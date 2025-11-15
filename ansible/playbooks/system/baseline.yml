@@ -1,0 +1,97 @@
+---
+# Universal baseline configuration
+# Applies to all hosts regardless of platform
+
+- name: Apply universal baseline configuration
+  hosts: all
+  become: true
+  vars:
+    # Use variables from group_vars/all.yml or defaults
+    _scripts_dir: "{{ scripts_dir | default('/home/' + primary_user + '/.scripts') }}"
+    _config_dir: "{{ system_config_dir | default('/etc/monitoring') }}"
+  tasks:
+    - name: Set os_family if not defined (for standalone playbook execution)
+      ansible.builtin.set_fact:
+        os_family: "{{ ansible_os_family | lower }}"
+      when: os_family is not defined
+      tags: [always]
+    
+    - name: Ensure base directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+        owner: "{{ primary_user }}"
+        group: "{{ primary_user }}"
+      loop:
+        - "{{ _scripts_dir }}"
+        - "{{ _config_dir }}"
+      tags: [baseline, directories]
+      
+    - name: Find all common scripts
+      ansible.builtin.find:
+        paths: "{{ playbook_dir }}/../../../scripts/common/"
+        file_type: file
+      register: common_scripts_baseline
+      delegate_to: localhost
+      become: false  # Don't sudo on control machine
+      run_once: true
+      tags: [baseline, scripts, monitoring]
+    
+    - name: Deploy all common scripts
+      ansible.builtin.copy:
+        src: "{{ item.path }}"
+        dest: "{{ _scripts_dir }}/{{ item.path | basename }}"
+        mode: '0755'
+        owner: "{{ primary_user }}"
+        group: "{{ primary_user }}"
+        backup: true
+      loop: "{{ common_scripts_baseline.files }}"
+      tags: [baseline, scripts, monitoring]
+      
+    - name: Import GPG key from GitHub
+      ansible.builtin.shell:
+        cmd: "{{ _scripts_dir }}/import_gpg_github.sh --url https://github.com/{{ git_name }}.gpg"
+      become_user: "{{ ansible_user }}"
+      when: 
+        - (os_family == "debian" or platform_type == "lxc")
+        - git_name is defined
+      register: gpg_import
+      changed_when: "'Successfully set ultimate trust' in gpg_import.stdout"
+      failed_when: false
+      tags: [baseline, gpg]
+    
+    - name: Configure cron PATH environment
+      ansible.builtin.cron:
+        name: PATH
+        env: true
+        job: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        user: "{{ primary_user }}"
+      tags: [baseline, cron]
+    
+    - name: Set up log rotation for user logs
+      ansible.builtin.copy:
+        dest: "/etc/logrotate.d/{{ primary_user }}"
+        content: |
+          {{ logs_dir }}/*.log {
+              daily
+              rotate 7
+              compress
+              delaycompress
+              missingok
+              notifempty
+              create 0644 {{ primary_user }} {{ primary_user }}
+          }
+        owner: root
+        group: root
+        mode: '0644'
+      when: os_family == "debian"
+      tags: [baseline, logging]
+
+- name: Install base software packages
+  hosts: all
+  become: true
+  tasks:
+    - ansible.builtin.import_tasks: ../tasks/install_base_software.yml
+      when: os_family == "debian"
+      tags: [packages, base]

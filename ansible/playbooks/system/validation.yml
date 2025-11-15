@@ -1,0 +1,24 @@
+---
+# Final validation and health checks
+
+- name: Validate deployment
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Test script execution
+      ansible.builtin.command:
+        cmd: "{{ scripts_dir }}/system_health_check.sh --test"
+      register: health_check
+      failed_when: false
+      changed_when: false
+      when: enable_monitoring | default(true)
+      tags: [validation]
+      
+    - name: Display validation result
+      ansible.builtin.debug:
+        msg: |
+          ✅ Configuration complete for {{ inventory_hostname }}
+          Platform: {{ platform_type | default('unknown') }}
+          Monitoring: {{ 'Enabled' if enable_monitoring | default(true) else 'Disabled' }}
+          Auto-updates: {{ 'Enabled' if enable_unattended_upgrades | default(false) else 'Disabled' }}
+      tags: [always]

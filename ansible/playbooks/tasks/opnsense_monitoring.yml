@@ -1,0 +1,115 @@
+---
+# OPNsense Monitoring Configuration
+# Deploy monitoring scripts and configure cron jobs for OPNsense firewall
+
+- name: Create monitoring directories on OPNsense
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: wheel
+    mode: '0755'
+  loop:
+    - /usr/local/bin/monitoring
+    - /var/run/monitoring-state
+  tags: [monitoring, opnsense]
+
+- name: Deploy monitoring wrapper script
+  ansible.builtin.copy:
+    src: ../../../scripts/freebsd/monitoring-wrapper.sh
+    dest: /usr/local/bin/monitoring-wrapper.sh
+    owner: root
+    group: wheel
+    mode: '0755'
+  tags: [monitoring, opnsense]
+
+- name: Deploy individual monitoring scripts
+  ansible.builtin.copy:
+    src: "../../../scripts/freebsd/"
+    dest: /usr/local/bin/monitoring/
+    owner: root
+    group: wheel
+    mode: '0755'
+  tags: [monitoring, opnsense]
+
+- name: Create OPNsense health check script
+  ansible.builtin.copy:
+    content: |
+      #!/bin/sh
+      # OPNsense System Health Check
+      
+      echo "🔍 OPNsense System Health Check"
+      echo "================================"
+      
+      # Check disk space
+      echo -n "Disk Space: "
+      /usr/local/bin/monitoring/check-disk-space.sh || echo "❌ Disk space issue"
+      
+      # Check memory
+      echo -n "Memory: "
+      /usr/local/bin/monitoring/check-memory.sh || echo "❌ Memory issue"
+      
+      # Check system load
+      echo -n "System Load: "
+      /usr/local/bin/monitoring/check-system-load.sh || echo "❌ High load"
+      
+      # Check gateway
+      echo -n "Gateway: "
+      /usr/local/bin/monitoring/check-gateway.sh || echo "❌ Gateway issue"
+      
+      # Check WireGuard (if applicable)
+      if [ -f /usr/local/bin/monitoring/check-wg.sh ]; then
+          echo -n "WireGuard: "
+          /usr/local/bin/monitoring/check-wg.sh || echo "❌ WireGuard issue"
+      fi
+      
+      # Check CrowdSec
+      if [ -f /usr/local/bin/monitoring/check-crowdsec.sh ]; then
+          echo -n "CrowdSec: "
+          /usr/local/bin/monitoring/check-crowdsec.sh || echo "❌ CrowdSec issue"
+      fi
+      
+      echo "================================"
+      echo "✅ Health check complete"
+    dest: /usr/local/bin/opnsense_health_check.sh
+    owner: root
+    group: wheel
+    mode: '0755'
+  tags: [monitoring, opnsense]
+
+- name: Configure cron jobs for OPNsense monitoring
+  ansible.builtin.cron:
+    name: "{{ item.name }}"
+    minute: "{{ item.minute }}"
+    hour: "{{ item.hour | default('*') }}"
+    job: "{{ item.job }}"
+    user: root
+  loop:
+    - name: "Check disk space"
+      minute: "*/30"
+      job: "/usr/local/bin/monitoring-wrapper.sh --heartbeat-interval=daily MONITOR_WH ALERT_WH /usr/local/bin/monitoring/check-disk-space.sh"
+    - name: "Check memory"
+      minute: "*/15"
+      job: "/usr/local/bin/monitoring-wrapper.sh --heartbeat-interval=daily MONITOR_WH ALERT_WH /usr/local/bin/monitoring/check-memory.sh"
+    - name: "Check system load"
+      minute: "*/10"
+      job: "/usr/local/bin/monitoring-wrapper.sh --heartbeat-interval=daily MONITOR_WH ALERT_WH /usr/local/bin/monitoring/check-system-load.sh"
+    - name: "Check gateway connectivity"
+      minute: "*/5"
+      job: "/usr/local/bin/monitoring-wrapper.sh --heartbeat-interval=hourly MONITOR_WH ALERT_WH /usr/local/bin/monitoring/check-gateway.sh"
+  when: enable_cron_monitoring | default(false)
+  tags: [monitoring, opnsense, cron]
+
+- name: Test OPNsense monitoring scripts
+  ansible.builtin.command:
+    cmd: "/usr/local/bin/opnsense_health_check.sh"
+  register: health_check_result
+  changed_when: false
+  failed_when: false
+  tags: [monitoring, opnsense, test]
+
+- name: Display health check results
+  ansible.builtin.debug:
+    var: health_check_result.stdout
+  when: health_check_result is defined
+  tags: [monitoring, opnsense, test]

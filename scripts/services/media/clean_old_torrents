@@ -1,0 +1,44 @@
+#!/bin/bash
+# 
+# Script to clean up old torrents from the completed directory
+# Removes torrent files older than 30 days
+
+set -e          # stop on errors
+set -u          # stop on unset variables
+set -o pipefail # stop on pipe failures
+
+# Colors for terminal output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+NC='\033[0m' # No Color
+
+log_msg() {
+  echo -e "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
+}
+
+if [ "$#" -lt 1 ]; then
+  echo "Usage: $0 <completed_dir>"
+  exit 1
+fi
+
+COMPLETED_DIR="$1"
+
+log_msg "${GREEN}Checking for completed torrents older than 30 days...${NC}"
+
+# Find completed torrents older than 30 days
+OLD_TORRENTS=$(find "${COMPLETED_DIR}" -type f -mtime +30 -name "*.torrent" 2>/dev/null || echo "")
+
+if [ -z "${OLD_TORRENTS}" ]; then
+  log_msg "✅ No old torrents to clean up"
+  exit 0
+else
+  COUNT=$(echo "${OLD_TORRENTS}" | wc -l)
+  log_msg "Found ${COUNT} old torrents to clean up"
+  
+  # Remove old torrents
+  echo "${OLD_TORRENTS}" | xargs rm -v
+  
+  log_msg "✅ Cleaned up ${COUNT} old torrents"
+  exit 0
+fi

@@ -1,0 +1,225 @@
+#!/bin/bash
+#
+# Script to backup last modified file in a folder
+
+set -e          # stop on errors
+set -u          # stop on unset variables
+set -o pipefail # stop on pipe failures
+
+# Colors for terminal output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+NC='\033[0m' # No Color
+
+log_msg() {
+  echo -e "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
+}
+
+usage(){
+  echo "Usage: $(basename "$0") [options] folder recipient"
+  echo "Options:"
+  echo "  --logging=webhook_id  Slack webhook ID for success notifications (format T[A-Z0-9]*/B[A-Z0-9]*/[a-zA-Z0-9]*)"
+  echo "  --alert=webhook_id    Slack webhook ID for failure notifications (format T[A-Z0-9]*/B[A-Z0-9]*/[a-zA-Z0-9]*)"
+  echo "  --folder=PATH        Path to folder containing files to backup (REQUIRED)"
+  echo "  --email=EMAIL       Email address for GPG encryption (REQUIRED)"
+  echo "  --silent             Suppress Slack notifications (useful when run via monitoring wrapper)"
+  echo "  --help               Show this help message"
+  echo ""
+  echo "Required arguments (can be specified as options or positional arguments):"
+  echo "  folder              Path to folder containing files to backup"
+  echo "  recipient           Email address for GPG encryption"
+  echo ""
+  echo "Note: If --silent is used, webhook IDs are not required"
+  echo "      For backward compatibility, you can also use: logging_webhookid alert_webhookid folder recipient [--silent]"
+}
+
+E_NOARGS=85
+wh_regex="T[A-Z0-9]*\/B[A-Z0-9]*\/[a-zA-Z0-9]*"
+
+# Parse arguments
+silent_mode=false
+logging_wh=""
+alert_wh=""
+folder=""
+recipient=""
+
+# Check if using the old argument format (for backward compatibility)
+if [ -n "${1+x}" ] && [[ $1 =~ $wh_regex ]]; then
+  # Old format: logging_wh alert_wh folder recipient [--silent]
+  logging_wh=$1
+  alert_wh=$2
+  folder=$3
+  recipient=$4
+  
+  # Check for silent mode flag in old format
+  if [ -n "${5+x}" ] && [ "$5" == "--silent" ]; then
+    silent_mode=true
+  fi
+else
+  # New format with named options
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --logging=*)
+        logging_wh="${1#--logging=}"
+        shift
+        ;;
+      --alert=*)
+        alert_wh="${1#--alert=}"
+        shift
+        ;;
+      --folder=*)
+        folder="${1#--folder=}"
+        shift
+        ;;
+      --email=*)
+        recipient="${1#--email=}"
+        shift
+        ;;
+      --silent)
+        silent_mode=true
+        shift
+        ;;
+      --help)
+        usage
+        exit 0
+        ;;
+      --*)
+        log_msg "${RED}ERROR: Unknown option: $1${NC}"
+        usage
+        exit 1
+        ;;
+      *)
+        # First non-option argument is folder
+        if [ -z "$folder" ]; then
+          folder="$1"
+          shift
+        # Second non-option argument is recipient
+        elif [ -z "$recipient" ]; then
+          recipient="$1"
+          shift
+        else
+          log_msg "${RED}ERROR: Unexpected argument: $1${NC}"
+          usage
+          exit 1
+        fi
+        ;;
+    esac
+  done
+fi
+
+# Validate required arguments
+if [ -z "$folder" ] || [ -z "$recipient" ]; then
+  log_msg "${RED}ERROR: Missing required arguments${NC}"
+  usage
+  exit "$E_NOARGS"
+fi
+
+# Validate folder exists
+if ! test -d "$folder"; then
+  log_msg "${RED}ERROR: Cannot access folder: $folder${NC}"
+  usage
+  exit 1
+fi
+
+# Fix webhook tokens if they still contain the option prefix
+if [[ $logging_wh == --logging=* ]]; then
+  logging_wh=${logging_wh#--logging=}
+fi
+
+if [[ $alert_wh == --alert=* ]]; then
+  alert_wh=${alert_wh#--alert=}
+fi
+
+# Validate webhook format if provided
+if [ -n "$logging_wh" ] && ! [[ $logging_wh =~ $wh_regex ]]; then
+  log_msg "${RED}ERROR: Logging webhook format invalid. Expected format $wh_regex. Received: $logging_wh${NC}"
+  usage
+  exit 1
+fi
+
+if [ -n "$alert_wh" ] && ! [[ $alert_wh =~ $wh_regex ]]; then
+  log_msg "${RED}ERROR: Alert webhook format invalid. Expected format $wh_regex. Received: $alert_wh${NC}"
+  usage
+  exit 1
+fi
+
+# If not in silent mode, webhooks are required
+if [ "$silent_mode" != "true" ] && ([ -z "$logging_wh" ] || [ -z "$alert_wh" ]); then
+  log_msg "${RED}ERROR: Webhook IDs are required unless --silent is used${NC}"
+  usage
+  exit 1
+fi
+
+if [ "$silent_mode" == "true" ]; then
+  log_msg "${GREEN}Running in silent mode - will not send notifications${NC}"
+fi
+
+log_msg "${GREEN}Looking for the most recent file in: $folder${NC}"
+
+# Define files to skip
+skip_extensions="*.json"
+# Format for multiple extensions="*.{bak,old}"
+
+# Find the latest file using a cross-platform approach
+if find "$folder" -not -name "${skip_extensions}" -type f -printf '%T@ %p\n' 2>/dev/null | grep -q .; then
+  # Linux version with -printf (if it works)
+  latest_file=$(find "$folder" -not -name "${skip_extensions}" -type f -printf '%T@ %p\n' | sort -n | tail -n 1 | awk '{print $2}')
+else
+  # macOS/BSD version without -printf
+  latest_file=$(find "$folder" -not -name "${skip_extensions}" -type f -exec stat -f "%m %N" {} \; | sort -n | tail -n 1 | awk '{$1=""; print substr($0,2)}')
+fi
+
+if [ -n "$latest_file" ]; then
+  log_msg "${GREEN}Found latest file: $latest_file${NC}"
+  log_msg "Backing up file using do_backup..."
+  
+  # Get the full path to the do_backup script
+  do_backup_script="$(dirname "$0")/do_backup"
+  
+  # Check if the do_backup script exists
+  if [ ! -f "$do_backup_script" ]; then
+    log_msg "${RED}ERROR: do_backup script not found at: $do_backup_script${NC}"
+    exit 1
+  fi
+  
+  # Execute do_backup with the appropriate arguments based on silent mode
+  if [ "$silent_mode" == "true" ]; then
+    # In silent mode, we can use the new format with just the required arguments
+    "$do_backup_script" --silent "$latest_file" "$recipient"
+  else
+    # When not in silent mode, we need to provide the webhook IDs
+    "$do_backup_script" --logging="$logging_wh" --alert="$alert_wh" "$latest_file" "$recipient"
+  fi
+  backup_exit_code=$?
+  
+  if [ $backup_exit_code -eq 0 ]; then
+    log_msg "${GREEN}Backup completed successfully${NC}"
+    exit 0
+  elif [ $backup_exit_code -eq 2 ]; then
+    log_msg "${YELLOW}Online backup failed but local fallback backup is available${NC}"
+    log_msg "${YELLOW}Check the Slack notification for details${NC}"
+    exit 0  # Consider this a success for monitoring purposes
+  else
+    log_msg "${RED}Backup failed with exit code: $backup_exit_code${NC}"
+    log_msg "${RED}Check the Slack notification for details${NC}"
+    exit $backup_exit_code
+  fi
+else
+  log_msg "${RED}ERROR: No files found in $folder${NC}"
+  
+  # Send alert to webhook using the alert webhook (unless in silent mode)
+  if [ "$silent_mode" != "true" ]; then
+    alert_hook="https://hooks.slack.com/services/${alert_wh}"
+    hostname_info=$(hostname)
+    content="{\"text\":\"\u274c \`${hostname_info}\` - Backup failed, latest file not retrieved. \n\file:\`${latest_file:-'None'}\` \n\folder:\`${folder}\` \n \"}"
+    
+    log_msg "${YELLOW}Sending alert to alert webhook${NC}"
+    webhook_result=$(curl -s -X POST -H 'Content-type: application/json' --data "${content}" "$alert_hook" || echo "Webhook call failed")
+    log_msg "Webhook result: ${webhook_result}"
+  else
+    log_msg "${YELLOW}Silent mode: Skipping failure notification${NC}"
+  fi
+  
+  exit 1
+fi

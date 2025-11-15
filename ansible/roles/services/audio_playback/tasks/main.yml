@@ -1,0 +1,308 @@
+---
+# Audio Playback role - For hifipi (MPD, Shairport, Raspotify)
+# This role is for playback SINK hosts that receive and play audio
+
+# ============================================================
+# Hardware Configuration (HiFiBerry DAC+)
+# ============================================================
+
+- name: Configure audio hardware (HiFiBerry DAC+)
+  become: true
+  when: not (is_test_environment | default(false))
+  block:
+    - name: Disable HDMI audio and enable HiFiBerry DAC+
+      ansible.builtin.lineinfile:
+        path: /boot/firmware/config.txt
+        regexp: '^dtoverlay=vc4-kms-v3d'
+        line: 'dtoverlay=vc4-kms-v3d,noaudio,nohdmi'
+        create: false
+      notify: reboot for hardware changes
+    
+    - name: Disable onboard audio
+      ansible.builtin.lineinfile:
+        path: /boot/firmware/config.txt
+        regexp: '^dtparam=audio='
+        line: '#dtparam=audio=on'
+        create: false
+      notify: reboot for hardware changes
+    
+    - name: Enable HiFiBerry DAC+ overlay
+      ansible.builtin.lineinfile:
+        path: /boot/firmware/config.txt
+        line: 'dtoverlay=hifiberry-dacplus'
+        insertafter: EOF
+        create: false
+      notify: reboot for hardware changes
+    
+    - name: Set minimal GPU memory
+      ansible.builtin.lineinfile:
+        path: /boot/firmware/config.txt
+        regexp: '^gpu_mem='
+        line: 'gpu_mem=16'
+        insertafter: EOF
+        create: false
+      notify: reboot for hardware changes
+  tags: [audio_playback, hardware]
+
+# ============================================================
+# Package Installation
+# ============================================================
+
+- name: Install audio playback packages
+  become: true
+  ansible.builtin.apt:
+    name:
+      - mpd
+      - mpc
+      - alsa-utils
+      - pulseaudio
+    state: present
+    update_cache: true
+  tags: [audio_playback, packages]
+
+- name: Configure MPD
+  become: true
+  block:
+    - name: Allow any host to connect to MPD
+      ansible.builtin.replace:
+        dest: /etc/mpd.conf
+        regexp: '^bind_to_address'
+        replace: '#bind_to_address'
+    
+    - name: Enable mDNS announcement for MPD
+      ansible.builtin.lineinfile:
+        path: /etc/mpd.conf
+        line: 'zeroconf_enabled "yes"'
+        insertafter: EOF
+    
+    - name: Set mDNS name for MPD
+      ansible.builtin.lineinfile:
+        path: /etc/mpd.conf
+        line: 'zeroconf_name "{{ ansible_hostname }}-mpd"'
+        insertafter: 'zeroconf_enabled'
+  tags: [audio_playback, mpd]
+  notify: restart mpd
+
+- name: Configure audio volume (requires audio hardware)
+  become: true
+  when: not (is_test_environment | default(false))
+  block:
+    - name: Check available ALSA mixer controls (with sudo for hardware controls)
+      ansible.builtin.command: amixer scontrols
+      register: alsa_controls
+      changed_when: false
+      failed_when: false
+    
+    - name: Set maximum volume for Analogue control (HiFiBerry hardware)
+      ansible.builtin.command: amixer sset 'Analogue' 100%
+      when: "'Analogue' in alsa_controls.stdout"
+      changed_when: false
+      failed_when: false
+    
+    - name: Set maximum volume for Digital control (DAC)
+      ansible.builtin.command: amixer sset 'Digital' 100%
+      when: "'Digital' in alsa_controls.stdout"
+      changed_when: false
+      failed_when: false
+    
+    - name: Set maximum volume for Master control (software mixer)
+      ansible.builtin.command: amixer sset 'Master' 100%
+      when: "'Master' in alsa_controls.stdout"
+      changed_when: false
+      failed_when: false
+    
+    - name: Store ALSA mixer configuration
+      ansible.builtin.command: alsactl store
+      changed_when: false
+      failed_when: false
+    
+    - name: Report audio configuration status
+      ansible.builtin.debug:
+        msg: |
+          Audio hardware configured. Available controls: {{ alsa_controls.stdout_lines | default(['None detected - may require reboot']) }}
+  tags: [audio_playback, volume]
+  # Note: Skipped on test environments (no audio hardware)
+  # Hardware controls (Analogue, Digital) require root access to see/modify
+
+- name: Install Shairport Sync dependencies
+  become: true
+  ansible.builtin.apt:
+    name:
+      - build-essential
+      - git
+      - autoconf
+      - automake
+      - libtool
+      - libpopt-dev
+      - libconfig-dev
+      - libasound2-dev
+      - avahi-daemon
+      - libavahi-client-dev
+      - libssl-dev
+      - libsoxr-dev
+      - libdaemon-dev      # From original raspberrypi-ansible
+      - xmltoman           # From original raspberrypi-ansible
+      - libplist-dev
+      - libsodium-dev
+      - libavutil-dev
+      - libavcodec-dev
+      - libavformat-dev
+      - uuid-dev
+      - libgcrypt-dev
+      - libpulse-dev
+    state: present
+  when: enable_airplay | default(true)
+  tags: [audio_playback, airplay, build]
+
+- name: Clone Shairport Sync repository
+  ansible.builtin.git:
+    repo: https://github.com/mikebrady/shairport-sync.git
+    dest: "/home/{{ primary_user }}/shairport-sync"
+    version: master
+    update: true
+  when: enable_airplay | default(true)
+  tags: [audio_playback, airplay]
+
+- name: Build and install Shairport Sync from source
+  become: true
+  block:
+    - name: Run autoreconf
+      ansible.builtin.command:
+        cmd: autoreconf -i -f
+        chdir: "/home/{{ primary_user }}/shairport-sync"
+      changed_when: false
+    
+    - name: Configure Shairport Sync
+      ansible.builtin.command:
+        cmd: ./configure --with-alsa --with-avahi --with-ssl=openssl --with-systemd --with-metadata --with-soxr --with-systemdsystemunitdir=/lib/systemd/system
+        chdir: "/home/{{ primary_user }}/shairport-sync"
+      changed_when: false
+    
+    - name: Compile Shairport Sync
+      ansible.builtin.command:
+        cmd: make -j{{ ansible_processor_vcpus | default(2) }}
+        chdir: "/home/{{ primary_user }}/shairport-sync"
+      changed_when: false
+    
+    - name: Install Shairport Sync
+      ansible.builtin.command:
+        cmd: make install
+        chdir: "/home/{{ primary_user }}/shairport-sync"
+      changed_when: false
+      notify: restart shairport-sync
+  when: enable_airplay | default(true)
+  tags: [audio_playback, airplay]
+
+- name: Install Raspotify (Spotify Connect)
+  become: true
+  block:
+    - name: Install apt-transport-https
+      ansible.builtin.apt:
+        name: apt-transport-https
+        state: present
+    
+    - name: Add Raspotify repository key
+      ansible.builtin.get_url:
+        url: https://dtcooper.github.io/raspotify/key.asc
+        dest: /usr/share/keyrings/raspotify-archive-keyring.asc
+        mode: '0644'
+    
+    - name: Add Raspotify repository
+      ansible.builtin.apt_repository:
+        repo: "deb [signed-by=/usr/share/keyrings/raspotify-archive-keyring.asc] https://dtcooper.github.io/raspotify raspotify main"
+        filename: raspotify
+        state: present
+        update_cache: true
+    
+    - name: Install Raspotify
+      ansible.builtin.apt:
+        name: raspotify
+        state: present
+    
+    - name: Configure Raspotify
+      ansible.builtin.copy:
+        dest: /etc/default/raspotify
+        content: |
+          #### Custom Configs for {{ primary_user }} ####
+          BITRATE="320"
+          VOLUME_ARGS="--initial-volume=100"
+        mode: '0644'
+      notify: restart raspotify
+  when: enable_spotify | default(true)
+  tags: [audio_playback, spotify]
+
+- name: Start and enable audio playback services
+  become: true
+  ansible.builtin.service:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop:
+    - mpd
+    - avahi-daemon
+    - "{{ 'shairport-sync' if enable_airplay | default(true) else omit }}"
+    - "{{ 'raspotify' if enable_spotify | default(true) else omit }}"
+  when: item != omit
+  tags: [audio_playback, service]
+
+# ============================================================
+# Monitoring Configuration
+# ============================================================
+
+- name: Deploy audio playback monitoring scripts
+  ansible.builtin.copy:
+    src: "{{ inventory_dir }}/../../scripts/services/audio/{{ item }}"
+    dest: "{{ scripts_dir }}/{{ item }}"
+    owner: "{{ primary_user }}"
+    group: "{{ primary_user }}"
+    mode: '0755'
+  loop:
+    - check_mpd.sh
+    - check_shairport.sh
+    - check_raspotify.sh
+    - check_avahi.sh
+    - check_audio_output.sh
+    - restart_audio_services.sh
+  tags: [audio_playback, monitoring, scripts]
+
+- name: Configure audio playback service monitoring cron jobs
+  ansible.builtin.cron:
+    name: "{{ item.name }}"
+    special_time: "{{ item.special_time | default(omit) }}"
+    minute: "{{ item.minute | default(omit) }}"
+    job: >
+      {{ scripts_dir }}/enhanced_monitoring_wrapper
+      --heartbeat-interval=daily
+      --notify-fixed=true
+      {{ logging_token }}
+      {{ alert_token }}
+      {{ scripts_dir }}/{{ item.script }}
+      >> {{ logs_dir }}/{{ item.log }} 2>&1
+    user: "{{ primary_user }}"
+  loop:
+    - { name: "MPD service check", special_time: "hourly", script: "check_mpd.sh", log: "mpd_service_check.log", skip_on_test: false }
+    - { name: "Shairport service check", special_time: "hourly", script: "check_shairport.sh", log: "shairport_service_check.log", skip_on_test: false }
+    - { name: "Raspotify service check", special_time: "hourly", script: "check_raspotify.sh", log: "raspotify_service_check.log", skip_on_test: false }
+    - { name: "Avahi daemon check", special_time: "hourly", script: "check_avahi.sh", log: "avahi_daemon_check.log", skip_on_test: false }
+    - { name: "Audio output check", special_time: "daily", script: "check_audio_output.sh", log: "audio_output_check.log", skip_on_test: true }
+    - { name: "Audio services restart", special_time: "weekly", script: "restart_audio_services.sh", log: "audio_services_restart.log", skip_on_test: false }
+  when: not (is_test_environment | default(false) and item.skip_on_test | default(false))
+  tags: [audio_playback, monitoring, cron]
+
+# NOTE: System health check is now handled by the generic monitoring role
+# (ansible/playbooks/tasks/deploy_monitoring.yml) and should NOT be duplicated here
+
+- name: Report audio playback services deployment status
+  ansible.builtin.debug:
+    msg: |
+      ✅ Audio Playback Services deployed (hifipi-style)
+      Services: MPD, Shairport-sync, Raspotify, Avahi
+      Monitoring: 6 audio-specific cron jobs configured
+        - MPD service check (@hourly)
+        - Shairport service check (@hourly)
+        - Raspotify service check (@hourly)
+        - Avahi daemon check (@hourly)
+        - Audio output check (@daily)
+        - Audio services restart (@weekly)
+      Note: System health check is handled by the generic monitoring role
+  tags: [audio_playback]

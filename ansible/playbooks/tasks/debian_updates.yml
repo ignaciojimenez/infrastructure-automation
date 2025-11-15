@@ -1,0 +1,76 @@
+---
+# Debian Automatic Updates Configuration
+
+- name: Install unattended-upgrades
+  ansible.builtin.apt:
+    name:
+      - unattended-upgrades
+      - apt-listchanges
+    state: present
+  tags: [updates]
+
+- name: Configure unattended-upgrades
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/../../../templates/debian/50unattended-upgrades.j2"
+    dest: /etc/apt/apt.conf.d/50unattended-upgrades
+    owner: root
+    group: root
+    mode: '0644'
+    backup: true
+  tags: [updates, configuration]
+
+- name: Enable automatic updates
+  ansible.builtin.copy:
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Download-Upgradeable-Packages "1";
+      APT::Periodic::AutocleanInterval "7";
+      APT::Periodic::Unattended-Upgrade "1";
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    owner: root
+    group: root
+    mode: '0644'
+  tags: [updates, configuration]
+
+- name: Configure automatic reboot if needed
+  ansible.builtin.lineinfile:
+    path: /etc/apt/apt.conf.d/50unattended-upgrades
+    regexp: '^//Unattended-Upgrade::Automatic-Reboot '
+    line: 'Unattended-Upgrade::Automatic-Reboot "{{ auto_reboot | default(true) }}";'
+    create: false
+  when: auto_reboot is defined
+  ignore_errors: "{{ ansible_check_mode }}"
+  tags: [updates, reboot]
+
+- name: Set automatic reboot time
+  ansible.builtin.lineinfile:
+    path: /etc/apt/apt.conf.d/50unattended-upgrades
+    regexp: '^//Unattended-Upgrade::Automatic-Reboot-Time '
+    line: 'Unattended-Upgrade::Automatic-Reboot-Time "{{ auto_reboot_time | default("04:00") }}";'
+    create: false
+  when: auto_reboot_time is defined
+  ignore_errors: "{{ ansible_check_mode }}"
+  tags: [updates, reboot]
+
+- name: Create monitoring script for updates
+  ansible.builtin.copy:
+    content: |
+      #!/bin/sh
+      # Check unattended-upgrades status
+      
+      if [ -f /var/log/unattended-upgrades/unattended-upgrades.log ]; then
+          TODAY=$(date +%Y-%m-%d)
+          if grep -q "$TODAY" /var/log/unattended-upgrades/unattended-upgrades.log; then
+              echo "✅ Unattended upgrades ran today"
+              exit 0
+          else
+              echo "⚠️  No unattended upgrades activity today"
+              exit 1
+          fi
+      else
+          echo "❌ Unattended upgrades log not found"
+          exit 2
+      fi
+    dest: "{{ scripts_dir }}/check_auto_updates.sh"
+    mode: '0755'
+  tags: [updates, monitoring]

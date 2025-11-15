@@ -1,0 +1,76 @@
+---
+# Cobra automation scripts installation
+
+- name: Install Python base packages for cobra
+  become: true
+  ansible.builtin.apt:
+    name:
+      - python3-full
+      - python3-pip
+      - python3-feedparser
+    state: present
+    update_cache: true
+  tags: [media, cobra, packages]
+
+- name: Install tvnamer via pip
+  become: true
+  ansible.builtin.pip:
+    name: tvnamer
+    state: present
+    executable: pip3
+    break_system_packages: true
+  tags: [media, cobra, packages]
+
+- name: Clone cobra repository
+  ansible.builtin.git:
+    repo: "https://github.com/{{ gh_profile }}/cobra.git"
+    dest: "{{ cobra_folder }}"
+    update: false
+  when: enable_cobra_scripts | default(false)
+  tags: [media, cobra]
+
+- name: Create cobra logs directory
+  ansible.builtin.file:
+    path: "{{ cobra_folder }}/logs"
+    state: directory
+    mode: '0755'
+  when: enable_cobra_scripts | default(false)
+  tags: [media, cobra]
+
+- name: Create cobra auth directory
+  ansible.builtin.file:
+    path: "{{ cobra_folder }}/auth"
+    state: directory
+    mode: '0700'
+  when: enable_cobra_scripts | default(false)
+  tags: [media, cobra]
+
+# Deploy sensitive cobra configuration files (not in git)
+- name: Copy cobra auth configuration
+  ansible.builtin.copy:
+    src: "{{ inventory_dir }}/../files/cobra/conf_auth.ini"
+    dest: "{{ cobra_folder }}/auth/conf_auth.ini"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0600'
+  when: enable_cobra_scripts | default(false)
+  tags: [media, cobra]
+
+- name: Copy cobra move configuration
+  ansible.builtin.copy:
+    src: "{{ inventory_dir }}/../files/cobra/conf_move.ini"
+    dest: "{{ cobra_folder }}/auth/conf_move.ini"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0600'
+  when: enable_cobra_scripts | default(false)
+  tags: [media, cobra]
+
+- name: Configure hourly RSS feed check
+  ansible.builtin.cron:
+    name: "Hourly RSS checks"
+    special_time: "hourly"
+    job: "/usr/bin/python3 {{ cobra_folder }}/rss.py >> {{ cobra_folder }}/logs/rss.log 2>&1"
+    user: "{{ ansible_user }}"
+  when: enable_cobra_rss | default(false)
+  tags: [media, cobra, cron]

@@ -1,0 +1,19 @@
+[Unit]
+Description={{ liqs_name }}.liq Liquidsoap daemon
+After=sound.target icecast2.service
+Requires=icecast2.service
+
+[Service]
+Type=simple
+User={{ primary_user }}
+ExecStartPre=/bin/sleep 2
+ExecStart=/usr/bin/liquidsoap {{ liquidsoap_script_path }}
+Restart=on-failure
+RestartSec=5
+CPUWeight=75
+IOWeight=90
+Nice=5
+
+[Install]
+WantedBy=multi-user.target
+Alias={{ liqs_name }}_liquidsoap.service

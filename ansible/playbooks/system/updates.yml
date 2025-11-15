@@ -1,0 +1,19 @@
+---
+# System updates playbook
+# Handles initial and final system updates
+
+- name: Initial system update and upgrade
+  hosts: all
+  become: true
+  tasks:
+    - ansible.builtin.import_tasks: ../tasks/update_upgrade_clean.yml
+      when: os_family == "debian"
+      tags: [updates, initial]
+
+- name: Final system update and upgrade
+  hosts: all
+  become: true
+  tasks:
+    - ansible.builtin.import_tasks: ../tasks/update_upgrade_clean.yml
+      when: os_family == "debian"
+      tags: [updates, final]

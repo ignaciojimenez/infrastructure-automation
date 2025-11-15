@@ -1,0 +1,274 @@
+---
+# Home Assistant service role
+
+# Docker installation is handled by the docker role
+# Include docker role as a dependency in meta/main.yml
+
+- name: Install Home Assistant dependencies
+  become: true
+  ansible.builtin.apt:
+    name:
+      - apparmor-utils
+      - avahi-daemon
+      - dbus
+      - jq
+      - network-manager
+      - socat
+      - python3-docker
+    state: present
+    update_cache: true
+  tags: [homeassistant, packages]
+
+- name: Check if ModemManager is installed
+  ansible.builtin.systemd:
+    name: ModemManager
+  register: modemmanager_check
+  failed_when: false
+  changed_when: false
+  tags: [homeassistant]
+
+- name: Disable ModemManager (conflicts with Home Assistant USB devices)
+  become: true
+  ansible.builtin.systemd:
+    name: ModemManager
+    enabled: false
+    state: stopped
+  when: 
+    - modemmanager_check.status is defined
+    - not (is_test_environment | default(false))
+  tags: [homeassistant]
+  # Note: ModemManager interferes with USB devices (Zigbee, Z-Wave, etc.)
+  # Only disabled if service exists and not in test environment
+
+- name: Create Home Assistant directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0755'
+  loop:
+    - "{{ homeassistant_config_dir | default('/home/' + ansible_user + '/homeassistant') }}"
+    - "{{ homeassistant_config_dir | default('/home/' + ansible_user + '/homeassistant') }}/backups"
+  tags: [homeassistant, directories]
+
+- name: Pull Home Assistant Docker image
+  community.docker.docker_image:
+    name: "ghcr.io/home-assistant/home-assistant:{{ homeassistant_version | default('stable') }}"
+    source: pull
+    force_source: true
+  become_user: "{{ ansible_user }}"
+  tags: [homeassistant, docker]
+
+- name: Create and start Home Assistant container
+  community.docker.docker_container:
+    name: "{{ homeassistant_container_name | default('home-assistant') }}"
+    image: "ghcr.io/home-assistant/home-assistant:{{ homeassistant_version | default('stable') }}"
+    restart_policy: unless-stopped
+    privileged: true
+    volumes:
+      - "{{ homeassistant_config_dir | default('/home/' + ansible_user + '/homeassistant') }}:/config"
+      - "/etc/localtime:/etc/localtime:ro"
+    network_mode: host
+    env:
+      TZ: "{{ timezone | default('Europe/Madrid') }}"
+    state: started
+  become_user: "{{ ansible_user }}"
+  tags: [homeassistant, docker]
+
+# Install HACS (Home Assistant Community Store)
+- name: Wait for Home Assistant to start
+  ansible.builtin.wait_for:
+    port: 8123
+    host: localhost
+    delay: 30
+    timeout: 300
+  tags: [homeassistant, hacs]
+
+- name: Download HACS installer in container
+  community.docker.docker_container_exec:
+    container: "{{ homeassistant_container_name | default('home-assistant') }}"
+    command: "curl -fsSL https://get.hacs.xyz -o /config/install_hacs.sh"
+  become_user: "{{ ansible_user }}"
+  tags: [homeassistant, hacs]
+
+- name: Execute HACS installer
+  community.docker.docker_container_exec:
+    container: "{{ homeassistant_container_name | default('home-assistant') }}"
+    command: "/bin/bash /config/install_hacs.sh"
+  become_user: "{{ ansible_user }}"
+  tags: [homeassistant, hacs]
+
+- name: Remove HACS installer script
+  community.docker.docker_container_exec:
+    container: "{{ homeassistant_container_name | default('home-assistant') }}"
+    command: "/bin/rm /config/install_hacs.sh"
+  become_user: "{{ ansible_user }}"
+  failed_when: false
+  tags: [homeassistant, hacs]
+
+# Deploy management scripts
+- name: Deploy Home Assistant scripts
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "{{ scripts_dir }}/{{ item | basename }}"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0755'
+  with_fileglob:
+    - "{{ role_path }}/files/*"
+  tags: [homeassistant, scripts]
+
+# ============================================================
+# Monitoring Configuration
+# ============================================================
+
+- name: Deploy Home Assistant service check scripts
+  ansible.builtin.copy:
+    src: "{{ inventory_dir }}/../../scripts/services/homeassistant/{{ item.src }}"
+    dest: "{{ scripts_dir }}/{{ item.dest }}"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0755'
+  loop:
+    - {src: 'check_docker.sh', dest: 'check_docker.sh'}
+    - {src: 'check_ha_web.sh', dest: 'check_ha_web.sh'}
+    - {src: 'check_container.sh', dest: 'check_container.sh'}
+    - {src: 'docker_prune.sh', dest: 'docker_prune.sh'}
+    - {src: 'dockassist_monitor.sh', dest: 'dockassist_monitor.sh'}
+  tags: [homeassistant, monitoring]
+
+- name: Configure Docker service monitoring cron job
+  ansible.builtin.cron:
+    name: "Docker service check"
+    minute: "0"
+    job: >
+      {{ scripts_dir }}/enhanced_monitoring_wrapper
+      --heartbeat-interval=daily
+      --notify-fixed=true
+      {{ logging_token }}
+      {{ alert_token }}
+      {{ scripts_dir }}/check_docker.sh
+      >> {{ logs_dir }}/docker_service_check.log 2>&1
+    user: "{{ ansible_user }}"
+  when:
+    - logging_token is defined and logging_token != ''
+    - alert_token is defined and alert_token != ''
+  tags: [homeassistant, monitoring, cron]
+
+- name: Configure Home Assistant container monitoring cron job
+  ansible.builtin.cron:
+    name: "Home Assistant container check"
+    minute: "*/10"
+    job: >
+      {{ scripts_dir }}/enhanced_monitoring_wrapper
+      --heartbeat-interval=daily
+      --notify-fixed=true
+      {{ logging_token }}
+      {{ alert_token }}
+      {{ scripts_dir }}/check_container.sh {{ alert_token }} {{ homeassistant_container_name | default('home-assistant') }}
+      >> {{ logs_dir }}/homeassistant_container_check.log 2>&1
+    user: "{{ ansible_user }}"
+  when:
+    - logging_token is defined and logging_token != ''
+    - alert_token is defined and alert_token != ''
+  tags: [homeassistant, monitoring, cron]
+
+- name: Configure Home Assistant web interface monitoring cron job
+  ansible.builtin.cron:
+    name: "Home Assistant web interface check"
+    minute: "0"
+    job: >
+      {{ scripts_dir }}/enhanced_monitoring_wrapper
+      --heartbeat-interval=daily
+      --notify-fixed=true
+      {{ logging_token }}
+      {{ alert_token }}
+      {{ scripts_dir }}/check_ha_web.sh
+      >> {{ logs_dir }}/homeassistant_web_interface.log 2>&1
+    user: "{{ ansible_user }}"
+  when:
+    - logging_token is defined and logging_token != ''
+    - alert_token is defined and alert_token != ''
+  tags: [homeassistant, monitoring, cron]
+
+- name: Configure Docker system prune cron job
+  ansible.builtin.cron:
+    name: "Docker system prune"
+    minute: "0"
+    hour: "0"
+    day: "1"
+    job: >
+      {{ scripts_dir }}/enhanced_monitoring_wrapper
+      --heartbeat-interval=daily
+      --notify-fixed=true
+      {{ logging_token }}
+      {{ alert_token }}
+      {{ scripts_dir }}/docker_prune.sh
+      >> {{ logs_dir }}/docker_system_prune.log 2>&1
+    user: "{{ ansible_user }}"
+  when:
+    - logging_token is defined and logging_token != ''
+    - alert_token is defined and alert_token != ''
+  tags: [homeassistant, monitoring, cron]
+
+- name: Configure clean old backups cron job
+  ansible.builtin.cron:
+    name: "Clean old backups"
+    special_time: "weekly"
+    job: >
+      {{ scripts_dir }}/enhanced_monitoring_wrapper
+      --heartbeat-interval=daily
+      --notify-fixed=true
+      {{ logging_token }}
+      {{ alert_token }}
+      {{ scripts_dir }}/clean_old_backups.sh
+      >> {{ logs_dir }}/clean_old_backups.log 2>&1
+    user: "{{ ansible_user }}"
+  when:
+    - logging_token is defined and logging_token != ''
+    - alert_token is defined and alert_token != ''
+  tags: [homeassistant, monitoring, cron]
+
+# ============================================================
+# Backup Configuration
+# ============================================================
+
+- name: Configure Home Assistant backup cron job
+  ansible.builtin.cron:
+    name: "Home Assistant backup"
+    minute: "0"
+    hour: "4"
+    job: >
+      {{ scripts_dir }}/enhanced_monitoring_wrapper
+      --heartbeat-interval=daily
+      --notify-fixed=true
+      {{ logging_token }}
+      {{ alert_token }}
+      {{ scripts_dir }}/backup_last_mod --silent --folder={{ homeassistant_config_dir | default('/home/' + ansible_user + '/homeassistant') }}/backups/ --email={{ git_mail }}
+      >> {{ logs_dir }}/homeassistant_backup.log 2>&1
+    user: "{{ ansible_user }}"
+  when:
+    - logging_token is defined and logging_token != ''
+    - alert_token is defined and alert_token != ''
+  tags: [homeassistant, backup, cron]
+
+- name: Configure Home Assistant update cron job
+  ansible.builtin.cron:
+    name: "Home Assistant update"
+    minute: "0"
+    hour: "3"
+    day: "10"
+    job: >
+      {{ scripts_dir }}/enhanced_monitoring_wrapper
+      --heartbeat-interval=always
+      --notify-fixed=true
+      {{ logging_token }}
+      {{ alert_token }}
+      {{ scripts_dir }}/update_ha
+      >> {{ logs_dir }}/homeassistant_update.log 2>&1
+    user: "{{ ansible_user }}"
+  when:
+    - logging_token is defined and logging_token != ''
+    - alert_token is defined and alert_token != ''
+  tags: [homeassistant, update, cron]

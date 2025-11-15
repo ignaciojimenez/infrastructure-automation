@@ -1,0 +1,19 @@
+---
+# Samba handlers
+
+- name: restart samba
+  become: true
+  ansible.builtin.service:
+    name: "{{ item }}"
+    state: restarted
+  loop:
+    - smbd
+    - nmbd
+  listen: restart samba
+
+- name: reload samba
+  become: true
+  ansible.builtin.service:
+    name: smbd
+    state: reloaded
+  listen: reload samba

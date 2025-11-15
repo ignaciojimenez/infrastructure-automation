@@ -1,0 +1,22 @@
+---
+# Home Assistant (dockassist)
+
+# Services
+enable_docker: true
+enable_homeassistant: true
+
+# Hardware (auto-skipped on test environments)
+disable_modemmanager: true
+
+# Backup
+enable_homeassistant_backup: true
+homeassistant_backup_frequency: "daily"
+homeassistant_backup_retention_days: 7
+
+# Container
+homeassistant_container_name: "homeassistant"
+homeassistant_config_dir: "/home/{{ ansible_user }}/homeassistant"
+
+# Platform
+disable_bluetooth: false  # Keep for BLE integrations
+disable_hdmi: true

@@ -1,0 +1,37 @@
+#!/usr/bin/liquidsoap
+
+# Liquidsoap 2.x configuration for vinyl streaming (Docker-compatible)
+
+# Logging to stdout for Docker
+log.level.set(3)
+
+# Audio format
+settings.frame.audio.samplerate := {{ liquidsoap_sample_rate }}
+
+# Capture audio from ALSA device (explicitly use dsnoop device)
+input_stream = input.alsa(device="liq.dsnooped", bufferize=true, fallible=true)
+
+# Encode to FLAC in OGG container
+encoded = %ffmpeg(
+  format="ogg",
+  %audio(
+    codec="flac",
+    samplerate={{ liquidsoap_sample_rate }},
+    channels=2
+  )
+)
+
+# Stream to Icecast (localhost works with host network mode)
+output.icecast(
+  encoded,
+  host="localhost",
+  port={{ icecast_port }},
+  password="{{ icecast_source_password }}",
+  mount="{{ liqs_name }}.ogg",
+  name="{{ liquidsoap_stream_name }}",
+  description="{{ liquidsoap_stream_description }}",
+  genre="Vinyl",
+  url="http://{{ inventory_hostname }}:{{ icecast_port }}/{{ liqs_name }}.ogg",
+  input_stream,
+  fallible=true
+)

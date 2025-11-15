@@ -1,0 +1,15 @@
+---
+# Proxmox host-specific configuration
+
+- name: Configure Proxmox host
+  hosts: proxmox_hosts
+  become: true
+  tasks:
+    - name: Proxmox-specific monitoring
+      ansible.builtin.cron:
+        name: "Proxmox health check"
+        minute: "0"
+        hour: "*/4"
+        job: "{{ scripts_dir }}/proxmox_health.sh"
+      when: platform_type == "proxmox"
+      tags: [proxmox, monitoring]

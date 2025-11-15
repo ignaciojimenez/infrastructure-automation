@@ -1,0 +1,62 @@
+---
+# Install and configure base software packages - Migrated from raspberrypi-ansible
+
+- name: Install base packages (Debian)
+  become: true
+  ansible.builtin.apt:
+    pkg:
+      - git
+      - dnsutils
+      - jq
+      - fail2ban
+      - vim
+      - curl
+      - wget
+      - htop
+      - rsync
+      - cron
+      - sudo
+      - python3-pip
+      - bc  # Required for system health check script
+      - net-tools
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  when: os_family == "debian"
+  tags: [packages, base]
+
+- name: Setup git name
+  community.general.git_config:
+    name: user.name
+    scope: global
+    value: "{{ git_name }}"
+  when: git_name is defined
+  tags: [git]
+
+- name: Setup git user email
+  community.general.git_config:
+    name: user.email
+    scope: global
+    value: "{{ git_mail }}"
+  when: git_mail is defined
+  tags: [git]
+
+- name: Check if fail2ban is installed
+  ansible.builtin.command: systemctl list-unit-files fail2ban.service
+  register: fail2ban_check
+  failed_when: false
+  changed_when: false
+  when: os_family == "debian"
+  tags: [always]
+
+- name: Ensure fail2ban is enabled and started
+  become: true
+  ansible.builtin.systemd:
+    name: fail2ban
+    state: started
+    enabled: true
+  when: 
+    - os_family == "debian"
+    - fail2ban_check is not skipped
+    - fail2ban_check.rc == 0
+  tags: [security, fail2ban]

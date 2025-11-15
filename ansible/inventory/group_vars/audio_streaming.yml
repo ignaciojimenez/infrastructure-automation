@@ -1,0 +1,32 @@
+---
+# Audio Streaming (vinylstreamer)
+
+# Services
+enable_icecast: true
+enable_liquidsoap: true
+enable_audio_detection: true
+
+# Icecast config
+icecast_port: 8000
+icecast_source_password: "{{ vault_icecast_source_password | default('changeme') }}"
+icecast_admin_password: "{{ vault_icecast_admin_password | default('changeme') }}"
+icecast_hostname: "{{ ansible_host }}"
+icecast_max_clients: 10
+
+# Liquidsoap config
+liquidsoap_input_device: "hw:0"
+liquidsoap_sample_rate: 48000
+liquidsoap_mount_point: "/phono"
+liquidsoap_stream_name: "Phono"
+liquidsoap_stream_description: "Vinyl Streaming"
+
+# Audio detection config
+audio_detection_device: "hw:0"
+audio_detection_threshold: 0.01
+hifipi_ip: "hifipi"  # MPC target for audio detection
+str_name: "Phono"    # Stream name
+liqs_name: "phono"   # Liquidsoap service name
+
+# Platform
+disable_bluetooth: true
+disable_hdmi: true

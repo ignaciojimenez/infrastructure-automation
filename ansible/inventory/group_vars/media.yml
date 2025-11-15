@@ -1,0 +1,56 @@
+---
+# Media (cobra)
+
+# Services
+enable_plex: true
+enable_transmission: true
+enable_samba: true
+
+# External Storage Configuration
+external_drive_uuid: "67F4-15D5"  # ExFAT USB drive
+external_drive_mount: "/mnt/almacenNTFS"
+external_drive_fstype: "exfat"
+
+# Transmission Configuration
+transmission_download_dir: "{{ external_drive_mount }}/Descargas/ready"
+transmission_incomplete_dir: "{{ external_drive_mount }}/Descargas/tmp"
+transmission_rpc_whitelist: "127.0.0.1,10.30.40.*,10.30.20.*,10.30.80.*,10.30.41.*"
+transmission_blocklist_enabled: true
+transmission_blocklist_url: "https://github.com/Naunter/BT_BlockLists/raw/master/bt_blocklists.gz"
+transmission_umask: 2
+
+# Samba Configuration
+samba_shares:
+  - name: "Plex_Storage"
+    path: "{{ external_drive_mount }}"
+    comment: "Plex Media Storage"
+    browseable: yes
+    guest_ok: yes
+    read_only: no
+    create_mask: "0777"
+    directory_mask: "0777"
+    owner: "nobody"
+    group: "nogroup"
+    mode: "0777"
+    recurse: true
+
+# Cobra Scripts Configuration
+cobra_folder: "{{ home_dir }}/.cobra"
+enable_cobra_scripts: true
+enable_cobra_rss: true
+
+# Incron Configuration
+enable_incron: true
+incron_monitor_folder: "{{ transmission_download_dir }}"
+incron_action_script: "{{ cobra_folder }}/incron_transmission_action"
+
+# VPN Monitoring
+enable_vpn_check: true
+
+# Backup
+enable_plex_backup: true
+plex_backup_frequency: "weekly"
+
+# Platform
+disable_bluetooth: true
+disable_hdmi: true

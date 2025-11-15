@@ -1,0 +1,16 @@
+#!/usr/bin/liquidsoap
+set("log.file.path", "{{ liquidsoap_log_file }}")
+set("frame.audio.samplerate", {{ liquidsoap_sample_rate }})
+input_stream = input.alsa(fallible = true)
+output.icecast(%ogg(%flac(samplerate = {{ liquidsoap_sample_rate }},
+                        channels = 2,
+                        compression = 5,
+                        bits_per_sample = 16)),
+                mount = "{{ liqs_name }}.ogg",
+                name = "{{ liquidsoap_stream_name }}",
+                format = "audio/ogg",
+                description = "{{ liquidsoap_stream_description }}",
+                genre = "Vinyl",
+                password = "{{ icecast_source_password }}",
+                input_stream,
+                fallible = true)

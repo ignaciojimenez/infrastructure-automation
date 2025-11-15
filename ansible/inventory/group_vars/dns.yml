@@ -1,0 +1,15 @@
+---
+# DNS (pihole-lxc)
+
+# Services
+enable_pihole: true
+enable_unbound: true
+
+# Pi-hole
+pihole_dns_1: "127.0.0.1#5335"  # Unbound
+pihole_webpassword: "{{ vault_pihole_password | default('') }}"
+
+# Backup
+enable_pihole_backup: true
+pihole_backup_frequency: "weekly"
+pihole_backup_retention_days: 14

@@ -1,0 +1,463 @@
+#!/bin/bash
+#
+# Enhanced Monitoring Wrapper
+# A smart monitoring wrapper with state tracking and intelligent notification rules
+#
+# Usage: enhanced_monitoring_wrapper [options] monitor_token alert_token script_path [script_args]
+#
+# Options:
+#   --heartbeat-interval=daily|hourly|always  How often to send success heartbeats (default: daily)
+#   --state-file=/path/to/state.json          Custom state file location (default: in logs_dir)
+#   --notify-fixed=true|false                 Whether to notify on self-healing (default: true)
+#   --monitoring-name=name                    Name of the monitoring task (used for state file if provided)
+
+# Don't use set -e here as we want to capture script failures
+set -u          # stop on unset variables
+set -o pipefail # stop on pipe failures
+
+# Colors for terminal output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+NC='\033[0m' # No Color
+
+# Function for logging messages with timestamp
+log_msg() {
+  echo -e "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
+}
+
+# Function to safely escape JSON strings - using Python for reliability
+escape_json() {
+  local input="$1"
+  # Limit input length to prevent oversized payloads
+  if [ ${#input} -gt 1500 ]; then
+    input="${input:0:1500}... (output truncated)"
+  fi
+  
+  # Use Python for proper JSON string escaping - this is much more reliable than sed/tr
+  python3 -c "import json; print(json.dumps('''$input''')[1:-1])" 2>/dev/null || \
+  python -c "import json; print(json.dumps('''$input''')[1:-1])" 2>/dev/null || \
+  echo "$input" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\r/\\r/g; s/\t/\\t/g' | tr '\n' ' '
+}
+
+# Function to display usage information
+usage() {
+  echo "Usage: $(basename "$0") [options] monitor_webhook_id [alert_webhook_id] path_to_script [all_arguments]"
+  echo ""
+  echo "Options:"
+  echo "  --heartbeat-interval=daily|hourly|always  How often to send success heartbeats (default: daily)"
+  echo "  --state-file=/path/to/state.json          Custom state file location (default: in logs_dir)"
+  echo "  --notify-fixed=true|false                 Whether to notify on self-healing (default: true)"
+  echo "  --monitoring-name=name                    Name of the monitoring task (used for state file if provided)"
+  echo ""
+  echo "  monitor_webhook_id: Slack webhook ID for regular monitoring notifications"
+  echo "  alert_webhook_id: Optional Slack webhook ID for error alerts (failures only)"
+  echo "                    If not provided, monitor_webhook_id will be used for alerts too"
+  echo "  path_to_script: Path to the script to execute"
+  echo "  all_arguments: Arguments to pass to the script (optional)"
+  echo ""
+  echo "Examples:"
+  echo "  # With separate alert webhook:"
+  echo "  $(basename "$0") --heartbeat-interval=daily TXXXX/BXXXX/monitor_token TXXXX/BXXXX/alert_token /path/to/script.sh arg1"
+  echo ""
+  echo "  # With single webhook:"
+  echo "  $(basename "$0") --notify-fixed=false TXXXX/BXXXX/webhook_token /path/to/script.sh arg1 arg2"
+  echo ""
+}
+
+# Function to send Slack notifications
+send_slack_notification() {
+  local status=$1
+  local execution_time=$2
+  local exit_code=$3
+  local output=$4
+  local webhook_url=$5
+  local is_alert=${6:-false}
+  
+  # Truncate output if too long (Slack has a limit)
+  local max_output_length=1500
+  if [ ${#output} -gt $max_output_length ]; then
+    output="${output:0:$max_output_length}...\n[Output truncated due to size limits]"
+  fi
+  
+  # Determine emoji and color based on status
+  local emoji=":white_check_mark:"
+  local color="#36a64f"  # Green
+  if [ "$status" != "SUCCESS" ]; then
+    emoji=":x:"
+    color="#ff0000"  # Red
+  fi
+  
+  # Get hostname and timestamp
+  local hostname=$(hostname)
+  local timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+  
+  # Escape all variables individually for JSON
+  local escaped_output="$(escape_json "$output")"
+  local escaped_script="$(escape_json "${script_path_sanitized} ${script_args_sanitized}")"
+  local escaped_hostname="$(escape_json "$hostname")"
+  local escaped_status="$(escape_json "$status")"
+  local escaped_exit_code="$(escape_json "$exit_code")"
+  local escaped_execution_time="$(escape_json "$execution_time")"
+  local escaped_timestamp="$(escape_json "$timestamp")"
+  local escaped_date_started="$(escape_json "$date_started")"
+  
+  # Create a more informative title for alerts
+  local title="${emoji} Script Execution: ${status}"
+  if [ "$is_alert" = "true" ]; then
+    title="${emoji} ALERT: Script Failed on ${hostname}"
+  fi
+  
+  # Create a JSON payload using a template approach
+  local json_template='{
+    "text": "TITLE",
+    "attachments": [
+      {
+        "color": "COLOR",
+        "fields": [
+          {
+            "title": "Host",
+            "value": "HOSTNAME",
+            "short": true
+          },
+          {
+            "title": "Script",
+            "value": "SCRIPT",
+            "short": true
+          },
+          {
+            "title": "Started",
+            "value": "STARTED",
+            "short": true
+          },
+          {
+            "title": "Duration",
+            "value": "DURATION seconds",
+            "short": true
+          },
+          {
+            "title": "Status",
+            "value": "STATUS",
+            "short": true
+          },
+          {
+            "title": "Exit Code",
+            "value": "EXIT_CODE",
+            "short": true
+          }
+        ],
+        "footer": "Enhanced Monitoring Wrapper • TIMESTAMP",
+        "text": "*Output:*\n```OUTPUT```"
+      }
+    ]
+  }'
+  
+  # Replace placeholders with escaped values
+  local json_payload="${json_template}"
+  json_payload="${json_payload//TITLE/$(escape_json "$title")}"
+  json_payload="${json_payload//COLOR/$color}"
+  json_payload="${json_payload//HOSTNAME/$escaped_hostname}"
+  json_payload="${json_payload//SCRIPT/$escaped_script}"
+  json_payload="${json_payload//STARTED/$escaped_date_started}"
+  json_payload="${json_payload//DURATION/$escaped_execution_time}"
+  json_payload="${json_payload//STATUS/$escaped_status}"
+  json_payload="${json_payload//EXIT_CODE/$escaped_exit_code}"
+  json_payload="${json_payload//TIMESTAMP/$escaped_timestamp}"
+  json_payload="${json_payload//OUTPUT/$escaped_output}"
+  
+  # Save payload to debug file before sending
+  echo "${json_payload}" > /tmp/slack_payload_debug.json
+  
+  # Log the payload for debugging (without sensitive information)
+  if [ "$is_alert" = "true" ]; then
+    log_msg "Sending notification to Slack (ALERT)"
+  else
+    log_msg "Sending notification to Slack (MONITORING)"
+  fi
+  
+  # Send to Slack with proper Content-Type header
+  local response=$(curl -s -X POST -H 'Content-type: application/json; charset=utf-8' --data "${json_payload}" "${webhook_url}" || echo "Failed to send notification")
+  
+  if [ "$response" != "ok" ]; then
+    log_msg "${YELLOW}Warning: Slack notification may not have been sent properly. Response: ${response}${NC}"
+    log_msg "${YELLOW}Debug payload saved to /tmp/slack_payload_debug.json${NC}"
+    
+    # Try an even simpler payload as fallback
+    local fallback_payload="{\"text\":\"${emoji} Script execution on ${escaped_hostname}: ${escaped_status} (Exit code: ${escaped_exit_code})\"}"
+    log_msg "${YELLOW}Trying fallback simple notification...${NC}"
+    local fallback_response=$(curl -s -X POST -H 'Content-type: application/json; charset=utf-8' --data "${fallback_payload}" "${webhook_url}" || echo "Failed to send notification")
+    if [ "$fallback_response" != "ok" ]; then
+      log_msg "${RED}Fallback notification also failed. Response: ${fallback_response}${NC}"
+      return 1
+    else
+      log_msg "${GREEN}Fallback notification sent successfully${NC}"
+      return 0
+    fi
+  else
+    log_msg "${GREEN}Notification sent successfully${NC}"
+    return 0
+  fi
+}
+
+# Parse options
+HEARTBEAT_INTERVAL="daily"
+NOTIFY_FIXED="true"
+STATE_FILE=""
+MONITORING_NAME=""
+
+while [[ "$1" == --* ]]; do
+  case "$1" in
+    --heartbeat-interval=*)
+      HEARTBEAT_INTERVAL="${1#*=}"
+      shift
+      ;;
+    --state-file=*)
+      STATE_FILE="${1#*=}"
+      shift
+      ;;
+    --notify-fixed=*)
+      NOTIFY_FIXED="${1#*=}"
+      shift
+      ;;
+    --monitoring-name=*)
+      MONITORING_NAME="${1#*=}"
+      shift
+      ;;
+    --help)
+      usage
+      exit 0
+      ;;
+    *)
+      log_msg "${RED}Unknown option: $1${NC}"
+      usage
+      exit 1
+      ;;
+  esac
+done
+
+# Validate arguments
+E_NOARGS=85
+wh_regex="T[A-Z0-9]*\/B[A-Z0-9]*\/[a-zA-Z0-9]*"
+
+# Check if we have at least the monitoring webhook and script path
+if [ -z ${1+x} ] || [ -z ${2+x} ]; then
+  log_msg "${RED}Error: Missing required arguments${NC}"
+  usage
+  exit "$E_NOARGS"
+fi
+
+# Check if the first argument is a valid webhook
+if ! [[ $1 =~ $wh_regex ]]; then
+  log_msg "${RED}Error: Monitor webhook format invalid. Expected format $wh_regex${NC}"
+  usage
+  exit 1
+fi
+
+# Determine if we have a separate alert webhook
+monitor_wh=$1
+monitor_hook="https://hooks.slack.com/services/$monitor_wh"
+
+# Check if second argument is a webhook or a script path
+if [[ $2 =~ $wh_regex ]]; then
+  # We have a separate alert webhook
+  alert_wh=$2
+  alert_hook="https://hooks.slack.com/services/$alert_wh"
+  
+  # Check if we have a script path (now the third argument)
+  if [ -z ${3+x} ]; then
+    log_msg "${RED}Error: Missing script path${NC}"
+    usage
+    exit "$E_NOARGS"
+  fi
+  
+  script_path=$3
+  script_args="${*:4}"
+  
+  log_msg "Using separate webhooks for monitoring and alerts"
+else
+  # No separate alert webhook, use the monitor webhook for alerts too
+  alert_wh=$monitor_wh
+  alert_hook=$monitor_hook
+  
+  script_path=$2
+  script_args="${*:3}"
+  
+  log_msg "Using single webhook for both monitoring and alerts"
+fi
+
+# Check if the script exists and is executable
+if [ ! -f "$script_path" ]; then
+  log_msg "${RED}Error: Script not found: $script_path${NC}"
+  exit 1
+elif [ ! -x "$script_path" ]; then
+  log_msg "${YELLOW}Warning: Script is not executable. Attempting to execute anyway.${NC}"
+fi
+
+# Sanitize script path and args for logging (remove sensitive info)
+script_path_sanitized=$(echo "$script_path" | sed "s/${wh_regex}/SLACK_TOKEN/g")
+script_args_sanitized=$(echo "$script_args" | sed "s/${wh_regex}/SLACK_TOKEN/g")
+
+# Get name for state file (prefer monitoring name if provided, otherwise use script name)
+STATE_NAME="${MONITORING_NAME:-$(basename "$script_path")}"
+if [ -z "$STATE_FILE" ]; then
+  # Get username in a way that works in cron jobs (where $USER might be unset)
+  CURRENT_USER="${USER:-$(whoami)}"
+  # Fallback chain: use $SUDO_USER if available (for sudo commands), then $CURRENT_USER, then 'nobody'
+  EFFECTIVE_USER="${SUDO_USER:-${CURRENT_USER:-nobody}}"
+  STATE_DIR="${logs_dir:-/home/${EFFECTIVE_USER}/.log}"
+  STATE_FILE="$STATE_DIR/${STATE_NAME}.json"
+fi
+
+# Initialize state file if it doesn't exist
+if [ ! -f "$STATE_FILE" ]; then
+  echo '{"last_notification": "never", "last_status": "unknown", "last_success_notification": "never"}' > "$STATE_FILE"
+fi
+
+# Read previous state
+LAST_STATUS=$(jq -r '.last_status' "$STATE_FILE" 2>/dev/null || echo "unknown")
+LAST_NOTIFICATION=$(jq -r '.last_notification' "$STATE_FILE" 2>/dev/null || echo "never")
+LAST_SUCCESS_NOTIFICATION=$(jq -r '.last_success_notification' "$STATE_FILE" 2>/dev/null || echo "never")
+
+# Get current date/time information
+CURRENT_DATE=$(date +"%Y-%m-%d")
+CURRENT_HOUR=$(date +"%H")
+LAST_NOTIFICATION_DATE=${LAST_NOTIFICATION:0:10}
+LAST_NOTIFICATION_HOUR=${LAST_NOTIFICATION:11:2}
+
+# Record start time
+date_started=$(date +"%Y-%m-%d %H:%M:%S")
+start_seconds=$(date +%s)
+
+log_msg "${GREEN}Starting execution of: ${script_path_sanitized} ${script_args_sanitized}${NC}"
+
+# Create a temporary file for output
+output_file=$(mktemp)
+
+# Execute the script and capture both stdout and stderr
+if [ -z "$script_args" ]; then
+  "$script_path" > "$output_file" 2>&1
+  exit_code=$?
+else
+  # Execute the script with arguments, preserving quotes
+  # Create an array with the script path and all arguments
+  declare -a cmd_array=( "$script_path" )
+  
+  # Parse the arguments properly, preserving quotes
+  # This approach handles arguments with spaces correctly
+  while IFS= read -r -d '' arg; do
+    cmd_array+=("$arg")
+  done < <(xargs printf '%s\0' <<< "$script_args")
+  
+  # Execute the command with all arguments
+  "${cmd_array[@]}" > "$output_file" 2>&1
+  exit_code=$?
+fi
+
+# Record end time and calculate duration
+end_seconds=$(date +%s)
+execution_time=$((end_seconds - start_seconds))
+
+# Read the output
+execution_result=$(cat "$output_file")
+rm -f "$output_file"
+
+# Determine if there were self-healing actions
+ACTIONS_TAKEN=$(echo "$execution_result" | grep -c "ACTIONS TAKEN\|Fixed Issues\|Successfully restarted\|Restarted" || true)
+
+# Determine current status based on exit code
+if [ $exit_code -eq 0 ]; then
+  CURRENT_STATUS="success"
+  log_msg "${GREEN}Script completed successfully (exit code: $exit_code)${NC}"
+else
+  CURRENT_STATUS="failure"
+  log_msg "${RED}Script failed with exit code: $exit_code${NC}"
+fi
+
+# Determine if we should send a notification
+SEND_TO_MONITOR=false
+SEND_TO_ALERT=false
+
+# Always notify on failures
+if [ "$CURRENT_STATUS" = "failure" ]; then
+  SEND_TO_ALERT=true
+  
+# For successes, notification rules depend on settings
+elif [ "$CURRENT_STATUS" = "success" ]; then
+  # Heartbeat notifications based on interval setting
+  if [ "$HEARTBEAT_INTERVAL" = "daily" ] && [ "$CURRENT_DATE" != "$LAST_NOTIFICATION_DATE" ]; then
+    SEND_TO_MONITOR=true
+    log_msg "Sending daily heartbeat notification"
+  elif [ "$HEARTBEAT_INTERVAL" = "hourly" ] && ([ "$CURRENT_DATE" != "$LAST_NOTIFICATION_DATE" ] || [ "$CURRENT_HOUR" != "$LAST_NOTIFICATION_HOUR" ]); then
+    SEND_TO_MONITOR=true
+    log_msg "Sending hourly heartbeat notification"
+  elif [ "$HEARTBEAT_INTERVAL" = "always" ]; then
+    SEND_TO_MONITOR=true
+    log_msg "Sending notification (always mode)"
+  fi
+  
+  # Recovery notifications (previous status was failure)
+  if [ "$LAST_STATUS" = "failure" ]; then
+    SEND_TO_MONITOR=true
+    log_msg "Sending recovery notification (previous run failed)"
+  fi
+  
+  # Self-healing notifications
+  if [ "$NOTIFY_FIXED" = "true" ] && [ $ACTIONS_TAKEN -gt 0 ]; then
+    SEND_TO_MONITOR=true
+    log_msg "Sending notification for self-healing actions"
+  fi
+fi
+
+# Send notifications if needed
+if [ "$SEND_TO_ALERT" = true ]; then
+  send_slack_notification "FAILED" "$execution_time" "$exit_code" "$execution_result" "$alert_hook" "true"
+  echo "$(date) - Sent alert notification" >> "${STATE_FILE}.log"
+fi
+
+if [ "$SEND_TO_MONITOR" = true ]; then
+  send_slack_notification "SUCCESS" "$execution_time" "$exit_code" "$execution_result" "$monitor_hook" "false"
+  echo "$(date) - Sent monitor notification" >> "${STATE_FILE}.log"
+  LAST_SUCCESS_NOTIFICATION=$(date +"%Y-%m-%d %H:%M:%S")
+fi
+
+# Update state file
+if command -v jq >/dev/null 2>&1; then
+  jq --arg status "$CURRENT_STATUS" \
+     --arg notification "$(date +"%Y-%m-%d %H:%M:%S")" \
+     --arg success_notification "$LAST_SUCCESS_NOTIFICATION" \
+     '.last_status = $status | .last_notification = $notification | .last_success_notification = $success_notification' \
+     "$STATE_FILE" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "$STATE_FILE"
+else
+  # Fallback if jq is not available
+  echo "{\"last_status\": \"$CURRENT_STATUS\", \"last_notification\": \"$(date +"%Y-%m-%d %H:%M:%S")\", \"last_success_notification\": \"$LAST_SUCCESS_NOTIFICATION\"}" > "$STATE_FILE"
+fi
+
+# Always log the execution to the log file
+echo "$(date) - Executed with exit code $exit_code" >> "${STATE_FILE}.log"
+
+# Output a summary to console
+log_msg "Execution summary:"
+log_msg "  Script: ${script_path_sanitized} ${script_args_sanitized}"
+log_msg "  Started: ${date_started}"
+log_msg "  Duration: ${execution_time} seconds"
+log_msg "  Status: ${CURRENT_STATUS}"
+log_msg "  Exit code: ${exit_code}"
+log_msg "  Notification sent: $([ "$SEND_TO_MONITOR" = true ] || [ "$SEND_TO_ALERT" = true ] && echo "Yes" || echo "No")"
+
+# If there was output, show a preview
+if [ -n "$execution_result" ]; then
+  log_msg "  Output preview (first 5 lines):"
+  echo "$execution_result" | head -n 5 | while read -r line; do
+    echo "    $line"
+  done
+  
+  if [ $(echo "$execution_result" | wc -l) -gt 5 ]; then
+    log_msg "    ...(output truncated, full output in log)"
+  fi
+fi
+
+# Output the full result to stdout for cron logs
+echo "$execution_result"
+
+# Exit with the same code as the wrapped script
+exit $exit_code

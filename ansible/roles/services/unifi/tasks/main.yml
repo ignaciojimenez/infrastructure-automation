@@ -1,0 +1,217 @@
+---
+# UniFi Network Controller service role
+# Standalone installation for dedicated UniFi hosts (e.g., unifi-lxc)
+
+# Variables
+- name: Set UniFi installation paths
+  ansible.builtin.set_fact:
+    unifi_install_dir: /var/tmp/unifi-install
+    unifi_service_file: /lib/systemd/system/unifi.service
+    unifi_lib_dir: /usr/lib/unifi
+  tags: [unifi, always]
+
+- name: Check if UniFi is already installed
+  ansible.builtin.stat:
+    path: "{{ unifi_lib_dir }}"
+  register: unifi_installed
+  tags: [unifi, check]
+
+- name: Check if UniFi service is running
+  ansible.builtin.systemd:
+    name: unifi
+  register: unifi_service_status
+  failed_when: false
+  tags: [unifi, check]
+
+- name: Install UniFi Network Controller
+  when: not unifi_installed.stat.exists
+  block:
+    - name: Create UniFi installation directory
+      ansible.builtin.file:
+        path: "{{ unifi_install_dir }}"
+        state: directory
+        mode: '0755'
+      tags: [unifi, install]
+    
+    - name: Download GlennR's UniFi installer
+      ansible.builtin.get_url:
+        url: https://get.glennr.nl/unifi/install/install_latest/unifi-latest.sh
+        dest: "{{ unifi_install_dir }}/unifi-install.sh"
+        mode: '0755'
+        timeout: 60
+      when: not ansible_check_mode
+      register: download_result
+      retries: 3
+      delay: 5
+      until: download_result is succeeded
+      tags: [unifi, install]
+    
+    - name: Run UniFi installer
+      become: true
+      when: not ansible_check_mode
+      ansible.builtin.shell:
+        cmd: bash {{ unifi_install_dir }}/unifi-install.sh --skip --add-repository --install-network-application 2>&1 | tee {{ unifi_install_dir }}/install.log
+      environment:
+        DEBIAN_FRONTEND: noninteractive
+        TMPDIR: "{{ unifi_install_dir }}"
+      register: unifi_install_result
+      failed_when: 
+        - unifi_install_result.rc != 0
+        - "'successfully' not in unifi_install_result.stdout"
+      async: 1800  # 30 minute timeout
+      poll: 10
+      tags: [unifi, install]
+    
+    - name: Display installation output
+      ansible.builtin.debug:
+        var: unifi_install_result.stdout_lines
+      tags: [unifi, install]
+    
+    - name: Check installation log for errors
+      ansible.builtin.shell:
+        cmd: tail -50 {{ unifi_install_dir }}/install.log
+      register: install_log
+      failed_when: false
+      changed_when: false
+      tags: [unifi, install]
+    
+    - name: Display installation log
+      ansible.builtin.debug:
+        var: install_log.stdout_lines
+      tags: [unifi, install]
+
+- name: Wait for UniFi service to be created
+  ansible.builtin.wait_for:
+    path: "{{ unifi_service_file }}"
+    timeout: 60
+  failed_when: false
+  register: service_file_wait
+  tags: [unifi, service]
+
+- name: Reload systemd daemon
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: service_file_wait is succeeded
+  tags: [unifi, service]
+
+- name: Check if UniFi service exists
+  ansible.builtin.command: systemctl list-unit-files unifi.service
+  register: unifi_service_check
+  failed_when: false
+  changed_when: false
+  tags: [always]
+
+- name: Ensure UniFi service is enabled and started
+  become: true
+  ansible.builtin.service:
+    name: unifi
+    enabled: true
+    state: started
+  when: 
+    - service_file_wait is succeeded
+    - unifi_service_check is not skipped
+    - unifi_service_check.rc == 0
+  tags: [unifi, service]
+
+- name: Configure firewall for UniFi (if UFW enabled)
+  become: true
+  community.general.ufw:
+    rule: allow
+    port: "{{ item.port }}"
+    proto: "{{ item.proto }}"
+    comment: "{{ item.comment }}"
+  loop:
+    - { port: '8080', proto: 'tcp', comment: 'UniFi Device Communication' }
+    - { port: '8443', proto: 'tcp', comment: 'UniFi Web UI' }
+    - { port: '3478', proto: 'udp', comment: 'UniFi STUN' }
+    - { port: '10001', proto: 'udp', comment: 'UniFi AP Discovery' }
+    - { port: '6789', proto: 'tcp', comment: 'UniFi Mobile Speed Test' }
+  when: enable_ufw | default(false) | bool
+  tags: [unifi, firewall]
+
+- name: Deploy UniFi-specific monitoring scripts
+  ansible.builtin.copy:
+    src: "{{ inventory_dir }}/../../scripts/services/network/{{ item.src }}"
+    dest: "{{ scripts_dir }}/{{ item.dest }}"
+    mode: '0755'
+    owner: "{{ primary_user }}"
+    group: "{{ primary_user }}"
+  loop:
+    - { src: 'check_unifi.sh', dest: 'check_unifi_service' }
+    - { src: 'check_unifi_web.sh', dest: 'unifi_web_interface' }
+    - { src: 'backup_unifi.sh', dest: 'backup_unifi' }
+  tags: [unifi, monitoring, scripts]
+
+- name: Deploy common monitoring scripts for UniFi
+  ansible.builtin.copy:
+    src: "{{ inventory_dir }}/../../scripts/common/{{ item }}"
+    dest: "{{ scripts_dir }}/{{ item }}"
+    mode: '0755'
+    owner: "{{ primary_user }}"
+    group: "{{ primary_user }}"
+  loop:
+    - enhanced_monitoring_wrapper
+    - do_backup
+  tags: [unifi, monitoring, scripts]
+
+- name: Set up UniFi service monitoring cron job
+  ansible.builtin.cron:
+    name: "Test unifi service and restart"
+    minute: "*/13"
+    job: >
+      {{ scripts_dir }}/enhanced_monitoring_wrapper
+      --heartbeat-interval=daily
+      --notify-fixed=true
+      {{ logging_token }}
+      {{ alert_token }}
+      {{ scripts_dir }}/check_unifi_service
+      >> {{ logs_dir }}/check_unifi_service.log 2>&1
+    user: "{{ primary_user }}"
+  tags: [unifi, monitoring, cron]
+
+- name: Set up UniFi web interface monitoring cron job
+  ansible.builtin.cron:
+    name: "Test unifi web interface and restart"
+    minute: "*/15"
+    job: >
+      {{ scripts_dir }}/enhanced_monitoring_wrapper
+      --heartbeat-interval=daily
+      --notify-fixed=true
+      {{ logging_token }}
+      {{ alert_token }}
+      {{ scripts_dir }}/unifi_web_interface
+      >> {{ logs_dir }}/unifi_web_interface.log 2>&1
+    user: "{{ primary_user }}"
+  tags: [unifi, monitoring, cron]
+
+- name: Set up UniFi backup cron job
+  ansible.builtin.cron:
+    name: "Daily UniFi backup at 3:00 AM"
+    minute: "0"
+    hour: "3"
+    job: >
+      {{ scripts_dir }}/enhanced_monitoring_wrapper
+      --heartbeat-interval=daily
+      --notify-fixed=true
+      {{ logging_token }}
+      {{ alert_token }}
+      {{ scripts_dir }}/backup_unifi --silent --email={{ git_mail }}
+      >> {{ logs_dir }}/unifi_backup.log 2>&1
+    user: "{{ primary_user }}"
+  tags: [unifi, backup, cron]
+
+# Note: System health check is handled by the monitoring role (deploy_monitoring.yml)
+# No need to duplicate it here
+
+- name: Report UniFi deployment status
+  ansible.builtin.debug:
+    msg: |
+      ✅ UniFi Network Controller deployed
+      Web UI: https://{{ ansible_host }}:8443
+      Device Communication: {{ ansible_host }}:8080
+      Monitoring: 3 UniFi-specific cron jobs configured
+        - UniFi service check (*/13)
+        - Web interface check (*/15)
+        - Daily backup (3:00 AM)
+      Note: System health check is handled by the monitoring role
+  tags: [unifi]

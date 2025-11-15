@@ -1,0 +1,300 @@
+---
+# Pi-hole DNS filtering service role
+
+- name: Install required packages for Pi-hole
+  become: true
+  ansible.builtin.apt:
+    name:
+      - bc
+      - curl
+      - wget
+    state: present
+    update_cache: true
+  tags: [pihole, packages]
+
+- name: Create Pi-hole directory
+  become: true
+  ansible.builtin.file:
+    path: /etc/pihole
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+  tags: [pihole, directories]
+
+- name: Create Pi-hole setup configuration
+  become: true
+  ansible.builtin.template:
+    src: setupVars.conf.j2
+    dest: /etc/pihole/setupVars.conf
+    mode: '0644'
+    owner: root
+    group: root
+  tags: [pihole, config]
+
+- name: Download Pi-hole installation script
+  ansible.builtin.get_url:
+    url: "{{ pihole_install_url | default('https://install.pi-hole.net') }}"
+    dest: /tmp/pihole_install.sh
+    mode: '0755'
+  register: download_result
+  failed_when: false
+  tags: [pihole, install]
+
+- name: Download Pi-hole installation script from backup URL if needed
+  ansible.builtin.get_url:
+    url: https://raw.githubusercontent.com/pi-hole/pi-hole/master/automated%20install/basic-install.sh
+    dest: /tmp/pihole_install.sh
+    mode: '0755'
+  when: download_result.failed
+  tags: [pihole, install]
+
+- name: Install Pi-hole with unattended setup
+  become: true
+  ansible.builtin.shell: |
+    export PIHOLE_SKIP_OS_CHECK=true
+    export PH_VERBOSE=false
+    export PH_SKIP_INSTALL=false
+    bash /tmp/pihole_install.sh --unattended
+  args:
+    executable: /bin/bash
+    creates: /usr/local/bin/pihole
+  tags: [pihole, install]
+
+- name: Ensure Pi-hole services are enabled and started
+  become: true
+  ansible.builtin.service:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop:
+    - pihole-FTL
+  tags: [pihole, service]
+
+- name: Check if Pi-hole is already installed
+  ansible.builtin.stat:
+    path: /usr/local/bin/pihole
+  register: pihole_installed
+  tags: [pihole, check]
+
+- name: Configure Pi-hole
+  become: true
+  block:
+    - name: Update gravity database
+      ansible.builtin.command:
+        cmd: pihole -g
+      changed_when: false
+      tags: [pihole, update]
+    
+    - name: Add custom DNS records
+      ansible.builtin.lineinfile:
+        path: /etc/pihole/custom.list
+        line: "{{ item.ip }} {{ item.domain }}"
+        create: true
+      loop: "{{ pihole_custom_dns | default([]) }}"
+      when: pihole_custom_dns is defined
+      notify: restart pihole-FTL
+      tags: [pihole, dns]
+    
+    - name: Check if setupVars.conf exists
+      ansible.builtin.stat:
+        path: /etc/pihole/setupVars.conf
+      register: setupvars_exists
+      tags: [pihole, dns]
+    
+    - name: Configure upstream DNS servers
+      ansible.builtin.lineinfile:
+        path: /etc/pihole/setupVars.conf
+        regexp: "^{{ item.split('=')[0] }}"
+        line: "{{ item }}"
+      loop:
+        - "PIHOLE_DNS_1={{ pihole_dns1 | default('9.9.9.9') }}"
+        - "PIHOLE_DNS_2={{ pihole_dns2 | default('1.1.1.1') }}"
+      when: setupvars_exists.stat.exists
+      notify: restart pihole-FTL
+      tags: [pihole, dns]
+
+- name: Check if ufw is available
+  ansible.builtin.command:
+    cmd: which ufw
+  register: ufw_available
+  failed_when: false
+  changed_when: false
+  tags: [pihole, firewall]
+
+- name: Configure firewall for Pi-hole
+  become: true
+  community.general.ufw:
+    rule: allow
+    port: "{{ item.port }}"
+    proto: "{{ item.proto }}"
+    comment: "{{ item.comment }}"
+  loop:
+    - { port: '53', proto: 'tcp', comment: 'DNS TCP' }
+    - { port: '53', proto: 'udp', comment: 'DNS UDP' }
+    - { port: '80', proto: 'tcp', comment: 'Pi-hole Web' }
+    - { port: '443', proto: 'tcp', comment: 'Pi-hole Web SSL' }
+    - { port: '67', proto: 'udp', comment: 'DHCP' }
+  when: ufw_available.rc == 0 and primary_function == "dns"
+  tags: [pihole, firewall]
+
+# ============================================================
+# LEGACY: Combined Pi-hole + UniFi installation (DEPRECATED)
+# ============================================================
+# This section is kept for backward compatibility with old
+# single-host setups (e.g., original pihole Raspberry Pi).
+# For new deployments, use separate roles:
+#   - services/pihole for DNS (pihole-lxc)
+#   - services/unifi for Network Controller (unifi-lxc)
+# ============================================================
+# - name: Install Unifi Controller (optional - LEGACY)
+#   when: install_unifi | default(false)
+#   block:
+#     - name: Check if Unifi is already installed
+#       ansible.builtin.stat:
+#         path: /usr/lib/unifi
+#       register: unifi_installed
+#       tags: [unifi, check]
+#     
+#     - name: Install Unifi Controller using GlennR's script
+#       when: not unifi_installed.stat.exists
+#       block:
+#         - name: Download GlennR's Unifi installer
+#           ansible.builtin.get_url:
+#             url: https://get.glennr.nl/unifi/install/install_latest/unifi-latest.sh
+#             dest: /tmp/unifi-install.sh
+#             mode: '0755'
+#           tags: [unifi, install]
+#         
+#         - name: Run Unifi installer
+#           become: true
+#           ansible.builtin.command:
+#             cmd: /tmp/unifi-install.sh --skip
+#           environment:
+#             DEBIAN_FRONTEND: noninteractive
+#           tags: [unifi, install]
+#     
+#     - name: Configure firewall for Unifi
+#       become: true
+#       community.general.ufw:
+#         rule: allow
+#         port: "{{ item.port }}"
+#         proto: "{{ item.proto }}"
+#         comment: "{{ item.comment }}"
+#       loop:
+#         - { port: '8080', proto: 'tcp', comment: 'Unifi Device Communication' }
+#         - { port: '8443', proto: 'tcp', comment: 'Unifi Web UI' }
+#         - { port: '3478', proto: 'udp', comment: 'Unifi STUN' }
+#         - { port: '10001', proto: 'udp', comment: 'Unifi AP Discovery' }
+#         - { port: '6789', proto: 'tcp', comment: 'Unifi Mobile Speed Test' }
+#       when: ufw_available.rc == 0
+#       tags: [unifi, firewall]
+# ============================================================
+
+- name: Deploy Pi-hole monitoring scripts
+  ansible.builtin.copy:
+    src: "{{ inventory_dir }}/../../scripts/services/dns/{{ item }}"
+    dest: "{{ scripts_dir }}/{{ item }}"
+    mode: '0755'
+    owner: "{{ primary_user }}"
+    group: "{{ primary_user }}"
+  loop:
+    - check_ftl.sh
+    - dns_checkandchange
+    - dns_resolution_monitor.sh
+    - pihole_update.sh
+    - backup_pihole.sh
+  tags: [pihole, monitoring, scripts]
+
+- name: Set up Pi-hole FTL service monitoring cron job
+  ansible.builtin.cron:
+    name: "Check Pi-hole FTL service"
+    minute: "*/13"
+    job: >
+      {{ scripts_dir }}/enhanced_monitoring_wrapper
+      --heartbeat-interval=daily
+      --notify-fixed=true
+      {{ logging_token }}
+      {{ alert_token }}
+      {{ scripts_dir }}/check_ftl.sh
+      >> {{ logs_dir }}/ftl_service_check.log 2>&1
+    user: "{{ primary_user }}"
+  tags: [pihole, monitoring, cron]
+
+- name: Set up DNS checkandchange monitoring cron job
+  ansible.builtin.cron:
+    name: "DNS failover check"
+    minute: "*/15"
+    job: >
+      {{ scripts_dir }}/enhanced_monitoring_wrapper
+      --heartbeat-interval=daily
+      --notify-fixed=true
+      {{ logging_token }}
+      {{ alert_token }}
+      {{ scripts_dir }}/dns_checkandchange
+      >> {{ logs_dir }}/dns_checkandchange.log 2>&1
+    user: "{{ primary_user }}"
+  tags: [pihole, monitoring, cron]
+
+- name: Set up DNS resolution monitoring cron job
+  ansible.builtin.cron:
+    name: "DNS resolution test"
+    minute: "*/17"
+    job: >
+      {{ scripts_dir }}/enhanced_monitoring_wrapper
+      --heartbeat-interval=daily
+      --notify-fixed=true
+      {{ logging_token }}
+      {{ alert_token }}
+      {{ scripts_dir }}/dns_resolution_monitor.sh
+      >> {{ logs_dir }}/dns_resolution_monitor.log 2>&1
+    user: "{{ primary_user }}"
+  tags: [pihole, monitoring, cron]
+
+- name: Set up Pi-hole update cron job
+  ansible.builtin.cron:
+    name: "Monthly Pi-hole update"
+    special_time: monthly
+    job: >
+      {{ scripts_dir }}/enhanced_monitoring_wrapper
+      --heartbeat-interval=daily
+      --notify-fixed=true
+      {{ logging_token }}
+      {{ alert_token }}
+      {{ scripts_dir }}/pihole_update.sh
+      >> {{ logs_dir }}/pihole_update.log 2>&1
+    user: "{{ primary_user }}"
+  tags: [pihole, monitoring, cron]
+
+- name: Set up Pi-hole backup cron job
+  ansible.builtin.cron:
+    name: "Daily Pi-hole backup at 4:00 AM"
+    minute: "0"
+    hour: "4"
+    job: >
+      {{ scripts_dir }}/enhanced_monitoring_wrapper
+      --heartbeat-interval=daily
+      --notify-fixed=true
+      {{ logging_token }}
+      {{ alert_token }}
+      {{ scripts_dir }}/backup_pihole.sh --silent --email={{ git_mail }}
+      >> {{ logs_dir }}/pihole_backup.log 2>&1
+    user: "{{ primary_user }}"
+  tags: [pihole, backup, cron]
+
+# Note: System health check is handled by the monitoring role (deploy_monitoring.yml)
+# No need to duplicate it here
+
+- name: Report Pi-hole deployment status
+  ansible.builtin.debug:
+    msg: |
+      ✅ Pi-hole DNS Service deployed
+      Web UI: http://{{ ansible_host }}/admin
+      Monitoring: 5 Pi-hole-specific cron jobs configured
+        - FTL service check (*/13)
+        - DNS failover check (*/15)
+        - DNS resolution test (*/17)
+        - Monthly Pi-hole update
+        - Daily backup (4:00 AM)
+      Note: System health check is handled by the monitoring role
+  tags: [pihole]

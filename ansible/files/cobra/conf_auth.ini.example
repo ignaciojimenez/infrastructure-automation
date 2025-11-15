@@ -1,0 +1,4 @@
+[AUT]
+auth=username:password
+[SLACK]
+cobra_token="YOUR_SLACK_TOKEN_HERE"

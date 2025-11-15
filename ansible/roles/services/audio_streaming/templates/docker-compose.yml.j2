@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  liquidsoap:
+    image: savonet/liquidsoap:v2.2.5
+    container_name: liquidsoap_{{ liqs_name }}
+    network_mode: host
+    ipc: host  # Share IPC namespace for ALSA dsnoop shared memory
+    restart: unless-stopped
+    devices:
+      - /dev/snd:/dev/snd
+    volumes:
+      - {{ liquidsoap_script_path }}:/etc/liquidsoap/{{ liqs_name }}.liq:ro
+      - /var/log/liquidsoap:/var/log/liquidsoap
+      - /etc/asound.conf:/etc/asound.conf:ro
+    command: /etc/liquidsoap/{{ liqs_name }}.liq
+    user: "{{ primary_user_uid }}:{{ audio_group_gid }}"
+    group_add:
+      - "{{ audio_group_gid }}"
+    environment:
+      - HOME=/tmp

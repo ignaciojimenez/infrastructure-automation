@@ -1,0 +1,63 @@
+---
+# External storage configuration for media hosts
+
+- name: Ensure media group exists
+  become: true
+  ansible.builtin.group:
+    name: media
+    state: present
+  tags: [media, storage]
+
+- name: Create mount point for external drive
+  become: true
+  ansible.builtin.file:
+    path: "{{ external_drive_mount }}"
+    state: directory
+    mode: "0777"
+  when: external_drive_mount is defined
+  tags: [media, storage]
+
+- name: Check if external drive is already in fstab
+  ansible.builtin.command: "grep -q '{{ external_drive_uuid }}' /etc/fstab"
+  register: fstab_check
+  failed_when: false
+  changed_when: false
+  when: 
+    - external_drive_uuid is defined
+    - external_drive_mount is defined
+  tags: [media, storage]
+
+- name: Add fstab entry for external drive
+  become: true
+  ansible.builtin.lineinfile:
+    path: /etc/fstab
+    line: "UUID={{ external_drive_uuid }} {{ external_drive_mount }} {{ external_drive_fstype }} defaults,nofail,uid=1000,gid=media,dmask=002,fmask=113 0 0"
+    state: present
+  when: 
+    - external_drive_uuid is defined
+    - external_drive_mount is defined
+    - fstab_check.rc != 0
+  tags: [media, storage]
+
+- name: Mount external drive
+  become: true
+  ansible.builtin.command: "mount {{ external_drive_mount }}"
+  register: mount_result
+  failed_when: false
+  changed_when: mount_result.rc == 0
+  when: external_drive_mount is defined
+  tags: [media, storage]
+
+- name: Verify external drive is mounted
+  ansible.builtin.command: "mountpoint -q {{ external_drive_mount }}"
+  register: mount_check
+  failed_when: false
+  changed_when: false
+  when: external_drive_mount is defined
+  tags: [media, storage]
+
+- name: Display mount status
+  ansible.builtin.debug:
+    msg: "{{ 'External drive mounted at ' ~ external_drive_mount if mount_check.rc == 0 else 'WARNING: External drive not mounted at ' ~ external_drive_mount }}"
+  when: external_drive_mount is defined
+  tags: [media, storage]
