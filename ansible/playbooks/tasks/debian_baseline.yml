@@ -1,0 +1,38 @@
+---
+# Debian Baseline Configuration Tasks
+
+- name: Update package cache
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+  tags: [packages]
+
+- name: Install essential packages
+  ansible.builtin.apt:
+    name:
+      - curl
+      - wget
+      - git
+      - htop
+      - vim
+      - jq
+      - rsync
+      - cron
+      - sudo
+      - python3-pip
+      - iputils-ping
+    state: present
+  tags: [packages]
+
+- name: Set timezone
+  ansible.builtin.timezone:
+    name: "{{ timezone | default('Europe/Madrid') }}"
+  tags: [timezone]
+
+- name: Set ping capabilities for non-root users (LXC compatibility)
+  ansible.builtin.command:
+    cmd: setcap cap_net_raw+ep /bin/ping
+  changed_when: false
+  failed_when: false
+  when: platform_type == "lxc"
+  tags: [network, lxc]

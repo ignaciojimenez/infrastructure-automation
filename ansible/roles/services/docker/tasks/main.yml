@@ -1,0 +1,82 @@
+---
+# Docker installation and configuration role
+
+- name: Install Docker prerequisites
+  become: true
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - curl
+      - gnupg
+      - apt-transport-https
+    state: present
+    update_cache: true
+  tags: [docker, packages]
+
+- name: Download Docker GPG key
+  become: true
+  ansible.builtin.get_url:
+    url: "{{ docker_key_url | default('https://download.docker.com/linux/raspbian/gpg') }}"
+    dest: "{{ docker_key_file | default('/usr/share/keyrings/docker.asc') }}"
+    force: true
+    mode: '0644'
+  tags: [docker]
+
+- name: Get system architecture
+  ansible.builtin.command: dpkg --print-architecture
+  register: architecture_result
+  changed_when: false
+  tags: [docker]
+
+- name: Add Docker repository
+  become: true
+  ansible.builtin.apt_repository:
+    repo: "deb [arch={{ architecture_result.stdout }} signed-by={{ docker_key_file | default('/usr/share/keyrings/docker.asc') }}] {{ docker_distro_url | default('https://download.docker.com/linux/debian') }} {{ ansible_distribution_release }} stable"
+    filename: "docker"
+    state: present
+    update_cache: true
+  tags: [docker]
+
+- name: Install Docker packages
+  become: true
+  ansible.builtin.apt:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-buildx-plugin
+      - docker-compose-plugin
+      - python3-docker
+    state: present
+    install_recommends: true
+    force_apt_get: true
+    update_cache: true
+  tags: [docker, packages]
+
+- name: Create docker group
+  become: true
+  ansible.builtin.group:
+    name: docker
+    state: present
+  tags: [docker]
+
+- name: Add user to docker group
+  become: true
+  ansible.builtin.user:
+    name: "{{ ansible_user }}"
+    groups: docker
+    append: true
+  tags: [docker]
+
+- name: Reset SSH connection for group changes
+  ansible.builtin.meta: reset_connection
+  tags: [docker]
+
+- name: Start and enable Docker service
+  become: true
+  ansible.builtin.systemd:
+    name: docker
+    state: started
+    enabled: true
+    daemon_reload: true
+  tags: [docker]

@@ -1,0 +1,138 @@
+---
+# SSH Hardening - Migrated from raspberrypi-ansible
+
+- name: Fetch authorized keys from GitHub
+  ansible.builtin.uri:
+    url: "{{ gh_keys }}"
+    return_content: true
+    timeout: 30
+    status_code: 200
+  register: github_keys_fetched
+  when: gh_keys is defined
+  changed_when: false
+  tags: [ssh, keys]
+
+- name: Set authorized keys for standard user from github
+  ansible.posix.authorized_key:
+    user: "{{ ansible_user }}"
+    state: present
+    key: "{{ github_keys_fetched.content }}"
+    exclusive: true
+  when: gh_keys is defined and github_keys_fetched.status == 200
+  tags: [ssh, keys]
+
+- name: Create authorized key command script
+  become: true
+  ansible.builtin.copy:
+    dest: "/usr/local/bin/update_keys"
+    owner: root
+    mode: "755"
+    content: |
+      #!/bin/bash
+      curl -sf "{{ gh_keys }}"
+  when: gh_keys is defined
+  tags: [ssh, keys]
+
+- name: Backup current SSH configuration
+  ansible.builtin.copy:
+    src: /etc/ssh/sshd_config
+    dest: "/etc/ssh/sshd_config.backup.{{ ansible_date_time.epoch }}"
+    remote_src: true
+    owner: root
+    mode: '0600'
+  tags: [ssh, backup]
+
+- name: Deploy hardened sshd config
+  become: true
+  ansible.builtin.template:
+    backup: true
+    src: "{{ playbook_dir }}/../../templates/debian/sshd_config.j2"
+    dest: "/etc/ssh/sshd_config"
+    mode: '0600'
+    owner: root
+    group: root
+    validate: 'sshd -t -f %s'
+  when: os_family == "debian"
+  notify: restart_ssh
+  vars:
+    update_key_script: "/usr/local/bin/update_keys"
+  tags: [ssh, configuration]
+
+- name: Disable root user login
+  become: true
+  ansible.builtin.user:
+    name: root
+    state: present
+    password_lock: true
+    shell: "/sbin/nologin"
+  when: ansible_user != "root"
+  tags: [ssh, security]
+
+- name: Lock the user account password
+  become: true
+  ansible.builtin.user:
+    name: "{{ ansible_user }}"
+    password_lock: true
+  when: inventory_hostname not in ['devpi']  # Don't lock out devpi yet
+  tags: [ssh, security]
+
+- name: Allow only specific users (optional)
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^#?AllowUsers'
+    line: "AllowUsers {{ ssh_allowed_users | default('choco') }}"
+    state: present
+    validate: 'sshd -t -f %s'
+  when: ssh_allowed_users is defined
+  notify: restart_ssh
+  tags: [ssh, configuration]
+
+- name: Configure SSH idle timeout
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "{{ item.regexp }}"
+    line: "{{ item.line }}"
+    state: present
+  with_items:
+    - { regexp: '^#?TCPKeepAlive', line: 'TCPKeepAlive yes' }
+    - { regexp: '^#?LoginGraceTime', line: 'LoginGraceTime 60' }
+  notify: restart_ssh
+  tags: [ssh, configuration]
+
+- name: Ensure SSH service is enabled and running
+  ansible.builtin.systemd:
+    name: "{{ 'ssh' if os_family == 'debian' else 'sshd' }}"
+    state: started
+    enabled: true
+  when: os_family == 'debian'
+  tags: [ssh, service]
+
+- name: Create SSH monitoring script
+  ansible.builtin.copy:
+    content: |
+      #!/bin/sh
+      # Monitor SSH failed login attempts
+      
+      LOG_FILE="/var/log/auth.log"
+      if [ -f "/var/log/secure" ]; then
+          LOG_FILE="/var/log/secure"
+      fi
+      
+      # Check for failed SSH attempts in the last hour
+      FAILED=$(grep "Failed password" "$LOG_FILE" 2>/dev/null | \
+               grep "$(date '+%b %e %H')" | \
+               wc -l)
+      
+      if [ "$FAILED" -gt 10 ]; then
+          echo "❌ Warning: $FAILED failed SSH attempts in the last hour"
+          exit 1
+      elif [ "$FAILED" -gt 0 ]; then
+          echo "⚠️  $FAILED failed SSH attempts in the last hour"
+          exit 0
+      else
+          echo "✅ No failed SSH attempts"
+          exit 0
+      fi
+    dest: "{{ scripts_dir }}/check_ssh_security.sh"
+    mode: '0755'
+  tags: [ssh, monitoring]

@@ -1,0 +1,64 @@
+---
+# Main Site Playbook - Multi-platform infrastructure automation
+# Usage: ansible-playbook playbooks/site.yml --limit hostname
+#
+# This is the main orchestrator that imports all sub-playbooks in the correct order.
+# Each sub-playbook handles a specific phase of the deployment.
+#
+# Works with any initial state:
+# - Infrastructure user with SSH keys (works directly)
+# - Infrastructure user with password (uses vault_bootstrap_password)
+# - Root with SSH keys (creates infrastructure user, then continues)
+# - Root with password (uses vault_bootstrap_password, creates infrastructure user)
+
+# ========== PHASE 1: Bootstrap ==========
+# Creates user, sets up SSH keys, hardens security
+- ansible.builtin.import_playbook: bootstrap.yml
+  tags: [bootstrap, always]
+
+# ========== PHASE 2: Pre-flight Checks ==========
+# Validates connectivity, sets global facts, configures sudo
+- ansible.builtin.import_playbook: system/preflight.yml
+  tags: [preflight, always]
+
+# ========== PHASE 3: Initial System Updates ==========
+# Updates package lists and upgrades all packages
+- ansible.builtin.import_playbook: system/updates.yml
+  tags: [updates, initial]
+
+# ========== PHASE 4: Universal Baseline ==========
+# Applies baseline configuration to all hosts
+- ansible.builtin.import_playbook: system/baseline.yml
+  tags: [baseline]
+
+# ========== PHASE 5: Platform-Specific Configuration ==========
+# Applies OS and platform-specific settings
+- ansible.builtin.import_playbook: platform/debian.yml
+  tags: [debian, platform]
+
+- ansible.builtin.import_playbook: platform/freebsd.yml
+  tags: [freebsd, platform]
+
+- ansible.builtin.import_playbook: platform/raspberrypi.yml
+  tags: [raspberrypi, platform]
+
+- ansible.builtin.import_playbook: platform/lxc.yml
+  tags: [lxc, platform]
+
+- ansible.builtin.import_playbook: platform/proxmox.yml
+  tags: [proxmox, platform]
+
+# ========== PHASE 6: Service Deployments ==========
+# Deploys all services based on primary_function or install_* flags
+- ansible.builtin.import_playbook: services.yml
+  tags: [services]
+
+# ========== PHASE 7: Final Updates ==========
+# Final system update after all services are installed
+- ansible.builtin.import_playbook: system/updates.yml
+  tags: [updates, final]
+
+# ========== PHASE 8: Validation ==========
+# Validates deployment and displays summary
+- ansible.builtin.import_playbook: system/validation.yml
+  tags: [validation, always]

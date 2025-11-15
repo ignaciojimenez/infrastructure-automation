@@ -1,0 +1,20 @@
+# This option allows you to specify the frequency (in days) at which the package lists are refreshed.
+APT::Periodic::Update-Package-Lists "1";
+
+# Again, this option indicates a frequency (in days), this time for the downloading of the actual packages.
+APT::Periodic::Download-Upgradeable-Packages "1";
+
+# When this option is enabled, the daily script will execute unattended-upgrade (from the unattended-upgrades package)
+# which — as its name suggest — can automatize the upgrade process for some packages (by default it only
+# takes care of security updates, but this can be customized in /etc/apt/apt.conf.d/50unattended-upgrades).
+# Note that this option can be set with the help of debconf by running dpkg-reconfigure -plow unattended-upgrades.
+# If apt-listbugs is installed, it will prevent an automatic upgrade of packages which are affected by an already
+# reported serious or grave bug.
+APT::Periodic::Unattended-Upgrade "1";
+
+# This option covers a feature that apticron doesn't have. It controls how often obsolete packages
+# (those not referenced by any distribution anymore) are removed from the APT cache. This keeps the APT
+# cache at a reasonable size and means that you don't need to worry about that task.
+APT::Periodic::AutocleanInterval "3";
+
+APT::Periodic::Verbose "1";

@@ -1,0 +1,21 @@
+---
+# LXC container-specific configuration
+
+- name: Configure LXC containers
+  hosts: lxc_containers
+  become: true
+  tasks:
+    - name: LXC-specific configuration
+      ansible.builtin.debug:
+        msg: "Configuring LXC container {{ inventory_hostname }}"
+      tags: [lxc]
+      
+    - name: Remove unnecessary packages in containers
+      ansible.builtin.apt:
+        name:
+          - snapd
+          - cloud-init
+        state: absent
+        purge: true
+      when: platform_type == "lxc"
+      tags: [lxc, cleanup]

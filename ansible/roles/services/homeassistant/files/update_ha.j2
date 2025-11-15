@@ -1,0 +1,131 @@
+#!/bin/bash
+# Home Assistant Update Script
+
+set -euo pipefail
+
+CONTAINER_NAME="{{ container_name }}"
+IMAGE_NAME="ghcr.io/home-assistant/home-assistant:stable"
+BACKUP_DIR="{{ homeassistant_config_dir }}/backups"
+LOG_FILE="{{ logs_dir }}/ha_update.log"
+
+# Function to log messages
+log_message() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" | tee -a "$LOG_FILE"
+}
+
+# Function to create backup
+create_backup() {
+    log_message "Creating backup before update..."
+    mkdir -p "$BACKUP_DIR"
+    
+    local backup_file="$BACKUP_DIR/ha_backup_$(date +%Y%m%d_%H%M%S).tar.gz"
+    
+    if tar -czf "$backup_file" -C "{{ homeassistant_config_dir }}" --exclude="backups" .; then
+        log_message "✅ Backup created: $backup_file"
+        
+        # Keep only last 5 backups
+        cd "$BACKUP_DIR"
+        ls -t ha_backup_*.tar.gz | tail -n +6 | xargs rm -f 2>/dev/null || true
+        
+        return 0
+    else
+        log_message "❌ Failed to create backup"
+        return 1
+    fi
+}
+
+# Function to update Home Assistant
+update_ha() {
+    log_message "🔄 Starting Home Assistant update..."
+    
+    # Create backup first
+    if ! create_backup; then
+        log_message "❌ Update aborted due to backup failure"
+        exit 1
+    fi
+    
+    # Pull latest image
+    log_message "📥 Pulling latest Home Assistant image..."
+    if docker pull "$IMAGE_NAME"; then
+        log_message "✅ Latest image pulled successfully"
+    else
+        log_message "❌ Failed to pull latest image"
+        exit 1
+    fi
+    
+    # Stop current container
+    log_message "🛑 Stopping current Home Assistant container..."
+    if docker stop "$CONTAINER_NAME" 2>/dev/null; then
+        log_message "✅ Container stopped"
+    else
+        log_message "⚠️  Container was not running"
+    fi
+    
+    # Remove old container
+    log_message "🗑️  Removing old container..."
+    if docker rm "$CONTAINER_NAME" 2>/dev/null; then
+        log_message "✅ Old container removed"
+    else
+        log_message "⚠️  No container to remove"
+    fi
+    
+    # Start new container
+    log_message "🚀 Starting updated Home Assistant container..."
+    if docker run -d \
+        --name "$CONTAINER_NAME" \
+        --restart=unless-stopped \
+        --privileged \
+        -v "{{ homeassistant_config_dir }}:/config" \
+        -v "/etc/localtime:/etc/localtime:ro" \
+        --network=host \
+        -e TZ="{{ timezone | default('Europe/Madrid') }}" \
+        "$IMAGE_NAME"; then
+        log_message "✅ New container started successfully"
+    else
+        log_message "❌ Failed to start new container"
+        exit 1
+    fi
+    
+    # Wait for Home Assistant to be ready
+    log_message "⏳ Waiting for Home Assistant to be ready..."
+    local timeout=300
+    local count=0
+    
+    while [ $count -lt $timeout ]; do
+        if curl -s http://localhost:8123 >/dev/null 2>&1; then
+            log_message "✅ Home Assistant is ready!"
+            break
+        fi
+        
+        sleep 2
+        count=$((count + 2))
+    done
+    
+    if [ $count -ge $timeout ]; then
+        log_message "⚠️  Home Assistant may not be fully ready yet"
+    fi
+    
+    # Clean up old images
+    log_message "🧹 Cleaning up old Docker images..."
+    docker image prune -f >/dev/null 2>&1 || true
+    
+    log_message "🎉 Home Assistant update completed successfully!"
+}
+
+# Main execution
+main() {
+    log_message "🏠 Home Assistant Update Script Started"
+    
+    # Check if Docker is running
+    if ! docker info >/dev/null 2>&1; then
+        log_message "❌ Docker is not running"
+        exit 1
+    fi
+    
+    update_ha
+    
+    log_message "✅ Update process completed"
+}
+
+# Run main function
+main "$@"

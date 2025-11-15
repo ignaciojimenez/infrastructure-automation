@@ -1,0 +1,29 @@
+---
+# Audio streaming handlers
+
+- name: restart alsa
+  become: true
+  ansible.builtin.systemd:
+    name: alsa-restore.service
+    state: restarted
+
+- name: restart icecast2
+  become: true
+  ansible.builtin.systemd:
+    name: icecast2
+    state: restarted
+
+- name: restart liquidsoap
+  become: true
+  ansible.builtin.systemd:
+    name: "{{ liqs_name }}_liquidsoap.service"
+    state: restarted
+    daemon_reload: true
+  when: not (is_test_environment | default(false))
+
+- name: restart detect_audio
+  become: true
+  ansible.builtin.systemd:
+    name: detect_audio
+    state: restarted
+  when: not (is_test_environment | default(false))

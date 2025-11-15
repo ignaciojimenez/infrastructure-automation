@@ -1,0 +1,20 @@
+---
+exclude_paths:
+  - .git/
+  - migration_backup*/
+  - tmp/
+  
+skip_list:
+  - yaml[line-length]
+  - no-changed-when
+  
+warn_list:
+  - experimental
+  - command-instead-of-shell
+  
+use_default_rules: true
+
+# Ansible-lint configuration
+parseable: true
+quiet: false
+strict: false

@@ -1,0 +1,308 @@
+#!/bin/bash
+#
+# Internet Speed Monitor
+# Monitors internet speed using Ookla Speedtest CLI and alerts on significant drops
+#
+# Usage: internet_speed_monitor [--min-download=MBPS] [--min-upload=MBPS] [--max-ping=MS] [--tests=N] [--delay=SEC] [--silent]
+#
+# Parameters:
+#   --min-download=MBPS  Minimum acceptable download speed in Mbps (default: 50)
+#   --min-upload=MBPS    Minimum acceptable upload speed in Mbps (default: 10)
+#   --max-ping=MS        Maximum acceptable ping in milliseconds (default: 100)
+#   --tests=N            Number of tests to run and average (default: 3)
+#   --delay=SEC          Delay between tests in seconds (default: 45)
+#   --silent             Suppress non-error output
+#
+# Exit codes:
+#   0 - Speed test passed all thresholds
+#   1 - Speed test failed one or more thresholds
+#   2 - Speedtest command failed or not available
+
+set -u
+set -o pipefail
+
+# Default thresholds
+MIN_DOWNLOAD=300
+MIN_UPLOAD=150
+MAX_PING=100
+NUM_TESTS=3
+DELAY_BETWEEN_TESTS=45
+SILENT=false
+
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --min-download=*)
+            MIN_DOWNLOAD="${1#*=}"
+            shift
+            ;;
+        --min-upload=*)
+            MIN_UPLOAD="${1#*=}"
+            shift
+            ;;
+        --max-ping=*)
+            MAX_PING="${1#*=}"
+            shift
+            ;;
+        --tests=*)
+            NUM_TESTS="${1#*=}"
+            shift
+            ;;
+        --delay=*)
+            DELAY_BETWEEN_TESTS="${1#*=}"
+            shift
+            ;;
+        --silent)
+            SILENT=true
+            shift
+            ;;
+        -h|--help)
+            echo "Usage: $0 [--min-download=MBPS] [--min-upload=MBPS] [--max-ping=MS] [--tests=N] [--delay=SEC] [--silent]"
+            echo ""
+            echo "Default thresholds:"
+            echo "  Download: ${MIN_DOWNLOAD} Mbps"
+            echo "  Upload: ${MIN_UPLOAD} Mbps"
+            echo "  Ping: ${MAX_PING} ms"
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            exit 2
+            ;;
+    esac
+done
+
+# Function for logging (respects silent mode)
+log_msg() {
+    if [ "$SILENT" = "false" ]; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
+    fi
+}
+
+# Function for error logging (always shown)
+error_msg() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: $1" >&2
+}
+
+# Check if speedtest is available
+if ! command -v speedtest >/dev/null 2>&1; then
+    error_msg "Speedtest CLI is not installed or not in PATH"
+    exit 2
+fi
+
+# Function to run a single speedtest and parse results
+run_single_speedtest() {
+    local test_num=$1
+    log_msg "Running speed test ${test_num}/${NUM_TESTS}..."
+    
+    # Run speedtest and capture JSON output
+    local speedtest_output
+    if ! speedtest_output=$(speedtest --accept-license --accept-gdpr --format=json 2>&1); then
+        error_msg "Speedtest ${test_num} failed: $speedtest_output"
+        return 1
+    fi
+    
+    # Parse JSON results using jq (fallback to basic parsing if jq not available)
+    # Note: speedtest CLI outputs multiple JSON lines (logs + result), so filter for type="result" only
+    local download_mbps upload_mbps ping_ms server_name server_location isp
+    if command -v jq >/dev/null 2>&1; then
+        # Extract only the result line (type="result") to avoid parsing log lines
+        local result_json
+        result_json=$(echo "$speedtest_output" | grep '"type":"result"')
+        
+        if [ -z "$result_json" ]; then
+            error_msg "No result found in speedtest output"
+            return 1
+        fi
+        
+        download_mbps=$(echo "$result_json" | jq -r '.download.bandwidth // 0' | awk '{printf "%.2f", $1 * 8 / 1000000}')
+        upload_mbps=$(echo "$result_json" | jq -r '.upload.bandwidth // 0' | awk '{printf "%.2f", $1 * 8 / 1000000}')
+        ping_ms=$(echo "$result_json" | jq -r '.ping.latency // 0')
+        server_name=$(echo "$result_json" | jq -r '.server.name // "Unknown"')
+        server_location=$(echo "$result_json" | jq -r '.server.location // "Unknown"')
+        isp=$(echo "$result_json" | jq -r '.isp // "Unknown"')
+    else
+        # Fallback parsing without jq (basic regex extraction)
+        # Extract only the result line to avoid parsing log lines
+        local result_line
+        result_line=$(echo "$speedtest_output" | grep '"type":"result"')
+        
+        if [ -z "$result_line" ]; then
+            error_msg "No result found in speedtest output"
+            return 1
+        fi
+        
+        local download_bps upload_bps
+        download_bps=$(echo "$result_line" | grep -o '"bandwidth":[0-9]*' | head -1 | cut -d: -f2)
+        upload_bps=$(echo "$result_line" | grep -o '"bandwidth":[0-9]*' | tail -1 | cut -d: -f2)
+        download_mbps=$(echo "scale=2; $download_bps * 8 / 1000000" | bc -l 2>/dev/null || echo "0")
+        upload_mbps=$(echo "scale=2; $upload_bps * 8 / 1000000" | bc -l 2>/dev/null || echo "0")
+        ping_ms=$(echo "$result_line" | grep -o '"latency":[0-9.]*' | head -1 | cut -d: -f2)
+        server_name="Unknown"
+        server_location="Unknown"
+        isp="Unknown"
+    fi
+    
+    # Validate parsed values
+    if [ -z "$download_mbps" ] || [ -z "$upload_mbps" ] || [ -z "$ping_ms" ]; then
+        error_msg "Failed to parse speedtest ${test_num} results"
+        return 1
+    fi
+    
+    # Store results in global arrays
+    download_results+=("$download_mbps")
+    upload_results+=("$upload_mbps")
+    ping_results+=("$ping_ms")
+    
+    # Store server info from first successful test
+    if [ "$test_num" -eq 1 ]; then
+        final_server_name="$server_name"
+        final_server_location="$server_location"
+        final_isp="$isp"
+    fi
+    
+    log_msg "Test ${test_num} results: Download ${download_mbps} Mbps, Upload ${upload_mbps} Mbps, Ping ${ping_ms} ms"
+    return 0
+}
+
+# Function to calculate average from array
+calculate_average() {
+    local -n arr=$1
+    local sum=0
+    local count=${#arr[@]}
+    
+    if [ "$count" -eq 0 ]; then
+        echo "0"
+        return
+    fi
+    
+    for value in "${arr[@]}"; do
+        sum=$(echo "$sum + $value" | bc -l)
+    done
+    
+    echo "scale=2; $sum / $count" | bc -l
+}
+
+# Function to calculate median from array (more robust against outliers)
+calculate_median() {
+    local -n arr=$1
+    local count=${#arr[@]}
+    
+    if [ "$count" -eq 0 ]; then
+        echo "0"
+        return
+    fi
+    
+    # Sort array
+    local sorted=($(printf '%s\n' "${arr[@]}" | sort -n))
+    
+    if [ $((count % 2)) -eq 1 ]; then
+        # Odd number of elements
+        local middle=$((count / 2))
+        echo "${sorted[$middle]}"
+    else
+        # Even number of elements
+        local mid1=$((count / 2 - 1))
+        local mid2=$((count / 2))
+        echo "scale=2; (${sorted[$mid1]} + ${sorted[$mid2]}) / 2" | bc -l
+    fi
+}
+
+log_msg "Starting internet speed test series..."
+log_msg "Configuration: ${NUM_TESTS} tests with ${DELAY_BETWEEN_TESTS}s delay"
+log_msg "Thresholds: Download ≥${MIN_DOWNLOAD} Mbps, Upload ≥${MIN_UPLOAD} Mbps, Ping ≤${MAX_PING} ms"
+
+# Initialize result arrays
+download_results=()
+upload_results=()
+ping_results=()
+final_server_name="Unknown"
+final_server_location="Unknown"
+final_isp="Unknown"
+
+# Run multiple speed tests
+successful_tests=0
+for ((i=1; i<=NUM_TESTS; i++)); do
+    if run_single_speedtest "$i"; then
+        ((successful_tests++))
+    else
+        log_msg "Test ${i} failed, continuing with remaining tests..."
+    fi
+    
+    # Add delay between tests (except after the last test)
+    if [ "$i" -lt "$NUM_TESTS" ]; then
+        log_msg "Waiting ${DELAY_BETWEEN_TESTS} seconds before next test..."
+        sleep "$DELAY_BETWEEN_TESTS"
+    fi
+done
+
+# Check if we have enough successful tests
+if [ "$successful_tests" -eq 0 ]; then
+    error_msg "All speed tests failed"
+    exit 2
+elif [ "$successful_tests" -lt 2 ]; then
+    error_msg "Only ${successful_tests} test(s) succeeded, need at least 2 for reliable results"
+    exit 2
+fi
+
+# Calculate final results using median (more robust than average)
+download_mbps=$(calculate_median download_results)
+upload_mbps=$(calculate_median upload_results)
+ping_ms=$(calculate_median ping_results)
+
+# Also calculate averages for reporting
+download_avg=$(calculate_average download_results)
+upload_avg=$(calculate_average upload_results)
+ping_avg=$(calculate_average ping_results)
+
+log_msg "Completed ${successful_tests}/${NUM_TESTS} successful tests"
+log_msg "Final results (median): Download ${download_mbps} Mbps, Upload ${upload_mbps} Mbps, Ping ${ping_ms} ms"
+log_msg "Average results: Download ${download_avg} Mbps, Upload ${upload_avg} Mbps, Ping ${ping_avg} ms"
+
+# Convert to numeric for comparison (handle decimal points)
+download_int=$(echo "$download_mbps" | cut -d. -f1)
+upload_int=$(echo "$upload_mbps" | cut -d. -f1)
+ping_int=$(echo "$ping_ms" | cut -d. -f1)
+
+# Check thresholds
+issues=()
+status="PASS"
+
+if [ "$download_int" -lt "$MIN_DOWNLOAD" ]; then
+    issues+=("Download speed ${download_mbps} Mbps is below threshold of ${MIN_DOWNLOAD} Mbps")
+    status="FAIL"
+fi
+
+if [ "$upload_int" -lt "$MIN_UPLOAD" ]; then
+    issues+=("Upload speed ${upload_mbps} Mbps is below threshold of ${MIN_UPLOAD} Mbps")
+    status="FAIL"
+fi
+
+if [ "$ping_int" -gt "$MAX_PING" ]; then
+    issues+=("Ping ${ping_ms} ms is above threshold of ${MAX_PING} ms")
+    status="FAIL"
+fi
+
+# Generate report
+if [ "$SILENT" = "false" ]; then
+    log_msg "Speed test series completed"
+    log_msg "Server: $final_server_name, $final_server_location"
+    log_msg "ISP: $final_isp"
+    log_msg "Final results (median): Download ${download_mbps} Mbps, Upload ${upload_mbps} Mbps, Ping ${ping_ms} ms"
+fi
+
+if [ "$status" = "PASS" ]; then
+    if [ "$SILENT" = "false" ]; then
+        log_msg "✅ All speed thresholds met"
+    else
+        # Even in silent mode, provide minimal success output for monitoring
+        echo "✅ Speed test passed: Download ${download_mbps} Mbps, Upload ${upload_mbps} Mbps, Ping ${ping_ms} ms"
+    fi
+    exit 0
+else
+    error_msg "❌ Speed test failed - ${#issues[@]} issue(s) detected:"
+    for issue in "${issues[@]}"; do
+        error_msg "  - $issue"
+    done
+    exit 1
+fi

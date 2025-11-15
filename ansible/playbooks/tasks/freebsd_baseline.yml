@@ -1,0 +1,63 @@
+---
+# FreeBSD Baseline Configuration Tasks
+
+- name: Update package repository
+  ansible.builtin.command:
+    cmd: pkg update
+  register: pkg_update
+  changed_when: "'New version of pkg detected' in pkg_update.stdout"
+  tags: [packages]
+
+- name: Install essential packages
+  ansible.builtin.pkgng:
+    name:
+      - curl
+      - wget
+      - git
+      - htop
+      - vim
+      - jq
+      - rsync
+      - python3
+      - bash
+    state: present
+  tags: [packages]
+
+- name: Deploy FreeBSD-specific scripts
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../scripts/freebsd/"
+    dest: "{{ scripts_dir }}/"
+    mode: '0755'
+    backup: true
+  ignore_errors: true  # In case directory doesn't exist yet
+  tags: [scripts]
+
+- name: Configure system logging
+  ansible.builtin.lineinfile:
+    path: /etc/syslog.conf
+    regexp: '^#?\*\.\*.*@'
+    line: '*.* @{{ syslog_server | default("127.0.0.1") }}'
+    state: "{{ 'present' if syslog_server is defined else 'absent' }}"
+  when: syslog_server is defined
+  notify: restart syslogd
+  tags: [logging]
+
+- name: Set timezone
+  ansible.builtin.command:
+    cmd: "tzsetup {{ timezone | default('Europe/Madrid') }}"
+  register: tz_result
+  changed_when: tz_result.rc == 0
+  failed_when: false
+  tags: [timezone]
+
+- name: Configure periodic scripts
+  ansible.builtin.lineinfile:
+    path: /etc/periodic.conf
+    regexp: "{{ item.regexp }}"
+    line: "{{ item.line }}"
+    create: true
+  with_items:
+    - { regexp: '^daily_status_security_enable', line: 'daily_status_security_enable="YES"' }
+    - { regexp: '^daily_clean_tmps_enable', line: 'daily_clean_tmps_enable="YES"' }
+    - { regexp: '^weekly_locate_enable', line: 'weekly_locate_enable="YES"' }
+  tags: [periodic]

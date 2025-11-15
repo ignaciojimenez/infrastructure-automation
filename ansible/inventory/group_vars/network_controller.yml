@@ -1,0 +1,13 @@
+---
+# Network Controller (unifi-lxc)
+
+# Services
+enable_unifi: true
+
+# Firewall (OPNsense handles perimeter)
+enable_ufw: false
+
+# Backup
+enable_unifi_backup: true
+unifi_backup_frequency: "daily"
+unifi_backup_retention_days: 7

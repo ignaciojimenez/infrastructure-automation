@@ -1,0 +1,160 @@
+#!/bin/bash
+#
+# Script to change pihole dns settings when vpn is up/down
+# Designed to work with enhanced_monitoring_wrapper for Slack notifications
+
+set -e          # stop on errors
+set -u          # stop on unset variables
+set -o pipefail # stop on pipe failures
+
+# Colors for terminal output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+NC='\033[0m' # No Color
+
+# Initialize arrays for tracking issues and actions
+ALERTS=()
+ACTIONS=()
+
+# Log with timestamp and color
+log_msg() {
+  echo -e "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
+}
+
+# Configuration
+VPN_IP="10.64.0.1"
+VPN_DNS="${VPN_IP}"
+FALLBACK_DNS="9.9.9.9"
+SECONDARY_FALLBACK_DNS="1.1.1.1"
+
+# Check if VPN is up by pinging the VPN IP
+check_vpn() {
+  log_msg "Checking VPN connectivity to ${VPN_IP}..."
+  if /bin/ping -c 1 -W 2 "${VPN_IP}" > /dev/null 2>&1; then
+    log_msg "${GREEN}VPN is UP${NC}"
+    return 0
+  else
+    log_msg "${YELLOW}VPN is DOWN${NC}"
+    return 1
+  fi
+}
+
+# Get current DNS settings from pihole-FTL
+get_current_dns() {
+  log_msg "Retrieving current DNS settings..."
+  local dns_settings
+  dns_settings=$(sudo pihole-FTL --config dns.upstreams 2>/dev/null || echo "[]")
+  
+  if [[ "$dns_settings" == "[]" ]]; then
+    log_msg "${YELLOW}Warning: Could not retrieve current DNS settings${NC}"
+  else
+    log_msg "Current DNS settings: $dns_settings"
+  fi
+  
+  echo "$dns_settings"
+}
+
+# Set DNS servers using pihole-FTL
+set_dns_servers() {
+  local primary=$1
+  local secondary=$2
+  local dns_config="[\"${primary}\", \"${secondary}\"]"
+  
+  log_msg "Setting DNS servers to: ${dns_config}"
+  
+  # Update DNS configuration using Pi-hole v6 API
+  # This persists to pihole.toml automatically
+  if ! sudo pihole-FTL --config dns.upstreams "${dns_config}" 2>/dev/null; then
+    ALERTS+=("Failed to update DNS settings via pihole-FTL")
+    return 1
+  fi
+  
+  # Restart service to apply changes
+  log_msg "Restarting pihole-FTL service..."
+  if ! sudo systemctl restart pihole-FTL; then
+    ALERTS+=("Failed to restart pihole-FTL service")
+    return 1
+  fi
+  
+  # Verify the change was applied
+  sleep 2
+  local new_dns
+  new_dns=$(sudo pihole-FTL --config dns.upstreams 2>/dev/null || echo "[]")
+  if [[ "${new_dns}" == *"${primary}"* ]]; then
+    log_msg "${GREEN}DNS servers updated and verified successfully${NC}"
+    return 0
+  else
+    ALERTS+=("DNS update verification failed - settings may not have persisted")
+    return 1
+  fi
+}
+
+# Main execution
+log_msg "${GREEN}Starting DNS check and change${NC}"
+
+# Determine which DNS servers to use based on VPN status
+if check_vpn; then
+  PRIMARY_DNS="${VPN_DNS}"
+  SECONDARY_DNS="${FALLBACK_DNS}"
+  
+  # Check if we're already using the correct DNS
+  CURRENT_DNS=$(get_current_dns)
+  if [[ "${CURRENT_DNS}" == *"${VPN_DNS}"* ]]; then
+    log_msg "${GREEN}DNS already correctly configured for VPN${NC}"
+    echo "✅ DNS is properly configured for VPN usage"
+    exit 0
+  else
+    log_msg "${YELLOW}DNS needs to be updated for VPN${NC}"
+    ACTIONS+=("Switching DNS to use VPN DNS server: ${VPN_DNS}")
+  fi
+else
+  PRIMARY_DNS="${FALLBACK_DNS}"
+  SECONDARY_DNS="${SECONDARY_FALLBACK_DNS}"
+  
+  # Check if we're already using the correct DNS
+  CURRENT_DNS=$(get_current_dns)
+  if [[ "${CURRENT_DNS}" == *"${FALLBACK_DNS}"* && "${CURRENT_DNS}" != *"${VPN_DNS}"* ]]; then
+    log_msg "${GREEN}DNS already correctly configured for fallback${NC}"
+    echo "✅ DNS is properly configured for fallback usage"
+    exit 0
+  else
+    log_msg "${YELLOW}DNS needs to be updated for fallback${NC}"
+    ACTIONS+=("Switching DNS to use fallback DNS server: ${FALLBACK_DNS}")
+  fi
+fi
+
+# Apply the DNS configuration
+if set_dns_servers "${PRIMARY_DNS}" "${SECONDARY_DNS}"; then
+  ACTIONS+=("DNS configuration updated successfully")
+else
+  ALERTS+=("Failed to update DNS configuration")
+fi
+
+# Output results for monitoring_wrapper
+if [ ${#ALERTS[@]} -gt 0 ]; then
+  echo "DNS CHECK ALERTS:"
+  for alert in "${ALERTS[@]}"; do
+    echo "❌ $alert"
+  done
+  
+  if [ ${#ACTIONS[@]} -gt 0 ]; then
+    echo ""
+    echo "ACTIONS TAKEN:"
+    for action in "${ACTIONS[@]}"; do
+      echo "✅ $action"
+    done
+  fi
+  
+  exit 1
+else
+  if [ ${#ACTIONS[@]} -gt 0 ]; then
+    echo "DNS CHECK STATUS: Changes Applied"
+    for action in "${ACTIONS[@]}"; do
+      echo "✅ $action"
+    done
+  else
+    echo "✅ DNS configuration is correct"
+  fi
+  exit 0
+fi

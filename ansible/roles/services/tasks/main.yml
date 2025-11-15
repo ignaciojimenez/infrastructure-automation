@@ -1,0 +1,7 @@
+---
+# Services role - placeholder for service-specific tasks
+
+- name: Services role placeholder
+  ansible.builtin.debug:
+    msg: "Services role loaded - specific services are handled by sub-roles"
+  tags: [services]

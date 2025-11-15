@@ -1,0 +1,6 @@
+---
+# Home Assistant role dependencies
+
+dependencies:
+  - role: services/docker
+    tags: [docker]

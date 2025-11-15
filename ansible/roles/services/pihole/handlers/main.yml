@@ -1,0 +1,8 @@
+---
+# Pi-hole service handlers
+
+- name: Restart pihole-FTL
+  become: true
+  ansible.builtin.systemd:
+    name: pihole-FTL
+    state: restarted

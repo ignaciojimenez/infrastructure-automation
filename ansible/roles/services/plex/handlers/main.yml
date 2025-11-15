@@ -1,0 +1,16 @@
+---
+# Plex Media Server handlers
+
+- name: restart plex
+  become: true
+  ansible.builtin.service:
+    name: plexmediaserver
+    state: restarted
+  listen: restart plex
+
+- name: reload plex
+  become: true
+  ansible.builtin.service:
+    name: plexmediaserver
+    state: reloaded
+  listen: reload plex

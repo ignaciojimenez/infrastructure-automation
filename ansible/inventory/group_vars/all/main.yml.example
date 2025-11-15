@@ -1,0 +1,51 @@
+---
+# Global Variables - Common to all hosts
+# Uses vault.yml for sensitive data
+
+# ============================================================
+# Smart Defaults (override in hosts.yml or host_vars if needed)
+# ============================================================
+
+# Connection defaults - use inventory_hostname as ansible_host unless overridden
+ansible_host: "{{ inventory_hostname }}"
+
+# Infrastructure user - defaults to current user running Ansible
+# Can be overridden in vault.yml or host_vars
+infrastructure_user: "{{ vault_infrastructure_user | default(lookup('env', 'USER')) }}"
+ansible_user: "{{ infrastructure_user }}"
+
+# User configuration
+primary_user: "{{ ansible_user }}"
+home_dir: "/home/{{ primary_user }}"
+scripts_dir: "/home/{{ primary_user }}/scriptdir"
+logs_dir: "/home/{{ primary_user }}/logdir"
+
+# Connection fallback - try these users in order if infrastructure_user fails
+# Used by bootstrap to auto-detect initial user
+ansible_ssh_common_args: '-o ConnectTimeout=5'
+bootstrap_fallback_users:
+  - "{{ infrastructure_user }}"  # Try infrastructure user first (existing hosts)
+  - pi     # Try pi (fresh Raspberry Pi OS)
+  - root   # Try root (LXC containers, Proxmox)
+
+# Locale and timezone
+locale: "en_US.UTF-8"
+timezone: "Europe/Madrid"
+
+# Git configuration (from vault)
+git_name: "{{ vault_git_name }}"
+git_mail: "{{ vault_git_mail }}"
+
+# GitHub profile for SSH keys (from vault)
+gh_profile: "{{ vault_gh_profile }}"
+gh_keys: "https://github.com/{{ gh_profile }}.keys"
+gh_pgp: "https://github.com/{{ gh_profile }}.gpg"
+
+# Monitoring tokens (from vault)
+logging_token: "{{ vault_logging_token }}"
+alert_token: "{{ vault_alert_token }}"
+
+# System configuration
+enable_unattended_upgrades: true
+enable_monitoring: true
+

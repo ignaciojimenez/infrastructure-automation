@@ -1,0 +1,81 @@
+---
+# Deploy Monitoring Infrastructure - Cross-platform
+
+- name: Set up monitoring cron jobs (Debian/Linux)
+  ansible.builtin.cron:
+    name: "System health check"
+    minute: "{{ monitoring_interval | default('*/15') }}"
+    job: >
+      {{ scripts_dir }}/enhanced_monitoring_wrapper
+      --heartbeat-interval=daily
+      --notify-fixed=true
+      {{ logging_token }}
+      {{ alert_token }}
+      {{ scripts_dir }}/system_health_check.sh
+      >> {{ logs_dir }}/system_health_check.log 2>&1
+    user: "{{ primary_user }}"
+  when:
+    - os_family == "debian"
+    - logging_token is defined
+    - alert_token is defined
+  tags: [monitoring, cron]
+  # Note: disk_usage.sh and memory_check.sh are NOT scheduled separately
+  # as system_health_check.sh already includes disk and memory checks
+  # System health check is deployed to ALL hosts, including network_controller
+
+- name: Set up monitoring cron jobs (FreeBSD)
+  ansible.builtin.cron:
+    name: "{{ item.name }}"
+    minute: "{{ item.minute }}"
+    hour: "{{ item.hour | default('*') }}"
+    job: "{{ item.job }}"
+    user: "{{ primary_user }}"
+  loop:
+    - name: "System health check"
+      minute: "{{ monitoring_interval | default('*/15') }}"
+      job: "{{ scripts_dir }}/system_health_check.sh"
+    - name: "Firewall status check"
+      minute: "*/5"
+      job: "{{ scripts_dir }}/check_pf_status.sh"
+  when: os_family == "freebsd"
+  tags: [monitoring, cron]
+
+- name: Create monitoring aggregation script
+  ansible.builtin.copy:
+    content: |
+      #!/bin/sh
+      # Aggregate monitoring results
+      # Note: system_health_check.sh includes disk and memory checks
+      
+      MONITORING_DIR="{{ system_config_dir | default('/etc/monitoring') }}/results"
+      mkdir -p "$MONITORING_DIR"
+      
+      # Run comprehensive health check (includes disk, memory, load, services, network)
+      echo "=== System Health Check ===" > "$MONITORING_DIR/latest.txt"
+      {{ scripts_dir }}/system_health_check.sh >> "$MONITORING_DIR/latest.txt" 2>&1
+      
+      # Keep historical data
+      cp "$MONITORING_DIR/latest.txt" "$MONITORING_DIR/$(date +%Y%m%d_%H%M%S).txt"
+      
+      # Clean old files (keep 7 days)
+      find "$MONITORING_DIR" -name "*.txt" -mtime +7 -delete
+    dest: "{{ scripts_dir }}/run_all_monitoring.sh"
+    mode: '0755'
+  tags: [monitoring, scripts]
+
+- name: Test monitoring script execution
+  ansible.builtin.command:
+    cmd: "{{ scripts_dir }}/system_health_check.sh --version"
+  register: monitoring_test
+  failed_when: false
+  changed_when: false
+  tags: [monitoring, validation]
+
+- name: Report monitoring deployment status
+  ansible.builtin.debug:
+    msg: |
+      ✅ Monitoring deployed to {{ inventory_hostname }}
+      Scripts directory: {{ scripts_dir }}
+      Config directory: {{ system_config_dir | default('/etc/monitoring') }}
+      Monitoring interval: {{ monitoring_interval | default('*/15') }}
+  tags: [monitoring, validation]

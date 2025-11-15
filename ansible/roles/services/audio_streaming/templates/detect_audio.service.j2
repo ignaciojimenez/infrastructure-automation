@@ -1,0 +1,27 @@
+[Unit]
+Description=Audio Detection Service for Vinyl Streaming
+After=network.target icecast2.service {{ liqs_name }}_liquidsoap.service
+Requires=icecast2.service {{ liqs_name }}_liquidsoap.service
+
+[Service]
+Type=simple
+User={{ ansible_user }}
+Group=audio
+WorkingDirectory={{ home_dir }}
+ExecStart=/usr/bin/python3 {{ scripts_dir }}/detect_audio.py
+Restart=always
+RestartSec=5
+Nice=-5
+IOSchedulingClass=1
+IOSchedulingPriority=6
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=detect-audio
+
+# Environment
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

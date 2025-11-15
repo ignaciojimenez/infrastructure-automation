@@ -1,0 +1,342 @@
+#!/bin/bash
+#
+# Script to backup a file or dir to curlbin.ignacio.systems
+
+set -e          # stop on errors
+set -u          # stop on unset variables
+set -o pipefail # stop on pipe failures
+
+# Colors for terminal output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+NC='\033[0m' # No Color
+
+usage(){
+  echo "Usage: $(basename "$0") [options] file|dir recipient"
+  echo "Options:"
+  echo "  --logging=webhook_id  Slack webhook ID for success notifications (format T[A-Z0-9]*/B[A-Z0-9]*/[a-zA-Z0-9]*)"
+  echo "  --alert=webhook_id    Slack webhook ID for failure notifications (format T[A-Z0-9]*/B[A-Z0-9]*/[a-zA-Z0-9]*)"
+  echo "  --silent             Suppress Slack notifications (useful when run via monitoring wrapper)"
+  echo "  --help               Show this help message"
+  echo ""
+  echo "Required arguments:"
+  echo "  file|dir            Path to file or directory to backup"
+  echo "  recipient           Email address for GPG encryption"
+  echo ""
+  echo "Note: If --silent is used, webhook IDs are not required"
+  echo "      For backward compatibility, you can also use: logging_webhookid alert_webhookid file|dir recipient [--silent]"
+}
+
+log_msg() {
+  echo -e "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
+}
+
+cleanup() {
+  # Clean up any temporary files
+  if [ -n "${path_enc:-}" ] && [ -f "${path_enc}" ]; then
+    log_msg "Cleaning up temporary file: ${path_enc}"
+    rm -f "${path_enc}"
+  fi
+  
+  if [ -n "${tar_file:-}" ] && [ -f "${tar_file}" ]; then
+    log_msg "Cleaning up temporary tar file: ${tar_file}"
+    rm -f "${tar_file}"
+  fi
+}
+
+# Set up trap to clean up temporary files on exit
+trap cleanup EXIT INT TERM
+
+# Detect if running on Ubiquiti EdgeRouter (EdgeOS)
+is_edgerouter() {
+  if [ -d "/opt/vyatta" ] || [ -d "/etc/ubnt" ] || grep -qi 'edgeos\|edgerouter' /etc/issue /etc/version /etc/os-release 2>/dev/null; then
+    return 0
+  fi
+  return 1
+}
+
+E_NOARGS=85
+wh_regex="T[A-Z0-9]*\/B[A-Z0-9]*\/[a-zA-Z0-9]*"
+
+# Parse arguments
+silent_mode=false
+logging_wh=""
+alert_wh=""
+fileordir=""
+recipient=""
+
+# Check if using the old argument format (for backward compatibility)
+if [ -n "${1+x}" ] && [[ $1 =~ $wh_regex ]]; then
+  # Old format: logging_wh alert_wh fileordir recipient [--silent]
+  logging_wh=$1
+  alert_wh=$2
+  fileordir=$3
+  recipient=$4
+  
+  # Check for silent mode flag in old format
+  if [ -n "${5+x}" ] && [ "$5" == "--silent" ]; then
+    silent_mode=true
+  fi
+else
+  # New format with named options
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --logging=*)
+        # Extract just the webhook token from the option string
+        logging_wh=${1#--logging=}
+        shift
+        ;;
+      --alert=*)
+        # Extract just the webhook token from the option string
+        alert_wh=${1#--alert=}
+        shift
+        ;;
+      --silent)
+        silent_mode=true
+        shift
+        ;;
+      --help)
+        usage
+        exit 0
+        ;;
+      --*)
+        log_msg "ERROR: Unknown option: $1"
+        usage
+        exit 1
+        ;;
+      *)
+        # First non-option argument is fileordir
+        if [ -z "$fileordir" ]; then
+          fileordir="$1"
+        # Second non-option argument is recipient
+        elif [ -z "$recipient" ]; then
+          recipient="$1"
+        else
+          log_msg "ERROR: Unexpected argument: $1"
+          usage
+          exit 1
+        fi
+        shift
+        ;;
+    esac
+  done
+fi
+
+# Validate required arguments
+if [ -z "$fileordir" ] || [ -z "$recipient" ]; then
+  log_msg "ERROR: Missing required arguments"
+  usage
+  exit "$E_NOARGS"
+fi
+
+# Validate file/directory exists
+if ! test -e "$fileordir"; then
+  log_msg "ERROR: Cannot access file|dir: $fileordir"
+  usage
+  exit 1
+fi
+
+# Fix webhook tokens if they still contain the option prefix
+if [[ $logging_wh == --logging=* ]]; then
+  logging_wh=${logging_wh#--logging=}
+fi
+
+if [[ $alert_wh == --alert=* ]]; then
+  alert_wh=${alert_wh#--alert=}
+fi
+
+# Validate webhook format if provided
+if [ -n "$logging_wh" ] && ! [[ $logging_wh =~ $wh_regex ]]; then
+  log_msg "ERROR: Logging webhook format invalid. Expected format $wh_regex. Received: $logging_wh"
+  usage
+  exit 1
+fi
+
+if [ -n "$alert_wh" ] && ! [[ $alert_wh =~ $wh_regex ]]; then
+  log_msg "ERROR: Alert webhook format invalid. Expected format $wh_regex. Received: $alert_wh"
+  usage
+  exit 1
+fi
+
+# If not in silent mode, webhooks are required
+if [ "$silent_mode" != "true" ] && ([ -z "$logging_wh" ] || [ -z "$alert_wh" ]); then
+  log_msg "ERROR: Webhook IDs are required unless --silent is used"
+  usage
+  exit 1
+fi
+
+if [ "$silent_mode" == "true" ]; then
+  log_msg "Running in silent mode - will not send notifications"
+fi
+
+# On EdgeRouter (EdgeOS), prefer persistent GnuPG home under /config/.gnupg if not explicitly set
+if [ -z "${GNUPGHOME:-}" ] && is_edgerouter; then
+  if [ ! -d "/config/.gnupg" ]; then
+    mkdir -p "/config/.gnupg"
+    chmod 700 "/config/.gnupg"
+  fi
+  export GNUPGHOME="/config/.gnupg"
+  log_msg "Using EdgeOS GnuPG home: ${GNUPGHOME}"
+fi
+
+now=$(date +%d%m%y-%H%M)
+
+# Check if GPG is installed
+if ! command -v gpg &> /dev/null; then
+  log_msg "ERROR: GPG is not installed. Please install it to use this script."
+  exit 1
+fi
+
+# Check if curl is installed
+if ! command -v curl &> /dev/null; then
+  log_msg "ERROR: curl is not installed. Please install it to use this script."
+  exit 1
+fi
+
+# Check if recipient key is available
+if ! gpg --list-keys "${recipient}" &> /dev/null; then
+  log_msg "WARNING: GPG key for recipient '${recipient}' not found in keyring."
+  log_msg "Attempting to retrieve key from keyserver..."
+  if ! gpg --recv-keys "${recipient}" &> /dev/null; then
+    log_msg "WARNING: Could not retrieve key from keyserver. Encryption may fail."
+  fi
+fi
+
+# Handle directory compression
+if test -d "$fileordir"; then
+  log_msg "Compressing directory: ${fileordir}"
+  tar_file="/tmp/${fileordir##*/}.tar.gz"
+  parent=$(dirname "$fileordir")
+  cd "$parent"
+  if ! sudo tar -czf "${tar_file}" "${fileordir##*/}"; then
+    log_msg "ERROR: Failed to compress directory: ${fileordir}"
+    exit 1
+  fi
+  cd - > /dev/null
+  fileordir="${tar_file}"
+  log_msg "Directory compressed to: ${tar_file}"
+fi
+
+file_enc="${fileordir##*/}-${now}.gpg"
+path_enc="/tmp/${file_enc}"
+
+log_msg "Encrypting file with GPG for recipient: ${recipient}"
+if ! gpg --quiet --encrypt --output "${path_enc}" --yes --recipient "${recipient}" "${fileordir}"; then
+  log_msg "ERROR: GPG encryption failed"
+  exit 1
+fi
+log_msg "File encrypted successfully: ${path_enc}"
+
+log_msg "Uploading encrypted file to curlbin.ignacio.systems..."
+
+# Add timeout and retry logic with better error handling
+max_retries=3
+retry_count=0
+curl_log="/tmp/curl_log_${now}.txt"
+
+while [ $retry_count -lt $max_retries ]; do
+    # Upload to curlbin.ignacio.systems
+    log_msg "Attempt $((retry_count + 1)) to upload file..."
+    upload_response=$(curl -s -Fc=@"${path_enc}" "https://curlbin.ignacio.systems" 2>"$curl_log")
+    
+    # Check if we got a successful response by looking for the URL field in the JSON
+    if [[ "$upload_response" == *"url"* ]]; then
+        # Extract the URL from the JSON response
+        if command -v jq &> /dev/null; then
+            backup_url=$(echo "$upload_response" | jq -r '.url')
+            suggested_url=$(echo "$upload_response" | jq -r '.suggestedUrl')
+            manage_url=$(echo "$upload_response" | jq -r '.manageUrl')
+            expire_at=$(echo "$upload_response" | jq -r '.expireAt')
+        else
+            # Fallback to basic extraction if jq is not available
+            backup_url=$(echo "$upload_response" | grep -o '"url": "[^"]*"' | cut -d'"' -f4)
+            suggested_url=$(echo "$upload_response" | grep -o '"suggestedUrl": "[^"]*"' | cut -d'"' -f4)
+            manage_url=$(echo "$upload_response" | grep -o '"manageUrl": "[^"]*"' | cut -d'"' -f4)
+            expire_at=$(echo "$upload_response" | grep -o '"expireAt": "[^"]*"' | cut -d'"' -f4)
+        fi
+        
+        if [ -n "$backup_url" ]; then
+            log_msg "${GREEN}Upload successful on attempt $((retry_count + 1))${NC}"
+            break
+        fi
+    fi
+    
+    # If we get here, the upload failed
+    log_msg "${RED}Upload attempt $((retry_count + 1)) failed${NC}"
+    log_msg "Response received: ${upload_response:-'No response'}"
+    
+    retry_count=$((retry_count + 1))
+    if [ $retry_count -lt $max_retries ]; then
+        log_msg "Retrying in 5 seconds..."
+        sleep 5
+    fi
+done
+
+# Check if upload was successful
+if [ -n "${backup_url:-}" ]; then
+    log_msg "${GREEN}Backup performed successfully${NC}"
+    log_msg "Backup URL: ${backup_url}"
+    log_msg "Suggested URL: ${suggested_url}"
+    log_msg "Management URL: ${manage_url}"
+    log_msg "Expires at: ${expire_at}"
+    
+    # Create a file with the backup URLs for reference
+    {
+        echo "Backup URL: ${backup_url}"
+        echo "Suggested URL: ${suggested_url}"
+        echo "Management URL: ${manage_url}"
+        echo "Expires at: ${expire_at}"
+    } > "/tmp/backup_url_${now}.txt"
+    log_msg "Backup URLs saved to: /tmp/backup_url_${now}.txt"
+    
+    # Print success message with file size information
+    orig_size=$(du -h "${fileordir}" | cut -f1)
+    enc_size=$(du -h "${path_enc}" | cut -f1)
+    log_msg "Original size: ${orig_size}, Encrypted size: ${enc_size}"
+    
+    # Send success notification to Slack using logging webhook (unless in silent mode)
+    if [ "$silent_mode" != "true" ]; then
+      logging_hook="https://hooks.slack.com/services/${logging_wh}"
+      hostname_info=$(hostname)
+      content="{\"text\":\"\u2705 \`${hostname_info}\` - Backup successful \nFile: \`${fileordir}\`\nBackup URL: \`${backup_url}\`\nExpires: \`${expire_at}\` \n\"}"
+      
+      log_msg "Sending success notification to logging webhook"
+      webhook_result=$(curl -s -X POST -H 'Content-type: application/json' --data "${content}" "$logging_hook" || echo "Webhook call failed")
+      log_msg "Webhook result: ${webhook_result}"
+    else
+      log_msg "Silent mode: Skipping success notification"
+    fi
+    
+    exit 0
+else
+    # Upload failed completely
+    log_msg "${RED}ERROR: Backup failed after $max_retries attempts${NC}"
+    
+    # Save file locally as fallback
+    fallback_path="/tmp/backup_${file_enc}"
+    cp "${path_enc}" "$fallback_path"
+    log_msg "${YELLOW}Fallback backup saved to: $fallback_path${NC}"
+    
+    # Check if we have curl logs to include in the alert
+    curl_error=""
+    if [ -f "$curl_log" ]; then
+        curl_error=$(head -n 10 "$curl_log")
+        log_msg "Curl error details: $curl_error"
+    fi
+    
+    # Send failure notification to Slack using alert webhook (unless in silent mode)
+    if [ "$silent_mode" != "true" ]; then
+      alert_hook="https://hooks.slack.com/services/${alert_wh}"
+      hostname_info=$(hostname)
+      content="{\"text\":\"\u274c \`${hostname_info}\` - Backup failed \nFile: \`${fileordir}\`\nLocal backup: \`${fallback_path}\`\nError: \`${curl_error}\` \n\"}"
+      
+      log_msg "Sending alert to alert webhook"
+      webhook_result=$(curl -s -X POST -H 'Content-type: application/json' --data "${content}" "$alert_hook" || echo "Webhook call failed")
+      log_msg "Webhook result: ${webhook_result}"
+    else
+      log_msg "Silent mode: Skipping failure notification"
+    fi
+    
+    exit 1
+fi

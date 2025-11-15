@@ -1,0 +1,41 @@
+---
+# Deploy all common scripts to all hosts
+# Usage: ansible-playbook ansible/playbooks/deploy_monitoring.yml
+
+- name: Deploy common scripts
+  hosts: all
+  become: true
+  tasks:
+    - name: Find all scripts in common directory
+      ansible.builtin.find:
+        paths: "{{ playbook_dir }}/../../scripts/common/"
+        file_type: file
+      register: common_scripts
+      delegate_to: localhost
+      become: false  # Don't sudo on control machine
+      run_once: true
+      tags: [monitoring, scripts]
+    
+    - name: Deploy all common scripts
+      ansible.builtin.copy:
+        src: "{{ item.path }}"
+        dest: "{{ scripts_dir }}/{{ item.path | basename }}"
+        mode: '0755'
+        owner: "{{ primary_user }}"
+        group: "{{ primary_user }}"
+      loop: "{{ common_scripts.files }}"
+      tags: [monitoring, scripts]
+      
+    - name: Restart monitoring services if needed
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: restarted
+      loop:
+        - cron
+      when: ansible_service_mgr == "systemd"
+      failed_when: false
+      tags: [monitoring, services]
+      
+    - name: Report deployment complete
+      ansible.builtin.debug:
+        msg: "✅ Monitoring scripts deployed to {{ inventory_hostname }}"

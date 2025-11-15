@@ -1,0 +1,98 @@
+---
+# Samba file sharing service role
+
+- name: Install Samba packages
+  become: true
+  ansible.builtin.apt:
+    name:
+      - samba
+      - samba-common-bin
+    state: present
+    update_cache: true
+  tags: [samba, packages]
+
+- name: Create Samba configuration backup
+  become: true
+  ansible.builtin.copy:
+    src: /etc/samba/smb.conf
+    dest: /etc/samba/smb.conf.backup
+    remote_src: true
+    force: false
+  tags: [samba, config]
+
+- name: Configure Samba global settings
+  become: true
+  ansible.builtin.template:
+    src: smb.conf.j2
+    dest: /etc/samba/smb.conf
+    backup: true
+    owner: root
+    group: root
+    mode: '0644'
+  tags: [samba, config]
+  notify: restart samba
+
+- name: Create Samba share directories
+  become: true
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner | default('nobody') }}"
+    group: "{{ item.group | default('nogroup') }}"
+    mode: "{{ item.mode | default('0755') }}"
+  loop: "{{ samba_shares | default([]) }}"
+  tags: [samba, directories]
+
+- name: Set ownership for existing share directories
+  become: true
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    owner: "{{ item.owner | default('nobody') }}"
+    group: "{{ item.group | default('nogroup') }}"
+    mode: "{{ item.mode | default('0755') }}"
+    recurse: "{{ item.recurse | default(false) }}"
+  loop: "{{ samba_shares | default([]) }}"
+  when: item.path is defined
+  tags: [samba, permissions]
+
+- name: Start and enable Samba services
+  become: true
+  ansible.builtin.service:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop:
+    - smbd
+    - nmbd
+  tags: [samba, service]
+
+# ============================================================
+# Monitoring Configuration
+# ============================================================
+
+- name: Deploy Samba monitoring script
+  ansible.builtin.copy:
+    src: "{{ inventory_dir }}/../../scripts/services/media/check_samba.sh"
+    dest: "{{ scripts_dir }}/check_samba.sh"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0755'
+  tags: [samba, monitoring]
+
+- name: Configure Samba service monitoring cron job
+  ansible.builtin.cron:
+    name: "Samba service check"
+    minute: "0"
+    job: >
+      {{ scripts_dir }}/enhanced_monitoring_wrapper
+      --heartbeat-interval=daily
+      --notify-fixed=true
+      {{ logging_token }}
+      {{ alert_token }}
+      {{ scripts_dir }}/check_samba.sh
+      >> {{ logs_dir }}/samba_service_check.log 2>&1
+    user: "{{ ansible_user }}"
+  when:
+    - logging_token is defined and logging_token != ''
+    - alert_token is defined and alert_token != ''
+  tags: [samba, monitoring, cron]

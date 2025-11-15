@@ -1,0 +1,178 @@
+#!/bin/bash
+# Home Assistant Stop/Start Script
+
+set -euo pipefail
+
+CONTAINER_NAME="{{ container_name }}"
+LOG_FILE="{{ logs_dir }}/ha_control.log"
+
+# Function to log messages
+log_message() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" | tee -a "$LOG_FILE"
+}
+
+# Function to show usage
+show_usage() {
+    echo "Usage: $0 {start|stop|restart|status}"
+    echo ""
+    echo "Commands:"
+    echo "  start   - Start Home Assistant container"
+    echo "  stop    - Stop Home Assistant container"
+    echo "  restart - Restart Home Assistant container"
+    echo "  status  - Show container status"
+    exit 1
+}
+
+# Function to get container status
+get_container_status() {
+    if docker ps -q -f name="$CONTAINER_NAME" | grep -q .; then
+        echo "running"
+    elif docker ps -aq -f name="$CONTAINER_NAME" | grep -q .; then
+        echo "stopped"
+    else
+        echo "not_found"
+    fi
+}
+
+# Function to start Home Assistant
+start_ha() {
+    local status=$(get_container_status)
+    
+    case $status in
+        "running")
+            log_message "✅ Home Assistant is already running"
+            return 0
+            ;;
+        "stopped")
+            log_message "🚀 Starting Home Assistant container..."
+            if docker start "$CONTAINER_NAME"; then
+                log_message "✅ Home Assistant started successfully"
+                wait_for_ha
+                return 0
+            else
+                log_message "❌ Failed to start Home Assistant"
+                return 1
+            fi
+            ;;
+        "not_found")
+            log_message "❌ Home Assistant container not found. Please run update_ha to create it."
+            return 1
+            ;;
+    esac
+}
+
+# Function to stop Home Assistant
+stop_ha() {
+    local status=$(get_container_status)
+    
+    case $status in
+        "running")
+            log_message "🛑 Stopping Home Assistant container..."
+            if docker stop "$CONTAINER_NAME"; then
+                log_message "✅ Home Assistant stopped successfully"
+                return 0
+            else
+                log_message "❌ Failed to stop Home Assistant"
+                return 1
+            fi
+            ;;
+        "stopped")
+            log_message "✅ Home Assistant is already stopped"
+            return 0
+            ;;
+        "not_found")
+            log_message "⚠️  Home Assistant container not found"
+            return 1
+            ;;
+    esac
+}
+
+# Function to restart Home Assistant
+restart_ha() {
+    log_message "🔄 Restarting Home Assistant..."
+    
+    if stop_ha && start_ha; then
+        log_message "✅ Home Assistant restarted successfully"
+        return 0
+    else
+        log_message "❌ Failed to restart Home Assistant"
+        return 1
+    fi
+}
+
+# Function to show status
+show_status() {
+    local status=$(get_container_status)
+    
+    case $status in
+        "running")
+            echo "🟢 Home Assistant is RUNNING"
+            docker ps -f name="$CONTAINER_NAME" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+            
+            # Check if web interface is accessible
+            if curl -s http://localhost:8123 >/dev/null 2>&1; then
+                echo "🌐 Web interface is accessible at http://localhost:8123"
+            else
+                echo "⚠️  Web interface may not be ready yet"
+            fi
+            ;;
+        "stopped")
+            echo "🔴 Home Assistant is STOPPED"
+            docker ps -a -f name="$CONTAINER_NAME" --format "table {{.Names}}\t{{.Status}}"
+            ;;
+        "not_found")
+            echo "❌ Home Assistant container NOT FOUND"
+            echo "Run 'update_ha' to create and start the container"
+            ;;
+    esac
+}
+
+# Function to wait for Home Assistant to be ready
+wait_for_ha() {
+    log_message "⏳ Waiting for Home Assistant to be ready..."
+    local timeout=120
+    local count=0
+    
+    while [ $count -lt $timeout ]; do
+        if curl -s http://localhost:8123 >/dev/null 2>&1; then
+            log_message "✅ Home Assistant is ready!"
+            return 0
+        fi
+        
+        sleep 2
+        count=$((count + 2))
+    done
+    
+    log_message "⚠️  Home Assistant may not be fully ready yet (timeout after ${timeout}s)"
+    return 1
+}
+
+# Main execution
+main() {
+    # Check if Docker is running
+    if ! docker info >/dev/null 2>&1; then
+        log_message "❌ Docker is not running"
+        exit 1
+    fi
+    
+    case "${1:-}" in
+        "start")
+            start_ha
+            ;;
+        "stop")
+            stop_ha
+            ;;
+        "restart")
+            restart_ha
+            ;;
+        "status")
+            show_status
+            ;;
+        *)
+            show_usage
+            ;;
+    esac
+}
+
+# Run main function
+main "$@"

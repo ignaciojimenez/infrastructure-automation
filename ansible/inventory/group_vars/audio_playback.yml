@@ -1,0 +1,16 @@
+---
+# Audio Playback (hifipi)
+
+# Services
+enable_mpd: true
+enable_avahi: true
+enable_airplay: true
+enable_spotify: true
+
+# Hardware (auto-skipped on test environments)
+configure_audio_volume: true
+enable_audio_output_check: true
+
+# Platform
+disable_bluetooth: true
+disable_hdmi: true

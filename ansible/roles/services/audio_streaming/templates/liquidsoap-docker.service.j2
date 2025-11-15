@@ -1,0 +1,19 @@
+[Unit]
+Description=Liquidsoap {{ liqs_name }} (Docker)
+After=docker.service icecast2.service
+Requires=docker.service
+Wants=icecast2.service
+
+[Service]
+Type=simple
+WorkingDirectory={{ home_dir }}/liquidsoap
+ExecStartPre=/usr/bin/docker-compose down
+ExecStart=/usr/bin/docker-compose up
+ExecStop=/usr/bin/docker-compose down
+Restart=always
+RestartSec=10
+User={{ primary_user }}
+Group={{ primary_user }}
+
+[Install]
+WantedBy=multi-user.target

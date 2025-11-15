@@ -1,0 +1,29 @@
+---
+# Vault-encrypted secrets template
+# Copy to vault.yml and encrypt with: ansible-vault encrypt vault.yml
+# Edit with: ansible-vault edit vault.yml
+
+# Bootstrap password (for initial host setup)
+vault_bootstrap_password: "XXXXXXXX"
+
+# Infrastructure user (optional - defaults to current user running Ansible)
+# vault_infrastructure_user: "myusername"
+
+# Git configuration  
+vault_git_name: "Your Name"
+vault_git_mail: "your.email@example.com"
+
+# GitHub profile (for SSH keys)
+vault_gh_profile: "yourgithubusername"
+
+# Monitoring tokens
+vault_logging_token: "your-logging-token"
+vault_alert_token: "your-alert-token"
+
+# Service-specific secrets (examples)
+vault_transmission_username: "admin"
+vault_transmission_password: "changeme"
+
+# WiFi credentials (for WiFi-enabled Pis)
+vault_wifi_ssid: "YourWiFiNetwork"
+vault_wifi_password: "YourWiFiPassword"

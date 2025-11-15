@@ -1,0 +1,26 @@
+---
+# FreeBSD-specific configuration
+
+- name: Configure FreeBSD-based systems
+  hosts: freebsd_hosts
+  become: true
+  tasks:
+    - ansible.builtin.import_tasks: ../tasks/freebsd_baseline.yml
+      tags: [freebsd, baseline]
+      
+    - name: Deploy FreeBSD-specific monitoring
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../../scripts/freebsd/"
+        dest: "{{ scripts_dir }}/"
+        mode: '0755'
+        backup: true
+      when: enable_monitoring | default(true)
+      tags: [freebsd, scripts, monitoring]
+
+- name: Configure OPNsense firewall
+  hosts: freebsd_hosts
+  become: true
+  tasks:
+    - ansible.builtin.import_tasks: ../tasks/opnsense_monitoring.yml
+      when: platform_type == "opnsense"
+      tags: [opnsense, monitoring, firewall]

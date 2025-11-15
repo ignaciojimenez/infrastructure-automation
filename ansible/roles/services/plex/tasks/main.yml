@@ -1,0 +1,118 @@
+---
+# Plex Media Server service role
+
+- name: Install packages required for Plex
+  become: true
+  ansible.builtin.apt:
+    update_cache: true
+    name:
+      - apt-transport-https
+    state: present
+  tags: [plex, packages]
+
+- name: Download Plex repository key
+  become: true
+  ansible.builtin.get_url:
+    url: "{{ plex_key_url | default('https://downloads.plex.tv/plex-keys/PlexSign.key') }}"
+    dest: "{{ plex_key_file | default('/usr/share/keyrings/PlexSign.key') }}"
+    force: true
+    mode: '0644'
+  tags: [plex, repository]
+
+- name: Add Plex repository
+  become: true
+  ansible.builtin.apt_repository:
+    repo: "deb [signed-by={{ plex_key_file | default('/usr/share/keyrings/PlexSign.key') }}] {{ plex_distro_url | default('https://downloads.plex.tv/repo/deb') }} public main"
+    filename: "plex"
+    state: present
+    update_cache: true
+  tags: [plex, repository]
+
+- name: Install Plex Media Server
+  become: true
+  ansible.builtin.apt:
+    name: plexmediaserver
+    state: present
+    install_recommends: true
+    force_apt_get: true
+    update_cache: true
+  tags: [plex, packages]
+  notify: restart plex
+
+- name: Ensure Plex service is enabled and started
+  become: true
+  ansible.builtin.service:
+    name: plexmediaserver
+    enabled: true
+    state: started
+  tags: [plex, service]
+
+- name: Configure Plex media server
+  ansible.builtin.debug:
+    msg: "Plex configuration placeholder - add specific tasks here"
+  tags: [plex, media]
+
+# ============================================================
+# Monitoring Configuration
+# ============================================================
+
+- name: Deploy Plex monitoring script
+  ansible.builtin.copy:
+    src: "{{ inventory_dir }}/../../scripts/services/media/check_plex.sh"
+    dest: "{{ scripts_dir }}/check_plex.sh"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0755'
+  tags: [plex, monitoring]
+
+- name: Configure Plex service monitoring cron job
+  ansible.builtin.cron:
+    name: "Plex service check"
+    minute: "0"
+    job: >
+      {{ scripts_dir }}/enhanced_monitoring_wrapper
+      --heartbeat-interval=daily
+      --notify-fixed=true
+      {{ logging_token }}
+      {{ alert_token }}
+      {{ scripts_dir }}/check_plex.sh
+      >> {{ logs_dir }}/plex_service_check.log 2>&1
+    user: "{{ ansible_user }}"
+  when:
+    - logging_token is defined and logging_token != ''
+    - alert_token is defined and alert_token != ''
+  tags: [plex, monitoring, cron]
+
+# ============================================================
+# Backup Configuration
+# ============================================================
+
+- name: Deploy Plex backup script
+  ansible.builtin.copy:
+    src: backup_plex_config
+    dest: "{{ scripts_dir }}/backup_plex_config"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0755'
+  tags: [plex, backup]
+
+- name: Configure Plex backup cron job
+  ansible.builtin.cron:
+    name: "Plex configuration backup"
+    minute: "0"
+    hour: "4"
+    day: "*/7"
+    job: >
+      {{ scripts_dir }}/enhanced_monitoring_wrapper
+      --heartbeat-interval=always
+      --notify-fixed=true
+      {{ logging_token }}
+      {{ alert_token }}
+      {{ scripts_dir }}/backup_plex_config --silent --email={{ git_mail }}
+      >> {{ logs_dir }}/plex_config_backup.log 2>&1
+    user: "{{ ansible_user }}"
+  when:
+    - logging_token is defined and logging_token != ''
+    - alert_token is defined and alert_token != ''
+    - git_mail is defined and git_mail != ''
+  tags: [plex, backup, cron]

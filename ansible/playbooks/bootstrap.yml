@@ -1,0 +1,322 @@
+---
+# Bootstrap Playbook - Initial Host Configuration
+# Usage: ansible-playbook playbooks/bootstrap.yml --limit newhost
+# 
+# This playbook handles all scenarios automatically:
+# - Infrastructure user with SSH keys (works directly)
+# - Infrastructure user with password (uses vault_bootstrap_password)
+# - Root with SSH keys (creates infrastructure user, then continues)
+# - Root with password (uses vault_bootstrap_password, creates infrastructure user)
+#
+# Just run: ansible-playbook playbooks/bootstrap.yml --limit hostname
+# No need for --ask-pass or --user flags!
+
+- name: Detect available user (try infrastructure user, pi, root)
+  hosts: all
+  gather_facts: false
+  vars_files:
+    - "{{ playbook_dir }}/../inventory/group_vars/all/vault.yml"
+  vars:
+    ansible_password: "{{ vault_bootstrap_password | default(omit) }}"
+  tasks:
+    - name: Try connecting with infrastructure user
+      ansible.builtin.raw: "echo connected"
+      vars:
+        ansible_user: "{{ infrastructure_user | default(lookup('env', 'USER')) }}"
+      register: infrastructure_connection
+      ignore_errors: true
+      changed_when: false
+    
+    - name: Try connecting as pi if infrastructure user failed
+      ansible.builtin.raw: "echo connected"
+      vars:
+        ansible_user: pi
+        ansible_password: "{{ vault_bootstrap_password | default(omit) }}"
+      register: pi_connection
+      ignore_errors: true
+      changed_when: false
+      when: infrastructure_connection is failed
+    
+    - name: Try connecting as root if both failed
+      ansible.builtin.raw: "echo connected"
+      vars:
+        ansible_user: root
+        ansible_password: "{{ vault_bootstrap_password | default(omit) }}"
+      register: root_connection
+      ignore_errors: true
+      changed_when: false
+      when: 
+        - infrastructure_connection is failed
+        - pi_connection is failed
+    
+    - name: Set detected user
+      ansible.builtin.set_fact:
+        detected_user: "{{ infrastructure_user if infrastructure_connection is succeeded else ('pi' if pi_connection is succeeded else ('root' if root_connection is succeeded else infrastructure_user)) }}"
+        cacheable: true
+    
+    - name: Display detected user
+      ansible.builtin.debug:
+        msg: " Detected user: {{ detected_user }} on {{ inventory_hostname }}"
+
+- name: Bootstrap system (create infrastructure user if needed)
+  hosts: all
+  become: true
+  gather_facts: true
+  vars_files:
+    - "{{ playbook_dir }}/../inventory/group_vars/all/vault.yml"
+  vars:
+    # Use bootstrap password from vault as fallback
+    ansible_user: "{{ detected_user | default(ansible_user) }}"
+    ansible_password: "{{ vault_bootstrap_password | default(omit) }}"
+    ansible_become_password: "{{ vault_bootstrap_password | default(omit) }}"
+  tasks:
+    - name: Check if we're connected as root
+      ansible.builtin.set_fact:
+        connected_as_root: "{{ ansible_user_id == 'root' }}"
+      tags: [always]
+    
+    - name: Check if infrastructure user exists
+      ansible.builtin.getent:
+        database: passwd
+        key: "{{ infrastructure_user }}"
+      register: infrastructure_user_exists
+      failed_when: false
+      tags: [always]
+    
+    - name: Create infrastructure user if doesn't exist (when connected as root)
+      when: 
+        - connected_as_root
+        - infrastructure_user_exists.failed or infrastructure_user_exists.ansible_facts.getent_passwd[infrastructure_user] is not defined
+      tags: [users]
+      block:
+        - name: Create infrastructure user
+          ansible.builtin.user:
+            name: "{{ infrastructure_user }}"
+            comment: "Infrastructure Management User"
+            groups: sudo
+            append: true
+            shell: /bin/bash
+            create_home: true
+            state: present
+        
+        - name: Create .ssh directory
+          ansible.builtin.file:
+            path: "/home/{{ infrastructure_user }}/.ssh"
+            state: directory
+            owner: "{{ infrastructure_user }}"
+            group: "{{ infrastructure_user }}"
+            mode: '0700'
+        
+        - name: Set up SSH keys from GitHub
+          ansible.builtin.authorized_key:
+            user: "{{ infrastructure_user }}"
+            key: "https://github.com/{{ vault_gh_profile }}.keys"
+            exclusive: false
+            state: present
+          when: vault_gh_profile is defined
+        
+        - name: Configure passwordless sudo
+          ansible.builtin.lineinfile:
+            path: "/etc/sudoers.d/{{ infrastructure_user }}"
+            line: "{{ infrastructure_user }} ALL=(ALL) NOPASSWD: ALL"
+            create: true
+            mode: '0440'
+            validate: 'visudo -cf %s'
+        
+        - name: Deploy colored bash prompt
+          ansible.builtin.copy:
+            src: "{{ playbook_dir }}/files/bashrc_debian_default"
+            dest: "/home/{{ infrastructure_user }}/.bashrc"
+            owner: "{{ infrastructure_user }}"
+            group: "{{ infrastructure_user }}"
+            mode: '0644'
+          when: ansible_os_family == "Debian"
+        
+        - name: Display user creation
+          ansible.builtin.debug:
+            msg: "✅ Created {{ infrastructure_user }} user on {{ inventory_hostname }}"
+    - name: Ensure user has sudo privileges
+      community.general.sudoers:
+        name: "{{ ansible_user_id }}_nopasswd"
+        state: present
+        user: "{{ ansible_user_id }}"
+        commands: ALL
+        nopassword: true
+      tags: [bootstrap, sudo]
+
+    - name: Fetch authorized keys from GitHub
+      ansible.builtin.uri:
+        url: "{{ gh_keys }}"
+        return_content: true
+        timeout: 30
+        status_code: 200
+      register: github_keys_fetched
+      when: gh_keys is defined
+      changed_when: false
+      tags: [bootstrap, ssh]
+
+    - name: Set authorized keys from GitHub
+      ansible.posix.authorized_key:
+        user: "{{ ansible_user_id }}"
+        state: present
+        key: "{{ github_keys_fetched.content }}"
+        exclusive: true  # Only GitHub keys, removes all others
+      when: gh_keys is defined and github_keys_fetched.status == 200
+      tags: [bootstrap, ssh]
+
+    - name: Lock password authentication for user
+      ansible.builtin.user:
+        name: "{{ ansible_user_id }}"
+        password_lock: true
+      tags: [bootstrap, security]
+
+    - name: Check if pi user exists
+      ansible.builtin.getent:
+        database: passwd
+        key: pi
+      register: pi_user_check
+      failed_when: false
+      tags: [bootstrap, security]
+    
+    - name: Remove pi user if exists (default Raspberry Pi user)
+      ansible.builtin.user:
+        name: pi
+        state: absent
+        remove: true
+        force: true
+      when: 
+        - pi_user_check is succeeded
+        - pi_user_check.ansible_facts.getent_passwd.pi is defined
+        - ansible_user_id != "pi"  # Don't delete if we're connected as pi
+      tags: [bootstrap, security]
+    
+    - name: Lock root account
+      ansible.builtin.user:
+        name: root
+        password_lock: true
+        shell: /sbin/nologin
+      tags: [bootstrap, security]
+
+    - name: Configure SSH daemon for key-only auth
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+        state: present
+        validate: 'sshd -t -f %s'
+      loop:
+        - { regexp: '^#?PermitRootLogin', line: 'PermitRootLogin no' }
+        - { regexp: '^#?PasswordAuthentication', line: 'PasswordAuthentication no' }
+        - { regexp: '^#?PubkeyAuthentication', line: 'PubkeyAuthentication yes' }
+        - { regexp: '^#?ChallengeResponseAuthentication', line: 'ChallengeResponseAuthentication no' }
+        - { regexp: '^#?UsePAM', line: 'UsePAM no' }
+      notify: restart sshd
+      tags: [bootstrap, ssh]
+
+    - name: Update hostname
+      ansible.builtin.hostname:
+        name: "{{ inventory_hostname }}"
+      tags: [bootstrap, hostname]
+
+    - name: Update /etc/hosts
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        regexp: '^127\.0\.1\.1'
+        line: "127.0.1.1\t{{ inventory_hostname }}"
+        state: present
+      tags: [bootstrap, hostname]
+
+    - name: Configure locale
+      community.general.locale_gen:
+        name: "{{ locale | default('en_US.UTF-8') }}"
+        state: present
+      when: ansible_os_family == "Debian"
+      tags: [bootstrap, locale]
+
+    - name: Configure timezone
+      community.general.timezone:
+        name: "{{ timezone | default('Europe/Madrid') }}"
+      tags: [bootstrap, timezone]
+
+    - name: Update package cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+      when: ansible_os_family == "Debian"
+      tags: [bootstrap, packages]
+
+    - name: Install essential packages
+      ansible.builtin.apt:
+        name:
+          - curl
+          - wget
+          - git
+          - vim
+          - htop
+          - rsync
+          - python3-pip
+          - python3-venv
+          - fail2ban
+        state: present
+      when: ansible_os_family == "Debian"
+      tags: [bootstrap, packages]
+
+    # UFW firewall - DISABLED by default for home networks
+    # Enable with: enable_ufw: true in host vars
+    # Only needed for internet-facing hosts (VPS, DMZ, etc.)
+    - name: Install UFW (if explicitly enabled)
+      ansible.builtin.apt:
+        name: ufw
+        state: present
+      when: 
+        - ansible_os_family == "Debian"
+        - enable_ufw | default(false) | bool
+      tags: [bootstrap, firewall]
+
+    - name: Configure basic firewall rules
+      community.general.ufw:
+        rule: allow
+        port: '22'
+        proto: tcp
+      when: 
+        - ansible_os_family == "Debian"
+        - enable_ufw | default(false) | bool
+      tags: [bootstrap, firewall]
+
+    - name: Enable firewall
+      community.general.ufw:
+        state: enabled
+        policy: deny
+        direction: incoming
+      when: 
+        - ansible_os_family == "Debian"
+        - enable_ufw | default(false) | bool
+      tags: [bootstrap, firewall]
+
+  handlers:
+    - name: restart_ssh
+      ansible.builtin.service:
+        name: "{{ 'ssh' if ansible_os_family == 'Debian' else 'sshd' }}"
+        state: restarted
+      listen:
+        - "restart ssh"
+        - "restart sshd"
+
+# Note: Raspberry Pi specific configuration moved to playbooks/platform/raspberrypi.yml
+# which runs during the platform phase
+
+- name: Bootstrap complete
+  hosts: all
+  tasks:
+    - name: Display completion message
+      ansible.builtin.debug:
+        msg: |
+          ✅ Bootstrap complete for {{ inventory_hostname }}
+          
+          SSH key-only authentication is now enforced.
+          Password authentication has been disabled.
+          
+          Next steps:
+          1. Verify SSH access: ssh {{ ansible_user_id }}@{{ ansible_host | default(inventory_hostname) }}
+          2. Run site playbook: ansible-playbook playbooks/site.yml --limit {{ inventory_hostname }}
+      tags: [bootstrap]

@@ -1,0 +1,351 @@
+---
+# Audio Streaming role - For vinylstreamer (Icecast2/Liquidsoap)
+# This role is for streaming SOURCE hosts that capture and stream audio
+
+# ============================================================
+# Audio Hardware Configuration
+# ============================================================
+
+- name: Set index value for snd-usb-audio
+  become: true
+  ansible.builtin.lineinfile:
+    path: /lib/modprobe.d/aliases.conf
+    regexp: '^options snd-usb-audio index=.*$'
+    line: 'options snd-usb-audio index=0'
+    backup: true
+  tags: [audio_streaming, hardware]
+
+- name: Install alsa-utils and add user to audio group
+  become: true
+  ansible.builtin.apt:
+    name: alsa-utils
+    state: present
+  tags: [audio_streaming, packages]
+
+- name: Add user to audio group
+  become: true
+  ansible.builtin.user:
+    name: "{{ primary_user }}"
+    groups: audio
+    append: true
+  tags: [audio_streaming, packages]
+
+- name: Configure ALSA (asound.conf)
+  become: true
+  ansible.builtin.template:
+    src: asound.conf.j2
+    dest: /etc/asound.conf
+    mode: '0644'
+  notify: restart alsa
+  tags: [audio_streaming, alsa]
+
+# ============================================================
+# Icecast2 Installation and Configuration
+# ============================================================
+
+- name: Install icecast2
+  become: true
+  ansible.builtin.apt:
+    name: icecast2
+    state: present
+  tags: [audio_streaming, icecast]
+
+- name: Generate random icecast password if not set
+  ansible.builtin.set_fact:
+    icecast_source_password: "{{ lookup('password', '/dev/null length=25 chars=ascii_letters') }}"
+  when: icecast_source_password == 'changeme'
+  tags: [audio_streaming, icecast]
+
+- name: Configure Icecast2 source password
+  become: true
+  ansible.builtin.lineinfile:
+    dest: /etc/icecast2/icecast.xml
+    regexp: '^(\s*)<source-password>.*</source-password>'
+    line: '\1<source-password>{{ icecast_source_password }}</source-password>'
+    backrefs: true
+    state: present
+    backup: true
+  notify: restart icecast2
+  tags: [audio_streaming, icecast]
+
+- name: Enable and start icecast2
+  become: true
+  ansible.builtin.systemd:
+    name: icecast2
+    enabled: true
+    state: started
+    daemon_reload: true
+  tags: [audio_streaming, icecast]
+
+# ============================================================
+# Liquidsoap Installation and Configuration (Native)
+# ============================================================
+
+- name: Create FFmpeg preferences file to pin packages from Debian
+  become: true
+  ansible.builtin.copy:
+    dest: "/etc/apt/preferences.d/ffmpeg.pref"
+    content: |
+      Package: ffmpeg libavcodec* libavdevice* libavfilter* libavformat* libavutil* libpostproc* libswresample* libswscale*
+      Pin: origin deb.debian.org
+      Pin-Priority: 1001
+    mode: '0644'
+  tags: [audio_streaming, liquidsoap]
+
+- name: Update apt cache after FFmpeg pinning
+  become: true
+  ansible.builtin.apt:
+    update_cache: true
+  tags: [audio_streaming, liquidsoap]
+
+- name: Install FFmpeg dependencies
+  become: true
+  ansible.builtin.apt:
+    name:
+      - ffmpeg
+    state: present
+    install_recommends: true
+  tags: [audio_streaming, liquidsoap]
+
+- name: Install Liquidsoap via apt
+  become: true
+  ansible.builtin.apt:
+    name: liquidsoap
+    state: present
+    allow_unauthenticated: true
+  tags: [audio_streaming, liquidsoap]
+
+- name: Create liquidsoap log directory
+  become: true
+  ansible.builtin.file:
+    path: /var/log/liquidsoap
+    state: directory
+    mode: '0777'
+  tags: [audio_streaming, liquidsoap]
+
+- name: Set liquidsoap log file path
+  ansible.builtin.set_fact:
+    liquidsoap_log_file: "/var/log/liquidsoap/{{ liqs_name }}.log"
+  tags: [audio_streaming, liquidsoap]
+
+- name: Create liquidsoap log file
+  become: true
+  ansible.builtin.file:
+    path: "{{ liquidsoap_log_file }}"
+    state: touch
+    mode: '0777'
+  tags: [audio_streaming, liquidsoap]
+
+- name: Create liquidsoap script directory
+  ansible.builtin.file:
+    path: "{{ home_dir }}/liquidsoap"
+    state: directory
+    mode: '0755'
+  tags: [audio_streaming, liquidsoap]
+
+- name: Set liquidsoap script path
+  ansible.builtin.set_fact:
+    liquidsoap_script_path: "{{ home_dir }}/liquidsoap/{{ liqs_name }}.liq"
+  tags: [audio_streaming, liquidsoap]
+
+- name: Deploy liquidsoap script
+  ansible.builtin.template:
+    src: liquidsoap-native.liq.j2
+    dest: "{{ liquidsoap_script_path }}"
+    mode: 'a+x'
+  notify: restart liquidsoap
+  tags: [audio_streaming, liquidsoap]
+
+- name: Install liquidsoap systemd service (native)
+  become: true
+  ansible.builtin.template:
+    src: liquidsoap-native.service.j2
+    dest: "/lib/systemd/system/{{ liqs_name }}_liquidsoap.service"
+    mode: '0644'
+  notify: restart liquidsoap
+  tags: [audio_streaming, liquidsoap]
+
+- name: Reload systemd daemon
+  become: true
+  ansible.builtin.systemd:
+    daemon_reload: true
+  tags: [audio_streaming, liquidsoap]
+
+- name: Enable and start liquidsoap
+  become: true
+  ansible.builtin.systemd:
+    name: "{{ liqs_name }}_liquidsoap.service"
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: not (is_test_environment | default(false))
+  tags: [audio_streaming, liquidsoap]
+
+- name: Report liquidsoap skipped on test environment
+  ansible.builtin.debug:
+    msg: "⚠️  Liquidsoap service not started (test environment - no audio hardware)"
+  when: is_test_environment | default(false)
+  tags: [audio_streaming, liquidsoap]
+
+# ============================================================
+# Audio Detection (detect_audio.py)
+# ============================================================
+
+- name: Install Python packages for audio detection
+  become: true
+  ansible.builtin.apt:
+    name:
+      - python3-pyaudio
+      - python3-numpy
+      - mpc
+    state: present
+  when: enable_audio_detection and not (is_test_environment | default(false))
+  tags: [audio_streaming, detection]
+
+- name: Create log directory for detect_audio
+  ansible.builtin.file:
+    path: "{{ home_dir }}/.log"
+    state: directory
+    owner: "{{ primary_user }}"
+    group: "{{ primary_user }}"
+    mode: '0755'
+  when: enable_audio_detection and not (is_test_environment | default(false))
+  tags: [audio_streaming, detection]
+
+- name: Deploy audio detection script
+  become: true
+  ansible.builtin.template:
+    src: detect_audio.py.j2
+    dest: "{{ scripts_dir }}/detect_audio.py"
+    owner: "{{ primary_user }}"
+    group: "{{ primary_user }}"
+    mode: '0755'
+  when: enable_audio_detection and not (is_test_environment | default(false))
+  tags: [audio_streaming, detection]
+
+- name: Clear MPC playlist on hifipi
+  ansible.builtin.command: mpc --host={{ hifipi_ip }} clear
+  when: enable_audio_detection and not (is_test_environment | default(false))
+  changed_when: false
+  failed_when: false
+  tags: [audio_streaming, detection, mpc]
+
+- name: Add stream URL to hifipi MPC playlist
+  ansible.builtin.command: mpc --host={{ hifipi_ip }} add http://{{ ansible_default_ipv4.address }}:{{ icecast_port }}/{{ liqs_name }}.ogg
+  when: enable_audio_detection and not (is_test_environment | default(false))
+  register: mpc_add_result
+  changed_when: mpc_add_result.rc == 0
+  failed_when: false
+  tags: [audio_streaming, detection, mpc]
+
+- name: Verify MPC playlist on hifipi
+  ansible.builtin.command: mpc --host={{ hifipi_ip }} playlist
+  when: enable_audio_detection and not (is_test_environment | default(false))
+  register: mpc_playlist
+  changed_when: false
+  failed_when: false
+  tags: [audio_streaming, detection, mpc]
+
+- name: Report MPC playlist setup
+  ansible.builtin.debug:
+    msg: "MPC Playlist on {{ hifipi_ip }}: {{ mpc_playlist.stdout_lines | default(['(no output)']) }}"
+  when: enable_audio_detection and not (is_test_environment | default(false))
+  tags: [audio_streaming, detection, mpc]
+
+- name: Create audio detection systemd service
+  become: true
+  ansible.builtin.template:
+    src: detect_audio.service.j2
+    dest: /etc/systemd/system/detect_audio.service
+    owner: root
+    group: root
+    mode: '0644'
+  when: enable_audio_detection and not (is_test_environment | default(false))
+  notify: restart detect_audio
+  tags: [audio_streaming, detection]
+
+- name: Start and enable detect_audio service
+  become: true
+  ansible.builtin.systemd:
+    name: detect_audio
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: enable_audio_detection and not (is_test_environment | default(false))
+  tags: [audio_streaming, detection]
+
+- name: Report audio detection skipped on test environment
+  ansible.builtin.debug:
+    msg: "⚠️  Audio detection not deployed (test environment - no audio hardware)"
+  when: enable_audio_detection and (is_test_environment | default(false))
+  tags: [audio_streaming, detection]
+
+# ============================================================
+# Monitoring Configuration
+# ============================================================
+
+- name: Deploy audio streaming monitoring scripts
+  ansible.builtin.copy:
+    src: "{{ inventory_dir }}/../../scripts/services/audio/{{ item }}"
+    dest: "{{ scripts_dir }}/{{ item }}"
+    owner: "{{ primary_user }}"
+    group: "{{ primary_user }}"
+    mode: '0755'
+  loop:
+    - vinylstreamer_monitor.sh
+  tags: [audio_streaming, monitoring, scripts]
+
+- name: Deploy storage monitoring script for streaming hosts
+  ansible.builtin.copy:
+    src: "{{ inventory_dir }}/../../scripts/services/storage/check_volume_quota.sh"
+    dest: "{{ scripts_dir }}/check_volume_quota.sh"
+    owner: "{{ primary_user }}"
+    group: "{{ primary_user }}"
+    mode: '0755'
+  tags: [audio_streaming, monitoring, scripts, storage]
+
+- name: Configure vinylstreamer monitoring cron job
+  ansible.builtin.cron:
+    name: "Vinylstreamer audio streaming monitor"
+    minute: "*/10"
+    job: >
+      {{ scripts_dir }}/enhanced_monitoring_wrapper
+      --heartbeat-interval=daily
+      --notify-fixed=true
+      {{ logging_token }}
+      {{ alert_token }}
+      {{ scripts_dir }}/vinylstreamer_monitor.sh
+      >> {{ logs_dir }}/vinylstreamer_monitoring.log 2>&1
+    user: "{{ primary_user }}"
+  tags: [audio_streaming, monitoring, cron]
+
+- name: Configure volume quota monitoring for streaming hosts
+  ansible.builtin.cron:
+    name: "Root partition disk space check"
+    special_time: "hourly"
+    job: >
+      {{ scripts_dir }}/enhanced_monitoring_wrapper
+      --heartbeat-interval=daily
+      --notify-fixed=true
+      {{ logging_token }}
+      {{ alert_token }}
+      {{ scripts_dir }}/check_volume_quota.sh / 60
+      >> {{ logs_dir }}/root_disk_space.log 2>&1
+    user: "{{ primary_user }}"
+  tags: [audio_streaming, monitoring, cron, storage]
+
+# NOTE: System health check is now handled by the generic monitoring role
+# (ansible/playbooks/tasks/deploy_monitoring.yml) and should NOT be duplicated here
+
+- name: Report audio streaming services deployment status
+  ansible.builtin.debug:
+    msg: |
+      ✅ Audio Streaming Services deployed
+      Packages: Icecast2, Liquidsoap, ALSA configured
+      {% if is_test_environment | default(false) %}
+      ⚠️  Test environment - Liquidsoap/detect_audio not started (no audio hardware)
+      {% else %}
+      Services: Icecast2, Liquidsoap{{ ', detect_audio' if enable_audio_detection else '' }}
+      Monitoring: 2 streaming-specific cron jobs configured
+      {% endif %}
+  tags: [audio_streaming]

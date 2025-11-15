@@ -1,0 +1,197 @@
+---
+# Transmission BitTorrent client service role
+
+- name: Install transmission daemon
+  become: true
+  ansible.builtin.apt:
+    name: transmission-daemon
+    state: present
+    update_cache: true
+  tags: [transmission, packages]
+
+- name: Ensure media group exists
+  become: true
+  ansible.builtin.group:
+    name: media
+    state: present
+  tags: [transmission, users]
+
+- name: Ensure debian-transmission user is in media group
+  become: true
+  ansible.builtin.user:
+    name: debian-transmission
+    groups: media
+    append: true
+  tags: [transmission, users]
+
+- name: Stop transmission daemon for configuration
+  become: true
+  ansible.builtin.service:
+    name: transmission-daemon
+    state: stopped
+  tags: [transmission, config]
+
+- name: Configure transmission settings
+  become: true
+  ansible.builtin.template:
+    src: settings.json.j2
+    dest: /etc/transmission-daemon/settings.json
+    owner: debian-transmission
+    group: debian-transmission
+    mode: '0600'
+    backup: true
+  tags: [transmission, config]
+  notify: restart transmission
+
+- name: Ensure download directories exist
+  become: true
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: debian-transmission
+    group: media
+    mode: '0775'
+  loop:
+    - "{{ transmission_download_dir | default('/var/lib/transmission-daemon/downloads') }}"
+    - "{{ transmission_incomplete_dir | default('/var/lib/transmission-daemon/incomplete') }}"
+  tags: [transmission, directories]
+
+
+# Install INCRON for file monitoring (cobra-specific)
+- name: Install INCRON for file monitoring
+  become: true
+  ansible.builtin.apt:
+    name: incron
+    state: present
+    update_cache: true
+  when: enable_incron | default(false)
+  tags: [transmission, incron]
+
+- name: Add user to incron.allow
+  become: true
+  ansible.builtin.lineinfile:
+    path: /etc/incron.allow
+    line: "{{ ansible_user }}"
+    create: true
+    mode: "0600"
+    insertbefore: EOF
+  when: enable_incron | default(false)
+  tags: [transmission, incron]
+
+- name: Create incron job for transmission monitoring
+  become: true
+  ansible.builtin.lineinfile:
+    path: "/var/spool/incron/{{ ansible_user }}"
+    line: "{{ incron_monitor_folder | default(transmission_download_dir ~ '/ready') }} IN_CREATE /bin/bash {{ incron_action_script }}"
+    state: present
+    owner: "{{ ansible_user }}"
+    group: incron
+    mode: "0600"
+    create: true
+  when: 
+    - enable_incron | default(false)
+    - incron_action_script is defined
+  tags: [transmission, incron]
+
+- name: Start and enable incron service
+  become: true
+  ansible.builtin.service:
+    name: incron
+    state: started
+    enabled: true
+  when: enable_incron | default(false)
+  tags: [transmission, incron]
+
+- name: Start and enable transmission daemon
+  become: true
+  ansible.builtin.service:
+    name: transmission-daemon
+    enabled: true
+    state: started
+  tags: [transmission, service]
+
+# ============================================================
+# Monitoring Configuration
+# ============================================================
+
+- name: Deploy Transmission monitoring scripts
+  ansible.builtin.copy:
+    src: "{{ inventory_dir }}/../../scripts/services/media/check_transmission.sh"
+    dest: "{{ scripts_dir }}/check_transmission.sh"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0755'
+  tags: [transmission, monitoring]
+
+- name: Deploy VPN monitoring script
+  ansible.builtin.copy:
+    src: "{{ inventory_dir }}/../../scripts/services/network/check_vpn.sh"
+    dest: "{{ scripts_dir }}/check_vpn.sh"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0755'
+  tags: [transmission, monitoring]
+
+- name: Deploy clean old torrents script
+  ansible.builtin.copy:
+    src: "{{ inventory_dir }}/../../scripts/services/media/clean_old_torrents"
+    dest: "{{ scripts_dir }}/clean_old_torrents"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0755'
+  tags: [transmission, monitoring]
+
+- name: Configure Transmission service monitoring cron job
+  ansible.builtin.cron:
+    name: "Transmission service check"
+    minute: "0"
+    job: >
+      {{ scripts_dir }}/enhanced_monitoring_wrapper
+      --heartbeat-interval=daily
+      --notify-fixed=true
+      {{ logging_token }}
+      {{ alert_token }}
+      {{ scripts_dir }}/check_transmission.sh
+      >> {{ logs_dir }}/transmission_service_check.log 2>&1
+    user: "{{ ansible_user }}"
+  when:
+    - logging_token is defined and logging_token != ''
+    - alert_token is defined and alert_token != ''
+  tags: [transmission, monitoring, cron]
+
+- name: Configure VPN connection monitoring cron job
+  ansible.builtin.cron:
+    name: "VPN connection check"
+    minute: "0"
+    job: >
+      {{ scripts_dir }}/enhanced_monitoring_wrapper
+      --heartbeat-interval=daily
+      --notify-fixed=true
+      {{ logging_token }}
+      {{ alert_token }}
+      {{ scripts_dir }}/check_vpn.sh {{ vpn_gateway | default('10.64.0.1') }}
+      >> {{ logs_dir }}/vpn_connection_check.log 2>&1
+    user: "{{ ansible_user }}"
+  when:
+    - logging_token is defined and logging_token != ''
+    - alert_token is defined and alert_token != ''
+    - enable_vpn_check | default(true)
+  tags: [transmission, monitoring, cron, vpn]
+
+- name: Configure clean old torrents cron job
+  ansible.builtin.cron:
+    name: "Clean old torrents"
+    special_time: "weekly"
+    job: >
+      {{ scripts_dir }}/enhanced_monitoring_wrapper
+      --heartbeat-interval=daily
+      --notify-fixed=true
+      {{ logging_token }}
+      {{ alert_token }}
+      {{ scripts_dir }}/clean_old_torrents {{ transmission_download_dir | default('/var/lib/transmission-daemon/downloads') }}/ready/
+      >> {{ logs_dir }}/clean_old_torrents.log 2>&1
+    user: "{{ ansible_user }}"
+  when:
+    - logging_token is defined and logging_token != ''
+    - alert_token is defined and alert_token != ''
+  tags: [transmission, monitoring, cron]

@@ -1,0 +1,19 @@
+---
+# Test inventory for development
+all:
+  children:
+    debian_hosts:
+      vars:
+        os_family: debian
+        package_manager: apt
+        service_manager: systemd
+        ansible_python_interpreter: /usr/bin/python3
+      children:
+        raspberrypi:
+          vars:
+            platform_type: raspberrypi
+          hosts:
+            devpi:
+              ansible_host: 10.30.100.247  # Different from key
+              primary_function: media  
+              is_test_environment: true  # Skips hardware-dependent checks

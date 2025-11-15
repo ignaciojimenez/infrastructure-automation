@@ -1,0 +1,117 @@
+---
+# Service deployments
+# All service roles are deployed from a single playbook for consistency
+# Each service is conditionally included based on primary_function or install_* flags
+
+- name: Configure SSH hardening
+  hosts: all
+  become: true
+  handlers:
+    - ansible.builtin.import_tasks: ../handlers/main.yml
+  tasks:
+    - ansible.builtin.import_tasks: tasks/ssh_hardening.yml
+      tags: [security, ssh]
+
+- name: Deploy service roles
+  hosts: all
+  become: true
+  tasks:
+    # Load role-specific variables based on primary_function
+    - name: Check if role configuration exists
+      ansible.builtin.stat:
+        path: "{{ inventory_dir }}/group_vars/{{ primary_function }}.yml"
+      register: role_config_file
+      when: primary_function is defined
+      delegate_to: localhost
+      become: false  # Don't sudo on control machine
+      tags: [always]
+    
+    - name: Load role configuration
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/group_vars/{{ primary_function }}.yml"
+      when: 
+        - primary_function is defined
+        - role_config_file.stat.exists | default(false)
+      tags: [always]
+    
+    # Media host preparation - external storage and cobra scripts
+    - name: Configure external storage for media hosts
+      ansible.builtin.import_tasks: tasks/media_storage.yml
+      when: 
+        - primary_function == "media"
+        - external_drive_uuid is defined
+      tags: [media, storage]
+    
+    - name: Install cobra automation scripts
+      ansible.builtin.import_tasks: tasks/cobra_scripts.yml
+      become: false
+      when: 
+        - primary_function == "media"
+        - enable_cobra_scripts | default(false)
+      tags: [media, cobra]
+    
+    # Audio services
+    - name: Deploy audio playback (MPD, Shairport, Raspotify)
+      ansible.builtin.include_role:
+        name: services/audio_playback
+      when: primary_function == "audio_playback"
+      tags: [audio, audio_playback, services]
+    
+    - name: Deploy audio streaming (Icecast, Liquidsoap)
+      ansible.builtin.include_role:
+        name: services/audio_streaming
+      when: primary_function == "audio_streaming"
+      tags: [audio, audio_streaming, services]
+    
+    # Network services
+    - name: Deploy Pi-hole (DNS/Ad-blocking)
+      ansible.builtin.include_role:
+        name: services/pihole
+      when: primary_function == "dns" or install_pihole | default(false)
+      tags: [pihole, dns, services]
+    
+    - name: Deploy UniFi Network Controller
+      ansible.builtin.include_role:
+        name: services/unifi
+      when: primary_function == "network_controller" or install_unifi | default(false)
+      tags: [unifi, network, services]
+    
+    # Media services
+    - name: Deploy Plex Media Server
+      ansible.builtin.include_role:
+        name: services/plex
+      when: primary_function == "media" or install_plex | default(false)
+      tags: [plex, media, services]
+    
+    - name: Deploy Transmission (BitTorrent)
+      ansible.builtin.include_role:
+        name: services/transmission
+      when: primary_function == "media" or install_transmission | default(false)
+      tags: [transmission, media, services]
+    
+    - name: Deploy Samba (File sharing)
+      ansible.builtin.include_role:
+        name: services/samba
+      when: primary_function == "media" or install_samba | default(false)
+      tags: [samba, media, services]
+    
+    # Container services
+    - name: Deploy Docker
+      ansible.builtin.include_role:
+        name: services/docker
+      when: primary_function == "homeassistant" or install_docker | default(false)
+      tags: [docker, services]
+    
+    - name: Deploy Home Assistant
+      ansible.builtin.include_role:
+        name: services/homeassistant
+      when: primary_function == "homeassistant" or install_homeassistant | default(false)
+      tags: [homeassistant, services]
+
+- name: Deploy monitoring infrastructure
+  hosts: all
+  become: true
+  tasks:
+    - ansible.builtin.import_tasks: tasks/deploy_monitoring.yml
+      when: enable_monitoring | default(true)
+      tags: [monitoring, services]

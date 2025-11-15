@@ -1,0 +1,13 @@
+---
+# Debian-specific configuration
+
+- name: Configure Debian-based systems
+  hosts: debian_hosts
+  become: true
+  tasks:
+    - ansible.builtin.import_tasks: ../tasks/debian_baseline.yml
+      tags: [debian, baseline]
+      
+    - ansible.builtin.import_tasks: ../tasks/debian_updates.yml
+      when: enable_unattended_upgrades | default(false)
+      tags: [debian, updates]

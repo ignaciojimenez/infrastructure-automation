@@ -1,0 +1,55 @@
+---
+# Pre-flight checks and global setup
+# Validates connectivity and sets up global facts
+
+- name: Pre-flight checks
+  hosts: all
+  tasks:
+    - name: Ensure required variables are defined
+      ansible.builtin.fail:
+        msg: "Required variable '{{ item }}' is not defined"
+      when: vars[item] is not defined
+      loop:
+        - logs_dir
+        - scripts_dir
+      tags: [always]
+      
+    - name: Test connectivity
+      ansible.builtin.ping:
+      tags: [always]
+      
+    - name: Display host information
+      ansible.builtin.debug:
+        msg: |
+          Host: {{ inventory_hostname }}
+          Platform: {{ platform_type | default('unknown') }}
+          OS Family: {{ os_family | default(ansible_os_family) }}
+          Primary Function: {{ primary_function | default('general') }}
+      tags: [always]
+
+- name: Setting initial global facts
+  hosts: all
+  tasks:
+    - name: Set the host fact to inventory_hostname
+      ansible.builtin.set_fact:
+        host: "{{ inventory_hostname }}"
+      tags: [always]
+    
+    - name: Set os_family from ansible_os_family
+      ansible.builtin.set_fact:
+        os_family: "{{ ansible_os_family | lower }}"
+      tags: [always]
+
+- name: Allow user to run as root
+  hosts: all
+  become: true
+  tasks:
+    - name: Creating a sudoer file
+      community.general.sudoers:
+        name: "{{ ansible_user }}_nopwd"
+        state: present
+        user: "{{ ansible_user }}"
+        commands: ALL
+        nopassword: true
+      when: ansible_user != "root"
+      tags: [sudo]

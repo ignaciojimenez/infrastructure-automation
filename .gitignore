@@ -1,0 +1,32 @@
+# Ansible
+*.retry
+.ansible/
+
+# Secrets
+vault_pass
+.vault_pass
+*.env
+*.key
+*.pem
+
+# Cobra config files (sensitive)
+**/conf_auth.ini
+**/conf_move.ini
+
+# System
+.DS_Store
+*.swp
+*~
+
+# Python
+venv/
+.venv/
+__pycache__/
+
+# Logs & temp
+*.log
+logs/
+tmp/
+temp-*
+temp_
+TODO.md
