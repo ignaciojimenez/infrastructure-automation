@@ -1,0 +1,118 @@
+---
+# OPNsense platform role - monitoring setup
+# Deploys monitoring scripts and configures cron jobs for OPNsense firewall
+
+- name: Ensure monitoring directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ infrastructure_user }}"
+    group: wheel
+    mode: '0755'
+  loop:
+    - "{{ scripts_dir }}"
+    - "{{ scripts_dir }}/monitoring"
+    - /var/run/monitoring-state
+  become: true
+
+- name: Deploy OPNsense-specific monitoring scripts
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../scripts/services/opnsense/{{ item }}"
+    dest: "{{ scripts_dir }}/monitoring/{{ item }}"
+    owner: "{{ infrastructure_user }}"
+    group: wheel
+    mode: '0755'
+  loop:
+    - check_crowdsec.sh
+    - check_ddns.sh
+    - check_gateway.sh
+    - check_wg.sh
+    - check_guest_agent.sh
+    - check_system_health.sh
+    - check_vpn_gateway.sh
+  become: true
+
+- name: Deploy common monitoring wrapper (Bash version for OPNsense)
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../scripts/common/enhanced_monitoring_wrapper"
+    dest: "{{ scripts_dir }}/enhanced_monitoring_wrapper"
+    owner: "{{ infrastructure_user }}"
+    group: wheel
+    mode: '0755'
+  become: true
+
+- name: Deploy OPNsense heartbeat script
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/../../scripts/services/opnsense/heartbeat_opnsense_wan.sh"
+    dest: "{{ scripts_dir }}/monitoring/heartbeat_opnsense_wan.sh"
+    owner: "{{ infrastructure_user }}"
+    group: wheel
+    mode: '0755'
+  become: true
+  when: vault_healthcheck_opnsense_wan is defined
+
+- name: Install bash package (required for monitoring wrapper)
+  community.general.pkgng:
+    name: bash
+    state: present
+  become: true
+
+- name: Configure OPNsense monitoring cron jobs
+  ansible.builtin.cron:
+    name: "{{ item.name }}"
+    minute: "{{ item.minute }}"
+    hour: "{{ item.hour | default('*') }}"
+    user: "{{ infrastructure_user }}"
+    job: "/usr/local/bin/bash {{ scripts_dir }}/enhanced_monitoring_wrapper --heartbeat-interval={{ item.heartbeat | default('daily') }} --monitoring-name={{ item.monitoring_name }} {{ logging_token }} {{ alert_token }} {{ scripts_dir }}/monitoring/{{ item.script }}"
+    state: present
+  loop:
+    - name: "OPNsense CrowdSec check"
+      minute: "*/30"
+      heartbeat: "daily"
+      monitoring_name: "opnsense_crowdsec"
+      script: "check_crowdsec.sh"
+    - name: "OPNsense DDNS check"
+      minute: "0"
+      hour: "*/6"
+      heartbeat: "daily"
+      monitoring_name: "opnsense_ddns"
+      script: "check_ddns.sh"
+    - name: "OPNsense gateway check"
+      minute: "*/10"
+      heartbeat: "daily"
+      monitoring_name: "opnsense_gateway"
+      script: "check_gateway.sh"
+    - name: "OPNsense WireGuard check"
+      minute: "*/10"
+      heartbeat: "daily"
+      monitoring_name: "opnsense_wg"
+      script: "check_wg.sh"
+    - name: "OPNsense guest agent check"
+      minute: "0"
+      hour: "*/6"
+      heartbeat: "daily"
+      monitoring_name: "opnsense_guest_agent"
+      script: "check_guest_agent.sh"
+    - name: "OPNsense system health check"
+      minute: "*/30"
+      heartbeat: "daily"
+      monitoring_name: "opnsense_health"
+      script: "check_system_health.sh"
+    - name: "OPNsense VPN gateway tracking"
+      minute: "*/15"
+      heartbeat: "never"
+      monitoring_name: "opnsense_vpn_gateway"
+      script: "check_vpn_gateway.sh"
+  become: true
+  become_user: "{{ infrastructure_user }}"
+
+- name: Configure OPNsense healthchecks.io heartbeat
+  ansible.builtin.cron:
+    name: "Healthchecks.io - OPNsense WAN connectivity"
+    minute: "*/5"
+    user: "{{ infrastructure_user }}"
+    job: "{{ scripts_dir }}/monitoring/heartbeat_opnsense_wan.sh"
+    state: present
+  become: true
+  become_user: "{{ infrastructure_user }}"
+  when: vault_healthcheck_opnsense_wan is defined

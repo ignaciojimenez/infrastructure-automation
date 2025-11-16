@@ -1,0 +1,18 @@
+# VM/CT Configuration for Proxmox Monitoring
+# This file is managed by Ansible - do not edit manually
+# Auto-discovered from inventory hosts with vm_id or container_id
+# Format: TYPE ID NAME
+
+# Virtual Machines
+{% for host in groups['all'] %}
+{% if hostvars[host].vm_id is defined %}
+VM {{ hostvars[host].vm_id }} {{ host }}
+{% endif %}
+{% endfor %}
+
+# Containers
+{% for host in groups['all'] %}
+{% if hostvars[host].container_id is defined %}
+CT {{ hostvars[host].container_id }} {{ host }}
+{% endif %}
+{% endfor %}

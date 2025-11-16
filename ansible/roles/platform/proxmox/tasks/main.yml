@@ -1,0 +1,123 @@
+---
+# Proxmox platform role - monitoring setup
+# Deploys monitoring scripts and configures cron jobs for Proxmox hypervisor
+
+- name: Ensure monitoring directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ infrastructure_user }}"
+    group: "{{ infrastructure_group }}"
+    mode: '0755'
+  loop:
+    - "{{ scripts_dir }}"
+    - "{{ scripts_dir }}/monitoring"
+    - "{{ logs_dir }}"
+    - /var/log/monitoring-state
+  become: true
+
+- name: Configure sudoers for monitoring commands
+  ansible.builtin.copy:
+    src: sudoers_monitoring
+    dest: /etc/sudoers.d/monitoring
+    owner: root
+    group: root
+    mode: '0440'
+    validate: 'visudo -cf %s'
+  become: true
+
+- name: Deploy VM/CT configuration file
+  ansible.builtin.template:
+    src: vm_ct_config.txt.j2
+    dest: "{{ scripts_dir }}/monitoring/vm_ct_config.txt"
+    owner: "{{ infrastructure_user }}"
+    group: "{{ infrastructure_group }}"
+    mode: '0644'
+  become: true
+  # Always deploy - template auto-discovers VMs/CTs from inventory
+
+- name: Deploy Proxmox-specific monitoring scripts
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../scripts/services/proxmox/{{ item }}"
+    dest: "{{ scripts_dir }}/monitoring/{{ item }}"
+    owner: "{{ infrastructure_user }}"
+    group: "{{ infrastructure_group }}"
+    mode: '0755'
+  loop:
+    - check_proxmox_health.sh
+    - check_vm_status.sh
+    - check_zfs_health.sh
+    - check_kernel_errors.sh
+    - check_crash_dumps.sh
+  become: true
+
+- name: Deploy Proxmox heartbeat script
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/../../scripts/services/proxmox/heartbeat_proxmox_health.sh"
+    dest: "{{ scripts_dir }}/monitoring/heartbeat_proxmox_health.sh"
+    owner: "{{ infrastructure_user }}"
+    group: "{{ infrastructure_group }}"
+    mode: '0755'
+  become: true
+  when: vault_healthcheck_proxmox_health is defined
+
+- name: Deploy common monitoring scripts
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../scripts/common/{{ item }}"
+    dest: "{{ scripts_dir }}/{{ item }}"
+    owner: "{{ infrastructure_user }}"
+    group: "{{ infrastructure_group }}"
+    mode: '0755'
+  loop:
+    - enhanced_monitoring_wrapper
+  become: true
+
+- name: Configure Proxmox monitoring cron jobs
+  ansible.builtin.cron:
+    name: "{{ item.name }}"
+    minute: "{{ item.minute }}"
+    hour: "{{ item.hour | default('*') }}"
+    user: "{{ infrastructure_user }}"
+    job: "{{ scripts_dir }}/enhanced_monitoring_wrapper --heartbeat-interval={{ item.heartbeat | default('daily') }} --monitoring-name={{ item.monitoring_name }} {{ logging_token }} {{ alert_token }} {{ scripts_dir }}/monitoring/{{ item.script }}"
+    state: present
+  loop:
+    - name: "Proxmox system health check"
+      minute: "*/30"
+      heartbeat: "daily"
+      monitoring_name: "proxmox_health"
+      script: "check_proxmox_health.sh"
+    - name: "Proxmox VM status check"
+      minute: "*/15"
+      heartbeat: "daily"
+      monitoring_name: "proxmox_vms"
+      script: "check_vm_status.sh"
+    - name: "Proxmox ZFS health check"
+      minute: "0"
+      hour: "*/6"
+      heartbeat: "daily"
+      monitoring_name: "proxmox_zfs"
+      script: "check_zfs_health.sh"
+    - name: "Proxmox kernel errors check"
+      minute: "*/30"
+      heartbeat: "daily"
+      monitoring_name: "proxmox_kernel"
+      script: "check_kernel_errors.sh"
+    - name: "Proxmox crash dumps check"
+      minute: "0"
+      hour: "*"
+      heartbeat: "daily"
+      monitoring_name: "proxmox_crashes"
+      script: "check_crash_dumps.sh"
+  become: true
+  become_user: "{{ infrastructure_user }}"
+
+- name: Configure Proxmox healthchecks.io heartbeat
+  ansible.builtin.cron:
+    name: "Healthchecks.io - Proxmox critical health"
+    minute: "*/10"
+    user: "{{ infrastructure_user }}"
+    job: "{{ scripts_dir }}/monitoring/heartbeat_proxmox_health.sh"
+    state: present
+  become: true
+  become_user: "{{ infrastructure_user }}"
+  when: vault_healthcheck_proxmox_health is defined
