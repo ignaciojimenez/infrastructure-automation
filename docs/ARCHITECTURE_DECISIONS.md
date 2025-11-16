@@ -46,6 +46,8 @@ Simple log of key technical decisions made in this project.
 - **Encrypted vault committed to repository** - `vault.yml` uses Ansible Vault (AES256) and is committed
   - This is a personal infrastructure repo, not a shared/team repository
   - Vault password not stored in git
+  - Vault password stored locally in macOS Keychain and retrieved via a helper script referenced by `ANSIBLE_VAULT_PASSWORD_FILE`
+  - The same vault password can be reused across personal Ansible-based projects
   - Provides backup of encrypted configuration via GitHub
   - Common practice for personal infrastructure-as-code repos
 - **Example files for onboarding** - `vault.yml.example` and `*.ini.example` files show structure without secrets
