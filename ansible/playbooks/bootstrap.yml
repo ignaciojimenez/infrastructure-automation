@@ -75,6 +75,18 @@
         connected_as_root: "{{ ansible_user_id == 'root' }}"
       tags: [always]
     
+    - name: Fix hostname resolution early (prevents sudo timeout)
+      ansible.builtin.shell: |
+        HOSTNAME=$(hostname)
+        if ! grep -q "127.0.1.1.*$HOSTNAME" /etc/hosts; then
+          echo "127.0.1.1 $HOSTNAME" | sudo tee -a /etc/hosts > /dev/null
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: false
+      when: ansible_os_family == "Debian"
+      tags: [always, hostname]
+    
     - name: Check if infrastructure user exists
       ansible.builtin.getent:
         database: passwd
