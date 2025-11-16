@@ -1,11 +1,21 @@
 ---
-# Deploy all common scripts to all hosts
+# Deploy monitoring scripts to all hosts
+# Includes common scripts and platform-specific monitoring
 # Usage: ansible-playbook ansible/playbooks/deploy_monitoring.yml
 
-- name: Deploy common scripts
+- name: Deploy common monitoring scripts
   hosts: all
   become: true
   tasks:
+    - name: Ensure base scripts directory exists
+      ansible.builtin.file:
+        path: "{{ scripts_dir }}"
+        state: directory
+        owner: "{{ infrastructure_user }}"
+        group: "{{ infrastructure_group }}"
+        mode: '0755'
+      tags: [monitoring, scripts]
+    
     - name: Find all scripts in common directory
       ansible.builtin.find:
         paths: "{{ playbook_dir }}/../../scripts/common/"
@@ -21,8 +31,8 @@
         src: "{{ item.path }}"
         dest: "{{ scripts_dir }}/{{ item.path | basename }}"
         mode: '0755'
-        owner: "{{ primary_user }}"
-        group: "{{ primary_user }}"
+        owner: "{{ infrastructure_user }}"
+        group: "{{ infrastructure_group }}"
       loop: "{{ common_scripts.files }}"
       tags: [monitoring, scripts]
       
@@ -36,6 +46,21 @@
       failed_when: false
       tags: [monitoring, services]
       
-    - name: Report deployment complete
+    - name: Report common scripts deployment complete
       ansible.builtin.debug:
-        msg: "✅ Monitoring scripts deployed to {{ inventory_hostname }}"
+        msg: "✅ Common monitoring scripts deployed to {{ inventory_hostname }}"
+
+# Deploy platform-specific monitoring
+- name: Deploy Proxmox monitoring
+  hosts: proxmox_hosts
+  become: true
+  roles:
+    - role: platform/proxmox
+  tags: [monitoring, proxmox]
+
+- name: Deploy OPNsense monitoring
+  hosts: freebsd_hosts
+  become: true
+  roles:
+    - role: platform/opnsense
+  tags: [monitoring, opnsense]

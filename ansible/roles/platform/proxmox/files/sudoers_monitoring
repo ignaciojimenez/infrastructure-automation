@@ -1,0 +1,14 @@
+# Allow choco user to run monitoring commands without password
+# This file should be placed in /etc/sudoers.d/monitoring
+# Syntax: user host=(runas) NOPASSWD: commands
+
+# Proxmox VM and Container commands
+choco ALL=(ALL) NOPASSWD: /usr/sbin/qm list
+choco ALL=(ALL) NOPASSWD: /usr/sbin/qm status *
+choco ALL=(ALL) NOPASSWD: /usr/sbin/qm config *
+choco ALL=(ALL) NOPASSWD: /usr/sbin/pct list
+choco ALL=(ALL) NOPASSWD: /usr/sbin/pct status *
+choco ALL=(ALL) NOPASSWD: /usr/sbin/pct config *
+
+# Kernel diagnostics
+choco ALL=(ALL) NOPASSWD: /usr/bin/dmesg

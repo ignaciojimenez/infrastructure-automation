@@ -33,6 +33,18 @@ Simple log of key technical decisions made in this project.
 - **Enhanced monitoring wrapper** - All checks use wrapper for heartbeats and notifications
 - **Self-healing health checks** - Scripts attempt auto-fix before alerting
 - **State tracking** - Monitoring tracks issue state to avoid alert fatigue
+- **Platform-specific monitoring** - Each platform runs it's own monitoring capabilities
+- **POSIX-compliant scripts** - All scripts use `/bin/sh` for FreeBSD compatibility
+- **Unified Slack webhooks** - All hosts share same monitoring/alert webhook configuration from vault
+
+## Monitoring Strategy
+
+Platform-specific monitoring scripts deployed to appropriate locations:
+- **Proxmox (Debian)**: `/home/${USER}/.scripts/monitoring/`
+- **OPNsense (FreeBSD)**: `/usr/local/bin/monitoring/`
+
+All scripts are POSIX-compliant shell scripts for maximum portability. Monitoring uses centralized wrapper with Slack notifications and state tracking to prevent alert fatigue.
+
 
 ## Configuration Loading Order
 
