@@ -206,6 +206,16 @@
     - backup_pihole.sh
   tags: [pihole, monitoring, scripts]
 
+- name: Deploy Pi-hole DNS heartbeat script
+  ansible.builtin.template:
+    src: "{{ inventory_dir }}/../../scripts/services/dns/heartbeat_pihole_dns.sh"
+    dest: "{{ scripts_dir }}/heartbeat_pihole_dns.sh"
+    mode: '0755'
+    owner: "{{ primary_user }}"
+    group: "{{ primary_user }}"
+  when: vault_healthcheck_pihole_dns is defined
+  tags: [pihole, monitoring, heartbeat]
+
 - name: Set up Pi-hole FTL service monitoring cron job
   ansible.builtin.cron:
     name: "Check Pi-hole FTL service"
@@ -281,6 +291,16 @@
       >> {{ logs_dir }}/pihole_backup.log 2>&1
     user: "{{ primary_user }}"
   tags: [pihole, backup, cron]
+
+- name: Configure Pi-hole healthchecks.io heartbeat
+  ansible.builtin.cron:
+    name: "Healthchecks.io - PiHole DNS health"
+    minute: "*/5"
+    job: "{{ scripts_dir }}/heartbeat_pihole_dns.sh"
+    user: "{{ primary_user }}"
+    state: present
+  when: vault_healthcheck_pihole_dns is defined
+  tags: [pihole, monitoring, heartbeat]
 
 # Note: System health check is handled by the monitoring role (deploy_monitoring.yml)
 # No need to duplicate it here
