@@ -31,7 +31,7 @@ cp ansible/inventory/group_vars/all/vault.yml.example ansible/inventory/group_va
 # 2. Edit with your values
 ansible-vault edit ansible/inventory/group_vars/all/vault.yml
 
-# 3. Store vault password locally (not in repo)
+# 3. Store vault password locally (not in repo). On macOS, use a Keychain-backed helper script referenced by `ANSIBLE_VAULT_PASSWORD_FILE` (see docs/ARCHITECTURE_DECISIONS.md).
 ```
 
 > **Note:** This repo includes MY encrypted `vault.yml` for personal backup. 
