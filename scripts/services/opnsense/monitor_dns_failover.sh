@@ -3,13 +3,13 @@
 # DNS Failover Monitoring Script
 # Monitors VPN gateway health and switches DNS forwarder accordingly
 # Primary: VPN resolver (10.64.0.1) via WireGuard tunnel
-# Fallback: Mullvad public DNS (194.242.2.3) when VPN is down
+# Fallback: Quad9 (9.9.9.9) when VPN is down
 
 set -eu
 
 # Configuration
 VPN_RESOLVER="10.64.0.1"
-MULLVAD_PUBLIC="194.242.2.3"
+FALLBACK_DNS="9.9.9.9"  # Quad9 - works without VPN (Mullvad DNS requires VPN or DoT)
 STATE_FILE="/tmp/dns_failover_state"
 FAILURE_THRESHOLD=3   # Number of failed checks before switching (3 x 1min = 3min)
 RECOVERY_THRESHOLD=3  # Number of successful checks before recovery
@@ -57,41 +57,24 @@ send_slack() {
     }" > /dev/null 2>&1 || true
 }
 
-# Check VPN gateway health
-# Uses multiple methods: ping, DNS resolution test, and WireGuard interface status
+# Check VPN gateway health - DNS resolution is the definitive test
 check_vpn_health() {
-  # Method 1: Quick ping to VPN resolver
-  if ping -c 1 -W 2 "$VPN_RESOLVER" > /dev/null 2>&1; then
-    # Method 2: Verify DNS actually works via VPN resolver
-    if drill @"$VPN_RESOLVER" mullvad.net A > /dev/null 2>&1; then
-      return 0
-    fi
+  # Test if DNS actually works via VPN resolver
+  if drill @"$VPN_RESOLVER" mullvad.net A > /dev/null 2>&1; then
+    return 0
   fi
   
-  # Method 3: Check if any WireGuard interface has active handshake (< 3 min old)
-  if command -v wg > /dev/null 2>&1; then
-    latest_handshake=$(wg show all latest-handshakes 2>/dev/null | awk '{print $2}' | sort -rn | head -1)
-    if [ -n "$latest_handshake" ]; then
-      current_time=$(date +%s)
-      handshake_age=$((current_time - latest_handshake))
-      # If handshake is less than 180 seconds old, VPN is likely healthy
-      if [ "$handshake_age" -lt 180 ]; then
-        # Give VPN a moment to stabilize, but consider it recovering
-        return 0
-      fi
-    fi
-  fi
-  
+  # DNS failed - VPN is not healthy for our purposes
   return 1
 }
 
-# Switch to Mullvad public DNS
-switch_to_mullvad() {
+# Switch to fallback DNS (Quad9)
+switch_to_fallback() {
   # Backup config (limit backups to avoid clutter)
   cp "$CONFIG_FILE" "${CONFIG_FILE}.backup-failover"
   
-  # Replace VPN resolver with Mullvad public DNS
-  sed -i '' "s|<server>$VPN_RESOLVER</server>|<server>$MULLVAD_PUBLIC</server>|g" "$CONFIG_FILE"
+  # Replace VPN resolver with fallback DNS
+  sed -i '' "s|<server>$VPN_RESOLVER</server>|<server>$FALLBACK_DNS</server>|g" "$CONFIG_FILE"
   
   # Reload Unbound
   /usr/local/sbin/configctl unbound restart > /dev/null 2>&1
@@ -104,8 +87,8 @@ switch_to_vpn() {
   # Backup config
   cp "$CONFIG_FILE" "${CONFIG_FILE}.backup-recovery"
   
-  # Replace Mullvad public with VPN resolver
-  sed -i '' "s|<server>$MULLVAD_PUBLIC</server>|<server>$VPN_RESOLVER</server>|g" "$CONFIG_FILE"
+  # Replace fallback DNS with VPN resolver
+  sed -i '' "s|<server>$FALLBACK_DNS</server>|<server>$VPN_RESOLVER</server>|g" "$CONFIG_FILE"
   
   # Reload Unbound
   /usr/local/sbin/configctl unbound restart > /dev/null 2>&1
@@ -117,8 +100,8 @@ switch_to_vpn() {
 get_active_dns() {
   if grep -q "<server>$VPN_RESOLVER</server>" "$CONFIG_FILE"; then
     echo "vpn"
-  elif grep -q "<server>$MULLVAD_PUBLIC</server>" "$CONFIG_FILE"; then
-    echo "mullvad"
+  elif grep -q "<server>$FALLBACK_DNS</server>" "$CONFIG_FILE"; then
+    echo "fallback"
   else
     echo "unknown"
   fi
@@ -147,10 +130,10 @@ EOF
     
     if [ "$state" = "failed" ] && [ "$recovery_count" -ge "$RECOVERY_THRESHOLD" ]; then
       # VPN recovered - switch back if needed
-      if [ "$real_active_dns" = "mullvad" ]; then
+      if [ "$real_active_dns" = "fallback" ]; then
         switch_to_vpn
         send_slack "$ALERT_WEBHOOK" "✅ *DNS RECOVERED*\\nVPN gateway is back online. Switched back to VPN resolver.\\n🔒 Full privacy restored (DNS via WireGuard tunnel)." ":white_check_mark:"
-        send_slack "$LOG_WEBHOOK" "DNS failover: VPN recovered, switched back from Mullvad public" ":white_check_mark:"
+        send_slack "$LOG_WEBHOOK" "DNS failover: VPN recovered, switched back from Quad9" ":white_check_mark:"
       fi
       state="healthy"
       active_dns="vpn"
@@ -165,14 +148,14 @@ EOF
     recovery_count=0
     
     if [ "$state" = "healthy" ] && [ "$failure_count" -ge "$FAILURE_THRESHOLD" ]; then
-      # VPN has failed - switch to Mullvad public
+      # VPN has failed - switch to fallback DNS
       if [ "$real_active_dns" = "vpn" ]; then
-        switch_to_mullvad
-        send_slack "$ALERT_WEBHOOK" "⚠️  *DNS FAILOVER ACTIVE*\\nVPN gateway unreachable. Switched to Mullvad public DNS.\\n❗ Privacy slightly degraded (DNS encrypted but not via VPN tunnel)." ":warning:"
-        send_slack "$LOG_WEBHOOK" "DNS failover activated: VPN unreachable, switched to Mullvad public DNS" ":warning:"
+        switch_to_fallback
+        send_slack "$ALERT_WEBHOOK" "⚠️  *DNS FAILOVER ACTIVE*\\nVPN gateway unreachable. Switched to Quad9 DNS.\\n❗ Privacy degraded (DNS not encrypted and not via VPN tunnel)." ":warning:"
+        send_slack "$LOG_WEBHOOK" "DNS failover activated: VPN unreachable, switched to Quad9" ":warning:"
       fi
       state="failed"
-      active_dns="mullvad"
+      active_dns="fallback"
       failure_count=0
     fi
     
