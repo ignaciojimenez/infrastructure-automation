@@ -11,7 +11,7 @@ OPNsense (10.30.40.254)
 ├── WAN: Mullvad VPN (WireGuard)
 ├── DNS: Unbound (with blocklists)
 │   ├── Primary: VPN resolver (10.64.0.1)
-│   └── Fallback: Mullvad public (194.242.2.3)
+│   └── Fallback: Quad9 (9.9.9.9)
 └── LAN: All internal hosts
 ```
 
@@ -97,9 +97,14 @@ OPNsense (10.30.40.254)
 
 ## Recent Changes
 
+### November 30, 2025
+- ✅ Fixed DNS boot circular dependency (OPNsense now uses Quad9 directly for system DNS)
+- ✅ Fixed DNS failover script (simplified health check, corrected Slack messages)
+- ✅ Tested failover mechanism end-to-end
+
 ### November 29, 2025
 - ✅ Migrated DNS from PiHole to OPNsense Unbound with blocklists
-- ✅ Implemented VPN-based DNS failover (primary: 10.64.0.1, fallback: 194.242.2.3)
+- ✅ Implemented VPN-based DNS failover (primary: 10.64.0.1, fallback: Quad9 9.9.9.9)
 - ✅ Added DNS heartbeat monitoring to OPNsense
 
 ### November 16, 2025
