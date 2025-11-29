@@ -1,5 +1,9 @@
 ---
 # Pi-hole DNS filtering service role
+#
+# DEPRECATED (November 2025): DNS filtering moved to OPNsense Unbound.
+# This role is preserved for reference or future use but is not actively deployed.
+# See: docs/ARCHITECTURE_DECISIONS.md for rationale.
 
 - name: Install required packages for Pi-hole
   become: true
