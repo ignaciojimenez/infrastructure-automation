@@ -24,3 +24,7 @@
     - ansible.builtin.import_tasks: ../tasks/opnsense_monitoring.yml
       when: platform_type == "opnsense"
       tags: [opnsense, monitoring, firewall]
+
+    - ansible.builtin.import_tasks: ../tasks/opnsense_utilities.yml
+      when: platform_type == "opnsense"
+      tags: [opnsense, utilities]
