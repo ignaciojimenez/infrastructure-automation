@@ -77,6 +77,40 @@
     mode: '0755'
   tags: [monitoring, opnsense]
 
+- name: Deploy DNS failover monitoring script
+  ansible.builtin.template:
+    src: ../../../scripts/services/opnsense/monitor_dns_failover.sh
+    dest: /usr/local/bin/monitoring/monitor_dns_failover.sh
+    owner: root
+    group: wheel
+    mode: '0755'
+  tags: [monitoring, opnsense, dns]
+
+- name: Deploy DNS heartbeat script
+  ansible.builtin.template:
+    src: ../../../scripts/services/opnsense/heartbeat_dns.sh
+    dest: /usr/local/bin/monitoring/heartbeat_dns.sh
+    owner: root
+    group: wheel
+    mode: '0755'
+  tags: [monitoring, opnsense, dns]
+
+- name: Configure DNS failover monitoring cron job
+  ansible.builtin.cron:
+    name: "DNS failover monitoring (VPN-based)"
+    minute: "*"
+    job: "/usr/local/bin/monitoring/monitor_dns_failover.sh {{ vault_slack_alert_webhook }} {{ vault_slack_log_webhook }}"
+    user: root
+  tags: [monitoring, opnsense, dns, cron]
+
+- name: Configure DNS heartbeat cron job
+  ansible.builtin.cron:
+    name: "DNS heartbeat"
+    minute: "*/5"
+    job: "/usr/local/bin/monitoring/heartbeat_dns.sh"
+    user: root
+  tags: [monitoring, opnsense, dns, cron]
+
 - name: Configure cron jobs for OPNsense monitoring
   ansible.builtin.cron:
     name: "{{ item.name }}"

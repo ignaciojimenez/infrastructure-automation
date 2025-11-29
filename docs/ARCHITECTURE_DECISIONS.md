@@ -64,3 +64,32 @@ All scripts are POSIX-compliant shell scripts for maximum portability. Monitorin
   - Common practice for personal infrastructure-as-code repos
 - **Example files for onboarding** - `vault.yml.example` and `*.ini.example` files show structure without secrets
 - **No plaintext secrets** - All sensitive data (tokens, passwords, keys) in vault only
+
+## LXC Container Management
+
+- **Hostname resolution fix** - Early fix in bootstrap.yml (line 78-88) adds hostname to /etc/hosts
+  - Prevents sudo timeout issues caused by DNS lookup failures
+  - Runs before any become operations to ensure success
+  - Required for containers where hostname differs from DNS name (e.g., pihole-lxc vs pihole)
+- **Container naming** - Proxmox adds `-lxc` suffix, DNS uses friendly names
+  - Containers: `pihole-lxc`, `unifi-lxc` (actual hostnames)
+  - DNS entries: `pihole`, `unifi` (user-friendly network names)
+  - Both approaches valid, handled automatically
+
+## DNS Architecture (Updated November 2025)
+
+- **Unbound over PiHole** - Chose OPNsense native Unbound with blocklists instead of separate PiHole LXC
+  - Simpler: One service instead of two
+  - Native HA: Unbound on OPNsense is already highly available
+  - Same features: Blocklists + static DNS entries available in Unbound
+  - Less resource usage: No extra LXC container needed
+  
+- **VPN-first DNS** - DNS queries go through VPN tunnel for privacy
+  - Primary: Forward to 10.64.0.1 (Mullvad DNS via WireGuard)
+  - Fallback: 194.242.2.3 (Mullvad public DNS when VPN down)
+  - Both Mullvad endpoints: Privacy preserved even during failover
+  
+- **Script-based failover** - Dynamic config switching vs static dual-forwarder
+  - Avoids Unbound querying both in parallel
+  - Clear visibility: Slack alerts on failover/recovery
+  - Fast detection: 1-minute checks, 3-minute failover threshold
