@@ -51,12 +51,24 @@ This document outlines the plan to establish Home Assistant as the central "brai
 ### Problem
 Eve sensors are paired to Apple HomeKit via Thread (HomePod Mini as border router). They're invisible to Home Assistant.
 
+### Current Status: PARKED
+Eve Door sensors are unresponsive (likely dead batteries). Matter Server infrastructure is deployed and ready. Revisit when sensors are functional.
+
+**Symptoms observed:**
+- Apple Home shows "No Response"
+- Eve app "hasn't seen devices in months"
+- "Turn On Pairing Mode" fails
+- No LED during factory reset attempt
+- Alerts still worked earlier this week (using last battery reserves)
+
+**To resume:** Replace CR2032 batteries, then continue with pairing process below.
+
 ### Solution: Matter Multi-Admin Pairing
 
 Since HA runs in Docker (not HAOS), we need:
-1. **Matter Server** as separate Docker container
-2. **Home Assistant Matter integration** connecting to the server
-3. **Multi-Admin pairing** from Apple Home app
+1. **Matter Server** as separate Docker container ✅ DEPLOYED
+2. **Home Assistant Matter integration** connecting to the server ✅ CONFIGURED
+3. **Multi-Admin pairing** from Apple Home app ⏸️ PENDING (sensor issues)
 
 ### Implementation Steps
 
