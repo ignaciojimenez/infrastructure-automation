@@ -272,3 +272,61 @@
     - logging_token is defined and logging_token != ''
     - alert_token is defined and alert_token != ''
   tags: [homeassistant, update, cron]
+
+# ============================================================
+# Matter Server Configuration
+# ============================================================
+
+- name: Create Matter Server data directory
+  ansible.builtin.file:
+    path: "{{ matter_server_data_dir | default('/home/' + ansible_user + '/matter-server') }}"
+    state: directory
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0755'
+  when: enable_matter_server | default(true)
+  tags: [homeassistant, matter]
+
+- name: Pull Matter Server Docker image
+  community.docker.docker_image:
+    name: "ghcr.io/home-assistant-libs/python-matter-server:{{ matter_server_version | default('stable') }}"
+    source: pull
+    force_source: true
+  become_user: "{{ ansible_user }}"
+  when: enable_matter_server | default(true)
+  tags: [homeassistant, matter, docker]
+
+- name: Create and start Matter Server container
+  community.docker.docker_container:
+    name: matter-server
+    image: "ghcr.io/home-assistant-libs/python-matter-server:{{ matter_server_version | default('stable') }}"
+    restart_policy: unless-stopped
+    network_mode: host
+    security_opts:
+      - "apparmor=unconfined"
+    volumes:
+      - "{{ matter_server_data_dir | default('/home/' + ansible_user + '/matter-server') }}:/data"
+      - "/run/dbus:/run/dbus:ro"
+    state: started
+  become_user: "{{ ansible_user }}"
+  when: enable_matter_server | default(true)
+  tags: [homeassistant, matter, docker]
+
+- name: Configure Matter Server container monitoring cron job
+  ansible.builtin.cron:
+    name: "Matter Server container check"
+    minute: "*/10"
+    job: >
+      {{ scripts_dir }}/enhanced_monitoring_wrapper
+      --heartbeat-interval=daily
+      --notify-fixed=true
+      {{ logging_token }}
+      {{ alert_token }}
+      {{ scripts_dir }}/check_container.sh {{ alert_token }} matter-server
+      >> {{ logs_dir }}/matter_server_check.log 2>&1
+    user: "{{ ansible_user }}"
+  when:
+    - enable_matter_server | default(true)
+    - logging_token is defined and logging_token != ''
+    - alert_token is defined and alert_token != ''
+  tags: [homeassistant, matter, monitoring, cron]

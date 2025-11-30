@@ -93,3 +93,30 @@ All scripts are POSIX-compliant shell scripts for maximum portability. Monitorin
   - Avoids Unbound querying both in parallel
   - Clear visibility: Slack alerts on failover/recovery
   - Fast detection: 1-minute checks, 3-minute failover threshold
+
+## Home Assistant Architecture (Updated November 2025)
+
+- **HA as central brain** - All automation logic centralized in Home Assistant
+  - Wyze scenes/schedules → HA automations
+  - Tado away/home mode → HA presence-based automations
+  - Siri Shortcuts → Native HomeKit Bridge (no separate shortcuts needed)
+
+- **Apple HomeKit as frontend only** - Voice control and remote access via Apple ecosystem
+  - HomeKit Bridge exposes HA entities to Siri
+  - HomePod Mini as Thread border router for Matter devices
+  - No duplicate logic in Apple Home app
+
+- **Matter Server as separate container** - Required for Eve sensor integration
+  - Eve sensors use Matter multi-admin pairing (HomeKit + HA)
+  - Thread network shared between Apple Home and HA via border router
+  - Matter Server runs alongside HA container on dockassist
+
+- **Presence detection via Tado trackers** - Uses existing device_tracker entities
+  - group.persons for home/away state
+  - Guest mode toggle disables automatic away
+  - 10-minute delay prevents false triggers
+
+- **Docker deployment** - Not Home Assistant OS
+  - Containers: `home-assistant`, `matter-server`
+  - Network mode: host (required for Matter/Thread)
+  - Privileged mode: enabled for USB/Bluetooth access
