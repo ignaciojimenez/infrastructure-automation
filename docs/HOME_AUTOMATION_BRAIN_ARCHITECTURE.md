@@ -251,23 +251,26 @@ Tado's native schedules should remain for:
 2. Sensitive entities exposed (device_tracker, automation)
 3. Eve sensors not exposed (not in HA yet)
 
-### Optimized Filter Configuration
+### Current Filter Configuration (IMPLEMENTED)
 ```yaml
-# Update via UI: Settings → Devices & Services → HomeKit → Configure
+# Configured via UI: Settings → Devices & Services → HomeKit → Configure
+# Stored in: .storage/core.config_entries (not YAML-manageable)
 filter:
   include_domains:
-    - light
-    - climate
-    - scene
+    - climate          # Tado thermostats
+    - light            # Wyze bulbs, Shelly plugs
+    - scene            # Chill, Cena, Descanso ← REQUIRED for Siri scenes
+    - input_boolean    # Guest Mode toggle ← REQUIRED for Siri control
+    - switch
     - binary_sensor
-  include_entities:
-    - binary_sensor.eve_balcony_contact  # After Matter pairing
-    - binary_sensor.eve_frontdoor_contact
+    - sensor
   exclude_entities:
     - binary_sensor.tado_online
     - binary_sensor.wyze_online
-    # Exclude internal sensors
 ```
+
+**Note:** HomeKit configuration is managed via HA UI, not Ansible templates.
+When setting up fresh, manually add `scene` and `input_boolean` to include_domains.
 
 ### Entities to Expose via HomeKit
 | Entity Type | Entities | Siri Command |
