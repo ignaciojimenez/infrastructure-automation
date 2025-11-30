@@ -330,3 +330,26 @@
     - logging_token is defined and logging_token != ''
     - alert_token is defined and alert_token != ''
   tags: [homeassistant, matter, monitoring, cron]
+
+# ============================================================
+# Dashboard Configuration
+# ============================================================
+
+- name: Ensure Home Assistant .storage directory exists
+  ansible.builtin.file:
+    path: "{{ homeassistant_config_dir | default('/home/' + ansible_user + '/homeassistant') }}/.storage"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  tags: [homeassistant, dashboard]
+
+- name: Deploy mobile dashboard configuration
+  ansible.builtin.template:
+    src: lovelace.dashboard_mobile.json.j2
+    dest: "{{ homeassistant_config_dir | default('/home/' + ansible_user + '/homeassistant') }}/.storage/lovelace.dashboard_mobile"
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart Home Assistant
+  tags: [homeassistant, dashboard]

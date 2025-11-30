@@ -1,0 +1,127 @@
+{
+  "version": 1,
+  "minor_version": 1,
+  "key": "lovelace.dashboard_mobile",
+  "data": {
+    "config": {
+      "title": "Mobile",
+      "views": [
+        {
+          "title": "Home",
+          "path": "home",
+          "icon": "mdi:home",
+          "cards": [
+            {
+              "type": "entities",
+              "title": "Status",
+              "entities": [
+                {
+                  "entity": "binary_sensor.home_occupied",
+                  "name": "Anyone Home"
+                },
+                {
+                  "entity": "input_boolean.guest_mode",
+                  "name": "Guest Mode"
+                }
+              ]
+            },
+            {
+              "type": "horizontal-stack",
+              "cards": [
+                {
+                  "type": "button",
+                  "entity": "scene.chill",
+                  "name": "Relax",
+                  "icon": "mdi:flower-tulip",
+                  "tap_action": {
+                    "action": "call-service",
+                    "service": "scene.turn_on",
+                    "target": {
+                      "entity_id": "scene.chill"
+                    }
+                  }
+                },
+                {
+                  "type": "button",
+                  "entity": "scene.cena",
+                  "name": "Dinner",
+                  "icon": "mdi:food",
+                  "tap_action": {
+                    "action": "call-service",
+                    "service": "scene.turn_on",
+                    "target": {
+                      "entity_id": "scene.cena"
+                    }
+                  }
+                },
+                {
+                  "type": "button",
+                  "name": "Lights Off",
+                  "icon": "mdi:lightbulb-off",
+                  "tap_action": {
+                    "action": "call-service",
+                    "service": "light.turn_off",
+                    "target": {
+                      "entity_id": "light.all_lights"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "type": "entities",
+              "title": "Heating Mode",
+              "show_header_toggle": false,
+              "entities": [
+                {
+                  "type": "button",
+                  "name": "Set Away",
+                  "icon": "mdi:home-export-outline",
+                  "tap_action": {
+                    "action": "call-service",
+                    "service": "climate.set_preset_mode",
+                    "data": {
+                      "preset_mode": "away"
+                    },
+                    "target": {
+                      "entity_id": {{ tado_climate_entities | default('["climate.salon", "climate.master_bedroom", "climate.office", "climate.upstairs_aisle", "climate.bathroom"]') }}
+                    }
+                  }
+                },
+                {
+                  "type": "button",
+                  "name": "Set Home",
+                  "icon": "mdi:home",
+                  "tap_action": {
+                    "action": "call-service",
+                    "service": "climate.set_preset_mode",
+                    "data": {
+                      "preset_mode": "home"
+                    },
+                    "target": {
+                      "entity_id": {{ tado_climate_entities | default('["climate.salon", "climate.master_bedroom", "climate.office", "climate.upstairs_aisle", "climate.bathroom"]') }}
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "type": "thermostat",
+              "entity": "climate.salon",
+              "name": "Living Room"
+            },
+            {
+              "type": "glance",
+              "title": "Temperatures",
+              "entities": [
+                {"entity": "sensor.salon_temperature", "name": "Salón"},
+                {"entity": "sensor.master_bedroom_temperature", "name": "Bedroom"},
+                {"entity": "sensor.office_temperature", "name": "Office"}
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
