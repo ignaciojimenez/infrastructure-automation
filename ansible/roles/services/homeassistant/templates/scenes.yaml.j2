@@ -1,0 +1,74 @@
+# Home Assistant Scenes - Managed by Ansible
+
+- id: '1638916130699'
+  name: Chill
+  entities:
+    light.floor_lamp:
+      state: 'on'
+      color_temp: 500
+      brightness: 1
+    light.book_floor_lamp:
+      state: 'on'
+      color_temp: 500
+      brightness: 1
+    light.table_lamp:
+      state: 'on'
+      color_temp: 500
+      brightness: 15
+    light.floor_lamp_new:
+      state: 'on'
+      color_temp: 500
+      brightness: 1
+    light.shelly_luz_outdoor:
+      state: 'on'
+    light.shelly_luz_salon:
+      state: 'on'
+
+- id: '1638984827016'
+  name: Cena
+  entities:
+    light.floor_lamp:
+      state: 'on'
+      color_temp: 357
+      brightness: 31
+    light.book_floor_lamp:
+      state: 'on'
+      color_temp: 357
+      brightness: 31
+    light.table_lamp:
+      state: 'on'
+      color_temp: 357
+      brightness: 102
+    light.floor_lamp_new:
+      state: 'on'
+      color_temp: 357
+      brightness: 31
+    light.shelly_luz_outdoor:
+      state: 'on'
+    light.shelly_luz_salon:
+      state: 'on'
+
+- id: 'descanso'
+  name: Descanso
+  icon: mdi:sleep
+  entities:
+    light.floor_lamp:
+      state: 'on'
+      brightness: 3
+      color_temp: 500
+    light.book_floor_lamp:
+      state: 'on'
+      brightness: 3
+      color_temp: 500
+    light.table_lamp:
+      state: 'on'
+      brightness: 3
+      color_temp: 500
+    light.floor_lamp_new:
+      state: 'on'
+      brightness: 3
+      color_temp: 500
+    light.shelly_luz_outdoor:
+      state: 'off'
+    light.shelly_luz_salon:
+      state: 'off'
