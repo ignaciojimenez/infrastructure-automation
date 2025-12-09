@@ -140,3 +140,22 @@
       target:
         entity_id: automation.away_mode_everyone_left
   mode: single
+
+# Eve door sensors - notification when doors open while nobody is home
+- id: "eve_door_open_while_away"
+  alias: "Door Opened While Away"
+  trigger:
+    - platform: state
+      entity_id:
+        - binary_sensor.eve_door_20ebn9901_door
+        - binary_sensor.eve_door_20ebn9901_door_2
+      to: "on"
+  condition:
+    - condition: state
+      entity_id: group.persons
+      state: "not_home"
+  action:
+    - service: rest_command.slack_notify
+      data:
+        message: "Door opened while away (Eve sensor)"
+  mode: single
