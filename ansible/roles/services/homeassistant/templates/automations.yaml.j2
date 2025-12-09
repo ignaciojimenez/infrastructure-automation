@@ -1,0 +1,161 @@
+# Home Assistant Automations - Managed by Ansible
+
+# Sunset lights
+- id: '1614473127522'
+  alias: Sunset lights on - sun elevation
+  trigger:
+    - platform: numeric_state
+      entity_id: sun.sun
+      value_template: "{{ '{{ state_attr(\"sun.sun\", \"elevation\") }}' }}"
+      below: '1.5'
+  condition:
+    - condition: state
+      entity_id: group.persons
+      state: home
+  action:
+    - service: scene.turn_on
+      target:
+        entity_id: scene.chill
+  mode: single
+
+# Lights off automations
+- id: '1638915083194'
+  alias: lights off - week
+  trigger:
+    - platform: time
+      at: '00:30:00'
+  condition:
+    - condition: time
+      weekday: [mon, tue, wed, thu, fri]
+  action:
+    - service: light.turn_off
+      target:
+        entity_id: light.living_room_lights
+  mode: single
+
+- id: '1638916130644'
+  alias: lights off - weekend
+  trigger:
+    - platform: time
+      at: '02:30:00'
+  condition:
+    - condition: time
+      weekday: [sat, sun]
+  action:
+    - service: light.turn_off
+      target:
+        entity_id: light.living_room_lights
+  mode: single
+
+# Daily backups
+- id: '1687725012156'
+  alias: Daily backups
+  trigger:
+    - platform: time
+      at: '03:00:00'
+  action:
+    - service: backup.create
+  mode: single
+
+# Away/Home mode
+- id: "away_mode_everyone_left"
+  alias: "Away Mode - Everyone Left"
+  trigger:
+    - platform: state
+      entity_id: group.persons
+      to: "not_home"
+      for:
+        minutes: 10
+  condition:
+    - condition: state
+      entity_id: input_boolean.guest_mode
+      state: "off"
+  action:
+    - service: climate.set_preset_mode
+      target:
+        entity_id:
+          - climate.salon
+          - climate.master_bedroom
+          - climate.office
+          - climate.upstairs_aisle
+          - climate.bathroom
+      data:
+        preset_mode: away
+    - service: light.turn_off
+      target:
+        entity_id: light.all_lights
+    - service: rest_command.slack_notify
+      data:
+        message: "Away mode activated"
+  mode: single
+
+- id: "home_mode_first_arrives"
+  alias: "Home Mode - First Person Arrives"
+  trigger:
+    - platform: state
+      entity_id: group.persons
+      to: "home"
+  condition:
+    - condition: state
+      entity_id: climate.salon
+      attribute: preset_mode
+      state: "away"
+  action:
+    - service: climate.set_preset_mode
+      target:
+        entity_id:
+          - climate.salon
+          - climate.master_bedroom
+          - climate.office
+          - climate.upstairs_aisle
+          - climate.bathroom
+      data:
+        preset_mode: home
+    - service: rest_command.slack_notify
+      data:
+        message: "Welcome home! Heating restored."
+  mode: single
+
+# Guest mode
+- id: "guest_mode_enabled"
+  alias: "Guest Mode - Disable Auto Away"
+  trigger:
+    - platform: state
+      entity_id: input_boolean.guest_mode
+      to: "on"
+  action:
+    - service: automation.turn_off
+      target:
+        entity_id: automation.away_mode_everyone_left
+  mode: single
+
+- id: "guest_mode_disabled"
+  alias: "Guest Mode Off - Enable Auto Away"
+  trigger:
+    - platform: state
+      entity_id: input_boolean.guest_mode
+      to: "off"
+  action:
+    - service: automation.turn_on
+      target:
+        entity_id: automation.away_mode_everyone_left
+  mode: single
+
+# Eve door sensors - notification when doors open while nobody is home
+- id: "eve_door_open_while_away"
+  alias: "Door Opened While Away"
+  trigger:
+    - platform: state
+      entity_id:
+        - binary_sensor.eve_door_20ebn9901_door
+        - binary_sensor.eve_door_20ebn9901_door_2
+      to: "on"
+  condition:
+    - condition: state
+      entity_id: group.persons
+      state: "not_home"
+  action:
+    - service: rest_command.slack_notify
+      data:
+        message: "Door opened while away (Eve sensor)"
+  mode: single

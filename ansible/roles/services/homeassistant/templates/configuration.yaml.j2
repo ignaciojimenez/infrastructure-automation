@@ -1,0 +1,87 @@
+# Home Assistant Configuration
+# Managed by Ansible - Manual changes will be overwritten
+
+# Loads default set of integrations. Do not remove.
+default_config:
+
+# Load frontend themes from the themes folder
+frontend:
+  themes: !include_dir_merge_named themes
+
+# Text-to-speech
+tts:
+  - platform: google_translate
+
+automation: !include automations.yaml
+script: !include scripts.yaml
+scene: !include scenes.yaml
+
+#### Manual configs from this point
+group: !include groups.yaml
+
+# Light Groups
+light:
+  - platform: group
+    name: All lights
+    entities:
+{% for light in homeassistant_lights | default(['light.floor_lamp', 'light.book_floor_lamp', 'light.table_lamp', 'light.floor_lamp_new', 'light.shelly_luz_outdoor', 'light.shelly_luz_salon']) %}
+      - {{ light }}
+{% endfor %}
+  - platform: group
+    name: Living room lights
+    entities:
+{% for light in homeassistant_living_room_lights | default(['light.floor_lamp', 'light.book_floor_lamp', 'light.table_lamp', 'light.floor_lamp_new', 'light.shelly_luz_outdoor', 'light.shelly_luz_salon']) %}
+      - {{ light }}
+{% endfor %}
+
+# Logger configuration
+logger:
+  default: warning
+  logs:
+    custom_components.wyzeapi: debug
+
+# Binary sensors for integration health monitoring
+binary_sensor:
+  - platform: template
+    sensors:
+      tado_online:
+        friendly_name: "Tado Online"
+        value_template: >
+          {{ '{{ states(\'binary_sensor.ib3176076544_connection_state\') not in [\'unavailable\', \'unknown\'] }}' }}
+      wyze_online:
+        friendly_name: "Wyze Online"
+        value_template: >
+          {{ '{{ states(\'light.floor_lamp_new\') not in [\'unavailable\', \'unknown\'] }}' }}
+
+# Guest Mode Input
+input_boolean:
+  guest_mode:
+    name: Guest Mode
+    icon: mdi:account-multiple
+
+# Enhanced Presence Detection Templates
+template:
+  - binary_sensor:
+      - name: "Home Occupied"
+        unique_id: home_occupied
+        device_class: occupancy
+        state: >
+          {{ '{{ is_state("group.persons", "home") }}' }}
+        icon: >
+          {{ '{% if is_state("group.persons", "home") %}' }}
+            mdi:home-account
+          {{ '{% else %}' }}
+            mdi:home-outline
+          {{ '{% endif %}' }}
+
+# Slack notifications
+rest_command:
+  slack_notify:
+    url: '{{ homeassistant_slack_webhook | default("") }}'
+    method: post
+    headers:
+      Content-Type: application/json
+    payload: >
+      {
+        "text": "{{ '{{ message }}' }}"
+      }
