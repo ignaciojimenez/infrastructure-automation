@@ -1,0 +1,78 @@
+# Home Assistant Scenes - Managed by Ansible
+# Note: Wyze bulbs support 2700K-6500K (153-370 mireds)
+# Using color_temp_kelvin for compatibility
+
+- id: "1638916130699"
+  name: Chill
+  icon: mdi:flower-tulip
+  entities:
+    light.floor_lamp:
+      state: "on"
+      color_temp_kelvin: 2700
+      brightness: 3
+    light.book_floor_lamp:
+      state: "on"
+      color_temp_kelvin: 2700
+      brightness: 3
+    light.table_lamp:
+      state: "on"
+      color_temp_kelvin: 2700
+      brightness: 38
+    light.floor_lamp_new:
+      state: "on"
+      color_temp_kelvin: 2700
+      brightness: 3
+    light.shelly_luz_outdoor:
+      state: "on"
+    light.shelly_luz_salon:
+      state: "on"
+
+- id: "1638916130698"
+  name: Cena
+  icon: mdi:food
+  entities:
+    light.floor_lamp:
+      state: "on"
+      color_temp_kelvin: 2700
+      brightness: 38
+    light.book_floor_lamp:
+      state: "on"
+      color_temp_kelvin: 2700
+      brightness: 64
+    light.table_lamp:
+      state: "on"
+      color_temp_kelvin: 2700
+      brightness: 77
+    light.floor_lamp_new:
+      state: "on"
+      color_temp_kelvin: 2700
+      brightness: 102
+    light.shelly_luz_outdoor:
+      state: "on"
+    light.shelly_luz_salon:
+      state: "on"
+
+- id: "descanso"
+  name: Descanso
+  icon: mdi:sleep
+  entities:
+    light.floor_lamp:
+      state: "on"
+      color_temp_kelvin: 2700
+      brightness: 8
+    light.book_floor_lamp:
+      state: "on"
+      color_temp_kelvin: 2700
+      brightness: 8
+    light.table_lamp:
+      state: "on"
+      color_temp_kelvin: 2700
+      brightness: 8
+    light.floor_lamp_new:
+      state: "on"
+      color_temp_kelvin: 2700
+      brightness: 8
+    light.shelly_luz_outdoor:
+      state: "off"
+    light.shelly_luz_salon:
+      state: "off"
