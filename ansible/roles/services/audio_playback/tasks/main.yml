@@ -29,7 +29,8 @@
     - name: Enable HiFiBerry DAC+ overlay
       ansible.builtin.lineinfile:
         path: /boot/firmware/config.txt
-        line: 'dtoverlay=hifiberry-dacplus'
+        # line: 'dtoverlay=hifiberry-dacplus'
+        line: 'dtoverlay=hifiberry-dacplushd'
         insertafter: EOF
         create: false
       notify: reboot for hardware changes
