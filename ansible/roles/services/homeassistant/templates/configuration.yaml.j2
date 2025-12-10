@@ -40,28 +40,27 @@ logger:
   logs:
     custom_components.wyzeapi: debug
 
-# Binary sensors for integration health monitoring
-binary_sensor:
-  - platform: template
-    sensors:
-      tado_online:
-        friendly_name: "Tado Online"
-        value_template: >
-          {{ '{{ states(\'binary_sensor.ib3176076544_connection_state\') not in [\'unavailable\', \'unknown\'] }}' }}
-      wyze_online:
-        friendly_name: "Wyze Online"
-        value_template: >
-          {{ '{{ states(\'light.floor_lamp_new\') not in [\'unavailable\', \'unknown\'] }}' }}
-
 # Guest Mode Input
 input_boolean:
   guest_mode:
     name: Guest Mode
     icon: mdi:account-multiple
 
-# Enhanced Presence Detection Templates
+# Template sensors (modern syntax)
 template:
   - binary_sensor:
+      # Integration health monitoring
+      - name: "Tado Online"
+        unique_id: tado_online
+        device_class: connectivity
+        state: >
+          {{ '{{ states(\'binary_sensor.ib3176076544_connection_state\') not in [\'unavailable\', \'unknown\'] }}' }}
+      - name: "Wyze Online"
+        unique_id: wyze_online
+        device_class: connectivity
+        state: >
+          {{ '{{ states(\'light.floor_lamp_new\') not in [\'unavailable\', \'unknown\'] }}' }}
+      # Presence detection
       - name: "Home Occupied"
         unique_id: home_occupied
         device_class: occupancy
