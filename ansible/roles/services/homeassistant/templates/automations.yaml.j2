@@ -142,20 +142,30 @@
   mode: single
 
 # Eve door sensors - notification when doors open while nobody is home
+# Only triggers if group.persons has been not_home for at least 5 minutes
+# (avoids false alerts when leaving home and crossing geofence)
+# Sensor mapping:
+#   binary_sensor.eve_door_20ebn9901_door   -> Balcony Door
+#   binary_sensor.eve_door_20ebn9901_door_2 -> Entrance Door
 - id: "eve_door_open_while_away"
   alias: "Door Opened While Away"
   trigger:
     - platform: state
-      entity_id:
-        - binary_sensor.eve_door_20ebn9901_door
-        - binary_sensor.eve_door_20ebn9901_door_2
+      entity_id: binary_sensor.eve_door_20ebn9901_door
       to: "on"
+      id: balcony
+    - platform: state
+      entity_id: binary_sensor.eve_door_20ebn9901_door_2
+      to: "on"
+      id: entrance
   condition:
     - condition: state
       entity_id: group.persons
       state: "not_home"
+      for:
+        minutes: 5
   action:
     - service: rest_command.slack_notify
       data:
-        message: "Door opened while away (Eve sensor)"
+        message: "{{ '{{' }} \"🚪 Balcony\" if trigger.id == \"balcony\" else \"🚪 Entrance\" {{ '}}' }} door opened while away"
   mode: single
