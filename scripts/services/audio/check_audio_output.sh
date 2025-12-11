@@ -9,7 +9,7 @@ set -o pipefail # stop on pipe failures
 # Check if ALSA is working properly
 if aplay -l | grep -q 'card'; then
   # Check if volume is set correctly
-  VOLUME=$(amixer sget 'Digital',0 | grep -E 'Left:|Mono:' | awk -F'[][]' '{ print $2 }' | tr -d '%')
+  VOLUME=$(amixer sget 'Master',0 | grep -E 'Left:|Mono:' | awk -F'[][]' '{ print $2 }' | tr -d '%')
   # Make sure VOLUME is a number before comparing
   if [[ "$VOLUME" =~ ^[0-9]+$ ]] && [ "$VOLUME" -lt "90" ]; then
     echo "❌ Audio volume is too low ($VOLUME%) - setting to 100%"
