@@ -141,6 +141,41 @@
         entity_id: automation.away_mode_everyone_left
   mode: single
 
+# Wyze bulb monitoring - alerts when specific bulbs go offline/online
+- id: "wyze_bulb_offline_alert"
+  alias: "Wyze Bulb Offline Alert"
+  trigger:
+    - platform: state
+      entity_id:
+        - light.floor_lamp
+        - light.floor_lamp_new
+        - light.book_floor_lamp
+        - light.table_lamp
+      to: "unavailable"
+      for:
+        minutes: 5
+  action:
+    - service: rest_command.slack_notify
+      data:
+        message: "{{ '{{' }} \"⚠️ Wyze bulb offline: \" ~ (trigger.to_state.attributes.friendly_name | default(trigger.entity_id)) {{ '}}' }}"
+  mode: parallel
+
+- id: "wyze_bulb_online_recovery"
+  alias: "Wyze Bulb Online Recovery"
+  trigger:
+    - platform: state
+      entity_id:
+        - light.floor_lamp
+        - light.floor_lamp_new
+        - light.book_floor_lamp
+        - light.table_lamp
+      from: "unavailable"
+  action:
+    - service: rest_command.slack_notify
+      data:
+        message: "{{ '{{' }} \"✅ Wyze bulb back online: \" ~ (trigger.to_state.attributes.friendly_name | default(trigger.entity_id)) {{ '}}' }}"
+  mode: parallel
+
 # Eve door sensors - notification when doors open while nobody is home
 # Only triggers if group.persons has been not_home for at least 5 minutes
 # (avoids false alerts when leaving home and crossing geofence)
