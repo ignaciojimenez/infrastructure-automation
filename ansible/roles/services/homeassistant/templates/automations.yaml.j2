@@ -204,3 +204,57 @@
       data:
         message: "{{ '{{' }} \"🚪 Balcony\" if trigger.id == \"balcony\" else \"🚪 Entrance\" {{ '}}' }} door opened while away"
   mode: single
+
+# ============================================================
+# TRAIN COMMUTE NOTIFICATION
+# ============================================================
+# Sends train platform info when Choco leaves home on weekday mornings
+
+- id: "train_commute_notification"
+  alias: "Train Commute - Platform Notification"
+  description: "Send NS train platform info when leaving for work"
+  trigger:
+    - platform: state
+      entity_id: person.choco
+      from: "home"
+      to: "not_home"
+  condition:
+    - condition: time
+      after: "07:00:00"
+      before: "10:00:00"
+      weekday:
+        - mon
+        - tue
+        - wed
+        - thu
+        - fri
+    - condition: state
+      entity_id: input_boolean.train_notified_today
+      state: "off"
+  action:
+    - service: input_boolean.turn_on
+      target:
+        entity_id: input_boolean.train_notified_today
+    - service: rest_command.slack_alert
+      data:
+        message: >-
+          {{ '{{' }} "🚆 *Train to Amsterdam*\n" ~
+          "Departure: " ~ states('sensor.commute_typical') ~
+          {% raw %}
+          ((" (" ~ state_attr('sensor.commute_typical', 'delay') ~ " delay)") if state_attr('sensor.commute_typical', 'delay') else "") ~
+          "\nPlatform: *" ~ (state_attr('sensor.commute_typical', 'departure_platform') | default('?')) ~ "*" ~
+          (("\n⚠️ " ~ state_attr('sensor.commute_typical', 'going')) if state_attr('sensor.commute_typical', 'going') == false else "")
+          {% endraw %} {{ '}}' }}
+  mode: single
+
+- id: "train_notification_reset"
+  alias: "Train Notification - Daily Reset"
+  description: "Reset train notification flag at midnight"
+  trigger:
+    - platform: time
+      at: "00:00:00"
+  action:
+    - service: input_boolean.turn_off
+      target:
+        entity_id: input_boolean.train_notified_today
+  mode: single

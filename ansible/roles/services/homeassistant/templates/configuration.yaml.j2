@@ -40,11 +40,14 @@ logger:
   logs:
     custom_components.wyzeapi: debug
 
-# Guest Mode Input
+# Input Booleans
 input_boolean:
   guest_mode:
     name: Guest Mode
     icon: mdi:account-multiple
+  train_notified_today:
+    name: Train Notification Sent Today
+    icon: mdi:train
 
 # Template sensors (modern syntax)
 template:
@@ -73,10 +76,19 @@ template:
             mdi:home-outline
           {{ '{% endif %}' }}
 
-# Slack notifications
+# Slack notifications (webhooks stored in secrets.yaml)
 rest_command:
   slack_notify:
-    url: '{{ homeassistant_slack_webhook | default("") }}'
+    url: !secret slack_log_webhook
+    method: post
+    headers:
+      Content-Type: application/json
+    payload: >
+      {
+        "text": "{{ '{{ message }}' }}"
+      }
+  slack_alert:
+    url: !secret slack_alert_webhook
     method: post
     headers:
       Content-Type: application/json

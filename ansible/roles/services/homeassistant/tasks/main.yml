@@ -52,6 +52,16 @@
     - "{{ homeassistant_config_dir | default('/home/' + ansible_user + '/homeassistant') }}/backups"
   tags: [homeassistant, directories]
 
+- name: Deploy Home Assistant secrets
+  ansible.builtin.template:
+    src: secrets.yaml.j2
+    dest: "{{ homeassistant_config_dir | default('/home/' + ansible_user + '/homeassistant') }}/secrets.yaml"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0600'
+  notify: Restart Home Assistant
+  tags: [homeassistant, secrets]
+
 - name: Pull Home Assistant Docker image
   community.docker.docker_image:
     name: "ghcr.io/home-assistant/home-assistant:{{ homeassistant_version | default('stable') }}"
