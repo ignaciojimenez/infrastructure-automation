@@ -174,6 +174,86 @@ check_network() {
     echo ""
 }
 
+check_auto_upgrades() {
+    echo "=== Auto-Upgrades Status ==="
+    
+    # Only check on Debian-based systems (unattended-upgrades is Debian-specific)
+    if [ "$OS_TYPE" != "debian" ]; then
+        print_status "warning" "Auto-upgrades check only available on Debian"
+        echo ""
+        return 0
+    fi
+    
+    issues_found=0
+    
+    # Check if unattended-upgrades is installed
+    if ! dpkg -l 2>/dev/null | grep -q "unattended-upgrades"; then
+        print_status "error" "unattended-upgrades package not installed"
+        issues_found=$((issues_found + 1))
+    else
+        # Check if service is enabled and running
+        if ! systemctl is-enabled unattended-upgrades.service >/dev/null 2>&1; then
+            print_status "error" "unattended-upgrades service not enabled"
+            issues_found=$((issues_found + 1))
+        elif ! systemctl is-active unattended-upgrades.service >/dev/null 2>&1; then
+            print_status "error" "unattended-upgrades service not running"
+            issues_found=$((issues_found + 1))
+        else
+            print_status "success" "unattended-upgrades service: running"
+        fi
+        
+        # Check for recent activity (look for runs in the last 7 days)
+        log_file="/var/log/unattended-upgrades/unattended-upgrades.log"
+        if [ -f "$log_file" ]; then
+            # Get dates for last 7 days and check for activity
+            activity_found=false
+            current_date=$(date +"%Y-%m-%d")
+            
+            # Check today and recent days
+            if grep -q "$current_date" "$log_file" 2>/dev/null; then
+                activity_found=true
+            else
+                # Check yesterday
+                yesterday=$(date -d "1 day ago" +"%Y-%m-%d" 2>/dev/null || date -v-1d +"%Y-%m-%d" 2>/dev/null)
+                if [ -n "$yesterday" ] && grep -q "$yesterday" "$log_file" 2>/dev/null; then
+                    activity_found=true
+                fi
+            fi
+            
+            if [ "$activity_found" = true ]; then
+                print_status "success" "Recent upgrade activity detected"
+            else
+                print_status "warning" "No recent upgrade activity in logs"
+            fi
+        else
+            print_status "warning" "Upgrade log not found"
+        fi
+        
+        # Check configuration files exist
+        if [ ! -f /etc/apt/apt.conf.d/20auto-upgrades ] || [ ! -f /etc/apt/apt.conf.d/50unattended-upgrades ]; then
+            print_status "error" "Missing auto-upgrade configuration files"
+            issues_found=$((issues_found + 1))
+        else
+            # Check if upgrades are enabled in config
+            if ! grep -q 'APT::Periodic::Unattended-Upgrade "1"' /etc/apt/apt.conf.d/20auto-upgrades 2>/dev/null; then
+                print_status "error" "Unattended upgrades not enabled in config"
+                issues_found=$((issues_found + 1))
+            else
+                print_status "success" "Configuration: valid"
+            fi
+        fi
+        
+        # Note: We intentionally do NOT alert on pending update counts
+        # Pending updates naturally accumulate between daily runs - this is normal
+        pending=$(apt-get --simulate upgrade 2>/dev/null | grep -c "^Inst")
+        pending=${pending:-0}
+        print_status "success" "Pending updates: $pending (informational)"
+    fi
+    
+    echo ""
+    return $issues_found
+}
+
 # Handle command line arguments
 case "${1:-}" in
     --version)
@@ -209,6 +289,7 @@ check_memory
 check_load
 check_services
 check_network
+check_auto_upgrades
 
 echo "=============================="
 echo "Health check completed"
