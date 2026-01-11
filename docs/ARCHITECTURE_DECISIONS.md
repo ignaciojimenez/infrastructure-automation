@@ -36,6 +36,7 @@ Simple log of key technical decisions made in this project.
 - **Platform-specific monitoring** - Each platform runs it's own monitoring capabilities
 - **POSIX-compliant scripts** - All scripts use `/bin/sh` for FreeBSD compatibility
 - **Unified Slack webhooks** - All hosts share same monitoring/alert webhook configuration from vault
+- **Auto-upgrades: pending counts are informational only** - Pending updates naturally accumulate between daily runs; only service/config issues trigger alerts
 
 ## Monitoring Strategy
 
@@ -120,3 +121,9 @@ All scripts are POSIX-compliant shell scripts for maximum portability. Monitorin
   - Containers: `home-assistant`, `matter-server`
   - Network mode: host (required for Matter/Thread)
   - Privileged mode: enabled for USB/Bluetooth access
+
+- **Docker cleanup via weekly prune** - Prevents disk space issues from old images
+  - `docker system prune -a -f` runs weekly via cron
+  - Each HA update leaves ~2GB of old images behind
+  - Weekly schedule balances cleanup frequency vs unnecessary runs
+  - Use `special_time: "weekly"` in Ansible cron tasks (not `cron_day` which is day-of-month)
