@@ -2,6 +2,25 @@
 
 Quick reference for the most common operation: deploying monitoring script updates to all hosts.
 
+## Active Debian Hosts
+
+**Raspberry Pi:**
+- cobra (media)
+- dockassist (homeassistant)
+- hifipi (audio_playback)
+- vinylstreamer (audio_streaming)
+
+**LXC Containers:**
+- unifi-lxc (network_controller)
+
+**Proxmox:**
+- proxmox/cwwk (hypervisor)
+
+**FreeBSD:**
+- opnsense (firewall)
+
+**Note:** devpi is unreachable (DNS resolution issue)
+
 ## The Workflow
 
 ```bash
