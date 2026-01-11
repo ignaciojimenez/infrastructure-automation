@@ -202,31 +202,48 @@ check_auto_upgrades() {
             print_status "success" "unattended-upgrades service: running"
         fi
         
-        # Check for recent activity (look for runs in the last 7 days)
+        # Check for recent activity - ALERT if no activity for 7+ days
         log_file="/var/log/unattended-upgrades/unattended-upgrades.log"
+        STALE_DAYS=7
+        
         if [ -f "$log_file" ]; then
-            # Get dates for last 7 days and check for activity
-            activity_found=false
-            current_date=$(date +"%Y-%m-%d")
+            # Find the most recent "Starting unattended upgrades" entry
+            last_run_line=$(grep "Starting unattended upgrades script" "$log_file" 2>/dev/null | tail -1)
             
-            # Check today and recent days
-            if grep -q "$current_date" "$log_file" 2>/dev/null; then
-                activity_found=true
-            else
-                # Check yesterday
-                yesterday=$(date -d "1 day ago" +"%Y-%m-%d" 2>/dev/null || date -v-1d +"%Y-%m-%d" 2>/dev/null)
-                if [ -n "$yesterday" ] && grep -q "$yesterday" "$log_file" 2>/dev/null; then
-                    activity_found=true
+            if [ -n "$last_run_line" ]; then
+                # Extract date from log entry (format: 2026-01-11 06:12:56,369)
+                last_run_date=$(echo "$last_run_line" | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' | head -1)
+                
+                if [ -n "$last_run_date" ]; then
+                    # Calculate days since last run (POSIX-compatible)
+                    current_epoch=$(date +%s)
+                    # Try GNU date first, then BSD date
+                    last_epoch=$(date -d "$last_run_date" +%s 2>/dev/null || date -jf "%Y-%m-%d" "$last_run_date" +%s 2>/dev/null)
+                    
+                    if [ -n "$last_epoch" ]; then
+                        days_since=$(( (current_epoch - last_epoch) / 86400 ))
+                        
+                        if [ "$days_since" -ge "$STALE_DAYS" ]; then
+                            print_status "error" "No upgrades for ${days_since} days (last: ${last_run_date}) - ACTION REQUIRED"
+                            issues_found=$((issues_found + 1))
+                        elif [ "$days_since" -ge 2 ]; then
+                            print_status "warning" "Last upgrade: ${last_run_date} (${days_since} days ago)"
+                        else
+                            print_status "success" "Last upgrade: ${last_run_date}"
+                        fi
+                    else
+                        print_status "warning" "Could not parse last upgrade date"
+                    fi
+                else
+                    print_status "warning" "Could not find upgrade date in logs"
                 fi
-            fi
-            
-            if [ "$activity_found" = true ]; then
-                print_status "success" "Recent upgrade activity detected"
             else
-                print_status "warning" "No recent upgrade activity in logs"
+                print_status "error" "No upgrade activity found in logs - ACTION REQUIRED"
+                issues_found=$((issues_found + 1))
             fi
         else
-            print_status "warning" "Upgrade log not found"
+            print_status "error" "Upgrade log not found - unattended-upgrades may not be configured"
+            issues_found=$((issues_found + 1))
         fi
         
         # Check configuration files exist
