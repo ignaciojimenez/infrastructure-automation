@@ -239,11 +239,11 @@
       data:
         message: >-
           {{ '{{' }} "🚆 *Train to Amsterdam*\n" ~
-          "Departure: " ~ states('sensor.commute_typical') ~
+          "Departure: " ~ states('sensor.commute_typical_actual_departure_time') ~
           {% raw %}
-          ((" (" ~ state_attr('sensor.commute_typical', 'delay') ~ " delay)") if state_attr('sensor.commute_typical', 'delay') else "") ~
-          "\nPlatform: *" ~ (state_attr('sensor.commute_typical', 'departure_platform') | default('?')) ~ "*" ~
-          (("\n⚠️ " ~ state_attr('sensor.commute_typical', 'going')) if state_attr('sensor.commute_typical', 'going') == false else "")
+          ((" (Delayed from " ~ states('sensor.commute_typical_planned_departure_time') ~ ")") if is_state('binary_sensor.commute_typical_departure_delayed', 'on') else "") ~
+          "\nPlatform: *" ~ (states('sensor.commute_typical_actual_departure_platform') if states('sensor.commute_typical_actual_departure_platform') not in ['unknown', 'unavailable', ''] else states('sensor.commute_typical_planned_departure_platform')) ~ "*" ~
+          (("\n⚠️ Train not running") if is_state('binary_sensor.commute_typical_going', 'off') else "")
           {% endraw %} {{ '}}' }}
   mode: single
 
