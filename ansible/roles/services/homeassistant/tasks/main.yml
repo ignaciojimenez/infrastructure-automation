@@ -62,6 +62,26 @@
   notify: Restart Home Assistant
   tags: [homeassistant, secrets]
 
+- name: Create scripts directory
+  ansible.builtin.file:
+    path: "{{ homeassistant_config_dir | default('/home/' + ansible_user + '/homeassistant') }}/scripts"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  become: true
+  tags: [homeassistant, scripts]
+
+- name: Deploy train notification script
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../scripts/services/homeassistant/notify_train_platform.sh"
+    dest: "{{ homeassistant_config_dir | default('/home/' + ansible_user + '/homeassistant') }}/scripts/notify_train_platform.sh"
+    owner: root
+    group: root
+    mode: '0755'
+  become: true
+  tags: [homeassistant, scripts]
+
 - name: Pull Home Assistant Docker image
   community.docker.docker_image:
     name: "ghcr.io/home-assistant/home-assistant:{{ homeassistant_version | default('stable') }}"
@@ -202,16 +222,15 @@
     - alert_token is defined and alert_token != ''
   tags: [homeassistant, monitoring, cron]
 
-- name: Configure Docker system prune cron job
+- name: Configure Docker system prune cron job (weekly)
   ansible.builtin.cron:
     name: "Docker system prune"
-    minute: "0"
-    hour: "0"
-    day: "1"
+    special_time: "weekly"
     job: >
       {{ scripts_dir }}/enhanced_monitoring_wrapper
-      --heartbeat-interval=daily
+      --heartbeat-interval=weekly
       --notify-fixed=true
+      --monitoring-name=docker_system_prune
       {{ logging_token }}
       {{ alert_token }}
       {{ scripts_dir }}/docker_prune.sh
