@@ -84,12 +84,33 @@ try:
     
     now = datetime.now().astimezone()
     
-    # Get up to 3 future trains
+    # Get up to 3 unique future trains (deduplicate by time+platform)
+    seen = set()
     train_lines = []
+    
     for trip in trips:
+        legs = trip.get("legs", [])
+        if not legs:
+            continue
+        
+        origin = legs[0].get("origin", {})
+        actual_time = origin.get("actualDateTime", origin.get("plannedDateTime", ""))
+        actual_track = origin.get("actualTrack", origin.get("plannedTrack", ""))
+        
+        # Create unique key for this departure
+        dept_dt = parse_time(actual_time)
+        if not dept_dt or dept_dt <= now:
+            continue
+        
+        key = (dept_dt.strftime("%H:%M"), actual_track)
+        if key in seen:
+            continue
+        
         line = format_train(trip, now)
         if line:
+            seen.add(key)
             train_lines.append(line)
+        
         if len(train_lines) >= 3:
             break
     
