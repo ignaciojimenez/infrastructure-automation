@@ -249,3 +249,16 @@
       target:
         entity_id: input_boolean.train_notified_today
   mode: single
+
+# ============================================================
+# TADO HEALTH MONITORING
+# ============================================================
+- id: "tado_health_check"
+  alias: "Tado Health Check"
+  description: "Check Tado device tracker health every 30 minutes"
+  trigger:
+    - platform: time_pattern
+      minutes: "/30"
+  action:
+    - service: shell_command.check_tado_health
+  mode: single
