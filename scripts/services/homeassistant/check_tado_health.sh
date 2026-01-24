@@ -28,9 +28,7 @@ now = datetime.now()
 max_age = timedelta(hours=2)
 
 trackers = [
-    ("device_tracker.choco_iphone", "Choco iPhone"),
     ("device_tracker.choco13mini", "Choco iPhone 13 Mini"),
-    ("device_tracker.candelin_iphone", "Candela iPhone"),
     ("device_tracker.candelaiphone12mini", "Candela iPhone 12 Mini")
 ]
 
