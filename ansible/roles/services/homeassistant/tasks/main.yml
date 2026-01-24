@@ -52,6 +52,21 @@
     - "{{ homeassistant_config_dir | default('/home/' + ansible_user + '/homeassistant') }}/backups"
   tags: [homeassistant, directories]
 
+- name: Deploy Home Assistant core configuration
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "{{ homeassistant_config_dir | default('/home/' + ansible_user + '/homeassistant') }}/{{ item }}"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0644'
+  loop:
+    - configuration.yaml
+    - automations.yaml
+    - groups.yaml
+    - scenes.yaml
+  notify: Restart Home Assistant
+  tags: [homeassistant, config]
+
 - name: Deploy Home Assistant secrets
   ansible.builtin.template:
     src: secrets.yaml.j2
@@ -76,6 +91,16 @@
   ansible.builtin.copy:
     src: "{{ playbook_dir }}/../scripts/services/homeassistant/notify_train_platform.sh"
     dest: "{{ homeassistant_config_dir | default('/home/' + ansible_user + '/homeassistant') }}/scripts/notify_train_platform.sh"
+    owner: root
+    group: root
+    mode: '0755'
+  become: true
+  tags: [homeassistant, scripts]
+
+- name: Deploy Tado health check script
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../scripts/services/homeassistant/check_tado_health.sh"
+    dest: "{{ homeassistant_config_dir | default('/home/' + ansible_user + '/homeassistant') }}/scripts/check_tado_health.sh"
     owner: root
     group: root
     mode: '0755'
