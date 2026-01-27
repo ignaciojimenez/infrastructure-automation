@@ -75,6 +75,12 @@ template:
           {{ '{% else %}' }}
             mdi:home-outline
           {{ '{% endif %}' }}
+      
+      # Choco presence (combined: Tado + Companion app staleness detection)
+      - name: "Choco Presence"
+        unique_id: choco_presence_combined
+        device_class: presence
+        state: '{{ "{{ ((as_timestamp(now()) - as_timestamp(states.device_tracker.choco13mini.last_updated, 0)) / 60 < 30 and is_state(\"device_tracker.choco13mini\", \"home\")) or ((as_timestamp(now()) - as_timestamp(states.device_tracker.nexuschoky.last_updated, 0)) / 60 < 5 and is_state(\"device_tracker.nexuschoky\", \"home\")) }}" }}'
 
 # Slack notifications (webhooks stored in secrets.yaml)
 rest_command:

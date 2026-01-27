@@ -6,7 +6,7 @@
   trigger:
     - platform: numeric_state
       entity_id: sun.sun
-      value_template: "{{ '{{ state_attr(\"sun.sun\", \"elevation\") }}' }}"
+      value_template: '{{ "{{ state_attr(\"sun.sun\", \"elevation\") }}" }}'
       below: '1.5'
   condition:
     - condition: state
@@ -212,12 +212,12 @@
 
 - id: "train_commute_notification"
   alias: "Train Commute - Platform Notification"
-  description: "Send NS train platform info when leaving for work (calls NS API directly)"
+  description: "Send NS train platform info when leaving for work (combined Tado + Companion app)"
   trigger:
     - platform: state
-      entity_id: person.choco
-      from: "home"
-      to: "not_home"
+      entity_id: binary_sensor.choco_presence
+      from: "on"
+      to: "off"
   condition:
     - condition: time
       after: "07:00:00"

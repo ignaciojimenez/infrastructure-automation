@@ -8,6 +8,12 @@
   become_user: "{{ ansible_user }}"
   listen: restart homeassistant
 
+- name: Restart Home Assistant
+  community.docker.docker_compose_v2:
+    project_src: "{{ homeassistant_config_dir | default('/home/' + ansible_user + '/homeassistant') }}"
+    restarted: true
+  become_user: "{{ ansible_user }}"
+
 - name: stop homeassistant
   community.docker.docker_compose_v2:
     project_src: "{{ homeassistant_config_dir | default('/home/' + ansible_user + '/homeassistant') }}"
