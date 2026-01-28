@@ -1,6 +1,11 @@
 # Home Assistant Configuration
 # Managed by Ansible - Manual changes will be overwritten
 
+# Core configuration
+homeassistant:
+  external_url: "https://ha.ignacio.systems"
+  internal_url: "http://localhost:8123"
+
 # Loads default set of integrations. Do not remove.
 default_config:
 
@@ -76,11 +81,11 @@ template:
             mdi:home-outline
           {{ '{% endif %}' }}
       
-      # Choco presence (SSID-based: home when connected to home WiFi)
+      # Choco presence (Companion App device tracker, fallback to Tado)
       - name: "Choco Presence"
         unique_id: choco_presence_combined
         device_class: presence
-        state: '{{ "{{ is_state(\"sensor.nexuschoky_ssid\", \"estonoesmazagon\") or (is_state(\"device_tracker.choco13mini\", \"home\") and (as_timestamp(now()) - as_timestamp(states.device_tracker.choco13mini.last_updated, 0)) / 60 < 30) }}" }}'
+        state: '{{ "{{ is_state(\"device_tracker.nexuschoky\", \"home\") or (is_state(\"device_tracker.choco13mini\", \"home\") and (as_timestamp(now()) - as_timestamp(states.device_tracker.choco13mini.last_updated, 0)) / 60 < 30) }}" }}'
 
 # Slack notifications (webhooks stored in secrets.yaml)
 rest_command:
@@ -102,6 +107,13 @@ rest_command:
       {
         "text": "{{ '{{ message }}' }}"
       }
+
+# HTTP configuration for reverse proxy (Cloudflare Tunnel)
+http:
+  use_x_forwarded_for: true
+  trusted_proxies:
+    - 127.0.0.1
+    - ::1
 
 # Shell commands
 shell_command:
