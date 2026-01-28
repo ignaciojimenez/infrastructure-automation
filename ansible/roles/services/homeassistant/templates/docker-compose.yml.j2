@@ -20,6 +20,16 @@ services:
       start_period: 30s
     depends_on:
       - matter-server
+{% if enable_cloudflare_tunnel | default(true) %}
+
+  cloudflared:
+    container_name: cloudflared
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    network_mode: host
+    command: tunnel --no-autoupdate run --token {{ vault_cloudflare_tunnel_token }}
+
+{% endif %}
 {% if enable_matter_server | default(true) %}
 
   matter-server:
