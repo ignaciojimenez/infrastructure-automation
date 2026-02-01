@@ -112,13 +112,21 @@ All scripts are POSIX-compliant shell scripts for maximum portability. Monitorin
   - Thread network shared between Apple Home and HA via border router
   - Matter Server runs alongside HA container on dockassist
 
-- **Presence detection via Tado trackers** - Uses existing device_tracker entities
+- **Presence detection via Companion App + Tado fallback** - Robust dual-source tracking
+  - Primary: Mobile Companion App device trackers (real-time GPS)
+  - Fallback: Tado device trackers (30-minute freshness window)
+  - Combined presence sensors: `binary_sensor.choco_presence`, `binary_sensor.candela_presence`
   - group.persons for home/away state
   - Guest mode toggle disables automatic away
   - 10-minute delay prevents false triggers
 
+- **Cloudflare Tunnel for remote access** - Secure external access without port forwarding
+  - Separate container: `cloudflared`
+  - Token-based auth from Ansible vault
+  - External URL: ha.ignacio.systems
+
 - **Docker deployment** - Not Home Assistant OS
-  - Containers: `home-assistant`, `matter-server`
+  - Containers: `home-assistant`, `matter-server`, `cloudflared`
   - Network mode: host (required for Matter/Thread)
   - Privileged mode: enabled for USB/Bluetooth access
 

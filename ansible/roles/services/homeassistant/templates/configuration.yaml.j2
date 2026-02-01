@@ -5,8 +5,6 @@
 homeassistant:
   external_url: "https://ha.ignacio.systems"
   internal_url: "http://localhost:8123"
-  ip_ban_enabled: true
-  login_attempts_threshold: 5
 
 # Loads default set of integrations. Do not remove.
 default_config:
@@ -88,6 +86,12 @@ template:
         unique_id: choco_presence_combined
         device_class: presence
         state: '{{ "{{ is_state(\"device_tracker.nexuschoky\", \"home\") or (is_state(\"device_tracker.choco13mini\", \"home\") and (as_timestamp(now()) - as_timestamp(states.device_tracker.choco13mini.last_updated, 0)) / 60 < 30) }}" }}'
+      
+      # Candela presence (Companion App device tracker, fallback to Tado)
+      - name: "Candela Presence"
+        unique_id: candela_presence_combined
+        device_class: presence
+        state: '{{ "{{ is_state(\"device_tracker.iphone_de_candela_2\", \"home\") or (is_state(\"device_tracker.candelaiphone12mini\", \"home\") and (as_timestamp(now()) - as_timestamp(states.device_tracker.candelaiphone12mini.last_updated, 0)) / 60 < 30) }}" }}'
 
 # Slack notifications (webhooks stored in secrets.yaml)
 rest_command:
@@ -116,6 +120,8 @@ http:
   trusted_proxies:
     - 127.0.0.1
     - ::1
+  ip_ban_enabled: true
+  login_attempts_threshold: 5
 
 # Shell commands
 shell_command:

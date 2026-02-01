@@ -131,6 +131,33 @@
   become_user: "{{ ansible_user }}"
   tags: [homeassistant, docker]
 
+# ============================================================
+# Cloudflare Tunnel Configuration
+# ============================================================
+
+- name: Pull Cloudflared Docker image
+  community.docker.docker_image:
+    name: cloudflare/cloudflared:latest
+    source: pull
+    force_source: true
+  become: true
+  become_user: "{{ ansible_user }}"
+  when: enable_cloudflare_tunnel | default(true)
+  tags: [homeassistant, cloudflare, docker]
+
+- name: Create and start Cloudflared tunnel container
+  community.docker.docker_container:
+    name: cloudflared
+    image: cloudflare/cloudflared:latest
+    restart_policy: unless-stopped
+    network_mode: host
+    command: "tunnel --no-autoupdate run --token {{ vault_cloudflare_tunnel_token }}"
+    state: started
+  become: true
+  become_user: "{{ ansible_user }}"
+  when: enable_cloudflare_tunnel | default(true)
+  tags: [homeassistant, cloudflare, docker]
+
 # Install HACS (Home Assistant Community Store)
 - name: Wait for Home Assistant to start
   ansible.builtin.wait_for:
