@@ -262,3 +262,41 @@
   action:
     - service: shell_command.check_tado_health
   mode: single
+
+# ============================================================
+# SECURITY MONITORING
+# ============================================================
+- id: 'security_login_failure_alert'
+  alias: 'Security: Failed Login Attempts Alert'
+  description: 'Alert on failed login attempts and IP bans via Slack'
+  trigger:
+    - platform: persistent_notification
+      update_type: added
+  condition:
+    - condition: template
+      value_template: >
+        {{ '{% set message = trigger.notification.message | default("") %}' }}
+        {{ '{% set title = trigger.notification.title | default("") %}' }}
+        {{ '{{ "Login attempt" in message or "login attempt" in message or' }}
+           {{ '"Too many login attempts" in message or "Banned" in message or' }}
+           {{ '"invalid authentication" in message }}' }}
+  action:
+    - service: rest_command.slack_alert
+      data:
+        message: >
+          {{ '🚨 Security Alert - {{ now().strftime("%Y-%m-%d %H:%M:%S") }}' }}
+          
+          {{ '{% set msg = trigger.notification.message | default("") %}' }}
+          {{ '{% set title = trigger.notification.title | default("") %}' }}
+          {{ '{% if "Too many login attempts" in msg or "Banned" in msg %}' }}
+          {{ '*IP BANNED*' }}
+          {{ '{% elif "invalid authentication" in msg or "login attempt" in msg %}' }}
+          {{ '*Failed Login Attempt*' }}
+          {{ '{% else %}' }}
+          {{ '*Security Event*' }}
+          {{ '{% endif %}' }}
+          
+          {{ '{{ title }}' }}
+          {{ '{{ msg }}' }}
+  mode: queued
+  max: 10
