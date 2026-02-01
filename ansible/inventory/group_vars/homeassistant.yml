@@ -14,7 +14,7 @@ homeassistant_backup_frequency: "daily"
 homeassistant_backup_retention_days: 7
 
 # Container
-homeassistant_container_name: "homeassistant"
+homeassistant_container_name: "home-assistant"
 homeassistant_config_dir: "/home/{{ ansible_user }}/homeassistant"
 
 # Platform
