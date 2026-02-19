@@ -57,7 +57,7 @@
     - service: backup.create
   mode: single
 
-# Away/Home mode
+ # Away/Home mode
 - id: "away_mode_everyone_left"
   alias: "Away Mode - Everyone Left"
   trigger:
@@ -73,18 +73,13 @@
   action:
     - service: climate.set_preset_mode
       target:
-        entity_id:
-          - climate.salon
-          - climate.master_bedroom
-          - climate.office
-          - climate.upstairs_aisle
-          - climate.bathroom
+        entity_id: group.homekit_tado_climates
       data:
         preset_mode: away
     - service: light.turn_off
       target:
         entity_id: light.all_lights
-    - service: rest_command.slack_notify
+    - service: rest_command.slack_alert
       data:
         message: "Away mode activated"
   mode: single
@@ -97,18 +92,13 @@
       to: "home"
   condition:
     - condition: state
-      entity_id: climate.salon
+      entity_id: group.homekit_tado_climates
       attribute: preset_mode
       state: "away"
   action:
     - service: climate.set_preset_mode
       target:
-        entity_id:
-          - climate.salon
-          - climate.master_bedroom
-          - climate.office
-          - climate.upstairs_aisle
-          - climate.bathroom
+        entity_id: group.homekit_tado_climates
       data:
         preset_mode: home
     - service: rest_command.slack_notify
@@ -176,6 +166,49 @@
         message: "{{ '{{' }} \"✅ Wyze bulb back online: \" ~ (trigger.to_state.attributes.friendly_name | default(trigger.entity_id)) {{ '}}' }}"
   mode: parallel
 
+# HomeKit heating availability monitoring
+- id: "homekit_tado_climate_offline_alert"
+  alias: "HomeKit Tado Climate Offline Alert"
+  trigger:
+    - platform: state
+      entity_id:
+        - climate.tado_smart_thermostat_ru3393984256
+        - climate.tado_smart_thermostat_su3182126080
+        - climate.tado_smart_radiator_thermostat_va3363583744
+        - climate.tado_smart_radiator_thermostat_va0290656256
+        - climate.tado_smart_radiator_thermostat_va2220036096
+        - climate.tado_smart_radiator_thermostat_va0612513536
+        - climate.tado_smart_radiator_thermostat_va1065432832
+        - climate.tado_smart_radiator_thermostat_va2323724032
+      to: "unavailable"
+      for:
+        minutes: 10
+  action:
+    - service: rest_command.slack_alert
+      data:
+        message: "{{ '{{' }} \"⚠️ Heating offline: \" ~ (trigger.to_state.attributes.friendly_name | default(trigger.entity_id)) {{ '}}' }}"
+  mode: parallel
+
+- id: "homekit_tado_climate_online_recovery"
+  alias: "HomeKit Tado Climate Online Recovery"
+  trigger:
+    - platform: state
+      entity_id:
+        - climate.tado_smart_thermostat_ru3393984256
+        - climate.tado_smart_thermostat_su3182126080
+        - climate.tado_smart_radiator_thermostat_va3363583744
+        - climate.tado_smart_radiator_thermostat_va0290656256
+        - climate.tado_smart_radiator_thermostat_va2220036096
+        - climate.tado_smart_radiator_thermostat_va0612513536
+        - climate.tado_smart_radiator_thermostat_va1065432832
+        - climate.tado_smart_radiator_thermostat_va2323724032
+      from: "unavailable"
+  action:
+    - service: rest_command.slack_notify
+      data:
+        message: "{{ '{{' }} \"✅ Heating back online: \" ~ (trigger.to_state.attributes.friendly_name | default(trigger.entity_id)) {{ '}}' }}"
+  mode: parallel
+
 # Eve door sensors - notification when doors open while nobody is home
 # Only triggers if group.persons has been not_home for at least 5 minutes
 # (avoids false alerts when leaving home and crossing geofence)
@@ -200,7 +233,7 @@
       for:
         minutes: 5
   action:
-    - service: rest_command.slack_notify
+    - service: rest_command.slack_alert
       data:
         message: "{{ '{{' }} \"🚪 Balcony\" if trigger.id == \"balcony\" else \"🚪 Entrance\" {{ '}}' }} door opened while away"
   mode: single
@@ -248,19 +281,6 @@
     - service: input_boolean.turn_off
       target:
         entity_id: input_boolean.train_notified_today
-  mode: single
-
-# ============================================================
-# TADO HEALTH MONITORING
-# ============================================================
-- id: "tado_health_check"
-  alias: "Tado Health Check"
-  description: "Check Tado device tracker health every 30 minutes"
-  trigger:
-    - platform: time_pattern
-      minutes: "/30"
-  action:
-    - service: shell_command.check_tado_health
   mode: single
 
 # ============================================================
