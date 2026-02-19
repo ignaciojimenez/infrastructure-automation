@@ -84,7 +84,7 @@
                       "preset_mode": "away"
                     },
                     "target": {
-                      "entity_id": {{ tado_climate_entities | default('["climate.salon", "climate.master_bedroom", "climate.office", "climate.upstairs_aisle", "climate.bathroom"]') }}
+                      "entity_id": "group.homekit_tado_climates"
                     }
                   }
                 },
@@ -99,7 +99,7 @@
                       "preset_mode": "home"
                     },
                     "target": {
-                      "entity_id": {{ tado_climate_entities | default('["climate.salon", "climate.master_bedroom", "climate.office", "climate.upstairs_aisle", "climate.bathroom"]') }}
+                      "entity_id": "group.homekit_tado_climates"
                     }
                   }
                 }
@@ -107,8 +107,8 @@
             },
             {
               "type": "thermostat",
-              "entity": "climate.salon",
-              "name": "Living Room"
+              "entity": "group.homekit_tado_climates",
+              "name": "Heating"
             },
             {
               "type": "glance",

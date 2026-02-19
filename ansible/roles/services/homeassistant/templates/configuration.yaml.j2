@@ -57,12 +57,6 @@ input_boolean:
 # Template sensors (modern syntax)
 template:
   - binary_sensor:
-      # Integration health monitoring
-      - name: "Tado Online"
-        unique_id: tado_online
-        device_class: connectivity
-        state: >
-          {{ '{{ states(\'binary_sensor.ib3176076544_connection_state\') not in [\'unavailable\', \'unknown\'] }}' }}
       - name: "Wyze Online"
         unique_id: wyze_online
         device_class: connectivity
@@ -126,4 +120,3 @@ http:
 # Shell commands
 shell_command:
   notify_train_platform: '/config/scripts/notify_train_platform.sh'
-  check_tado_health: '/config/scripts/check_tado_health.sh'

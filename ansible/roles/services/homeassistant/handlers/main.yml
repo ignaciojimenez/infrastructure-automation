@@ -2,16 +2,18 @@
 # Home Assistant handlers
 
 - name: restart homeassistant
-  community.docker.docker_compose_v2:
-    project_src: "{{ homeassistant_config_dir | default('/home/' + ansible_user + '/homeassistant') }}"
-    restarted: true
+  community.docker.docker_container:
+    name: "{{ homeassistant_container_name | default('home-assistant') }}"
+    state: started
+    restart: true
   become_user: "{{ ansible_user }}"
   listen: restart homeassistant
 
 - name: Restart Home Assistant
-  community.docker.docker_compose_v2:
-    project_src: "{{ homeassistant_config_dir | default('/home/' + ansible_user + '/homeassistant') }}"
-    restarted: true
+  community.docker.docker_container:
+    name: "{{ homeassistant_container_name | default('home-assistant') }}"
+    state: started
+    restart: true
   become_user: "{{ ansible_user }}"
 
 - name: stop homeassistant

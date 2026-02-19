@@ -89,18 +89,8 @@
 
 - name: Deploy train notification script
   ansible.builtin.copy:
-    src: "{{ playbook_dir }}/../scripts/services/homeassistant/notify_train_platform.sh"
+    src: "{{ playbook_dir }}/../../scripts/services/homeassistant/notify_train_platform.sh"
     dest: "{{ homeassistant_config_dir | default('/home/' + ansible_user + '/homeassistant') }}/scripts/notify_train_platform.sh"
-    owner: root
-    group: root
-    mode: '0755'
-  become: true
-  tags: [homeassistant, scripts]
-
-- name: Deploy Tado health check script
-  ansible.builtin.copy:
-    src: "{{ playbook_dir }}/../scripts/services/homeassistant/check_tado_health.sh"
-    dest: "{{ homeassistant_config_dir | default('/home/' + ansible_user + '/homeassistant') }}/scripts/check_tado_health.sh"
     owner: root
     group: root
     mode: '0755'
