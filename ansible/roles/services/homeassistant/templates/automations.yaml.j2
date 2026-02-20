@@ -1,17 +1,27 @@
 # Home Assistant Automations - Managed by Ansible
 
-# Sunset lights
+# Lights on when dark — fires at sunset (if someone home) or on arrival (if already dark)
 - id: '1614473127522'
-  alias: Sunset lights on - sun elevation
+  alias: Lights on when dark
   trigger:
     - platform: numeric_state
       entity_id: sun.sun
       value_template: '{{ "{{ state_attr(\"sun.sun\", \"elevation\") }}" }}'
       below: '1.5'
+    - platform: state
+      entity_id: group.persons
+      to: "home"
   condition:
+    - condition: numeric_state
+      entity_id: sun.sun
+      attribute: elevation
+      below: 1.5
     - condition: state
       entity_id: group.persons
       state: home
+    - condition: state
+      entity_id: light.living_room_lights
+      state: "off"
   action:
     - service: scene.turn_on
       target:
@@ -26,7 +36,7 @@
       at: '00:30:00'
   condition:
     - condition: time
-      weekday: [mon, tue, wed, thu, fri]
+      weekday: [mon, tue, wed, thu]
   action:
     - service: light.turn_off
       target:
@@ -40,7 +50,7 @@
       at: '02:30:00'
   condition:
     - condition: time
-      weekday: [sat, sun]
+      weekday: [fri, sat, sun]
   action:
     - service: light.turn_off
       target:
