@@ -79,9 +79,9 @@
                   "icon": "mdi:home-export-outline",
                   "tap_action": {
                     "action": "call-service",
-                    "service": "climate.set_preset_mode",
+                    "service": "climate.set_hvac_mode",
                     "data": {
-                      "preset_mode": "away"
+                      "hvac_mode": "off"
                     },
                     "target": {
                       "entity_id": "group.homekit_tado_climates"
@@ -94,9 +94,9 @@
                   "icon": "mdi:home",
                   "tap_action": {
                     "action": "call-service",
-                    "service": "climate.set_preset_mode",
+                    "service": "climate.set_hvac_mode",
                     "data": {
-                      "preset_mode": "home"
+                      "hvac_mode": "heat"
                     },
                     "target": {
                       "entity_id": "group.homekit_tado_climates"
