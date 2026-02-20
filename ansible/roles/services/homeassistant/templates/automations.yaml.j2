@@ -58,30 +58,34 @@
   mode: single
 
  # Away/Home mode
+# Uses template trigger to treat both "not_home" and "unknown" as away,
+# preventing hourly device-tracker polling blips from resetting the timer.
+# Uses hvac_mode off/heat instead of preset_mode since HomeKit Controller
+# climates don't support Tado preset modes.
 - id: "away_mode_everyone_left"
   alias: "Away Mode - Everyone Left"
   trigger:
-    - platform: state
-      entity_id: group.persons
-      to: "not_home"
+    - platform: template
+      value_template: >
+        {{ '{{ states("group.persons") != "home" }}' }}
       for:
-        minutes: 10
+        minutes: 6
   condition:
     - condition: state
       entity_id: input_boolean.guest_mode
       state: "off"
   action:
-    - service: climate.set_preset_mode
+    - service: climate.set_hvac_mode
       target:
         entity_id: group.homekit_tado_climates
       data:
-        preset_mode: away
+        hvac_mode: "off"
     - service: light.turn_off
       target:
         entity_id: light.all_lights
     - service: rest_command.slack_alert
       data:
-        message: "Away mode activated"
+        message: "Away mode activated — heating off"
   mode: single
 
 - id: "home_mode_first_arrives"
@@ -91,16 +95,15 @@
       entity_id: group.persons
       to: "home"
   condition:
-    - condition: state
-      entity_id: group.homekit_tado_climates
-      attribute: preset_mode
-      state: "away"
+    - condition: template
+      value_template: >
+        {{ '{{ states("climate.tado_smart_thermostat_ru3393984256") == "off" }}' }}
   action:
-    - service: climate.set_preset_mode
+    - service: climate.set_hvac_mode
       target:
         entity_id: group.homekit_tado_climates
       data:
-        preset_mode: home
+        hvac_mode: "heat"
     - service: rest_command.slack_notify
       data:
         message: "Welcome home! Heating restored."
