@@ -11,6 +11,8 @@
     - platform: state
       entity_id: group.persons
       to: "home"
+      for:
+        minutes: 2
   condition:
     - condition: numeric_state
       entity_id: sun.sun
@@ -68,10 +70,9 @@
   mode: single
 
  # Away/Home mode
-# Uses template trigger to treat both "not_home" and "unknown" as away,
+# Uses Tado API (presenceLock) to properly set home/away without fighting
+# Tado's own schedules. Template trigger treats "not_home" and "unknown" as away,
 # preventing hourly device-tracker polling blips from resetting the timer.
-# Uses hvac_mode off/heat instead of preset_mode since HomeKit Controller
-# climates don't support Tado preset modes.
 - id: "away_mode_everyone_left"
   alias: "Away Mode - Everyone Left"
   trigger:
@@ -79,44 +80,34 @@
       value_template: >
         {{ '{{ states("group.persons") != "home" }}' }}
       for:
-        minutes: 6
+        minutes: 10
   condition:
     - condition: state
       entity_id: input_boolean.guest_mode
       state: "off"
   action:
-    - service: climate.set_hvac_mode
-      target:
-        entity_id: group.homekit_tado_climates
-      data:
-        hvac_mode: "off"
+    - service: shell_command.tado_set_away
     - service: light.turn_off
       target:
         entity_id: light.all_lights
     - service: rest_command.slack_alert
       data:
-        message: "Away mode activated — heating off"
+        message: "Away mode activated — Tado set to AWAY"
   mode: single
 
 - id: "home_mode_first_arrives"
   alias: "Home Mode - First Person Arrives"
   trigger:
-    - platform: state
-      entity_id: group.persons
-      to: "home"
-  condition:
-    - condition: template
+    - platform: template
       value_template: >
-        {{ '{{ states("climate.tado_smart_thermostat_ru3393984256") == "off" }}' }}
+        {{ '{{ states("group.persons") == "home" }}' }}
+      for:
+        minutes: 3
   action:
-    - service: climate.set_hvac_mode
-      target:
-        entity_id: group.homekit_tado_climates
-      data:
-        hvac_mode: "heat"
+    - service: shell_command.tado_set_home
     - service: rest_command.slack_notify
       data:
-        message: "Welcome home! Heating restored."
+        message: "Welcome home! Tado set to HOME."
   mode: single
 
 # Guest mode

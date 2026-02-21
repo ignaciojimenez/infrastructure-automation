@@ -97,6 +97,16 @@
   become: true
   tags: [homeassistant, scripts]
 
+- name: Deploy Tado presence script
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../scripts/services/homeassistant/tado_presence.sh"
+    dest: "{{ homeassistant_config_dir | default('/home/' + ansible_user + '/homeassistant') }}/scripts/tado_presence.sh"
+    owner: root
+    group: root
+    mode: '0755'
+  become: true
+  tags: [homeassistant, scripts]
+
 - name: Pull Home Assistant Docker image
   community.docker.docker_image:
     name: "ghcr.io/home-assistant/home-assistant:{{ homeassistant_version | default('stable') }}"

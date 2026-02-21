@@ -75,17 +75,17 @@ template:
             mdi:home-outline
           {{ '{% endif %}' }}
       
-      # Choco presence (Companion App device tracker, fallback to Tado)
+      # Choco presence (Companion App device tracker)
       - name: "Choco Presence"
         unique_id: choco_presence_combined
         device_class: presence
-        state: '{{ "{{ is_state(\"device_tracker.nexuschoky\", \"home\") or (is_state(\"device_tracker.choco13mini\", \"home\") and (as_timestamp(now()) - as_timestamp(states.device_tracker.choco13mini.last_updated, 0)) / 60 < 30) }}" }}'
-      
-      # Candela presence (Companion App device tracker, fallback to Tado)
+        state: '{{ "{{ is_state(\"device_tracker.nexuschoky\", \"home\") }}" }}'
+
+      # Candela presence (Companion App device tracker)
       - name: "Candela Presence"
         unique_id: candela_presence_combined
         device_class: presence
-        state: '{{ "{{ is_state(\"device_tracker.iphone_de_candela_2\", \"home\") or (is_state(\"device_tracker.candelaiphone12mini\", \"home\") and (as_timestamp(now()) - as_timestamp(states.device_tracker.candelaiphone12mini.last_updated, 0)) / 60 < 30) }}" }}'
+        state: '{{ "{{ is_state(\"device_tracker.iphone_de_candela_2\", \"home\") }}" }}'
 
 # Slack notifications (webhooks stored in secrets.yaml)
 rest_command:
@@ -120,3 +120,5 @@ http:
 # Shell commands
 shell_command:
   notify_train_platform: '/config/scripts/notify_train_platform.sh'
+  tado_set_away: '/config/scripts/tado_presence.sh AWAY'
+  tado_set_home: '/config/scripts/tado_presence.sh HOME'
