@@ -434,3 +434,13 @@
     mode: '0644'
   notify: Restart Home Assistant
   tags: [homeassistant, dashboard]
+
+- name: Deploy dashboard registry
+  ansible.builtin.template:
+    src: lovelace_dashboards.json.j2
+    dest: "{{ homeassistant_config_dir | default('/home/' + ansible_user + '/homeassistant') }}/.storage/lovelace_dashboards"
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart Home Assistant
+  tags: [homeassistant, dashboard]

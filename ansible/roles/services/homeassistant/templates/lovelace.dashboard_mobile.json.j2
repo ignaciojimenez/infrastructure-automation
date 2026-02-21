@@ -12,18 +12,9 @@
           "icon": "mdi:home",
           "cards": [
             {
-              "type": "entities",
-              "title": "Status",
-              "entities": [
-                {
-                  "entity": "binary_sensor.home_occupied",
-                  "name": "Anyone Home"
-                },
-                {
-                  "entity": "input_boolean.guest_mode",
-                  "name": "Guest Mode"
-                }
-              ]
+              "type": "weather-forecast",
+              "entity": "weather.forecast_home",
+              "show_forecast": false
             },
             {
               "type": "horizontal-stack",
@@ -31,7 +22,7 @@
                 {
                   "type": "button",
                   "entity": "scene.chill",
-                  "name": "Relax",
+                  "name": "Chill",
                   "icon": "mdi:flower-tulip",
                   "tap_action": {
                     "action": "call-service",
@@ -56,7 +47,20 @@
                 },
                 {
                   "type": "button",
-                  "name": "Lights Off",
+                  "entity": "scene.descanso",
+                  "name": "Rest",
+                  "icon": "mdi:sleep",
+                  "tap_action": {
+                    "action": "call-service",
+                    "service": "scene.turn_on",
+                    "target": {
+                      "entity_id": "scene.descanso"
+                    }
+                  }
+                },
+                {
+                  "type": "button",
+                  "name": "Off",
                   "icon": "mdi:lightbulb-off",
                   "tap_action": {
                     "action": "call-service",
@@ -70,54 +74,160 @@
             },
             {
               "type": "entities",
-              "title": "Heating Mode",
-              "show_header_toggle": false,
               "entities": [
                 {
-                  "type": "button",
-                  "name": "Set Away",
-                  "icon": "mdi:home-export-outline",
-                  "tap_action": {
-                    "action": "call-service",
-                    "service": "climate.set_hvac_mode",
-                    "data": {
-                      "hvac_mode": "off"
-                    },
-                    "target": {
-                      "entity_id": "group.homekit_tado_climates"
-                    }
-                  }
+                  "entity": "input_select.tado_mode",
+                  "name": "Tado"
                 },
                 {
-                  "type": "button",
-                  "name": "Set Home",
-                  "icon": "mdi:home",
-                  "tap_action": {
-                    "action": "call-service",
-                    "service": "climate.set_hvac_mode",
-                    "data": {
-                      "hvac_mode": "heat"
-                    },
-                    "target": {
-                      "entity_id": "group.homekit_tado_climates"
-                    }
-                  }
+                  "entity": "input_boolean.guest_mode",
+                  "name": "Guest Mode"
                 }
               ]
             },
             {
-              "type": "thermostat",
-              "entity": "group.homekit_tado_climates",
-              "name": "Heating"
+              "type": "entities",
+              "title": "Temperatures",
+              "entities": [
+                {
+                  "type": "attribute",
+                  "entity": "climate.tado_smart_thermostat_ru3393984256",
+                  "attribute": "current_temperature",
+                  "name": "Salón",
+                  "suffix": "°C"
+                },
+                {
+                  "type": "attribute",
+                  "entity": "climate.tado_smart_thermostat_su3182126080",
+                  "attribute": "current_temperature",
+                  "name": "Bedroom",
+                  "suffix": "°C"
+                },
+                {
+                  "type": "attribute",
+                  "entity": "climate.tado_smart_radiator_thermostat_va2220036096",
+                  "attribute": "current_temperature",
+                  "name": "Office",
+                  "suffix": "°C"
+                },
+                {
+                  "type": "attribute",
+                  "entity": "climate.tado_smart_radiator_thermostat_va3363583744",
+                  "attribute": "current_temperature",
+                  "name": "Hallway",
+                  "suffix": "°C"
+                },
+                {
+                  "type": "attribute",
+                  "entity": "climate.tado_smart_radiator_thermostat_va0612513536",
+                  "attribute": "current_temperature",
+                  "name": "Bathroom",
+                  "suffix": "°C"
+                }
+              ]
+            },
+            {
+              "type": "entities",
+              "title": "Humidity",
+              "entities": [
+                {
+                  "type": "attribute",
+                  "entity": "climate.tado_smart_thermostat_ru3393984256",
+                  "attribute": "current_humidity",
+                  "name": "Salón",
+                  "suffix": "%"
+                },
+                {
+                  "type": "attribute",
+                  "entity": "climate.tado_smart_thermostat_su3182126080",
+                  "attribute": "current_humidity",
+                  "name": "Bedroom",
+                  "suffix": "%"
+                },
+                {
+                  "type": "attribute",
+                  "entity": "climate.tado_smart_radiator_thermostat_va2220036096",
+                  "attribute": "current_humidity",
+                  "name": "Office",
+                  "suffix": "%"
+                },
+                {
+                  "type": "attribute",
+                  "entity": "climate.tado_smart_radiator_thermostat_va3363583744",
+                  "attribute": "current_humidity",
+                  "name": "Hallway",
+                  "suffix": "%"
+                },
+                {
+                  "type": "attribute",
+                  "entity": "climate.tado_smart_radiator_thermostat_va0612513536",
+                  "attribute": "current_humidity",
+                  "name": "Bathroom",
+                  "suffix": "%"
+                }
+              ]
+            },
+            {
+              "type": "entities",
+              "title": "Doors",
+              "entities": [
+                {
+                  "entity": "binary_sensor.eve_door_20ebn9901_door",
+                  "name": "Balcony",
+                  "icon": "mdi:door"
+                },
+                {
+                  "entity": "binary_sensor.eve_door_20ebn9901_door_2",
+                  "name": "Entrance",
+                  "icon": "mdi:door"
+                }
+              ]
             },
             {
               "type": "glance",
-              "title": "Temperatures",
+              "title": "Presence",
               "entities": [
-                {"entity": "sensor.salon_temperature", "name": "Salón"},
-                {"entity": "sensor.master_bedroom_temperature", "name": "Bedroom"},
-                {"entity": "sensor.office_temperature", "name": "Office"}
+                {
+                  "entity": "person.choco",
+                  "name": "Choco"
+                },
+                {
+                  "entity": "person.candela",
+                  "name": "Candela"
+                }
               ]
+            }
+          ]
+        },
+        {
+          "title": "Climate",
+          "path": "climate",
+          "icon": "mdi:thermostat",
+          "cards": [
+            {
+              "type": "thermostat",
+              "entity": "climate.tado_smart_thermostat_ru3393984256",
+              "name": "Salón"
+            },
+            {
+              "type": "thermostat",
+              "entity": "climate.tado_smart_thermostat_su3182126080",
+              "name": "Bedroom"
+            },
+            {
+              "type": "thermostat",
+              "entity": "climate.tado_smart_radiator_thermostat_va2220036096",
+              "name": "Office"
+            },
+            {
+              "type": "thermostat",
+              "entity": "climate.tado_smart_radiator_thermostat_va3363583744",
+              "name": "Hallway"
+            },
+            {
+              "type": "thermostat",
+              "entity": "climate.tado_smart_radiator_thermostat_va0612513536",
+              "name": "Bathroom"
             }
           ]
         }
