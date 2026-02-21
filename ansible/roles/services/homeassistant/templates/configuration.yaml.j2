@@ -5,6 +5,23 @@
 homeassistant:
   external_url: "https://ha.ignacio.systems"
   internal_url: "http://localhost:8123"
+  customize:
+    climate.tado_smart_thermostat_ru3393984256:
+      friendly_name: "Salón Thermostat"
+    climate.tado_smart_radiator_thermostat_va1065432832:
+      friendly_name: "Salón Radiator 1"
+    climate.tado_smart_radiator_thermostat_va2323724032:
+      friendly_name: "Salón Radiator 2"
+    climate.tado_smart_thermostat_su3182126080:
+      friendly_name: "Bedroom Thermostat"
+    climate.tado_smart_radiator_thermostat_va0290656256:
+      friendly_name: "Bedroom Radiator"
+    climate.tado_smart_radiator_thermostat_va2220036096:
+      friendly_name: "Office Radiator"
+    climate.tado_smart_radiator_thermostat_va3363583744:
+      friendly_name: "Hallway Radiator"
+    climate.tado_smart_radiator_thermostat_va0612513536:
+      friendly_name: "Bathroom Radiator"
 
 # Loads default set of integrations. Do not remove.
 default_config:
@@ -44,6 +61,16 @@ logger:
   default: warning
   logs:
     custom_components.wyzeapi: debug
+
+# Input Select
+input_select:
+  tado_mode:
+    name: Tado Mode
+    options:
+      - Home
+      - Away
+    initial: Home
+    icon: mdi:home-thermometer
 
 # Input Booleans
 input_boolean:

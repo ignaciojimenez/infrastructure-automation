@@ -87,6 +87,11 @@
       state: "off"
   action:
     - service: shell_command.tado_set_away
+    - service: input_select.select_option
+      target:
+        entity_id: input_select.tado_mode
+      data:
+        option: "Away"
     - service: light.turn_off
       target:
         entity_id: light.all_lights
@@ -105,6 +110,11 @@
         minutes: 3
   action:
     - service: shell_command.tado_set_home
+    - service: input_select.select_option
+      target:
+        entity_id: input_select.tado_mode
+      data:
+        option: "Home"
     - service: rest_command.slack_notify
       data:
         message: "Welcome home! Tado set to HOME."
