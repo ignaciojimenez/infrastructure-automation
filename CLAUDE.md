@@ -48,14 +48,14 @@ docs/                               # Architecture decisions, infrastructure sta
 - **Templates**: Jinja2 templates in `roles/{role}/templates/` → deployed to remote host
 
 ### Home Assistant Specifics
-- **Tado heating via HomeKit Controller** — native Tado integration deprecated
-  - Entities: `climate.tado_smart_*` (8 radiator/thermostat entities)
-  - Group: `group.homekit_tado_climates`
-  - **No preset_mode support** — HomeKit climates only support `hvac_mode: off/heat`
-  - Away = `climate.set_hvac_mode` off; Home = `climate.set_hvac_mode` heat
-- **Presence detection**: Companion App + Tado fallback → `group.persons` (home/not_home)
-  - Hourly device-tracker polling causes brief `unknown` blips on the group
-  - Use `!= "home"` template triggers instead of `to: "not_home"` state triggers with `for:`
+- **Tado heating via direct API** — uses `presenceLock` endpoint to set home/away
+  - `tado_presence.sh` calls Tado API (OAuth2 refresh + presenceLock PUT)
+  - Credentials in `/config/.tado_tokens` (created once via `tado_setup.sh` on dockassist)
+  - HomeKit Controller entities (`climate.tado_smart_*`) still used for monitoring only
+  - Group: `group.homekit_tado_climates` (8 radiator/thermostat entities)
+- **Presence detection**: Companion App only → `group.persons` (home/not_home)
+  - Home trigger uses `for: minutes: 3` to debounce GPS bouncing
+  - Away trigger uses `for: minutes: 10` with template `!= "home"` (treats `unknown` as away)
 - **HA Jinja2 in Ansible templates**: double-escape as `{{ '{{ ha_expression }}' }}`
 - **Config path on remote**: `/home/choco/homeassistant/`
 - **Docker containers**: `home-assistant`, `matter-server`, `cloudflared`
