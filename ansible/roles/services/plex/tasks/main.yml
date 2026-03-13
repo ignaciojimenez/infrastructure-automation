@@ -1,8 +1,10 @@
 ---
 # Plex Media Server service role
-# Repo setup mirrors the official https://repo.plex.tv/scripts/setupRepo.sh:
-#   1. Download ASCII-armored key → dearmor → /etc/apt/keyrings/plexmediaserver.gpg
-#   2. Register repo with signed-by pointing at the binary keyring
+# Repo setup mirrors https://support.plex.tv/articles/235974187
+# (required since PMS v1.43.0 which migrated to a new repository):
+#   1. Remove any legacy plex* sources list entries
+#   2. Download v2 ASCII-armored key → gpg --yes --dearmor → /etc/apt/keyrings/plexmediaserver.v2.gpg
+#   3. Register repo at https://repo.plex.tv/deb/ with signed-by pointing at the binary keyring
 
 - name: Install packages required for Plex repository setup
   become: true
@@ -12,9 +14,28 @@
       - apt-transport-https
       - ca-certificates
       - curl
-      - gnupg
+      - gnupg2
     state: present
   tags: [plex, packages]
+
+# Migration: Plex moved repos in v1.43.0 — old sources must be removed first
+- name: Remove legacy Plex sources list entries
+  become: true
+  ansible.builtin.shell:
+    cmd: rm -fv /etc/apt/sources.list.d/plex*.list /etc/apt/sources.list.d/plexmediaserver*.list
+    executable: /bin/bash
+  changed_when: false
+  tags: [plex, repository]
+
+- name: Remove legacy Plex keyrings
+  become: true
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /usr/share/keyrings/PlexSign.key
+    - /etc/apt/keyrings/plexmediaserver.gpg
+  tags: [plex, repository]
 
 - name: Ensure /etc/apt/keyrings directory exists
   become: true
@@ -26,20 +47,20 @@
     group: root
   tags: [plex, repository]
 
-- name: Download Plex signing key (ASCII-armored)
+- name: Download Plex v2 signing key (ASCII-armored)
   become: true
   ansible.builtin.get_url:
-    url: "{{ plex_key_url | default('https://downloads.plex.tv/plex-keys/PlexSign.key') }}"
-    dest: /tmp/PlexSign.asc
+    url: "{{ plex_key_url | default('https://downloads.plex.tv/plex-keys/PlexSign.v2.key') }}"
+    dest: /tmp/PlexSign.v2.asc
     force: true
     mode: '0644'
   register: plex_key_download
   tags: [plex, repository]
 
-- name: Dearmor Plex signing key to binary keyring
+- name: Dearmor Plex v2 signing key to binary keyring
   become: true
   ansible.builtin.shell:
-    cmd: gpg --dearmor < /tmp/PlexSign.asc > /etc/apt/keyrings/plexmediaserver.gpg
+    cmd: gpg --yes --dearmor -o /etc/apt/keyrings/plexmediaserver.v2.gpg /tmp/PlexSign.v2.asc
     executable: /bin/bash
   when: plex_key_download.changed
   tags: [plex, repository]
@@ -47,24 +68,17 @@
 - name: Set Plex keyring permissions
   become: true
   ansible.builtin.file:
-    path: /etc/apt/keyrings/plexmediaserver.gpg
+    path: /etc/apt/keyrings/plexmediaserver.v2.gpg
     mode: '0644'
     owner: root
     group: root
   tags: [plex, repository]
 
-- name: Remove legacy Plex key from /usr/share/keyrings if present
-  become: true
-  ansible.builtin.file:
-    path: /usr/share/keyrings/PlexSign.key
-    state: absent
-  tags: [plex, repository]
-
 - name: Add Plex repository
   become: true
   ansible.builtin.apt_repository:
-    repo: "deb [signed-by=/etc/apt/keyrings/plexmediaserver.gpg] {{ plex_distro_url | default('https://downloads.plex.tv/repo/deb') }} public main"
-    filename: "plexmediaserver"
+    repo: "deb [signed-by=/etc/apt/keyrings/plexmediaserver.v2.gpg] {{ plex_distro_url | default('https://repo.plex.tv/deb/') }} public main"
+    filename: "plex"
     state: present
     update_cache: true
   tags: [plex, repository]
