@@ -1,29 +1,70 @@
 ---
 # Plex Media Server service role
+# Repo setup mirrors the official https://repo.plex.tv/scripts/setupRepo.sh:
+#   1. Download ASCII-armored key → dearmor → /etc/apt/keyrings/plexmediaserver.gpg
+#   2. Register repo with signed-by pointing at the binary keyring
 
-- name: Install packages required for Plex
+- name: Install packages required for Plex repository setup
   become: true
   ansible.builtin.apt:
     update_cache: true
     name:
       - apt-transport-https
+      - ca-certificates
+      - curl
+      - gnupg
     state: present
   tags: [plex, packages]
 
-- name: Download Plex repository key
+- name: Ensure /etc/apt/keyrings directory exists
+  become: true
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+  tags: [plex, repository]
+
+- name: Download Plex signing key (ASCII-armored)
   become: true
   ansible.builtin.get_url:
     url: "{{ plex_key_url | default('https://downloads.plex.tv/plex-keys/PlexSign.key') }}"
-    dest: "{{ plex_key_file | default('/usr/share/keyrings/PlexSign.key') }}"
+    dest: /tmp/PlexSign.asc
     force: true
     mode: '0644'
+  register: plex_key_download
+  tags: [plex, repository]
+
+- name: Dearmor Plex signing key to binary keyring
+  become: true
+  ansible.builtin.shell:
+    cmd: gpg --dearmor < /tmp/PlexSign.asc > /etc/apt/keyrings/plexmediaserver.gpg
+    executable: /bin/bash
+  when: plex_key_download.changed
+  tags: [plex, repository]
+
+- name: Set Plex keyring permissions
+  become: true
+  ansible.builtin.file:
+    path: /etc/apt/keyrings/plexmediaserver.gpg
+    mode: '0644'
+    owner: root
+    group: root
+  tags: [plex, repository]
+
+- name: Remove legacy Plex key from /usr/share/keyrings if present
+  become: true
+  ansible.builtin.file:
+    path: /usr/share/keyrings/PlexSign.key
+    state: absent
   tags: [plex, repository]
 
 - name: Add Plex repository
   become: true
   ansible.builtin.apt_repository:
-    repo: "deb [signed-by={{ plex_key_file | default('/usr/share/keyrings/PlexSign.key') }}] {{ plex_distro_url | default('https://downloads.plex.tv/repo/deb') }} public main"
-    filename: "plex"
+    repo: "deb [signed-by=/etc/apt/keyrings/plexmediaserver.gpg] {{ plex_distro_url | default('https://downloads.plex.tv/repo/deb') }} public main"
+    filename: "plexmediaserver"
     state: present
     update_cache: true
   tags: [plex, repository]
@@ -46,11 +87,6 @@
     enabled: true
     state: started
   tags: [plex, service]
-
-- name: Configure Plex media server
-  ansible.builtin.debug:
-    msg: "Plex configuration placeholder - add specific tasks here"
-  tags: [plex, media]
 
 # ============================================================
 # Monitoring Configuration
