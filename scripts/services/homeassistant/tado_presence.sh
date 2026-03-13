@@ -3,6 +3,11 @@
 # Uses presenceLock endpoint to properly control Tado schedules
 # without fighting HomeKit Controller or creating manual temperature holds.
 #
+# Before setting AWAY, cross-checks Tado's own mobile device tracking
+# to guard against HA presence detection errors (GPS drift, dead phone).
+# If any non-stale Tado device reports atHome, AWAY is skipped and a
+# Slack alert is sent.
+#
 # Usage: tado_presence.sh HOME|AWAY
 # Reads credentials from /config/.tado_tokens (created by tado_setup.sh)
 
@@ -75,6 +80,33 @@ client_id: "$CLIENT_ID"
 EOF
     mv "$tmp_file" "$TOKENS_FILE"
     echo "Refresh token rotated"
+fi
+
+# Cross-check: before setting AWAY, verify no Tado device reports atHome
+# Guards against HA presence detection errors (GPS drift, dead phone, etc.)
+if [ "$MODE" = "AWAY" ]; then
+    devices_response=$(curl -s \
+        -H "Authorization: Bearer $ACCESS_TOKEN" \
+        "${TADO_API_URL}/homes/${HOME_ID}/mobileDevices")
+
+    devices_at_home=$(echo "$devices_response" | python3 -c "
+import sys, json
+try:
+    devices = json.load(sys.stdin)
+    at_home = [d['name'] for d in devices
+               if d.get('location', {}).get('atHome') is True
+               and not d.get('location', {}).get('stale', False)]
+    print(','.join(at_home))
+except Exception:
+    print('')
+" 2>/dev/null)
+
+    if [ -n "$devices_at_home" ]; then
+        echo "SKIPPED: Tado device(s) at home: $devices_at_home — not setting AWAY" >&2
+        slack_alert "⚠️ Tado AWAY skipped — HA says nobody home but Tado device(s) still at home: $devices_at_home"
+        exit 0
+    fi
+    echo "Tado cross-check passed: no devices at home"
 fi
 
 # Set presence lock
