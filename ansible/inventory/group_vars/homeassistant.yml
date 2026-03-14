@@ -17,6 +17,14 @@ homeassistant_backup_retention_days: 7
 homeassistant_container_name: "home-assistant"
 homeassistant_config_dir: "/home/{{ ansible_user }}/homeassistant"
 
+# Internet Speed Monitoring
+enable_internet_speed_check: true
+internet_speed_min_download: 850
+internet_speed_min_upload: 850
+internet_speed_max_ping: 15
+internet_speed_tests: 5
+internet_speed_delay: 75
+
 # Platform
 disable_bluetooth: false  # Keep for BLE integrations
 disable_hdmi: true
