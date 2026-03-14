@@ -26,15 +26,15 @@ docs/                               # Architecture decisions, infrastructure sta
 
 ## Active Hosts
 
-| Host | Platform | Function | Notes |
-|------|----------|----------|-------|
-| `dockassist` | RPi | homeassistant | HA + Matter Server + Cloudflared (Docker) |
-| `cobra` | RPi | media | Plex, Transmission, Samba |
-| `hifipi` | RPi | audio_playback | MPD, Shairport, Raspotify |
-| `vinylstreamer` | RPi | audio_streaming | Icecast, Liquidsoap |
-| `opnsense` | FreeBSD VM | firewall | Unbound DNS, Mullvad WireGuard, CrowdSec |
-| `proxmox` | Debian | hypervisor | CWWK host for VMs and LXCs |
-| `unifi-lxc` | LXC | network_controller | UniFi Network Application |
+| Inventory Key | SSH Hostname | Platform | Function | Notes |
+|---------------|-------------|----------|----------|-------|
+| `dockassist` | `dockassist` | RPi | homeassistant | HA + Matter Server + Cloudflared (Docker) |
+| `cobra` | `cobra` | RPi | media | Plex, Transmission, Samba |
+| `hifipi` | `hifipi` | RPi | audio_playback | MPD, Shairport, Raspotify |
+| `vinylstreamer` | `vinylstreamer` | RPi | audio_streaming | Icecast, Liquidsoap |
+| `opnsense` | `opnsense` | FreeBSD VM | firewall | Unbound DNS, Mullvad WireGuard, CrowdSec |
+| `proxmox` | `cwwk` | Debian | hypervisor | CWWK host for VMs and LXCs |
+| `unifi-lxc` | `unifi` | LXC | network_controller | UniFi Network Application |
 
 ## Key Conventions
 
@@ -66,6 +66,7 @@ docs/                               # Architecture decisions, infrastructure sta
 - Use `enhanced_monitoring_wrapper` for heartbeats, state tracking, Slack alerts
 - Self-healing: scripts attempt auto-fix before alerting
 - Cron jobs defined in Ansible role tasks
+- **Cron naming**: Ansible `cron` module identifies entries by `name` — renaming a cron job creates a duplicate unless the old name is explicitly removed with `state: absent`
 
 ### Secrets
 - Ansible Vault (`vault.yml`) committed encrypted — vault password in macOS Keychain
@@ -87,7 +88,10 @@ ansible-playbook ansible/playbooks/deploy_monitoring.yml
 
 ## SSH Access
 
-All hosts are reachable by hostname via SSH (key-based auth). Use `ssh hostname` directly.
+All hosts are reachable via SSH (key-based auth). Use the **SSH Hostname** from the table above (not the inventory key). Two hosts differ:
+- `proxmox` → `ssh cwwk`
+- `unifi-lxc` → `ssh unifi`
+
 For HA API queries: read the token from `/home/choco/homeassistant/secrets.yaml` on `dockassist`.
 
 ## Working with This Repo
