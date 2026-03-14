@@ -27,3 +27,7 @@ vault_transmission_password: "changeme"
 # WiFi credentials (for WiFi-enabled Pis)
 vault_wifi_ssid: "YourWiFiNetwork"
 vault_wifi_password: "YourWiFiPassword"
+
+# Curlbin upload credentials
+vault_curlbin_user: "myusername"
+vault_curlbin_password: "mypassword"

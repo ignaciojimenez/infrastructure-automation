@@ -238,7 +238,7 @@ curl_log="/tmp/curl_log_${now}.txt"
 while [ $retry_count -lt $max_retries ]; do
     # Upload to curlbin.ignacio.systems
     log_msg "Attempt $((retry_count + 1)) to upload file..."
-    upload_response=$(curl -s -Fc=@"${path_enc}" "https://curlbin.ignacio.systems" 2>"$curl_log")
+    upload_response=$(curl -s --netrc -Fc=@"${path_enc}" "https://curlbin.ignacio.systems" 2>"$curl_log")
     
     # Check if we got a successful response by looking for the URL field in the JSON
     if [[ "$upload_response" == *"url"* ]]; then
