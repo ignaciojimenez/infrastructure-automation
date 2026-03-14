@@ -47,6 +47,11 @@ incron_action_script: "{{ cobra_folder }}/incron_transmission_action"
 # VPN Monitoring
 enable_vpn_check: true
 
+# Storage Monitoring
+enable_storage_monitoring: true
+storage_mount_check_path: "{{ external_drive_mount }}"
+storage_disk_space_threshold: 95
+
 # Backup
 enable_plex_backup: true
 plex_backup_frequency: "weekly"

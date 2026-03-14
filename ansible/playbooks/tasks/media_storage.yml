@@ -61,3 +61,61 @@
     msg: "{{ 'External drive mounted at ' ~ external_drive_mount if mount_check.rc == 0 else 'WARNING: External drive not mounted at ' ~ external_drive_mount }}"
   when: external_drive_mount is defined
   tags: [media, storage]
+
+# ============================================================
+# Storage Monitoring
+# ============================================================
+
+- name: Deploy storage monitoring scripts
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../scripts/services/storage/{{ item }}"
+    dest: "{{ scripts_dir }}/{{ item }}"
+    owner: "{{ primary_user }}"
+    group: "{{ primary_user }}"
+    mode: '0755'
+  loop:
+    - check_volume_mount.sh
+    - check_volume_quota.sh
+  when: enable_storage_monitoring | default(false)
+  tags: [media, storage, monitoring]
+
+- name: Configure external drive mount monitoring cron job
+  ansible.builtin.cron:
+    name: "External drive mount check"
+    special_time: "hourly"
+    job: >
+      {{ scripts_dir }}/enhanced_monitoring_wrapper
+      --heartbeat-interval=daily
+      --notify-fixed=true
+      {{ logging_token }}
+      {{ alert_token }}
+      {{ scripts_dir }}/check_volume_mount.sh {{ storage_mount_check_path }}
+      >> {{ logs_dir }}/external_drive_mount_check.log 2>&1
+    user: "{{ primary_user }}"
+  when:
+    - enable_storage_monitoring | default(false)
+    - storage_mount_check_path is defined
+    - logging_token is defined and logging_token != ''
+    - alert_token is defined and alert_token != ''
+  tags: [media, storage, monitoring, cron]
+
+- name: Configure external drive disk space monitoring cron job
+  ansible.builtin.cron:
+    name: "External drive disk space check"
+    special_time: "hourly"
+    job: >
+      {{ scripts_dir }}/enhanced_monitoring_wrapper
+      --heartbeat-interval=daily
+      --notify-fixed=true
+      --monitoring-name=external_drive_disk_space
+      {{ logging_token }}
+      {{ alert_token }}
+      {{ scripts_dir }}/check_volume_quota.sh {{ storage_mount_check_path }} {{ storage_disk_space_threshold | default(90) }}
+      >> {{ logs_dir }}/external_drive_disk_space.log 2>&1
+    user: "{{ primary_user }}"
+  when:
+    - enable_storage_monitoring | default(false)
+    - storage_mount_check_path is defined
+    - logging_token is defined and logging_token != ''
+    - alert_token is defined and alert_token != ''
+  tags: [media, storage, monitoring, cron]
