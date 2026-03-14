@@ -188,7 +188,7 @@
       --notify-fixed=true
       {{ logging_token }}
       {{ alert_token }}
-      {{ scripts_dir }}/clean_old_torrents {{ transmission_download_dir | default('/var/lib/transmission-daemon/downloads') }}/ready/
+      {{ scripts_dir }}/clean_old_torrents {{ transmission_download_dir | default('/var/lib/transmission-daemon/downloads') }}
       >> {{ logs_dir }}/clean_old_torrents.log 2>&1
     user: "{{ ansible_user }}"
   when:
