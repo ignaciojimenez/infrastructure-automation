@@ -355,6 +355,47 @@
   tags: [homeassistant, update, cron]
 
 # ============================================================
+# Internet Speed Monitoring
+# ============================================================
+
+- name: Deploy internet speed monitor script
+  ansible.builtin.copy:
+    src: "{{ inventory_dir }}/../../scripts/services/network/internet_speed_monitor"
+    dest: "{{ scripts_dir }}/internet_speed_monitor"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0755'
+  when: enable_internet_speed_check | default(false)
+  tags: [homeassistant, monitoring, network]
+
+- name: Configure internet speed monitoring cron job
+  ansible.builtin.cron:
+    name: "Internet speed check"
+    minute: "0"
+    hour: "*/6"
+    job: >
+      {{ scripts_dir }}/enhanced_monitoring_wrapper
+      --heartbeat-interval=daily
+      --notify-fixed=true
+      --monitoring-name=internet_speed_check
+      {{ logging_token }}
+      {{ alert_token }}
+      {{ scripts_dir }}/internet_speed_monitor
+      --min-download={{ internet_speed_min_download | default(300) }}
+      --min-upload={{ internet_speed_min_upload | default(150) }}
+      --max-ping={{ internet_speed_max_ping | default(100) }}
+      --tests={{ internet_speed_tests | default(3) }}
+      --delay={{ internet_speed_delay | default(45) }}
+      --silent
+      >> {{ logs_dir }}/internet_speed_check.log 2>&1
+    user: "{{ ansible_user }}"
+  when:
+    - enable_internet_speed_check | default(false)
+    - logging_token is defined and logging_token != ''
+    - alert_token is defined and alert_token != ''
+  tags: [homeassistant, monitoring, cron, network]
+
+# ============================================================
 # Matter Server Configuration
 # ============================================================
 
