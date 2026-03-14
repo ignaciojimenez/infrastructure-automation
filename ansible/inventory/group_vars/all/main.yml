@@ -45,6 +45,10 @@ gh_pgp: "https://github.com/{{ gh_profile }}.gpg"
 logging_token: "{{ vault_logging_token }}"
 alert_token: "{{ vault_alert_token }}"
 
+# Curlbin upload credentials (from vault)
+curlbin_user: "{{ vault_curlbin_user }}"
+curlbin_password: "{{ vault_curlbin_password }}"
+
 # System configuration
 enable_unattended_upgrades: true
 enable_monitoring: true
