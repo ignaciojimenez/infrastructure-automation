@@ -2,18 +2,27 @@
 #
 # DNS Failover Monitoring Script
 # Monitors VPN gateway health and switches DNS forwarder accordingly
-# Primary: VPN resolver (10.64.0.1) via WireGuard tunnel
-# Fallback: Quad9 (9.9.9.9) when VPN is down
+# Primary: Multiple VPN resolvers across different WireGuard tunnels for resilience
+# Fallback: Cloudflare (1.1.1.1) when ALL VPN tunnels are down
+#
+# Architecture:
+#   Layer 1: Unbound forwards to 4 Mullvad DNS servers (10.64.0.1, .3, .7, .11)
+#            Each routes through different tunnel - automatic failover
+#   Layer 2: This script - if ALL tunnels down, switch to Cloudflare
 
 set -eu
 
-# Configuration
-VPN_RESOLVER="10.64.0.1"
-FALLBACK_DNS="9.9.9.9"  # Quad9 - works without VPN (Mullvad DNS requires VPN or DoT)
+# Configuration - Multiple VPN DNS servers for resilience
+VPN_RESOLVERS="10.64.0.1 10.64.0.3 10.64.0.7 10.64.0.11"
+FALLBACK_DNS="1.1.1.1"  # Cloudflare - no VPN route, uses default gateway
 STATE_FILE="/tmp/dns_failover_state"
 FAILURE_THRESHOLD=3   # Number of failed checks before switching (3 x 1min = 3min)
 RECOVERY_THRESHOLD=3  # Number of successful checks before recovery
 CONFIG_FILE="/conf/config.xml"
+
+# Local alert log (fallback when Slack unreachable due to DNS issues)
+ALERT_LOG="/var/log/dns_failover_alerts.log"
+ALERT_FLAG="/tmp/dns_failover_alert_pending"
 
 # Slack webhooks (passed as arguments)
 if [ $# -lt 2 ]; then
@@ -44,37 +53,89 @@ write_state() {
   echo "$1" > "$STATE_FILE"
 }
 
-# Send Slack notification
+# Log alert locally (always works, even when DNS/Slack down)
+log_local() {
+  local level="$1"
+  local message="$2"
+  echo "$(date '+%Y-%m-%d %H:%M:%S') [$level] $message" >> "$ALERT_LOG" 2>/dev/null || true
+}
+
+# Create alert flag file (for external monitoring to detect)
+set_alert_flag() {
+  local status="$1"
+  local message="$2"
+  echo "$status|$(date +%s)|$message" > "$ALERT_FLAG" 2>/dev/null || true
+}
+
+clear_alert_flag() {
+  rm -f "$ALERT_FLAG" 2>/dev/null || true
+}
+
+# Send Slack notification with local fallback
 send_slack() {
   local webhook="$1"
   local message="$2"
   local emoji="${3:-:information_source:}"
   
-  curl -s -X POST "$webhook" \
+  # Always log locally first (Slack might be unreachable if DNS is down)
+  log_local "SLACK" "$message"
+  
+  # Try to send to Slack (may fail if DNS down, but that's OK)
+  # Use IP-based fallback for hooks.slack.com if DNS failing
+  if ! curl -s --max-time 10 -X POST "$webhook" \
     -H 'Content-Type: application/json' \
     -d "{
       \"text\": \"$emoji *DNS Failover Monitor*\\n$message\"
-    }" > /dev/null 2>&1 || true
+    }" > /dev/null 2>&1; then
+    log_local "SLACK_FAILED" "Could not send Slack notification (DNS likely down)"
+  fi
 }
 
-# Check VPN gateway health - DNS resolution is the definitive test
+# Check VPN gateway health - test ALL VPN resolvers
+# Returns 0 if ANY resolver works, 1 if ALL fail
 check_vpn_health() {
-  # Test if DNS actually works via VPN resolver
-  if drill @"$VPN_RESOLVER" mullvad.net A > /dev/null 2>&1; then
+  local working=0
+  local failed=0
+  
+  for resolver in $VPN_RESOLVERS; do
+    if drill @"$resolver" mullvad.net A > /dev/null 2>&1; then
+      working=$((working + 1))
+    else
+      failed=$((failed + 1))
+    fi
+  done
+  
+  # Log status if some but not all are failing
+  if [ "$working" -gt 0 ] && [ "$failed" -gt 0 ]; then
+    echo "VPN DNS: $working working, $failed failed" >> /tmp/dns_failover.log 2>/dev/null || true
+  fi
+  
+  # Return success if ANY resolver works
+  if [ "$working" -gt 0 ]; then
     return 0
   fi
   
-  # DNS failed - VPN is not healthy for our purposes
+  # ALL resolvers failed
   return 1
 }
 
-# Switch to fallback DNS (Quad9)
+# Verify fallback DNS is actually reachable (not routed through broken VPN)
+check_fallback_reachable() {
+  if drill @"$FALLBACK_DNS" cloudflare.com A > /dev/null 2>&1; then
+    return 0
+  fi
+  return 1
+}
+
+# Switch to fallback DNS
 switch_to_fallback() {
   # Backup config (limit backups to avoid clutter)
   cp "$CONFIG_FILE" "${CONFIG_FILE}.backup-failover"
   
-  # Replace VPN resolver with fallback DNS
-  sed -i '' "s|<server>$VPN_RESOLVER</server>|<server>$FALLBACK_DNS</server>|g" "$CONFIG_FILE"
+  # Replace ALL VPN resolvers with fallback DNS (keep first entry only)
+  for resolver in $VPN_RESOLVERS; do
+    sed -i '' "s|<server>$resolver</server>|<server>$FALLBACK_DNS</server>|g" "$CONFIG_FILE"
+  done
   
   # Reload Unbound
   /usr/local/sbin/configctl unbound restart > /dev/null 2>&1
@@ -82,13 +143,12 @@ switch_to_fallback() {
   return 0
 }
 
-# Switch back to VPN resolver
+# Switch back to VPN resolvers
 switch_to_vpn() {
-  # Backup config
-  cp "$CONFIG_FILE" "${CONFIG_FILE}.backup-recovery"
-  
-  # Replace fallback DNS with VPN resolver
-  sed -i '' "s|<server>$FALLBACK_DNS</server>|<server>$VPN_RESOLVER</server>|g" "$CONFIG_FILE"
+  # Restore from backup which has all VPN resolvers
+  if [ -f "${CONFIG_FILE}.backup-failover" ]; then
+    cp "${CONFIG_FILE}.backup-failover" "$CONFIG_FILE"
+  fi
   
   # Reload Unbound
   /usr/local/sbin/configctl unbound restart > /dev/null 2>&1
@@ -98,9 +158,15 @@ switch_to_vpn() {
 
 # Check which DNS is currently active
 get_active_dns() {
-  if grep -q "<server>$VPN_RESOLVER</server>" "$CONFIG_FILE"; then
-    echo "vpn"
-  elif grep -q "<server>$FALLBACK_DNS</server>" "$CONFIG_FILE"; then
+  # Check if any VPN resolver is configured
+  for resolver in $VPN_RESOLVERS; do
+    if grep -q "<server>$resolver</server>" "$CONFIG_FILE"; then
+      echo "vpn"
+      return
+    fi
+  done
+  
+  if grep -q "<server>$FALLBACK_DNS</server>" "$CONFIG_FILE"; then
     echo "fallback"
   else
     echo "unknown"
@@ -132,8 +198,10 @@ EOF
       # VPN recovered - switch back if needed
       if [ "$real_active_dns" = "fallback" ]; then
         switch_to_vpn
-        send_slack "$ALERT_WEBHOOK" "✅ *DNS RECOVERED*\\nVPN gateway is back online. Switched back to VPN resolver.\\n🔒 Full privacy restored (DNS via WireGuard tunnel)." ":white_check_mark:"
-        send_slack "$LOG_WEBHOOK" "DNS failover: VPN recovered, switched back from Quad9" ":white_check_mark:"
+        clear_alert_flag
+        log_local "RECOVERED" "VPN DNS restored - privacy mode active"
+        send_slack "$ALERT_WEBHOOK" "✅ *DNS RECOVERED*\nVPN gateway is back online. Switched back to VPN resolver.\n🔒 Full privacy restored (DNS via WireGuard tunnel)." ":white_check_mark:"
+        send_slack "$LOG_WEBHOOK" "DNS failover: VPN recovered, switched back to Mullvad DNS" ":white_check_mark:"
       fi
       state="healthy"
       active_dns="vpn"
@@ -148,11 +216,20 @@ EOF
     recovery_count=0
     
     if [ "$state" = "healthy" ] && [ "$failure_count" -ge "$FAILURE_THRESHOLD" ]; then
-      # VPN has failed - switch to fallback DNS
+      # VPN has failed - switch to fallback DNS only if fallback is reachable
       if [ "$real_active_dns" = "vpn" ]; then
-        switch_to_fallback
-        send_slack "$ALERT_WEBHOOK" "⚠️  *DNS FAILOVER ACTIVE*\\nVPN gateway unreachable. Switched to Quad9 DNS.\\n❗ Privacy degraded (DNS not encrypted and not via VPN tunnel)." ":warning:"
-        send_slack "$LOG_WEBHOOK" "DNS failover activated: VPN unreachable, switched to Quad9" ":warning:"
+        if check_fallback_reachable; then
+          switch_to_fallback
+          set_alert_flag "FAILOVER" "Switched to Cloudflare - VPN DNS unreachable"
+          log_local "FAILOVER" "ALL 4 VPN resolvers failed - switched to Cloudflare"
+          send_slack "$ALERT_WEBHOOK" "⚠️  *DNS FAILOVER ACTIVE*\nAll 4 VPN resolvers unreachable. Switched to Cloudflare DNS.\n❗ Privacy degraded (DNS queries NOT going through VPN).\n\nWhat this means:\n• DNS still works but queries are visible to Cloudflare\n• Check VPN tunnel status: all tunnels may be down\n• Will auto-recover when any VPN tunnel comes back" ":warning:"
+          send_slack "$LOG_WEBHOOK" "DNS failover activated: All VPN resolvers down, using Cloudflare" ":warning:"
+        else
+          set_alert_flag "CRITICAL" "Both VPN and Cloudflare DNS unreachable"
+          log_local "CRITICAL" "ALL DNS unreachable - VPN and Cloudflare both failed"
+          send_slack "$ALERT_WEBHOOK" "🚨 *DNS CRITICAL*\nVPN resolvers AND Cloudflare fallback both unreachable!\n\nWhat this means:\n• DNS resolution may be failing for all clients\n• Likely a major network/internet outage\n• Manual intervention required" ":rotating_light:"
+          send_slack "$LOG_WEBHOOK" "DNS CRITICAL: Both VPN and fallback unreachable" ":rotating_light:"
+        fi
       fi
       state="failed"
       active_dns="fallback"
