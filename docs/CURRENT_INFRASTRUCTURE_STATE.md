@@ -1,5 +1,5 @@
 # Current Infrastructure State
-*Updated: December 20, 2025*
+*Updated: March 15, 2026*
 
 ## Architecture Overview
 
@@ -75,8 +75,9 @@ All hosts have hourly health checks via `enhanced_monitoring_wrapper` with Slack
 - No automated OPNsense backups
 
 ### Issues
-- GPG dependency on laptop
-- No offsite for large backups
+- GPG dependency on laptop (key not portable)
+- No automated OPNsense or Proxmox backups
+- No offsite for large backups (vzdump is local only)
 - Manual process for critical hosts
 
 ## Authentication & Access
@@ -116,5 +117,14 @@ All hosts have hourly health checks via `enhanced_monitoring_wrapper` with Slack
 - ✅ Implemented VPN-based DNS failover
 - ✅ Fixed DNS boot circular dependency
 
+### January–March 2026
+- ✅ Migrated check_tado_health.sh from SQLite to HA REST API
+- ✅ Added external drive storage monitoring for media hosts
+- ✅ Added internet speed monitoring for dockassist
+- ✅ Tado cross-check before AWAY mode (prevents false triggers)
+- ✅ Rebuilt mobile dashboard, renamed Tado entities
+- ✅ Fixed bootstrap GitHub keys conditional in --check mode
+- ✅ Added curlbin auth credentials via .netrc
+
 ### Pending
-- See TODO.md for prioritized task list
+- See [docs/TODO.md](TODO.md) for prioritized task list
