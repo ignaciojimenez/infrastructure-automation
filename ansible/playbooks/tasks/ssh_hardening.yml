@@ -16,9 +16,9 @@
   ansible.posix.authorized_key:
     user: "{{ ansible_user }}"
     state: present
-    key: "{{ github_keys_fetched.content }}"
+    key: "{{ github_keys_fetched.content | default('') }}"
     exclusive: true
-  when: gh_keys is defined and github_keys_fetched.status == 200
+  when: github_keys_fetched is succeeded
   tags: [ssh, keys]
 
 - name: Create authorized key command script
