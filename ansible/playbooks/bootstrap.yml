@@ -171,9 +171,9 @@
       ansible.posix.authorized_key:
         user: "{{ ansible_user_id }}"
         state: present
-        key: "{{ github_keys_fetched.content }}"
+        key: "{{ github_keys_fetched.content | default('') }}"
         exclusive: true  # Only GitHub keys, removes all others
-      when: gh_keys is defined and github_keys_fetched.status == 200
+      when: github_keys_fetched is succeeded
       tags: [bootstrap, ssh]
 
     - name: Lock password authentication for user
