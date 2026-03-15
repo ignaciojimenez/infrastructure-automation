@@ -13,6 +13,10 @@ vault_pass
 **/conf_auth.ini
 **/conf_move.ini
 
+# IDE
+.vscode/
+.windsurf/
+
 # System
 .DS_Store
 *.swp

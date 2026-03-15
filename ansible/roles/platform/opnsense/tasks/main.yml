@@ -27,6 +27,7 @@
     - check_ddns.sh
     - check_gateway.sh
     - check_wg.sh
+    - check_dns_health.sh
     - check_guest_agent.sh
     - check_system_health.sh
     - check_vpn_gateway.sh
@@ -87,6 +88,11 @@
       heartbeat: "daily"
       monitoring_name: "opnsense_wg"
       script: "check_wg.sh"
+    - name: "OPNsense DNS health check"
+      minute: "*/5"
+      heartbeat: "daily"
+      monitoring_name: "opnsense_dns_health"
+      script: "check_dns_health.sh"
     - name: "OPNsense guest agent check"
       minute: "0"
       hour: "*/6"

@@ -1,5 +1,5 @@
 # Current Infrastructure State
-*Updated: November 29, 2025*
+*Updated: December 20, 2025*
 
 ## Architecture Overview
 
@@ -8,10 +8,10 @@
 Internet
     ↓
 OPNsense (10.30.40.254)
-├── WAN: Mullvad VPN (WireGuard)
+├── WAN: Mullvad VPN (13 WireGuard tunnels)
 ├── DNS: Unbound (with blocklists)
-│   ├── Primary: VPN resolver (10.64.0.1)
-│   └── Fallback: Quad9 (9.9.9.9)
+│   ├── Primary: 4 Mullvad resolvers (10.64.0.1, .3, .7, .11)
+│   └── Fallback: Cloudflare (1.1.1.1) - auto-failover
 └── LAN: All internal hosts
 ```
 
@@ -50,15 +50,22 @@ OPNsense (10.30.40.254)
 
 ### External Heartbeats (healthchecks.io)
 ✅ All active and reporting:
-- Proxmox health (every 10 min)
-- OPNsense DNS (every 5 min) - replaced PiHole
-- OPNsense WAN (every 5 min)
+- Proxmox health (10 min)
+- OPNsense WAN (5 min)
 
-### Internal Monitoring
-- Platform-specific scripts deployed
-- Slack notifications configured
-- State tracking prevents alert fatigue
-- DNS failover monitoring (every 1 min) - auto-switches on VPN outage
+### OPNsense Monitoring
+| Check | Frequency | Purpose |
+|-------|-----------|---------|
+| DNS failover | 1 min | Auto-switch to Cloudflare if all VPN resolvers fail |
+| DNS health | 5 min | Verify DNS resolution working |
+| WireGuard | 10 min | Tunnel health (WARN: 1-2 down, CRIT: 3+ down) |
+| Gateway | 10 min | WAN connectivity |
+| VPN gateway | 15 min | Track failover events |
+| CrowdSec | 30 min | Security monitoring |
+| System health | 30 min | CPU, memory, disk |
+
+### Raspberry Pi Monitoring
+All hosts have hourly health checks via `enhanced_monitoring_wrapper` with Slack alerts.
 
 ## Backup Strategy
 
@@ -97,20 +104,17 @@ OPNsense (10.30.40.254)
 
 ## Recent Changes
 
-### November 30, 2025
-- ✅ Fixed DNS boot circular dependency (OPNsense now uses Quad9 directly for system DNS)
-- ✅ Fixed DNS failover script (simplified health check, corrected Slack messages)
-- ✅ Tested failover mechanism end-to-end
+### December 19-20, 2025
+- ✅ Implemented resilient DNS with 4 Mullvad resolvers (multi-tunnel failover)
+- ✅ Changed fallback DNS from Quad9 to Cloudflare (avoids VPN routing issues)
+- ✅ Added DNS health monitoring (`check_dns_health.sh`)
+- ✅ Updated WireGuard monitoring for 4-tunnel resilience model
+- ✅ Added local logging fallback when Slack unreachable
 
-### November 29, 2025
+### November 29-30, 2025
 - ✅ Migrated DNS from PiHole to OPNsense Unbound with blocklists
-- ✅ Implemented VPN-based DNS failover (primary: 10.64.0.1, fallback: Quad9 9.9.9.9)
-- ✅ Added DNS heartbeat monitoring to OPNsense
-
-### November 16, 2025
-- ✅ Ansible sudo timeout (hostname resolution)
-- ✅ Monitoring deployment to all hosts
-- ✅ Kernel error duplicate alerts
+- ✅ Implemented VPN-based DNS failover
+- ✅ Fixed DNS boot circular dependency
 
 ### Pending
 - See TODO.md for prioritized task list
