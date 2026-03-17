@@ -76,4 +76,4 @@ The playbook automatically deploys **all scripts** in `scripts/common/` - no con
 
 - **[docs/ARCHITECTURE_DECISIONS.md](docs/ARCHITECTURE_DECISIONS.md)** - Key technical decisions and patterns
 - **[docs/CONFIGURATION_STRATEGY.md](docs/CONFIGURATION_STRATEGY.md)** - Configuration patterns and best practices
-- **[docs/MONITORING_DEPLOYMENT.md](docs/MONITORING_DEPLOYMENT.md)** - Deploy monitoring script updates
+- **[docs/TODO.md](docs/TODO.md)** - Prioritized infrastructure work items
