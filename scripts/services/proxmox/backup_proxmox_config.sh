@@ -96,8 +96,8 @@ trap "rm -rf $TEMP_DIR $BACKUP_FILE 2>/dev/null" EXIT
 log_msg "Collecting /etc/pve/ configurations..."
 mkdir -p "$TEMP_DIR/pve"
 
-# Copy /etc/pve (requires appropriate permissions)
-if sudo cp -a /etc/pve/* "$TEMP_DIR/pve/" 2>/dev/null; then
+# Copy /etc/pve via privileged helper (avoids glob expansion in sudoers)
+if sudo /usr/local/bin/pve_backup_helper "$TEMP_DIR/pve/"; then
   log_msg "  - /etc/pve/ copied"
 else
   log_msg "${RED}Error: Failed to copy /etc/pve/ - check permissions${NC}"
