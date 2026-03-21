@@ -268,10 +268,40 @@ Items previously flagged as issues that are confirmed working:
 
 ---
 
+## Priority 9 — TADO/HA Presence Notification Elegance
+
+**Risk:** Cosmetic — no functional impact. Current behavior sends two contradictory Slack notifications when user is nearby (~500m from home): HA fires "AWAY mode activated" after 10min debounce, then `tado_presence.sh` fires "TADO says device still home, skipping AWAY". Expected behavior producing confusing double-alerts.
+
+### Current State (2026-03-21)
+- HA automation `away_mode_everyone_left` triggers after 10min of `group.persons != home`
+- The automation immediately sends a Slack alert ("Away mode activated") AND calls `tado_set_away`
+- `tado_presence.sh` queries Tado's `mobileDevices` API before applying `presenceLock`
+- If any Tado device reports `atHome: true` (within ~500m geofence), the script skips AWAY and sends its own Slack alert
+- Result: user sees "AWAY activated" immediately followed by "TADO AWAY skipped — device still home"
+- No cron job involved — both notifications are triggered by the same HA automation action sequence
+
+### Proposed Fix
+Restructure the away automation to defer the Slack notification until after the TADO script confirms the away was applied:
+1. Remove the `slack_alert` call from the automation's action sequence
+2. Have `tado_presence.sh` send the appropriate notification based on outcome:
+   - AWAY applied → "Away mode activated, TADO set to AWAY"
+   - AWAY skipped → "HA detected away, but TADO device still home — heating unchanged"
+3. This way exactly one notification is sent, and it reflects the actual outcome
+4. Alternative: keep both notifications but downgrade the "skipped" message to the logging channel (since it's informational, not an alert)
+
+### Acceptance Criteria
+- [ ] Only one Slack notification when leaving home (whether TADO away succeeds or is skipped)
+- [ ] Notification accurately reflects the final state (TADO away vs. still home)
+- [ ] No functional change to the presence detection or TADO control logic
+
+---
+
 ## Deferred / Low Priority
 
 These items have value but are not urgent. Revisit quarterly.
 
+- **Slack Notification Strategy Review** — Current two-channel split (logging/alert) is architecturally sound but has some inconsistencies: train notifications go to `alert` (arguably informational), away mode goes to `alert` but home arrival goes to `notify`, DNS failover sends to both channels simultaneously, device offline alerts are split inconsistently between channels. A focused review session to audit all ~20 notification sources and reassign channels would improve signal-to-noise. Low effort, low urgency — current setup is functional and understood. May conclude that current state is good enough for a single-user system.
+- **Autonomous Infrastructure Agent** — Ambitious vision: an agent that monitors Slack alerts, host logs, and service health in real-time, then autonomously diagnoses, proposes solutions, and applies fixes without human intervention. Would need: Slack integration for alert intake, SSH access to hosts, diagnostic playbooks per failure type, a decision framework for when to auto-fix vs. notify, and safety guardrails to prevent cascading failures. High complexity — this is effectively building an SRE agent. Recommend scoping as a phased project: Phase 1 (alert aggregation + pattern matching), Phase 2 (diagnostic automation), Phase 3 (auto-remediation with approval gates). Worth exploring after Priorities 1-4 stabilize the monitoring foundation.
 - **Mullvad DoT Fallback** — Encrypting DNS during full VPN outage. Low urgency with 4-tunnel architecture; full VPN outage is rare. Would only affect the Cloudflare fallback path.
 - **Certificate Expiration Monitoring** — Monitor Proxmox + OPNsense web certs. Low effort, medium value. Alert at 30 days warning, 7 days critical.
 - **SMART Disk Health Monitoring** — Predict disk failures on Proxmox (ZFS) and cobra (media storage). Low effort, medium value.
