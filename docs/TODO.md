@@ -296,6 +296,87 @@ Restructure the away automation to defer the Slack notification until after the 
 
 ---
 
+## Priority 10 — Read-Only Agent Access for Autonomous Investigation
+
+**Risk:** Currently, Claude agents require manual SSH authentication (Secretive biometric) or web API tokens to investigate issues. This blocks autonomous, real-time diagnostics across the infrastructure. Goal is to enable agents to investigate any system (SSH, web UIs, logs) without requiring human intervention or biometric auth, while maintaining strict read-only guarantees.
+
+### Verified State (2026-03-21)
+- All SSH keys in Secretive (Secure Enclave) — non-exportable, require biometric auth for each use
+- Home Assistant API token exists and can be read from `/home/choco/homeassistant/secrets.yaml` on dockassist
+- Proxmox WebUI accessible via `choco@pam` with admin permissions (likely)
+- OPNsense WebUI accessible via SSH tunnel (requires SSH auth) or direct HTTPS
+- UniFi API documented but not tested for read-only access
+- No dedicated read-only SSH user or limited-privilege API tokens exist
+
+### Approach
+
+**Phase 1 — Discovery & Planning (low effort)**
+1. Inventory all systems needing agent access:
+   - SSH: dockassist, cobra, hifipi, vinylstreamer (RPi), opnsense (FreeBSD), proxmox (Debian), unifi-lxc (LXC)
+   - Web UIs: Home Assistant, Proxmox, OPNsense, UniFi, Plex
+   - Log files: syslog/journald on each host, HA logs
+2. For each system, identify read-only access method:
+   - **SSH**: create dedicated agent-only user (e.g., `claude_agent`) with sudo access to specific read commands, shell restricted to `/bin/sh` or similar
+   - **Web APIs**: generate long-lived read-only API tokens where possible (HA, Proxmox, UniFi, Plex)
+   - **Logs**: either agent SSH user can read logs directly, or set up `tail -f` endpoints via authenticated HTTP proxy
+3. Document required authentication: which tokens/users go in repo vs. password manager vs. created at bootstrap time
+4. Security model: agent access is IP-scoped (Claude's IPs only) or uses API token rate limiting / audit logging
+
+**Phase 2 — Implementation (medium effort)**
+1. Create `claude_agent` user on each host with minimal sudo privileges: `sudo grep -r`, `sudo journalctl`, `sudo netstat`, `sudo ps`, read-only systemctl status
+2. Generate or configure read-only API tokens:
+   - Home Assistant: read-only token (already supports scoped tokens)
+   - Proxmox: PVE API token with read-only role (no VM/LXC control)
+   - UniFi: read-only API token (need to verify API supports this)
+   - Plex: read-only API token
+3. Store tokens in password manager or project secrets, document format for agent use
+4. Ansible bootstrap tasks: deploy user account, configure sudo rules, create tokens during initial setup
+5. Test agent can:
+   - SSH to each host, run read-only diagnostic commands
+   - Query each web API without human intervention
+   - Return meaningful diagnostics (service status, recent errors, resource usage)
+
+**Phase 3 — Agent Integration (medium effort)**
+1. Provision agent access credentials to Claude via environment or MCP server
+2. Create diagnostic playbooks/scripts agents can invoke: `check_host_health.sh`, `diagnose_service.sh`, etc.
+3. Document what information agents are authorized to collect (logs, metrics, config—no secrets)
+4. Set up audit logging so all agent actions are logged to a notification channel (for visibility)
+
+### What This Enables
+- **Real-time diagnosis**: agents can SSH to any host, check systemd status, tail logs, query APIs without waiting for user auth
+- **Faster incident response**: "the homeassistant Docker container is down" → agent can SSH, run `docker ps`, check logs, and propose a fix without human context-switching
+- **Pattern detection**: agents can correlate events across hosts (e.g., "cobra rebooted at 03:45, vinylstreamer lost connectivity at 03:46, both recovered by 04:00")
+- **Scheduled diagnostics**: agents can run periodic health checks and surface trends (disk usage growth, error rates, dependency version drift)
+
+### Safety Guardrails
+- Read-only enforcement: agent users cannot `sudo reboot`, `sudo systemctl restart`, `sudo rm`, etc.
+- SSH key restriction: agent keys accept commands via forced command in authorized_keys (if using key-based auth)
+- API token scoping: read-only tokens, optionally rate-limited
+- Audit trail: all agent access logged (syslog, API audit logs)
+- No secret access: agent cannot read vault.yml, .tado_tokens, SSL certs, API keys
+
+### Limitations to Accept
+- Agent cannot make changes; fixes still require human confirmation or separate privileged access
+- Agent access is one-way (agents can observe, not control)
+- Some diagnostics require running privileged commands (e.g., packet captures); agents can only read summaries
+- Network topology issues (VPN outage, gateway unreachable) may prevent agent SSH access to affected hosts
+
+### Next Steps
+1. Document all systems and required read-only access methods (SSH user, API tokens)
+2. Design sudo rules for agent user on each host
+3. Create Ansible bootstrap tasks for agent user deployment
+4. Generate read-only API tokens where supported (HA, Proxmox, UniFi, Plex)
+5. Test agent can invoke all planned diagnostic commands
+
+### Acceptance Criteria
+- [ ] `claude_agent` user deployed on all production hosts via Ansible
+- [ ] Agent can SSH to any host and run read-only diagnostics without human auth
+- [ ] Agent can query HA, Proxmox, UniFi, Plex APIs using long-lived read-only tokens
+- [ ] Audit trail visible for all agent access (logged to Slack notification channel)
+- [ ] Documentation: what agent can access, how to revoke access, how to audit actions
+
+---
+
 ## Deferred / Low Priority
 
 These items have value but are not urgent. Revisit quarterly.
