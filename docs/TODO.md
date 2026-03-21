@@ -96,6 +96,47 @@ Items are ordered by risk × effort — highest-impact, most-actionable items fi
 
 ---
 
+## Priority 3.5 — Proxmox USB Recovery Kit + Backup Restore Testing
+
+**Risk:** All Proxmox data — OS, VM disk images, and vzdump backups — lives on a single 512GB NVMe (`rpool`). A drive failure loses everything including the local backup copies. The offsite curlbin backups cover service configs (config.xml, .unf, HA backup), but the fast-path recovery using vzdump snapshots would be gone. Additionally, no backup has ever been test-restored.
+
+### Verified State (2026-03-22)
+- Single NVMe pool `rpool`: 254G used / 472G total
+- vzdump runs daily at 03:00 for all guests (VM 100 + LXC 101 + LXC 102), 15-day retention — **not Ansible-managed**, configured in Proxmox `jobs.cfg`
+- Latest vzdump sizes: OPNsense VM ~12G, UniFi LXC ~1.1G, PiHole LXC ~516M
+- vzdump backups consume 201G in `/var/lib/vz/dump/` — all on the same NVMe
+- No offsite or separate-media copy of vzdump snapshots exists
+- No backup restore has ever been tested end-to-end
+
+### Next Steps
+
+**Part A — USB Recovery Drive**
+1. Purchase a 64GB USB drive (fits latest vzdump of each guest ×3 days + Proxmox ISO + `/etc/pve/` backup, with room to grow)
+2. Format as ext4, mount on Proxmox (e.g., `/mnt/usb-recovery`)
+3. Create a script that copies the latest vzdump for each guest + `/etc/pve/` to the USB, run weekly via cron
+4. Include Proxmox installer ISO on the drive
+5. Add a recovery checklist text file on the drive itself
+
+**Part B — Quarterly Backup Restore Test**
+1. Pick one backup (rotate through hosts each quarter)
+2. Download from curlbin, decrypt with GPG, inspect contents
+3. For vzdump: test-restore to a temporary VM/LXC on Proxmox, verify it boots
+4. Document results and any issues found
+5. First test: OPNsense config.xml restore into a throwaway VM
+
+### Acceptance Criteria
+- [ ] USB drive mounted and receiving weekly copies of latest vzdump snapshots
+- [ ] Recovery checklist on the USB drive matches `docs/BACKUP_AND_RECOVERY.md`
+- [ ] At least one backup restore test completed and documented
+
+### Notes
+- 64GB is sufficient: latest vzdump total is ~14G per snapshot, ×3 days = ~42G plus ~5G for ISOs and overhead
+- The USB is not a replacement for curlbin offsite backups — it's a fast-path for the "NVMe died, ZFS data gone" scenario
+- vzdump backup schedule is in Proxmox `jobs.cfg`, not Ansible — consider managing it via Ansible in a future iteration
+- This complements Priority 3 (freshness monitoring): freshness catches silent cron failures, this catches hardware failure of the backup medium itself
+
+---
+
 ## Priority 4 — Tado Health Check Ansible Integration
 
 **Risk:** `check_tado_health.sh` is the only monitoring script not managed by Ansible. If dockassist is rebuilt, this monitoring silently disappears.
