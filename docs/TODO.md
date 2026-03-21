@@ -31,7 +31,7 @@ Items are ordered by risk × effort — highest-impact, most-actionable items fi
 5. Deploy to both hosts and verify first backup completes end-to-end (encryption + upload to curlbin)
 
 ### Acceptance Criteria
-- [ ] Both scripts deployed via Ansible with `#Ansible:` cron prefix
+- [x] Both scripts deployed via Ansible with `#Ansible:` cron prefix
 - [ ] First backup from each host visible in curlbin
 - [ ] Slack notification received on success
 

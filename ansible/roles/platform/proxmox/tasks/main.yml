@@ -26,6 +26,60 @@
     validate: 'visudo -cf %s'
   become: true
 
+# --- Backup ---
+
+- name: Deploy pve backup helper script (root-owned)
+  ansible.builtin.copy:
+    src: pve_backup_helper
+    dest: /usr/local/bin/pve_backup_helper
+    owner: root
+    group: root
+    mode: '0755'
+  become: true
+
+- name: Configure sudoers for backup commands
+  ansible.builtin.copy:
+    src: sudoers_backup
+    dest: /etc/sudoers.d/backup
+    owner: root
+    group: root
+    mode: '0440'
+    validate: 'visudo -cf %s'
+  become: true
+
+- name: Deploy Proxmox backup script
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../scripts/services/proxmox/backup_proxmox_config.sh"
+    dest: "{{ scripts_dir }}/backup_proxmox_config.sh"
+    owner: "{{ infrastructure_user }}"
+    group: "{{ infrastructure_group }}"
+    mode: '0755'
+  become: true
+
+- name: Configure Proxmox backup cron job
+  ansible.builtin.cron:
+    name: "Proxmox configuration backup"
+    minute: "0"
+    hour: "4"
+    day: "*/7"
+    job: >
+      {{ scripts_dir }}/enhanced_monitoring_wrapper
+      --heartbeat-interval=always
+      --notify-fixed=true
+      {{ logging_token }}
+      {{ alert_token }}
+      {{ scripts_dir }}/backup_proxmox_config.sh --silent --email={{ git_mail }}
+      >> {{ logs_dir }}/proxmox_config_backup.log 2>&1
+    user: "{{ infrastructure_user }}"
+  become: true
+  become_user: "{{ infrastructure_user }}"
+  when:
+    - logging_token is defined and logging_token != ''
+    - alert_token is defined and alert_token != ''
+    - git_mail is defined and git_mail != ''
+
+# --- Monitoring ---
+
 - name: Deploy VM/CT configuration file
   ansible.builtin.template:
     src: vm_ct_config.txt.j2

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Script to backup a file or dir to curlbin.ignacio.systems
 
@@ -250,10 +250,11 @@ while [ $retry_count -lt $max_retries ]; do
             expire_at=$(echo "$upload_response" | jq -r '.expireAt')
         else
             # Fallback to basic extraction if jq is not available
-            backup_url=$(echo "$upload_response" | grep -o '"url": "[^"]*"' | cut -d'"' -f4)
-            suggested_url=$(echo "$upload_response" | grep -o '"suggestedUrl": "[^"]*"' | cut -d'"' -f4)
-            manage_url=$(echo "$upload_response" | grep -o '"manageUrl": "[^"]*"' | cut -d'"' -f4)
-            expire_at=$(echo "$upload_response" | grep -o '"expireAt": "[^"]*"' | cut -d'"' -f4)
+            # || true prevents set -e / pipefail from aborting on missing fields
+            backup_url=$(echo "$upload_response" | grep -o '"url": "[^"]*"' | cut -d'"' -f4 || true)
+            suggested_url=$(echo "$upload_response" | grep -o '"suggestedUrl": "[^"]*"' | cut -d'"' -f4 || true)
+            manage_url=$(echo "$upload_response" | grep -o '"manageUrl": "[^"]*"' | cut -d'"' -f4 || true)
+            expire_at=$(echo "$upload_response" | grep -o '"expireAt": "[^"]*"' | cut -d'"' -f4 || true)
         fi
         
         if [ -n "$backup_url" ]; then
