@@ -52,9 +52,11 @@
   become: true
   when: vault_healthcheck_opnsense_wan is defined
 
-- name: Install bash package (required for monitoring wrapper)
+- name: Install required packages
   community.general.pkgng:
-    name: bash
+    name:
+      - bash
+      - gnupg
     state: present
   become: true
 
@@ -122,3 +124,35 @@
   become: true
   become_user: "{{ infrastructure_user }}"
   when: vault_healthcheck_opnsense_wan is defined
+
+# --- Backup ---
+
+- name: Deploy OPNsense backup script
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../scripts/services/opnsense/backup_opnsense.sh"
+    dest: "{{ scripts_dir }}/backup_opnsense.sh"
+    owner: "{{ infrastructure_user }}"
+    group: wheel
+    mode: '0755'
+  become: true
+
+- name: Configure OPNsense backup cron job
+  ansible.builtin.cron:
+    name: "OPNsense configuration backup"
+    minute: "15"
+    hour: "4"
+    job: >
+      /usr/local/bin/bash {{ scripts_dir }}/enhanced_monitoring_wrapper
+      --heartbeat-interval=daily
+      --notify-fixed=true
+      {{ logging_token }}
+      {{ alert_token }}
+      {{ scripts_dir }}/backup_opnsense.sh --silent --email={{ git_mail }}
+      >> {{ logs_dir }}/opnsense_config_backup.log 2>&1
+    user: "{{ infrastructure_user }}"
+  become: true
+  become_user: "{{ infrastructure_user }}"
+  when:
+    - logging_token is defined and logging_token != ''
+    - alert_token is defined and alert_token != ''
+    - git_mail is defined and git_mail != ''

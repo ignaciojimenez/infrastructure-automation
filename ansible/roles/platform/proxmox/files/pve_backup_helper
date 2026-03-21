@@ -1,0 +1,9 @@
+#!/bin/bash
+# Root-owned helper: copy /etc/pve to destination directory
+# Called by backup_proxmox_config.sh via sudo
+# cp -a preserves root:www-data ownership with 640 perms, so we make
+# the copy readable by the calling user for tar archiving.
+set -e
+DEST="${1:?destination directory required}"
+cp -a /etc/pve/. "$DEST/"
+chmod -R a+rX "$DEST/"

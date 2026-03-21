@@ -1,0 +1,5 @@
+# Allow choco user to run backup commands without password
+# This file should be placed in /etc/sudoers.d/backup
+
+choco ALL=(ALL) NOPASSWD: /usr/local/bin/pve_backup_helper *
+choco ALL=(ALL) NOPASSWD: /usr/bin/crontab -l
