@@ -32,8 +32,8 @@ Items are ordered by risk × effort — highest-impact, most-actionable items fi
 
 ### Acceptance Criteria
 - [x] Both scripts deployed via Ansible with `#Ansible:` cron prefix
-- [ ] First backup from each host visible in curlbin
-- [ ] Slack notification received on success
+- [x] First backup from each host visible in curlbin
+- [ ] Slack notification received on success (verified via cron on next scheduled run)
 
 ### Notes
 - Proxmox configs rarely change — weekly schedule is sufficient
