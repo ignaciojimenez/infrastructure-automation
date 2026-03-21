@@ -23,7 +23,7 @@ All backups are GPG-encrypted and uploaded to curlbin. Success/failure notificat
 Before recovering any host, you need:
 
 1. **This repository** — cloned locally with Ansible installed
-2. **Ansible Vault password** — in `~/.ansible/vault_pass` (see `ansible.cfg`; the file is not in the repo)
+2. **Ansible Vault password** — stored in macOS Keychain (`security find-generic-password -s ansible-vault-master -w`)
 3. **GPG private key** — on the laptop's GPG keyring (the key matching `git_mail` in vault)
 4. **SSH access** — key-based auth via Secretive (Secure Enclave)
 5. **Slack webhook tokens** — in vault, needed for post-recovery monitoring
