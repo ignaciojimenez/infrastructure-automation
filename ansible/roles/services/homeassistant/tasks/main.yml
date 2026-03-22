@@ -274,6 +274,36 @@
     - alert_token is defined and alert_token != ''
   tags: [homeassistant, monitoring, cron]
 
+- name: Ensure monitoring directory exists for heartbeat
+  ansible.builtin.file:
+    path: "{{ scripts_dir }}/monitoring"
+    state: directory
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0755'
+  when: vault_healthcheck_ha is defined
+  tags: [homeassistant, monitoring]
+
+- name: Deploy Home Assistant heartbeat script
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/../../scripts/services/homeassistant/heartbeat_ha.sh"
+    dest: "{{ scripts_dir }}/monitoring/heartbeat_ha.sh"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0755'
+  when: vault_healthcheck_ha is defined
+  tags: [homeassistant, monitoring]
+
+- name: Configure Home Assistant healthchecks.io heartbeat
+  ansible.builtin.cron:
+    name: "Healthchecks.io - Home Assistant health"
+    minute: "*/10"
+    user: "{{ ansible_user }}"
+    job: "{{ scripts_dir }}/monitoring/heartbeat_ha.sh"
+    state: present
+  when: vault_healthcheck_ha is defined
+  tags: [homeassistant, monitoring, cron]
+
 - name: Configure Docker system prune cron job (weekly)
   ansible.builtin.cron:
     name: "Docker system prune"

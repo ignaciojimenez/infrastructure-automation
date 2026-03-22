@@ -6,7 +6,7 @@
 set -e
 
 # Configuration - uses Ansible vault variable (template)
-HEALTHCHECK_URL="{{ vault_healthcheck_pihole_dns }}"
+HEALTHCHECK_URL="{{ vault_healthcheck_opnsense_dns }}"
 TEST_DOMAIN="mullvad.net"
 
 # Test DNS resolution via Unbound
