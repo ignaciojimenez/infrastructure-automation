@@ -8,30 +8,6 @@ Items are ordered by risk × effort — highest-impact, most-actionable items fi
 
 ---
 
-## Priority 1 — Backup Automation (OPNsense + Proxmox) *(nearly complete)*
-
-**Risk:** Firewall config loss = full manual rebuild of WireGuard tunnels, DNS rules, CrowdSec, and all firewall rules. Proxmox host loss = loss of OPNsense VM + UniFi LXC with no offsite config copy.
-
-### Completed (2026-03-22)
-- `feat/backup-scripts` merged to main; both scripts deployed via Ansible cron
-- OPNsense: `backup_opnsense.sh` runs daily at 04:15, first backup verified in curlbin
-- Proxmox: `backup_proxmox_config.sh` runs weekly at 04:00, first backup verified in curlbin
-- `do_backup` shebang fixed for FreeBSD (`#!/usr/bin/env bash`), grep fallback crash fixed
-- `pve_backup_helper` + sudoers deployed for safe `/etc/pve/` copy on Proxmox
-- Full recovery guide: `docs/BACKUP_AND_RECOVERY.md`
-
-### Remaining
-- [ ] Slack notification received on success (verified via cron on next scheduled run)
-
-### Notes
-- Proxmox configs rarely change — weekly schedule is sufficient
-- OPNsense config changes more often (firewall rules, DNS) — daily is appropriate
-- Home Assistant backup already runs daily at 04:00 via Ansible cron on dockassist
-- UniFi backup already runs daily at 03:00 via Ansible cron on unifi-lxc
-- Plex backup already runs every 7 days at 04:00 via Ansible cron on cobra
-
----
-
 ## Priority 2 — OPNsense Ansible Consolidation
 
 **Risk:** Running Ansible on OPNsense could create duplicate crons or deploy conflicting wrapper scripts. Manual crons lack the `#Ansible:` prefix and will not be managed by Ansible.
@@ -288,15 +264,14 @@ Instead of a custom freshness script, add a healthchecks.io ping at the end of e
 
 ---
 
-## Resolved Items (Validated 2026-03-17)
+## Resolved Items
 
-Items previously flagged as issues that are confirmed working:
-
-- **VPN Country Switcher UUIDs** — All 4 UUIDs (`1a80d8ce`, `352f80d2`, `342fd91c`, `8029390a`) verified present in `/conf/config.xml` on OPNsense. Script is functional. No action needed.
-- **Plex on Cobra** — `plexmediaserver.service` is active and running (since 2026-03-15). Ansible crons for monitoring and backup are deployed. Transmission, Samba, VPN checks all running. No action needed.
-- **DNS Resilience** — 4-tunnel Mullvad architecture with Cloudflare fallback operational. DNS failover runs every minute, health check every 5 minutes. Fully functional.
-- **Tado SQLite migration** — Completed (commit `a7f6221`). Script uses HA REST API. But note: script is not yet deployed (see Priority 4).
-- **vinylstreamer liquidsoap inactive** — Expected behavior. Liquidsoap only runs during active vinyl streaming sessions. Icecast is active and ready.
+- **Backup Automation (OPNsense + Proxmox)** — Completed 2026-03-22. Both scripts deployed via Ansible cron (OPNsense daily 04:15, Proxmox weekly 04:00), first backups verified in curlbin. Recovery guide: `docs/BACKUP_AND_RECOVERY.md`.
+- **VPN Country Switcher UUIDs** — All 4 UUIDs verified in `/conf/config.xml`. Script functional.
+- **Plex on Cobra** — Active since 2026-03-15. Monitoring and backup crons deployed.
+- **DNS Resilience** — 4-tunnel Mullvad + Cloudflare fallback operational. Failover every minute, health check every 5 minutes.
+- **Tado SQLite migration** — Completed (commit `a7f6221`). Uses HA REST API. Not yet deployed on host (see Priority 4).
+- **vinylstreamer liquidsoap inactive** — Expected. Runs only during active streaming sessions.
 
 ---
 
