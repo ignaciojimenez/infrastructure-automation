@@ -42,7 +42,7 @@
     mode: '0755'
   become: true
 
-- name: Deploy OPNsense heartbeat script
+- name: Deploy OPNsense WAN heartbeat script
   ansible.builtin.template:
     src: "{{ playbook_dir }}/../../scripts/services/opnsense/heartbeat_opnsense_wan.sh"
     dest: "{{ scripts_dir }}/monitoring/heartbeat_opnsense_wan.sh"
@@ -51,6 +51,16 @@
     mode: '0755'
   become: true
   when: vault_healthcheck_opnsense_wan is defined
+
+- name: Deploy OPNsense DNS heartbeat script
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/../../scripts/services/opnsense/heartbeat_dns.sh"
+    dest: "{{ scripts_dir }}/monitoring/heartbeat_dns.sh"
+    owner: "{{ infrastructure_user }}"
+    group: wheel
+    mode: '0755'
+  become: true
+  when: vault_healthcheck_opnsense_dns is defined
 
 - name: Install required packages
   community.general.pkgng:
@@ -114,7 +124,7 @@
   become: true
   become_user: "{{ infrastructure_user }}"
 
-- name: Configure OPNsense healthchecks.io heartbeat
+- name: Configure OPNsense healthchecks.io WAN heartbeat
   ansible.builtin.cron:
     name: "Healthchecks.io - OPNsense WAN connectivity"
     minute: "*/5"
@@ -124,6 +134,17 @@
   become: true
   become_user: "{{ infrastructure_user }}"
   when: vault_healthcheck_opnsense_wan is defined
+
+- name: Configure OPNsense healthchecks.io DNS heartbeat
+  ansible.builtin.cron:
+    name: "Healthchecks.io - OPNsense DNS resolution"
+    minute: "*/5"
+    user: "{{ infrastructure_user }}"
+    job: "{{ scripts_dir }}/monitoring/heartbeat_dns.sh"
+    state: present
+  become: true
+  become_user: "{{ infrastructure_user }}"
+  when: vault_healthcheck_opnsense_dns is defined
 
 # --- Backup ---
 
