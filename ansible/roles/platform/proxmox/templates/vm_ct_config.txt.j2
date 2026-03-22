@@ -5,14 +5,14 @@
 
 # Virtual Machines
 {% for host in groups['all'] %}
-{% if hostvars[host].vm_id is defined %}
+{% if hostvars[host].vm_id is defined and not hostvars[host].archived | default(false) %}
 VM {{ hostvars[host].vm_id }} {{ host }}
 {% endif %}
 {% endfor %}
 
 # Containers
 {% for host in groups['all'] %}
-{% if hostvars[host].container_id is defined %}
+{% if hostvars[host].container_id is defined and not hostvars[host].archived | default(false) %}
 CT {{ hostvars[host].container_id }} {{ host }}
 {% endif %}
 {% endfor %}

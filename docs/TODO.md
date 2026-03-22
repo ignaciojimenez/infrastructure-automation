@@ -1,6 +1,6 @@
 # Infrastructure TODO — Prioritized Action List
 
-Updated: 2026-03-17 | Validated against live hosts
+Updated: 2026-03-22 | Validated against live hosts
 
 This document is the single source of truth for pending infrastructure work.
 Each item includes verified current state, concrete next steps, and acceptance criteria.
@@ -8,31 +8,19 @@ Items are ordered by risk × effort — highest-impact, most-actionable items fi
 
 ---
 
-## Priority 1 — Backup Automation (OPNsense + Proxmox)
+## Priority 1 — Backup Automation (OPNsense + Proxmox) *(nearly complete)*
 
 **Risk:** Firewall config loss = full manual rebuild of WireGuard tunnels, DNS rules, CrowdSec, and all firewall rules. Proxmox host loss = loss of OPNsense VM + UniFi LXC with no offsite config copy.
 
-### Verified State (2026-03-17)
-- `do_backup` is deployed and functional on both hosts:
-  - OPNsense: `/usr/local/bin/do_backup` (Nov 2025)
-  - Proxmox: `/home/choco/.scripts/do_backup` (Mar 2026)
-- Backup scripts exist on `feat/backup-scripts` branch (1 commit: `79c336e`):
-  - `scripts/services/opnsense/backup_opnsense.sh` (137 lines, POSIX sh — FreeBSD compatible)
-  - `scripts/services/proxmox/backup_proxmox_config.sh` (173 lines, bash)
-- Neither script is deployed to its target host
-- No Ansible role or cron exists for either script
-- `do_backup` uses bash syntax (`[[`, `=~`, `set -o pipefail`) — works on OPNsense because bash is installed at `/usr/local/bin/bash` (GNU bash 5.3.9)
+### Completed (2026-03-22)
+- `feat/backup-scripts` merged to main; both scripts deployed via Ansible cron
+- OPNsense: `backup_opnsense.sh` runs daily at 04:15, first backup verified in curlbin
+- Proxmox: `backup_proxmox_config.sh` runs weekly at 04:00, first backup verified in curlbin
+- `do_backup` shebang fixed for FreeBSD (`#!/usr/bin/env bash`), grep fallback crash fixed
+- `pve_backup_helper` + sudoers deployed for safe `/etc/pve/` copy on Proxmox
+- Full recovery guide: `docs/BACKUP_AND_RECOVERY.md`
 
-### Next Steps
-1. Merge `feat/backup-scripts` branch to main
-2. Add Ansible tasks to OPNsense platform role (`ansible/roles/platform/opnsense/tasks/main.yml`) to deploy `backup_opnsense.sh` and schedule daily cron
-3. Add Ansible tasks to Proxmox platform role (`ansible/roles/platform/proxmox/tasks/main.yml`) to deploy `backup_proxmox_config.sh` and schedule weekly cron
-4. Add vault vars for any missing webhook tokens or GPG email references
-5. Deploy to both hosts and verify first backup completes end-to-end (encryption + upload to curlbin)
-
-### Acceptance Criteria
-- [x] Both scripts deployed via Ansible with `#Ansible:` cron prefix
-- [x] First backup from each host visible in curlbin
+### Remaining
 - [ ] Slack notification received on success (verified via cron on next scheduled run)
 
 ### Notes
@@ -84,15 +72,19 @@ Items are ordered by risk × effort — highest-impact, most-actionable items fi
 - All backups upload to curlbin — success/failure is only visible via Slack notifications from `do_backup`
 - If `do_backup` itself crashes or the cron doesn't fire, there is zero visibility
 
+### Recommended Approach: healthchecks.io Backup Heartbeats
+Instead of a custom freshness script, add a healthchecks.io ping at the end of each successful backup. Healthchecks.io natively supports expected schedules — set "expect daily" with a grace period, and it alerts (via email/push) if the ping never comes. This catches silent cron failures, host reboots, and broken backup scripts — and works even when Slack itself is down.
+
 ### Next Steps
-1. Create a `check_backup_freshness.sh` script that queries curlbin (or local backup timestamps) for each service
-2. Alert if last successful backup exceeds threshold (24h for daily, 8 days for weekly)
-3. Deploy via Ansible to the monitoring host (dockassist or proxmox)
-4. Schedule as daily cron
+1. Create 5 healthchecks.io checks (one per backup host: HA daily, OPNsense daily, Proxmox weekly, Plex weekly, UniFi daily)
+2. Add vault variables (`vault_healthcheck_backup_*`) for each check URL
+3. Append `&& curl -fsS -m 10 "$HC_URL"` to each backup cron job (or create small heartbeat wrappers)
+4. Configure expected periods and grace on healthchecks.io (daily: 24h period + 6h grace, weekly: 7d + 2d)
 
 ### Acceptance Criteria
-- [ ] Script deployed and running via Ansible cron
-- [ ] Slack alert fires when backup is stale (test by temporarily moving last backup)
+- [ ] Each backup host has a healthchecks.io check with correct expected period
+- [ ] Successful backup triggers a ping; missed backup triggers healthchecks.io alert
+- [ ] Alert channel is independent of Slack (email or push notification)
 
 ---
 
@@ -102,9 +94,9 @@ Items are ordered by risk × effort — highest-impact, most-actionable items fi
 
 ### Verified State (2026-03-22)
 - Single NVMe pool `rpool`: 254G used / 472G total
-- vzdump runs daily at 03:00 for all guests (VM 100 + LXC 101 + LXC 102), 15-day retention — **not Ansible-managed**, configured in Proxmox `jobs.cfg`
-- Latest vzdump sizes: OPNsense VM ~12G, UniFi LXC ~1.1G, PiHole LXC ~516M
-- vzdump backups consume 201G in `/var/lib/vz/dump/` — all on the same NVMe
+- vzdump runs daily at 03:00 for active guests (VM 100 + LXC 101), 15-day retention — **not Ansible-managed**, configured in Proxmox `jobs.cfg`
+- Latest vzdump sizes: OPNsense VM ~12G, UniFi LXC ~1.1G
+- vzdump backups consume 201G in `/var/lib/vz/dump/` — all on the same NVMe (consider removing stopped LXC 102/pihole from vzdump schedule)
 - No offsite or separate-media copy of vzdump snapshots exists
 - No backup restore has ever been tested end-to-end
 
@@ -302,7 +294,6 @@ Items previously flagged as issues that are confirmed working:
 
 - **VPN Country Switcher UUIDs** — All 4 UUIDs (`1a80d8ce`, `352f80d2`, `342fd91c`, `8029390a`) verified present in `/conf/config.xml` on OPNsense. Script is functional. No action needed.
 - **Plex on Cobra** — `plexmediaserver.service` is active and running (since 2026-03-15). Ansible crons for monitoring and backup are deployed. Transmission, Samba, VPN checks all running. No action needed.
-- **devpi host** — Not in Ansible inventory. Likely decommissioned. Remove any stale references if found in docs.
 - **DNS Resilience** — 4-tunnel Mullvad architecture with Cloudflare fallback operational. DNS failover runs every minute, health check every 5 minutes. Fully functional.
 - **Tado SQLite migration** — Completed (commit `a7f6221`). Script uses HA REST API. But note: script is not yet deployed (see Priority 4).
 - **vinylstreamer liquidsoap inactive** — Expected behavior. Liquidsoap only runs during active vinyl streaming sessions. Icecast is active and ready.
@@ -430,4 +421,4 @@ These items have value but are not urgent. Revisit quarterly.
 - **Eve Sensor Matter Pairing** — Prerequisites met (Matter Server deployed, batteries replaced). Manual pairing process via Apple Home.
 - **Full Infrastructure as Code (Proxmox/OPNsense)** — High complexity for rarely-changing configs. Good config backups (Priority 1) may be sufficient.
 - **Cobra Media Config Consolidation** — Merge separate cobra repo into media role. Cosmetic improvement.
-- **Keep CURRENT_INFRASTRUCTURE_STATE.md Updated** — Last updated March 2026. Update after completing Priority 1-2.
+- **Tidal Receiver on hifipi** — Add Tidal Connect receiver alongside existing Shairport/Raspotify. Never been necessary; hifipi already covers AirPlay and Spotify Connect. Low effort if a good open-source receiver emerges.

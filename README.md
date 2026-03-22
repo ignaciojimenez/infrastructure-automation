@@ -42,7 +42,7 @@ ansible-vault edit ansible/inventory/group_vars/all/vault.yml
 - **audio_streaming** → Icecast, Liquidsoap, detect_audio
 - **media** → Plex, Transmission, Samba
 - **homeassistant** → Docker, Home Assistant
-- **dns** → Pi-hole
+- **firewall** → OPNsense (Unbound DNS, WireGuard VPN, CrowdSec)
 - **network_controller** → UniFi Network application using GleenR script
 
 ## Common Commands
@@ -75,5 +75,5 @@ The playbook automatically deploys **all scripts** in `scripts/common/` - no con
 ## Documentation
 
 - **[docs/ARCHITECTURE_DECISIONS.md](docs/ARCHITECTURE_DECISIONS.md)** - Key technical decisions and patterns
-- **[docs/CONFIGURATION_STRATEGY.md](docs/CONFIGURATION_STRATEGY.md)** - Configuration patterns and best practices
+- **[docs/BACKUP_AND_RECOVERY.md](docs/BACKUP_AND_RECOVERY.md)** - Backup inventory and per-host recovery procedures
 - **[docs/TODO.md](docs/TODO.md)** - Prioritized infrastructure work items

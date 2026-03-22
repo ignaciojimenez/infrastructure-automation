@@ -7,7 +7,6 @@ Simple log of key technical decisions made in this project.
 - **Ansible roles are self-healing** - Roles detect and fix missing configuration (e.g., hardware overlays, service configs)
 - **Variables over groups** - Use feature toggles in `group_vars/` rather than inventory groups for flexibility
 - **No dead code** - Delete disabled tasks, don't comment them out (git preserves history)
-- **Testing on devpi first** - Always test changes on development host before production deployment
 - **Generic scripts deploy to all hosts** - Prevents configuration drift, ensures consistency
 
 ## Hardware Configuration
@@ -33,19 +32,10 @@ Simple log of key technical decisions made in this project.
 - **Enhanced monitoring wrapper** - All checks use wrapper for heartbeats and notifications
 - **Self-healing health checks** - Scripts attempt auto-fix before alerting
 - **State tracking** - Monitoring tracks issue state to avoid alert fatigue
-- **Platform-specific monitoring** - Each platform runs it's own monitoring capabilities
+- **Platform-specific monitoring** - Each platform runs its own monitoring capabilities
 - **POSIX-compliant scripts** - All scripts use `/bin/sh` for FreeBSD compatibility
 - **Unified Slack webhooks** - All hosts share same monitoring/alert webhook configuration from vault
 - **Auto-upgrades: pending counts are informational only** - Pending updates naturally accumulate between daily runs; only service/config issues trigger alerts
-
-## Monitoring Strategy
-
-Platform-specific monitoring scripts deployed to appropriate locations:
-- **Proxmox (Debian)**: `/home/${USER}/.scripts/monitoring/`
-- **OPNsense (FreeBSD)**: `/usr/local/bin/monitoring/`
-
-All scripts are POSIX-compliant shell scripts for maximum portability. Monitoring uses centralized wrapper with Slack notifications and state tracking to prevent alert fatigue.
-
 
 ## Configuration Loading Order
 
@@ -68,14 +58,13 @@ All scripts are POSIX-compliant shell scripts for maximum portability. Monitorin
 
 ## LXC Container Management
 
-- **Hostname resolution fix** - Early fix in bootstrap.yml (line 78-88) adds hostname to /etc/hosts
+- **Hostname resolution fix** - Early fix in bootstrap.yml adds hostname to /etc/hosts
   - Prevents sudo timeout issues caused by DNS lookup failures
   - Runs before any become operations to ensure success
-  - Required for containers where hostname differs from DNS name (e.g., pihole-lxc vs pihole)
+  - Required for containers where hostname differs from DNS name (e.g., `unifi-lxc` vs `unifi`)
 - **Container naming** - Proxmox adds `-lxc` suffix, DNS uses friendly names
-  - Containers: `pihole-lxc`, `unifi-lxc` (actual hostnames)
-  - DNS entries: `pihole`, `unifi` (user-friendly network names)
-  - Both approaches valid, handled automatically
+  - Container: `unifi-lxc` (actual hostname), DNS: `unifi` (user-friendly network name)
+  - Handled automatically in inventory (`ansible_host` override)
 
 ## DNS Architecture (Updated November 2025)
 
