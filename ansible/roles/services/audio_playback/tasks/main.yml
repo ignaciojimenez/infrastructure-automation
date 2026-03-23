@@ -88,42 +88,21 @@
   become: true
   when: not (is_test_environment | default(false))
   block:
-    - name: Check available ALSA mixer controls (with sudo for hardware controls)
-      ansible.builtin.command: amixer scontrols
-      register: alsa_controls
+    - name: Set hardware DAC volume to maximum (HiFiBerry DAC+ HD on card 0)
+      ansible.builtin.command: amixer -c 0 sset 'DAC' 100%
       changed_when: false
       failed_when: false
-    
-    - name: Set maximum volume for Analogue control (HiFiBerry hardware)
-      ansible.builtin.command: amixer sset 'Analogue' 100%
-      when: "'Analogue' in alsa_controls.stdout"
-      changed_when: false
-      failed_when: false
-    
-    - name: Set maximum volume for Digital control (DAC)
-      ansible.builtin.command: amixer sset 'Digital' 100%
-      when: "'Digital' in alsa_controls.stdout"
-      changed_when: false
-      failed_when: false
-    
-    - name: Set maximum volume for Master control (software mixer)
+
+    - name: Set software master volume to maximum (PulseAudio)
       ansible.builtin.command: amixer sset 'Master' 100%
-      when: "'Master' in alsa_controls.stdout"
       changed_when: false
       failed_when: false
-    
+
     - name: Store ALSA mixer configuration
       ansible.builtin.command: alsactl store
       changed_when: false
       failed_when: false
-    
-    - name: Report audio configuration status
-      ansible.builtin.debug:
-        msg: |
-          Audio hardware configured. Available controls: {{ alsa_controls.stdout_lines | default(['None detected - may require reboot']) }}
   tags: [audio_playback, volume]
-  # Note: Skipped on test environments (no audio hardware)
-  # Hardware controls (Analogue, Digital) require root access to see/modify
 
 - name: Install Shairport Sync dependencies
   become: true
@@ -222,13 +201,21 @@
     
     - name: Configure Raspotify
       ansible.builtin.copy:
-        dest: /etc/default/raspotify
+        dest: /etc/raspotify/conf
         content: |
-          #### Custom Configs for {{ primary_user }} ####
-          BITRATE="320"
-          VOLUME_ARGS="--initial-volume=100"
-        mode: '0644'
+          # Raspotify config — managed by Ansible
+          LIBRESPOT_BITRATE=320
+          LIBRESPOT_INITIAL_VOLUME=100
+          LIBRESPOT_QUIET=
+          LIBRESPOT_DISABLE_AUDIO_CACHE=
+          TMPDIR=/tmp
+        mode: '0600'
       notify: restart raspotify
+
+    - name: Remove legacy raspotify config
+      ansible.builtin.file:
+        path: /etc/default/raspotify
+        state: absent
   when: enable_spotify | default(true)
   tags: [audio_playback, spotify]
 
