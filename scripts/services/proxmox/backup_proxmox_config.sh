@@ -26,7 +26,7 @@ usage() {
   echo "Options:"
   echo "  --logging=TOKEN   Slack webhook token for success notifications"
   echo "  --alert=TOKEN     Slack webhook token for failure notifications"
-  echo "  --email=ADDRESS   Email address for GPG encryption (REQUIRED)"
+  echo "  --recipient=KEY   age public key for encryption (REQUIRED)"
   echo "  --silent          Run in silent mode (for use with monitoring wrapper)"
   echo "  --help            Show this help message"
 }
@@ -35,7 +35,7 @@ usage() {
 silent_mode=false
 logging_token=""
 alert_token=""
-email=""
+recipient=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -47,8 +47,8 @@ while [ $# -gt 0 ]; do
       alert_token="${1#--alert=}"
       shift
       ;;
-    --email=*)
-      email="${1#--email=}"
+    --recipient=*)
+      recipient="${1#--recipient=}"
       shift
       ;;
     --silent)
@@ -68,8 +68,8 @@ while [ $# -gt 0 ]; do
 done
 
 # Validate required arguments
-if [ -z "$email" ]; then
-  log_msg "${RED}Error: Email address is required${NC}"
+if [ -z "$recipient" ]; then
+  log_msg "${RED}Error: Recipient public key is required${NC}"
   usage
   exit 1
 fi
@@ -158,9 +158,9 @@ log_msg "Using do_backup: $DO_BACKUP"
 
 # Run backup
 if [ "$silent_mode" = "true" ]; then
-  "$DO_BACKUP" --silent "$BACKUP_FILE" "$email"
+  "$DO_BACKUP" --silent "$BACKUP_FILE" "$recipient"
 else
-  "$DO_BACKUP" --logging="$logging_token" --alert="$alert_token" "$BACKUP_FILE" "$email"
+  "$DO_BACKUP" --logging="$logging_token" --alert="$alert_token" "$BACKUP_FILE" "$recipient"
 fi
 backup_result=$?
 

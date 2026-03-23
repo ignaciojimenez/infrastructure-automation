@@ -195,7 +195,7 @@
       --notify-fixed=true
       {{ logging_token }}
       {{ alert_token }}
-      {{ scripts_dir }}/backup_unifi --silent --email={{ git_mail }}
+      {{ scripts_dir }}/backup_unifi --silent --recipient={{ backup_age_pubkey }}
       >> {{ logs_dir }}/unifi_backup.log 2>&1
     user: "{{ primary_user }}"
   tags: [unifi, backup, cron]

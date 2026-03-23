@@ -22,13 +22,13 @@ usage(){
   echo "  --logging=webhook_id  Slack webhook ID for success notifications (format T[A-Z0-9]*/B[A-Z0-9]*/[a-zA-Z0-9]*)"
   echo "  --alert=webhook_id    Slack webhook ID for failure notifications (format T[A-Z0-9]*/B[A-Z0-9]*/[a-zA-Z0-9]*)"
   echo "  --folder=PATH        Path to folder containing files to backup (REQUIRED)"
-  echo "  --email=EMAIL       Email address for GPG encryption (REQUIRED)"
+  echo "  --recipient=KEY     age public key for encryption (REQUIRED)"
   echo "  --silent             Suppress Slack notifications (useful when run via monitoring wrapper)"
   echo "  --help               Show this help message"
   echo ""
   echo "Required arguments (can be specified as options or positional arguments):"
   echo "  folder              Path to folder containing files to backup"
-  echo "  recipient           Email address for GPG encryption"
+  echo "  recipient           age public key for encryption"
   echo ""
   echo "Note: If --silent is used, webhook IDs are not required"
   echo "      For backward compatibility, you can also use: logging_webhookid alert_webhookid folder recipient [--silent]"
@@ -72,8 +72,8 @@ else
         folder="${1#--folder=}"
         shift
         ;;
-      --email=*)
-        recipient="${1#--email=}"
+      --recipient=*)
+        recipient="${1#--recipient=}"
         shift
         ;;
       --silent)

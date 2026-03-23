@@ -356,7 +356,7 @@
       --notify-fixed=true
       {{ logging_token }}
       {{ alert_token }}
-      {{ scripts_dir }}/backup_last_mod --silent --folder={{ homeassistant_config_dir | default('/home/' + ansible_user + '/homeassistant') }}/backups/ --email={{ git_mail }}
+      {{ scripts_dir }}/backup_last_mod --silent --folder={{ homeassistant_config_dir | default('/home/' + ansible_user + '/homeassistant') }}/backups/ --recipient={{ backup_age_pubkey }}
       >> {{ logs_dir }}/homeassistant_backup.log 2>&1
     user: "{{ ansible_user }}"
   when:

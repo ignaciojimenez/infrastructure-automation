@@ -39,7 +39,9 @@ git_mail: "{{ vault_git_mail }}"
 # GitHub profile for SSH keys (from vault)
 gh_profile: "{{ vault_gh_profile }}"
 gh_keys: "https://github.com/{{ gh_profile }}.keys"
-gh_pgp: "https://github.com/{{ gh_profile }}.gpg"
+
+# Backup encryption - age public key (asymmetric, private key in password manager)
+backup_age_pubkey: "age1yeuwd2t78jyxldxeja529djj8zt5et7h9j0fnwzn7r0cqfnww58qjqrttc"
 
 # Monitoring tokens (from vault)
 logging_token: "{{ vault_logging_token }}"

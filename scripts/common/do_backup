@@ -22,7 +22,7 @@ usage(){
   echo ""
   echo "Required arguments:"
   echo "  file|dir            Path to file or directory to backup"
-  echo "  recipient           Email address for GPG encryption"
+  echo "  recipient           age public key for encryption"
   echo ""
   echo "Note: If --silent is used, webhook IDs are not required"
   echo "      For backward compatibility, you can also use: logging_webhookid alert_webhookid file|dir recipient [--silent]"
@@ -47,14 +47,6 @@ cleanup() {
 
 # Set up trap to clean up temporary files on exit
 trap cleanup EXIT INT TERM
-
-# Detect if running on Ubiquiti EdgeRouter (EdgeOS)
-is_edgerouter() {
-  if [ -d "/opt/vyatta" ] || [ -d "/etc/ubnt" ] || grep -qi 'edgeos\|edgerouter' /etc/issue /etc/version /etc/os-release 2>/dev/null; then
-    return 0
-  fi
-  return 1
-}
 
 E_NOARGS=85
 wh_regex="T[A-Z0-9]*\/B[A-Z0-9]*\/[a-zA-Z0-9]*"
@@ -170,21 +162,11 @@ if [ "$silent_mode" == "true" ]; then
   log_msg "Running in silent mode - will not send notifications"
 fi
 
-# On EdgeRouter (EdgeOS), prefer persistent GnuPG home under /config/.gnupg if not explicitly set
-if [ -z "${GNUPGHOME:-}" ] && is_edgerouter; then
-  if [ ! -d "/config/.gnupg" ]; then
-    mkdir -p "/config/.gnupg"
-    chmod 700 "/config/.gnupg"
-  fi
-  export GNUPGHOME="/config/.gnupg"
-  log_msg "Using EdgeOS GnuPG home: ${GNUPGHOME}"
-fi
-
 now=$(date +%d%m%y-%H%M)
 
-# Check if GPG is installed
-if ! command -v gpg &> /dev/null; then
-  log_msg "ERROR: GPG is not installed. Please install it to use this script."
+# Check if age is installed
+if ! command -v age &> /dev/null; then
+  log_msg "ERROR: age is not installed. Please install it to use this script."
   exit 1
 fi
 
@@ -192,15 +174,6 @@ fi
 if ! command -v curl &> /dev/null; then
   log_msg "ERROR: curl is not installed. Please install it to use this script."
   exit 1
-fi
-
-# Check if recipient key is available
-if ! gpg --list-keys "${recipient}" &> /dev/null; then
-  log_msg "WARNING: GPG key for recipient '${recipient}' not found in keyring."
-  log_msg "Attempting to retrieve key from keyserver..."
-  if ! gpg --recv-keys "${recipient}" &> /dev/null; then
-    log_msg "WARNING: Could not retrieve key from keyserver. Encryption may fail."
-  fi
 fi
 
 # Handle directory compression
@@ -218,12 +191,12 @@ if test -d "$fileordir"; then
   log_msg "Directory compressed to: ${tar_file}"
 fi
 
-file_enc="${fileordir##*/}-${now}.gpg"
+file_enc="${fileordir##*/}-${now}.age"
 path_enc="/tmp/${file_enc}"
 
-log_msg "Encrypting file with GPG for recipient: ${recipient}"
-if ! gpg --quiet --encrypt --output "${path_enc}" --yes --recipient "${recipient}" "${fileordir}"; then
-  log_msg "ERROR: GPG encryption failed"
+log_msg "Encrypting file with age for recipient: ${recipient}"
+if ! age -r "${recipient}" -o "${path_enc}" "${fileordir}"; then
+  log_msg "ERROR: age encryption failed"
   exit 1
 fi
 log_msg "File encrypted successfully: ${path_enc}"

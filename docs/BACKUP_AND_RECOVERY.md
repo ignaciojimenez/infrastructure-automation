@@ -16,7 +16,7 @@ Complete reference for what is backed up, where backups live, and how to recover
 | hifipi | — | — | — | Pure IaC, no unique state | — |
 | vinylstreamer | — | — | — | Pure IaC, no unique state | — |
 
-All backups are GPG-encrypted and uploaded to curlbin. Success/failure notifications go to Slack.
+All backups are age-encrypted (asymmetric, public key on hosts) and uploaded to curlbin. Success/failure notifications go to Slack.
 
 ## Prerequisites for Any Recovery
 
@@ -24,7 +24,7 @@ Before recovering any host, you need:
 
 1. **This repository** — cloned locally with Ansible installed
 2. **Ansible Vault password** — stored in macOS Keychain (`security find-generic-password -s ansible-vault-master -w`)
-3. **GPG private key** — on the laptop's GPG keyring (the key matching `git_mail` in vault)
+3. **age secret key** — one line (`AGE-SECRET-KEY-1...`), stored in password manager
 4. **SSH access** — key-based auth via Secretive (Secure Enclave)
 5. **Slack webhook tokens** — in vault, needed for post-recovery monitoring
 
@@ -34,16 +34,20 @@ Backup URLs are posted to Slack on successful upload. **Save these URLs** — th
 
 ```bash
 # Download the encrypted backup from curlbin (no auth required for downloads)
-curl -o backup.tar.gz.gpg "https://curlbin.ignacio.systems/FILE_ID"
+curl -o backup.age "https://curlbin.ignacio.systems/FILE_ID"
 
-# Decrypt
-gpg --decrypt -o backup.tar.gz backup.tar.gz.gpg
+# Decrypt (key.txt contains the age secret key from password manager: one line, AGE-SECRET-KEY-1...)
+age --decrypt -i key.txt -o backup.tar.gz backup.age
 
 # Extract
 tar -xzf backup.tar.gz
 ```
 
-If the curlbin upload failed, `do_backup` saves a local fallback at `/tmp/backup_*.gpg` on the source host, and logs the URL to `/tmp/backup_url_*.txt` (volatile — retrieve before reboot).
+On a fresh machine, recovery is: `brew install age` (or `apt install age` / `pkg install age`), paste the secret key from password manager into a file, decrypt.
+
+If the curlbin upload failed, `do_backup` saves a local fallback at `/tmp/backup_*.age` on the source host, and logs the URL to `/tmp/backup_url_*.txt` (volatile — retrieve before reboot).
+
+> **Old backups:** Backups created before 2026-03-23 use GPG encryption (`.gpg` extension). Decrypt with: `gpg --import <key-from-password-manager> && gpg --decrypt -o backup.tar.gz backup.gpg`
 
 ---
 
@@ -190,10 +194,10 @@ Ordered by rebuild complexity (highest risk first).
 | Gap | Impact | Mitigation |
 |-----|--------|------------|
 | **cobra media files** not backed up | Loss of media library (100s of GB) | Too large for curlbin (200 MB limit). Re-downloadable content. |
-| **GPG key on laptop only** | Cannot decrypt backups if laptop is lost | Priority 5 in TODO: migrate to `age` with key in password manager |
+| **age secret key in password manager only** | Cannot decrypt backups without password manager access | Single line key — easy to store in multiple locations if needed |
 | **Backup URLs only in Slack** | If Slack notification is missed, URL is gone — IDs are random and not discoverable | `do_backup` also logs URLs to `/tmp/backup_url_*.txt` on the source host, but this is volatile |
 | **Tado OAuth tokens** | Need re-auth on dockassist rebuild | Recoverable via `tado_setup.sh` (interactive OAuth2 flow) |
-| **curlbin single point of failure** | If curlbin is down, uploads fail | `do_backup` saves local fallback to `/tmp/backup_*.gpg`; 3 retries with 5s delay |
+| **curlbin single point of failure** | If curlbin is down, uploads fail | `do_backup` saves local fallback to `/tmp/backup_*.age`; 3 retries with 5s delay |
 | **No backup freshness monitoring** | Silent backup failures go undetected | Priority 3 in TODO: implement `check_backup_freshness.sh` |
 | **Plex library metadata** not backed up | Watch history and library scan data lost on rebuild | Re-scan from media files; metadata re-fetched from Plex servers |
 

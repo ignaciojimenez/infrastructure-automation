@@ -49,18 +49,14 @@
       loop: "{{ common_scripts_baseline.files }}"
       tags: [baseline, scripts, monitoring]
       
-    - name: Import GPG key from GitHub
-      ansible.builtin.shell:
-        cmd: "{{ _scripts_dir }}/import_gpg_github.sh --url https://github.com/{{ git_name }}.gpg"
-      become_user: "{{ ansible_user }}"
-      when: 
-        - (os_family == "debian" or platform_type == "lxc")
-        - git_name is defined
-      register: gpg_import
-      changed_when: "'Successfully set ultimate trust' in gpg_import.stdout"
-      failed_when: false
-      tags: [baseline, gpg]
-    
+    - name: Install age encryption tool
+      ansible.builtin.apt:
+        name: age
+        state: present
+      become: true
+      when: os_family == "debian"
+      tags: [baseline, packages]
+
     - name: Configure cron PATH environment
       ansible.builtin.cron:
         name: PATH

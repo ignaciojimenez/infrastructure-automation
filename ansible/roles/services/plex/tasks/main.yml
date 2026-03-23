@@ -158,11 +158,11 @@
       --notify-fixed=true
       {{ logging_token }}
       {{ alert_token }}
-      {{ scripts_dir }}/backup_plex_config --silent --email={{ git_mail }}
+      {{ scripts_dir }}/backup_plex_config --silent --recipient={{ backup_age_pubkey }}
       >> {{ logs_dir }}/plex_config_backup.log 2>&1
     user: "{{ ansible_user }}"
   when:
     - logging_token is defined and logging_token != ''
     - alert_token is defined and alert_token != ''
-    - git_mail is defined and git_mail != ''
+    - backup_age_pubkey is defined and backup_age_pubkey != ''
   tags: [plex, backup, cron]

@@ -291,7 +291,7 @@
       --notify-fixed=true
       {{ logging_token }}
       {{ alert_token }}
-      {{ scripts_dir }}/backup_pihole.sh --silent --email={{ git_mail }}
+      {{ scripts_dir }}/backup_pihole.sh --silent --recipient={{ backup_age_pubkey }}
       >> {{ logs_dir }}/pihole_backup.log 2>&1
     user: "{{ primary_user }}"
   tags: [pihole, backup, cron]

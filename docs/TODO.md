@@ -1,6 +1,6 @@
 # Infrastructure TODO — Prioritized Action List
 
-Updated: 2026-03-22 | Validated against live hosts
+Updated: 2026-03-23 | Validated against live hosts
 
 This document is the single source of truth for pending infrastructure work.
 Each item includes verified current state, concrete next steps, and acceptance criteria.
@@ -8,48 +8,17 @@ Items are ordered by risk × effort — highest-impact, most-actionable items fi
 
 ---
 
-## Priority 2 — OPNsense Ansible Consolidation
-
-**Risk:** Running Ansible on OPNsense could create duplicate crons or deploy conflicting wrapper scripts. Manual crons lack the `#Ansible:` prefix and will not be managed by Ansible.
-
-### Verified State (2026-03-17)
-- **9 legacy monitoring scripts** (hyphenated names, root-owned, Oct 2025) coexist with 10 current scripts:
-  - Legacy: `check-crowdsec.sh`, `check-ddns.sh`, `check-ddns-age.sh`, `check-disk-space.sh`, `check-gateway.sh`, `check-interface.sh`, `check-memory.sh`, `check-system-load.sh`, `check-wg.sh`
-  - Current (Ansible-managed): `check_crowdsec.sh`, `check_ddns.sh`, `check_dns_health.sh`, `check_gateway.sh`, `check_guest_agent.sh`, `check_system_health.sh`, `check_vpn_gateway.sh`, `check_wg.sh`, `heartbeat_opnsense_wan.sh`, `monitor_dns_failover.sh`
-- **2 manual cron entries** (no `#Ansible:` prefix):
-  - `# DNS failover monitoring (VPN-based)` — runs every minute
-  - `# DNS resolution health check` — runs every 5 minutes
-- **Two Ansible deployment paths**:
-  1. Role: `ansible/roles/platform/opnsense/tasks/main.yml` — deploys 8 scripts + crons with `#Ansible:` prefix
-  2. Playbook tasks: `ansible/playbooks/tasks/opnsense_monitoring.yml` — uses legacy `scripts/freebsd/` paths and hardcoded `root` user
-- The role (path 1) is the active/correct one. The playbook tasks file (path 2) appears to be legacy.
-
-### Next Steps
-1. Add the 2 manual cron entries (DNS failover + DNS health) to the OPNsense Ansible role so they become Ansible-managed
-2. Add `state: absent` tasks in the role to remove the 9 legacy hyphenated scripts from `/usr/local/bin/monitoring/`
-3. Remove or archive `ansible/playbooks/tasks/opnsense_monitoring.yml` (legacy path)
-4. Verify with `--check --diff` that no duplicates would be created
-5. Deploy and confirm crontab matches expected state
-
-### Acceptance Criteria
-- [ ] All OPNsense crons have `#Ansible:` prefix
-- [ ] Legacy `check-*.sh` scripts removed from host
-- [ ] `opnsense_monitoring.yml` playbook tasks removed or archived
-- [ ] `ansible-playbook deploy_monitoring.yml --limit opnsense --check --diff` shows clean state
-
----
-
 ## Priority 3 — Backup Freshness Monitoring
 
-**Risk:** Once backups are automated (Priority 1), there is no alerting if they silently fail. This is the #1 monitoring gap.
+**Risk:** Backups are now automated, but there is no alerting if they silently fail. The `enhanced_monitoring_wrapper` catches script failures via Slack, but if the cron itself doesn't fire (host rebooted, crontab corrupted), there is zero visibility.
 
-### Verified State (2026-03-17)
+### Verified State (2026-03-22)
 - No backup age monitoring exists for any host
-- All backups upload to curlbin — success/failure is only visible via Slack notifications from `do_backup`
-- If `do_backup` itself crashes or the cron doesn't fire, there is zero visibility
+- All backups upload to curlbin — success/failure is only visible via Slack notifications from `enhanced_monitoring_wrapper`
+- If the cron doesn't fire or the wrapper itself crashes, there is zero visibility
 
 ### Recommended Approach: healthchecks.io Backup Heartbeats
-Instead of a custom freshness script, add a healthchecks.io ping at the end of each successful backup. Healthchecks.io natively supports expected schedules — set "expect daily" with a grace period, and it alerts (via email/push) if the ping never comes. This catches silent cron failures, host reboots, and broken backup scripts — and works even when Slack itself is down.
+Add a healthchecks.io ping at the end of each successful backup. Healthchecks.io natively supports expected schedules — set "expect daily" with a grace period, and it alerts (via email/push) if the ping never comes. This catches silent cron failures, host reboots, and broken backup scripts — and works even when Slack itself is down.
 
 ### Next Steps
 1. Create 5 healthchecks.io checks (one per backup host: HA daily, OPNsense daily, Proxmox weekly, Plex weekly, UniFi daily)
@@ -64,7 +33,7 @@ Instead of a custom freshness script, add a healthchecks.io ping at the end of e
 
 ---
 
-## Priority 3.5 — Proxmox USB Recovery Kit + Backup Restore Testing
+## Priority 4 — Proxmox USB Recovery Kit + Backup Restore Testing
 
 **Risk:** All Proxmox data — OS, VM disk images, and vzdump backups — lives on a single 512GB NVMe (`rpool`). A drive failure loses everything including the local backup copies. The offsite curlbin backups cover service configs (config.xml, .unf, HA backup), but the fast-path recovery using vzdump snapshots would be gone. Additionally, no backup has ever been test-restored.
 
@@ -87,7 +56,7 @@ Instead of a custom freshness script, add a healthchecks.io ping at the end of e
 
 **Part B — Quarterly Backup Restore Test**
 1. Pick one backup (rotate through hosts each quarter)
-2. Download from curlbin, decrypt with GPG, inspect contents
+2. Download from curlbin, decrypt, inspect contents
 3. For vzdump: test-restore to a temporary VM/LXC on Proxmox, verify it boots
 4. Document results and any issues found
 5. First test: OPNsense config.xml restore into a throwaway VM
@@ -105,9 +74,39 @@ Instead of a custom freshness script, add a healthchecks.io ping at the end of e
 
 ---
 
-## Priority 4 — Tado Health Check Ansible Integration
+## Priority 5 — OPNsense Ansible Consolidation
 
-**Risk:** `check_tado_health.sh` is the only monitoring script not managed by Ansible. If dockassist is rebuilt, this monitoring silently disappears.
+**Risk:** Tech debt, not active breakage. Legacy scripts and a legacy playbook file coexist with the current role-based deployment. The legacy cron section has `enable_cron_monitoring | default(false)` so it won't fire accidentally, but the 9 old scripts waste disk space and 2 manual cron entries lack the `#Ansible:` prefix.
+
+### Verified State (2026-03-17)
+- **9 legacy monitoring scripts** (hyphenated names, root-owned, Oct 2025) coexist with 10 current scripts:
+  - Legacy: `check-crowdsec.sh`, `check-ddns.sh`, `check-ddns-age.sh`, `check-disk-space.sh`, `check-gateway.sh`, `check-interface.sh`, `check-memory.sh`, `check-system-load.sh`, `check-wg.sh`
+  - Current (Ansible-managed): `check_crowdsec.sh`, `check_ddns.sh`, `check_dns_health.sh`, `check_gateway.sh`, `check_guest_agent.sh`, `check_system_health.sh`, `check_vpn_gateway.sh`, `check_wg.sh`, `heartbeat_opnsense_wan.sh`, `monitor_dns_failover.sh`
+- **2 manual cron entries** (no `#Ansible:` prefix):
+  - `# DNS failover monitoring (VPN-based)` — runs every minute
+  - `# DNS resolution health check` — runs every 5 minutes
+- **Two Ansible deployment paths**:
+  1. Role: `ansible/roles/platform/opnsense/tasks/main.yml` — deploys 8 scripts + crons with `#Ansible:` prefix (active)
+  2. Playbook tasks: `ansible/playbooks/tasks/opnsense_monitoring.yml` — uses legacy `scripts/freebsd/` paths, hardcoded `root` user, `enable_cron_monitoring | default(false)` (inert)
+
+### Next Steps
+1. Add the 2 manual cron entries (DNS failover + DNS health) to the OPNsense Ansible role so they become Ansible-managed
+2. Add `state: absent` tasks in the role to remove the 9 legacy hyphenated scripts from `/usr/local/bin/monitoring/`
+3. Remove `ansible/playbooks/tasks/opnsense_monitoring.yml` (legacy path, inert)
+4. Verify with `--check --diff` that no duplicates would be created
+5. Deploy and confirm crontab matches expected state
+
+### Acceptance Criteria
+- [ ] All OPNsense crons have `#Ansible:` prefix
+- [ ] Legacy `check-*.sh` scripts removed from host
+- [ ] `opnsense_monitoring.yml` playbook tasks removed
+- [ ] `ansible-playbook deploy_monitoring.yml --limit opnsense --check --diff` shows clean state
+
+---
+
+## Priority 6 — Tado Health Check Ansible Integration
+
+**Risk:** `check_tado_health.sh` is the only monitoring script not managed by Ansible. If dockassist is rebuilt, this monitoring silently disappears. However, the script is not currently deployed or running, and nobody has noticed — the heating system works regardless.
 
 ### Verified State (2026-03-17)
 - Script exists in repo: `scripts/services/homeassistant/check_tado_health.sh`
@@ -128,32 +127,7 @@ Instead of a custom freshness script, add a healthchecks.io ping at the end of e
 
 ---
 
-## Priority 5 — GPG to age Encryption Migration
-
-**Risk:** GPG key lives only on laptop. Laptop loss or failure means cannot decrypt backups or run backup scripts from any other device. Recovery from backups becomes impossible in the scenario where you most need it.
-
-### Verified State (2026-03-17)
-- All backup encryption uses GPG (do_backup calls `gpg --encrypt`)
-- SSH keys are in Secretive (Secure Enclave) — not exportable
-- Two YubiKeys exist with SSH keys (untested recently)
-- User rarely decrypts backups in practice — the portability problem is theoretical but the bus-factor risk is real
-- age has not been tested yet — research needed on compatibility with existing SSH key infrastructure
-
-### Next Steps
-1. Research: test `age` encryption/decryption locally, verify it works with SSH keys from Secretive
-2. Generate age key pair; store public key in repo, private key in password manager
-3. Update `scripts/common/do_backup` to support age as encryption backend (consider feature flag during transition)
-4. Migrate all backup scripts from GPG to age
-5. Verify decryption works from a different device (phone or secondary machine)
-
-### Acceptance Criteria
-- [ ] age key pair generated and private key stored securely offsite
-- [ ] `do_backup` uses age for encryption
-- [ ] At least one backup successfully decrypted from a non-laptop device
-
----
-
-## Priority 6 — Ansible Playbook CI (Syntax + Lint)
+## Priority 7 — Ansible Playbook CI (Syntax + Lint)
 
 **Risk:** Broken YAML or undefined variables are only caught during manual deploys. Low probability but easy to prevent.
 
@@ -174,13 +148,13 @@ Instead of a custom freshness script, add a healthchecks.io ping at the end of e
 
 ---
 
-## Priority 7 — Ephemeral Ansible Testing Environment
+## Priority 8 — Ephemeral Ansible Testing Environment
 
 **Risk:** Ansible playbooks are only validated via `--check --diff` against live hosts. A full reprovision from scratch is untested — broken dependency ordering, missing template variables, or service startup failures would only surface during a real rebuild, which is exactly the worst time to discover them.
 
 ### Verified State (2026-03-17)
 - No testing infrastructure exists
-- No GitHub Actions CI (see Priority 6 for basic lint)
+- No GitHub Actions CI (see Priority 7 for basic lint)
 - Proxmox is available as a hypervisor and can create LXC containers and VMs via API
 - Current host types to simulate:
   - **Debian-based RPi hosts** (dockassist, cobra, hifipi, vinylstreamer) — LXC containers are a close match (same OS, ARM differences are minor for config management)
@@ -210,7 +184,7 @@ Instead of a custom freshness script, add a healthchecks.io ping at the end of e
 
 ### What This Enables
 - Confident reprovisioning of any host from scratch
-- Safe testing of major refactors (e.g., Priority 2's OPNsense consolidation)
+- Safe testing of major refactors (e.g., Priority 5's OPNsense consolidation)
 - Pre-merge validation in CI (Phase 2+)
 - New host onboarding without fear of breaking existing patterns
 
@@ -235,7 +209,7 @@ Instead of a custom freshness script, add a healthchecks.io ping at the end of e
 
 ---
 
-## Priority 8 — Proxmox WebUI User Migration
+## Priority 9 — Proxmox WebUI User Migration
 
 **Risk:** WebUI uses `root@pam` which is a security anti-pattern. Low practical risk in home network but poor hygiene.
 
@@ -266,16 +240,17 @@ Instead of a custom freshness script, add a healthchecks.io ping at the end of e
 
 ## Resolved Items
 
+- **Backup Encryption Portability (GPG → age)** — Completed 2026-03-23. Migrated all 5 backup pipelines from GPG asymmetric to age asymmetric encryption. Decision: age keypair chosen over GPG (complex recovery), age passphrase (symmetric = security downgrade), openssl enc (no AEAD), and age+SSH keys (incompatible with Secretive). Recovery path: `brew install age` + paste one-line secret key from password manager → decrypt. Old `.gpg` backups remain decryptable with the GPG key.
 - **Backup Automation (OPNsense + Proxmox)** — Completed 2026-03-22. Both scripts deployed via Ansible cron (OPNsense daily 04:15, Proxmox weekly 04:00), first backups verified in curlbin. Recovery guide: `docs/BACKUP_AND_RECOVERY.md`.
 - **VPN Country Switcher UUIDs** — All 4 UUIDs verified in `/conf/config.xml`. Script functional.
 - **Plex on Cobra** — Active since 2026-03-15. Monitoring and backup crons deployed.
 - **DNS Resilience** — 4-tunnel Mullvad + Cloudflare fallback operational. Failover every minute, health check every 5 minutes.
-- **Tado SQLite migration** — Completed (commit `a7f6221`). Uses HA REST API. Not yet deployed on host (see Priority 4).
+- **Tado SQLite migration** — Completed (commit `a7f6221`). Uses HA REST API. Not yet deployed on host (see Priority 6).
 - **vinylstreamer liquidsoap inactive** — Expected. Runs only during active streaming sessions.
 
 ---
 
-## Priority 9 — TADO/HA Presence Notification Elegance
+## Priority 10 — TADO/HA Presence Notification Elegance
 
 **Risk:** Cosmetic — no functional impact. Current behavior sends two contradictory Slack notifications when user is nearby (~500m from home): HA fires "AWAY mode activated" after 10min debounce, then `tado_presence.sh` fires "TADO says device still home, skipping AWAY". Expected behavior producing confusing double-alerts.
 
@@ -303,7 +278,7 @@ Restructure the away automation to defer the Slack notification until after the 
 
 ---
 
-## Priority 10 — Read-Only Agent Access for Autonomous Investigation
+## Priority 11 — Read-Only Agent Access for Autonomous Investigation
 
 **Risk:** Currently, Claude agents require manual SSH authentication (Secretive biometric) or web API tokens to investigate issues. This blocks autonomous, real-time diagnostics across the infrastructure. Goal is to enable agents to investigate any system (SSH, web UIs, logs) without requiring human intervention or biometric auth, while maintaining strict read-only guarantees.
 

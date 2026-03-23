@@ -20,18 +20,18 @@ log_msg() {
 silent_mode=false
 logging_token=""
 alert_token=""
-email=""
+recipient=""
 
 usage() {
   echo "Usage: $0 [options]"
   echo "Options:"
   echo "  --logging=TOKEN   Slack webhook token for success notifications"
   echo "  --alert=TOKEN     Slack webhook token for failure notifications"
-  echo "  --email=ADDRESS   Email address for GPG encryption (REQUIRED)"
+  echo "  --recipient=KEY   age public key for encryption (REQUIRED)"
   echo "  --silent          Run in silent mode (no notifications, for use with monitoring wrapper)"
   echo "  --help            Show this help message"
   echo ""
-  echo "For backward compatibility: $0 <logging_token> <alert_token> <upload_service> <email>"
+  echo "For backward compatibility: $0 <logging_token> <alert_token> <upload_service> <recipient>"
 }
 
 # Check if using the old argument format (for backward compatibility)
@@ -40,7 +40,7 @@ if [ "$#" -ge 4 ] && [[ $1 == T* ]] && [[ $2 == T* ]]; then
   logging_token="$1"
   alert_token="$2"
   # Ignore upload_service parameter as we now use curlbin.ignacio.systems
-  email="$4"
+  recipient="$4"
 else
   # New format with named options
   while [ $# -gt 0 ]; do
@@ -53,8 +53,8 @@ else
         alert_token="${1#--alert=}"
         shift
         ;;
-      --email=*)
-        email="${1#--email=}"
+      --recipient=*)
+        recipient="${1#--recipient=}"
         shift
         ;;
       --silent)
@@ -84,12 +84,12 @@ if [[ $alert_token == --alert=* ]]; then
 fi
 
 # Validate required arguments if not in silent mode
-if [ "$silent_mode" != "true" ] && ([ -z "$logging_token" ] || [ -z "$alert_token" ] || [ -z "$email" ]); then
+if [ "$silent_mode" != "true" ] && ([ -z "$logging_token" ] || [ -z "$alert_token" ] || [ -z "$recipient" ]); then
   log_msg "${RED}Error: Missing required arguments${NC}"
   usage
   exit 1
-elif [ "$silent_mode" == "true" ] && [ -z "$email" ]; then
-  log_msg "${RED}Error: Email address is required even in silent mode${NC}"
+elif [ "$silent_mode" == "true" ] && [ -z "$recipient" ]; then
+  log_msg "${RED}Error: Recipient public key is required even in silent mode${NC}"
   usage
   exit 1
 fi
@@ -197,11 +197,11 @@ log_msg "${GREEN}Using do_backup script: $DO_BACKUP_SCRIPT${NC}"
 if [ "$silent_mode" == "true" ]; then
   # In silent mode, we only need to pass the file and recipient
   log_msg "Running do_backup in silent mode"
-  "$DO_BACKUP_SCRIPT" --silent "$BACKUP_FILE" "$email"
+  "$DO_BACKUP_SCRIPT" --silent "$BACKUP_FILE" "$recipient"
 else
   # When not in silent mode, we need to provide the webhook tokens
   log_msg "Running do_backup with notifications"
-  "$DO_BACKUP_SCRIPT" --logging="$logging_token" --alert="$alert_token" "$BACKUP_FILE" "$email"
+  "$DO_BACKUP_SCRIPT" --logging="$logging_token" --alert="$alert_token" "$BACKUP_FILE" "$recipient"
 fi
 backup_exit_code=$?
 

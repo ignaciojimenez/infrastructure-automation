@@ -66,9 +66,25 @@
   community.general.pkgng:
     name:
       - bash
-      - gnupg
     state: present
   become: true
+
+- name: Check if age is installed
+  ansible.builtin.command: age --version
+  register: age_check
+  changed_when: false
+  failed_when: false
+
+- name: Install age encryption tool (static binary, not in OPNsense repos)
+  ansible.builtin.shell:
+    cmd: >
+      fetch -o /tmp/age.tar.gz https://github.com/FiloSottile/age/releases/download/v1.2.0/age-v1.2.0-freebsd-amd64.tar.gz
+      && tar xzf /tmp/age.tar.gz -C /tmp
+      && cp /tmp/age/age /tmp/age/age-keygen /usr/local/bin/
+      && chmod 755 /usr/local/bin/age /usr/local/bin/age-keygen
+      && rm -rf /tmp/age /tmp/age.tar.gz
+  become: true
+  when: age_check.rc != 0
 
 - name: Configure OPNsense monitoring cron jobs
   ansible.builtin.cron:
@@ -168,7 +184,7 @@
       --notify-fixed=true
       {{ logging_token }}
       {{ alert_token }}
-      {{ scripts_dir }}/backup_opnsense.sh --silent --email={{ git_mail }}
+      {{ scripts_dir }}/backup_opnsense.sh --silent --recipient={{ backup_age_pubkey }}
       >> {{ logs_dir }}/opnsense_config_backup.log 2>&1
     user: "{{ infrastructure_user }}"
   become: true
@@ -176,4 +192,4 @@
   when:
     - logging_token is defined and logging_token != ''
     - alert_token is defined and alert_token != ''
-    - git_mail is defined and git_mail != ''
+    - backup_age_pubkey is defined and backup_age_pubkey != ''
