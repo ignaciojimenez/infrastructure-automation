@@ -13,6 +13,14 @@
     update_cache: true
   tags: [docker, packages]
 
+- name: Validate Docker GPG key URL uses HTTPS
+  ansible.builtin.assert:
+    that:
+      - "(docker_key_url | default('https://download.docker.com/linux/raspbian/gpg')) is match('^https://')"
+    fail_msg: "docker_key_url must use https://"
+  when: docker_key_url is defined
+  tags: [docker]
+
 - name: Download Docker GPG key
   become: true
   ansible.builtin.get_url:

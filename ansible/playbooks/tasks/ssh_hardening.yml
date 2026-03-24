@@ -1,6 +1,14 @@
 ---
 # SSH Hardening - Migrated from raspberrypi-ansible
 
+- name: Validate gh_keys uses HTTPS
+  ansible.builtin.assert:
+    that:
+      - "gh_keys is match('^https://')"
+    fail_msg: "gh_keys must use https:// — got: {{ gh_keys }}"
+  when: gh_keys is defined
+  tags: [ssh, keys]
+
 - name: Fetch authorized keys from GitHub
   ansible.builtin.uri:
     url: "{{ gh_keys }}"

@@ -36,6 +36,14 @@
     group: root
   tags: [pihole, config]
 
+- name: Validate Pi-hole install URL uses HTTPS
+  ansible.builtin.assert:
+    that:
+      - "(pihole_install_url | default('https://install.pi-hole.net')) is match('^https://')"
+    fail_msg: "pihole_install_url must use https://"
+  when: pihole_install_url is defined
+  tags: [pihole, install]
+
 - name: Download Pi-hole installation script
   ansible.builtin.get_url:
     url: "{{ pihole_install_url | default('https://install.pi-hole.net') }}"

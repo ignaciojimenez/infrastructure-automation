@@ -47,6 +47,14 @@
     group: root
   tags: [plex, repository]
 
+- name: Validate Plex signing key URL uses HTTPS
+  ansible.builtin.assert:
+    that:
+      - "(plex_key_url | default('https://downloads.plex.tv/plex-keys/PlexSign.v2.key')) is match('^https://')"
+    fail_msg: "plex_key_url must use https://"
+  when: plex_key_url is defined
+  tags: [plex, repository]
+
 - name: Download Plex v2 signing key (ASCII-armored)
   become: true
   ansible.builtin.get_url:
