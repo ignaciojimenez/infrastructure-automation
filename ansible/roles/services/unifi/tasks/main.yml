@@ -200,6 +200,31 @@
     user: "{{ primary_user }}"
   tags: [unifi, backup, cron]
 
+- name: Deploy UniFi backup freshness heartbeat
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/../../scripts/common/heartbeat_backup.sh"
+    dest: "{{ scripts_dir }}/monitoring/heartbeat_backup_unifi.sh"
+    owner: "{{ primary_user }}"
+    group: "{{ primary_user }}"
+    mode: '0755'
+  vars:
+    backup_heartbeat_name: "UniFi backup"
+    backup_healthcheck_url: "{{ vault_healthcheck_backup_unifi }}"
+    backup_state_file: "/home/{{ primary_user }}/.log/backup_unifi.json"
+    backup_max_age_minutes: 1560
+  when: vault_healthcheck_backup_unifi is defined
+  tags: [unifi, backup, monitoring]
+
+- name: Configure UniFi backup freshness heartbeat cron
+  ansible.builtin.cron:
+    name: "Healthchecks.io - UniFi backup freshness"
+    minute: "30"
+    hour: "*/2"
+    job: "{{ scripts_dir }}/monitoring/heartbeat_backup_unifi.sh"
+    user: "{{ primary_user }}"
+  when: vault_healthcheck_backup_unifi is defined
+  tags: [unifi, backup, monitoring, cron]
+
 # Note: System health check is handled by the monitoring role (deploy_monitoring.yml)
 # No need to duplicate it here
 

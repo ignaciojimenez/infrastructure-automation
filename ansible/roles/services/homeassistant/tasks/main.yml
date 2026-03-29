@@ -364,6 +364,31 @@
     - alert_token is defined and alert_token != ''
   tags: [homeassistant, backup, cron]
 
+- name: Deploy Home Assistant backup freshness heartbeat
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/../../scripts/common/heartbeat_backup.sh"
+    dest: "{{ scripts_dir }}/monitoring/heartbeat_backup_ha.sh"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0755'
+  vars:
+    backup_heartbeat_name: "Home Assistant backup"
+    backup_healthcheck_url: "{{ vault_healthcheck_backup_ha }}"
+    backup_state_file: "/home/{{ ansible_user }}/.log/backup_last_mod.json"
+    backup_max_age_minutes: 1560
+  when: vault_healthcheck_backup_ha is defined
+  tags: [homeassistant, backup, monitoring]
+
+- name: Configure Home Assistant backup freshness heartbeat cron
+  ansible.builtin.cron:
+    name: "Healthchecks.io - Home Assistant backup freshness"
+    minute: "30"
+    hour: "*/2"
+    job: "{{ scripts_dir }}/monitoring/heartbeat_backup_ha.sh"
+    user: "{{ ansible_user }}"
+  when: vault_healthcheck_backup_ha is defined
+  tags: [homeassistant, backup, monitoring, cron]
+
 - name: Configure Home Assistant update cron job
   ansible.builtin.cron:
     name: "Home Assistant update"

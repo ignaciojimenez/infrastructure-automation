@@ -78,6 +78,32 @@
     - alert_token is defined and alert_token != ''
     - backup_age_pubkey is defined and backup_age_pubkey != ''
 
+- name: Deploy Proxmox backup freshness heartbeat
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/../../scripts/common/heartbeat_backup.sh"
+    dest: "{{ scripts_dir }}/monitoring/heartbeat_backup_proxmox.sh"
+    owner: "{{ infrastructure_user }}"
+    group: "{{ infrastructure_group }}"
+    mode: '0755'
+  become: true
+  vars:
+    backup_heartbeat_name: "Proxmox backup"
+    backup_healthcheck_url: "{{ vault_healthcheck_backup_proxmox }}"
+    backup_state_file: "/home/{{ infrastructure_user }}/.log/backup_proxmox_config.sh.json"
+    backup_max_age_minutes: 10320
+  when: vault_healthcheck_backup_proxmox is defined
+
+- name: Configure Proxmox backup freshness heartbeat cron
+  ansible.builtin.cron:
+    name: "Healthchecks.io - Proxmox backup freshness"
+    minute: "30"
+    hour: "*/2"
+    job: "{{ scripts_dir }}/monitoring/heartbeat_backup_proxmox.sh"
+    user: "{{ infrastructure_user }}"
+  become: true
+  become_user: "{{ infrastructure_user }}"
+  when: vault_healthcheck_backup_proxmox is defined
+
 # --- Monitoring ---
 
 - name: Deploy VM/CT configuration file

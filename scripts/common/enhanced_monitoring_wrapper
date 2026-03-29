@@ -308,6 +308,9 @@ if [ -z "$STATE_FILE" ]; then
   STATE_FILE="$STATE_DIR/${STATE_NAME}.json"
 fi
 
+# Ensure state directory exists
+mkdir -p "$(dirname "$STATE_FILE")"
+
 # Initialize state file if it doesn't exist
 if [ ! -f "$STATE_FILE" ]; then
   echo '{"last_notification": "never", "last_status": "unknown", "last_success_notification": "never"}' > "$STATE_FILE"

@@ -1,35 +1,12 @@
 # Infrastructure TODO — Prioritized Action List
 
-Updated: 2026-03-23 | Validated against live hosts
+Updated: 2026-03-28 | Validated against live hosts
 
 This document is the single source of truth for pending infrastructure work.
 Each item includes verified current state, concrete next steps, and acceptance criteria.
 Items are ordered by risk × effort — highest-impact, most-actionable items first.
 
 ---
-
-## Priority 3 — Backup Freshness Monitoring
-
-**Risk:** Backups are now automated, but there is no alerting if they silently fail. The `enhanced_monitoring_wrapper` catches script failures via Slack, but if the cron itself doesn't fire (host rebooted, crontab corrupted), there is zero visibility.
-
-### Verified State (2026-03-22)
-- No backup age monitoring exists for any host
-- All backups upload to curlbin — success/failure is only visible via Slack notifications from `enhanced_monitoring_wrapper`
-- If the cron doesn't fire or the wrapper itself crashes, there is zero visibility
-
-### Recommended Approach: healthchecks.io Backup Heartbeats
-Add a healthchecks.io ping at the end of each successful backup. Healthchecks.io natively supports expected schedules — set "expect daily" with a grace period, and it alerts (via email/push) if the ping never comes. This catches silent cron failures, host reboots, and broken backup scripts — and works even when Slack itself is down.
-
-### Next Steps
-1. Create 5 healthchecks.io checks (one per backup host: HA daily, OPNsense daily, Proxmox weekly, Plex weekly, UniFi daily)
-2. Add vault variables (`vault_healthcheck_backup_*`) for each check URL
-3. Append `&& curl -fsS -m 10 "$HC_URL"` to each backup cron job (or create small heartbeat wrappers)
-4. Configure expected periods and grace on healthchecks.io (daily: 24h period + 6h grace, weekly: 7d + 2d)
-
-### Acceptance Criteria
-- [ ] Each backup host has a healthchecks.io check with correct expected period
-- [ ] Successful backup triggers a ping; missed backup triggers healthchecks.io alert
-- [ ] Alert channel is independent of Slack (email or push notification)
 
 ---
 
@@ -240,6 +217,7 @@ Add a healthchecks.io ping at the end of each successful backup. Healthchecks.io
 
 ## Resolved Items
 
+- **Backup Freshness Monitoring** — Completed 2026-03-28. Added `heartbeat_backup.sh` reusable template in `scripts/common/`, deployed as standalone heartbeat scripts (one per backup host) following the existing healthchecks.io pattern. Each checks the `enhanced_monitoring_wrapper` state file for recent success, pings healthchecks.io every 2 hours. 5 checks: HA/OPNsense/UniFi daily (26h max age), Proxmox/Plex weekly (172h max age). Independent of Slack — catches silent cron failures, host reboots, and broken scripts.
 - **Backup Encryption Portability (GPG → age)** — Completed 2026-03-23. Migrated all 5 backup pipelines from GPG asymmetric to age asymmetric encryption. Decision: age keypair chosen over GPG (complex recovery), age passphrase (symmetric = security downgrade), openssl enc (no AEAD), and age+SSH keys (incompatible with Secretive). Recovery path: `brew install age` + paste one-line secret key from password manager → decrypt. Old `.gpg` backups remain decryptable with the GPG key.
 - **Backup Automation (OPNsense + Proxmox)** — Completed 2026-03-22. Both scripts deployed via Ansible cron (OPNsense daily 04:15, Proxmox weekly 04:00), first backups verified in curlbin. Recovery guide: `docs/BACKUP_AND_RECOVERY.md`.
 - **VPN Country Switcher UUIDs** — All 4 UUIDs verified in `/conf/config.xml`. Script functional.
@@ -368,7 +346,6 @@ These items have value but are not urgent. Revisit quarterly.
 - **Mullvad DoT Fallback** — Encrypting DNS during full VPN outage. Low urgency with 4-tunnel architecture; full VPN outage is rare. Would only affect the Cloudflare fallback path.
 - **Certificate Expiration Monitoring** — Monitor Proxmox + OPNsense web certs. Low effort, medium value. Alert at 30 days warning, 7 days critical.
 - **SMART Disk Health Monitoring** — Predict disk failures on Proxmox (ZFS) and cobra (media storage). Low effort, medium value.
-- **Eve Sensor Matter Pairing** — Prerequisites met (Matter Server deployed, batteries replaced). Manual pairing process via Apple Home.
 - **Full Infrastructure as Code (Proxmox/OPNsense)** — High complexity for rarely-changing configs. Good config backups (Priority 1) may be sufficient.
 - **Cobra Media Config Consolidation** — Merge separate cobra repo into media role. Cosmetic improvement.
-- **Tidal Receiver on hifipi** — Add Tidal Connect receiver alongside existing Shairport/Raspotify. Never been necessary; hifipi already covers AirPlay and Spotify Connect. Low effort if a good open-source receiver emerges.
+- **Tidal and Qobuz Receiver on hifipi** — Add Tidal and Qobuz receiver alongside existing Shairport/Raspotify. Never been necessary; hifipi already covers AirPlay and Spotify Connect. Low effort if a good open-source receiver emerges.

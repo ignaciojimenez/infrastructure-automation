@@ -174,3 +174,28 @@
     - alert_token is defined and alert_token != ''
     - backup_age_pubkey is defined and backup_age_pubkey != ''
   tags: [plex, backup, cron]
+
+- name: Deploy Plex backup freshness heartbeat
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/../../scripts/common/heartbeat_backup.sh"
+    dest: "{{ scripts_dir }}/monitoring/heartbeat_backup_plex.sh"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0755'
+  vars:
+    backup_heartbeat_name: "Plex backup"
+    backup_healthcheck_url: "{{ vault_healthcheck_backup_plex }}"
+    backup_state_file: "/home/{{ ansible_user }}/.log/backup_plex_config.json"
+    backup_max_age_minutes: 10320
+  when: vault_healthcheck_backup_plex is defined
+  tags: [plex, backup, monitoring]
+
+- name: Configure Plex backup freshness heartbeat cron
+  ansible.builtin.cron:
+    name: "Healthchecks.io - Plex backup freshness"
+    minute: "30"
+    hour: "*/2"
+    job: "{{ scripts_dir }}/monitoring/heartbeat_backup_plex.sh"
+    user: "{{ ansible_user }}"
+  when: vault_healthcheck_backup_plex is defined
+  tags: [plex, backup, monitoring, cron]

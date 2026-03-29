@@ -193,3 +193,29 @@
     - logging_token is defined and logging_token != ''
     - alert_token is defined and alert_token != ''
     - backup_age_pubkey is defined and backup_age_pubkey != ''
+
+- name: Deploy OPNsense backup freshness heartbeat
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/../../scripts/common/heartbeat_backup.sh"
+    dest: "{{ scripts_dir }}/monitoring/heartbeat_backup_opnsense.sh"
+    owner: "{{ infrastructure_user }}"
+    group: wheel
+    mode: '0755'
+  become: true
+  vars:
+    backup_heartbeat_name: "OPNsense backup"
+    backup_healthcheck_url: "{{ vault_healthcheck_backup_opnsense }}"
+    backup_state_file: "/home/{{ infrastructure_user }}/.log/backup_opnsense.sh.json"
+    backup_max_age_minutes: 1560
+  when: vault_healthcheck_backup_opnsense is defined
+
+- name: Configure OPNsense backup freshness heartbeat cron
+  ansible.builtin.cron:
+    name: "Healthchecks.io - OPNsense backup freshness"
+    minute: "30"
+    hour: "*/2"
+    job: "{{ scripts_dir }}/monitoring/heartbeat_backup_opnsense.sh"
+    user: "{{ infrastructure_user }}"
+  become: true
+  become_user: "{{ infrastructure_user }}"
+  when: vault_healthcheck_backup_opnsense is defined

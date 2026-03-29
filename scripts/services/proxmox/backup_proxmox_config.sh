@@ -90,7 +90,7 @@ log_msg "Starting Proxmox configuration backup"
 
 # Create temp directory for collecting configs
 TEMP_DIR=$(mktemp -d)
-trap "rm -rf $TEMP_DIR $BACKUP_FILE 2>/dev/null" EXIT
+trap 'case "$TEMP_DIR" in /tmp/tmp.*) sudo rm -rf "$TEMP_DIR" 2>/dev/null;; esac; rm -f "$BACKUP_FILE" 2>/dev/null' EXIT
 
 # Collect Proxmox configs
 log_msg "Collecting /etc/pve/ configurations..."
