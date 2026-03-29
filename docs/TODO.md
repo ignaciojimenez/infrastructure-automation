@@ -215,19 +215,6 @@ Items are ordered by risk × effort — highest-impact, most-actionable items fi
 
 ---
 
-## Resolved Items
-
-- **Backup Freshness Monitoring** — Completed 2026-03-28. Added `heartbeat_backup.sh` reusable template in `scripts/common/`, deployed as standalone heartbeat scripts (one per backup host) following the existing healthchecks.io pattern. Each checks the `enhanced_monitoring_wrapper` state file for recent success, pings healthchecks.io every 2 hours. 5 checks: HA/OPNsense/UniFi daily (26h max age), Proxmox/Plex weekly (172h max age). Independent of Slack — catches silent cron failures, host reboots, and broken scripts.
-- **Backup Encryption Portability (GPG → age)** — Completed 2026-03-23. Migrated all 5 backup pipelines from GPG asymmetric to age asymmetric encryption. Decision: age keypair chosen over GPG (complex recovery), age passphrase (symmetric = security downgrade), openssl enc (no AEAD), and age+SSH keys (incompatible with Secretive). Recovery path: `brew install age` + paste one-line secret key from password manager → decrypt. Old `.gpg` backups remain decryptable with the GPG key.
-- **Backup Automation (OPNsense + Proxmox)** — Completed 2026-03-22. Both scripts deployed via Ansible cron (OPNsense daily 04:15, Proxmox weekly 04:00), first backups verified in curlbin. Recovery guide: `docs/BACKUP_AND_RECOVERY.md`.
-- **VPN Country Switcher UUIDs** — All 4 UUIDs verified in `/conf/config.xml`. Script functional.
-- **Plex on Cobra** — Active since 2026-03-15. Monitoring and backup crons deployed.
-- **DNS Resilience** — 4-tunnel Mullvad + Cloudflare fallback operational. Failover every minute, health check every 5 minutes.
-- **Tado SQLite migration** — Completed (commit `a7f6221`). Uses HA REST API. Not yet deployed on host (see Priority 6).
-- **vinylstreamer liquidsoap inactive** — Expected. Runs only during active streaming sessions.
-
----
-
 ## Priority 10 — TADO/HA Presence Notification Elegance
 
 **Risk:** Cosmetic — no functional impact. Current behavior sends two contradictory Slack notifications when user is nearby (~500m from home): HA fires "AWAY mode activated" after 10min debounce, then `tado_presence.sh` fires "TADO says device still home, skipping AWAY". Expected behavior producing confusing double-alerts.
@@ -337,7 +324,7 @@ Restructure the away automation to defer the Slack notification until after the 
 
 ---
 
-## Deferred / Low Priority
+## Lower Priority
 
 These items have value but are not urgent. Revisit quarterly.
 
@@ -349,3 +336,17 @@ These items have value but are not urgent. Revisit quarterly.
 - **Full Infrastructure as Code (Proxmox/OPNsense)** — High complexity for rarely-changing configs. Good config backups (Priority 1) may be sufficient.
 - **Cobra Media Config Consolidation** — Merge separate cobra repo into media role. Cosmetic improvement.
 - **Tidal and Qobuz Receiver on hifipi** — Add Tidal and Qobuz receiver alongside existing Shairport/Raspotify. Never been necessary; hifipi already covers AirPlay and Spotify Connect. Low effort if a good open-source receiver emerges.
+
+---
+
+
+## Resolved Items
+
+- **Backup Freshness Monitoring** — Completed 2026-03-28. Added `heartbeat_backup.sh` reusable template in `scripts/common/`, deployed as standalone heartbeat scripts (one per backup host) following the existing healthchecks.io pattern. Each checks the `enhanced_monitoring_wrapper` state file for recent success, pings healthchecks.io every 2 hours. 5 checks: HA/OPNsense/UniFi daily (26h max age), Proxmox/Plex weekly (172h max age). Independent of Slack — catches silent cron failures, host reboots, and broken scripts.
+- **Backup Encryption Portability (GPG → age)** — Completed 2026-03-23. Migrated all 5 backup pipelines from GPG asymmetric to age asymmetric encryption. Decision: age keypair chosen over GPG (complex recovery), age passphrase (symmetric = security downgrade), openssl enc (no AEAD), and age+SSH keys (incompatible with Secretive). Recovery path: `brew install age` + paste one-line secret key from password manager → decrypt. Old `.gpg` backups remain decryptable with the GPG key.
+- **Backup Automation (OPNsense + Proxmox)** — Completed 2026-03-22. Both scripts deployed via Ansible cron (OPNsense daily 04:15, Proxmox weekly 04:00), first backups verified in curlbin. Recovery guide: `docs/BACKUP_AND_RECOVERY.md`.
+- **VPN Country Switcher UUIDs** — All 4 UUIDs verified in `/conf/config.xml`. Script functional.
+- **Plex on Cobra** — Active since 2026-03-15. Monitoring and backup crons deployed.
+- **DNS Resilience** — 4-tunnel Mullvad + Cloudflare fallback operational. Failover every minute, health check every 5 minutes.
+- **Tado SQLite migration** — Completed (commit `a7f6221`). Uses HA REST API. Not yet deployed on host (see Priority 6).
+- **vinylstreamer liquidsoap inactive** — Expected. Runs only during active streaming sessions.
