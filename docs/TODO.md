@@ -10,20 +10,6 @@ Items are ordered by risk × effort — highest-impact, most-actionable items fi
 
 ---
 
-## ~~Priority 4 — Proxmox USB Recovery Kit + Backup Restore Testing~~ RESOLVED
-
-**Resolved:** 2026-03-30
-
-- 128GB USB drive at `/mnt/usb-recovery`, syncing weekly (Sunday 05:00) via `sync_usb_recovery.sh`
-- Two-generation rotation (`current/` + `previous/`), RECOVERY.txt checklist, MANIFEST.txt with checksums
-- Removed stopped LXC 102 (pihole) from vzdump schedule, reclaimed ~7.6G
-- Monitoring: Slack alerts via enhanced_monitoring_wrapper, healthchecks.io heartbeat (pending: create check and add `vault_healthcheck_backup_usb_recovery` to vault)
-- First restore test passed: UniFi LXC 101 vzdump → temporary CT 999, filesystem verified intact
-- Finding: LXC restores require `--storage local-zfs` (not `local`) — documented in RECOVERY.txt and BACKUP_AND_RECOVERY.md
-- See `docs/RESTORE_TEST_LOG.md` for test results
-
----
-
 ## Priority 5 — OPNsense Ansible Consolidation
 
 **Risk:** Tech debt, not active breakage. Legacy scripts and a legacy playbook file coexist with the current role-based deployment. The legacy cron section has `enable_cron_monitoring | default(false)` so it won't fire accidentally, but the 9 old scripts waste disk space and 2 manual cron entries lack the `#Ansible:` prefix.
@@ -315,6 +301,7 @@ These items have value but are not urgent. Revisit quarterly.
 
 ## Resolved Items
 
+- **Proxmox USB Recovery Kit + Backup Restore Testing** — Completed 2026-03-30. 128GB USB drive at `/mnt/usb-recovery`, syncing weekly (Sunday 05:00) via `sync_usb_recovery.sh`. Two-generation rotation (`current/` + `previous/`), RECOVERY.txt checklist, MANIFEST.txt with checksums. First restore test passed: UniFi LXC 101 vzdump → temporary CT 999, filesystem verified intact. LXC restores require `--storage local-zfs` — documented in RECOVERY.txt and BACKUP_AND_RECOVERY.md.
 - **Backup Freshness Monitoring** — Completed 2026-03-28. Added `heartbeat_backup.sh` reusable template in `scripts/common/`, deployed as standalone heartbeat scripts (one per backup host) following the existing healthchecks.io pattern. Each checks the `enhanced_monitoring_wrapper` state file for recent success, pings healthchecks.io every 2 hours. 5 checks: HA/OPNsense/UniFi daily (26h max age), Proxmox/Plex weekly (172h max age). Independent of Slack — catches silent cron failures, host reboots, and broken scripts.
 - **Backup Encryption Portability (GPG → age)** — Completed 2026-03-23. Migrated all 5 backup pipelines from GPG asymmetric to age asymmetric encryption. Decision: age keypair chosen over GPG (complex recovery), age passphrase (symmetric = security downgrade), openssl enc (no AEAD), and age+SSH keys (incompatible with Secretive). Recovery path: `brew install age` + paste one-line secret key from password manager → decrypt. Old `.gpg` backups remain decryptable with the GPG key.
 - **Backup Automation (OPNsense + Proxmox)** — Completed 2026-03-22. Both scripts deployed via Ansible cron (OPNsense daily 04:15, Proxmox weekly 04:00), first backups verified in curlbin. Recovery guide: `docs/BACKUP_AND_RECOVERY.md`.
