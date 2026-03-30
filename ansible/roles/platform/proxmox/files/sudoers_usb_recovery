@@ -1,0 +1,4 @@
+# Allow choco user to run USB recovery sync without password
+# This file should be placed in /etc/sudoers.d/usb_recovery
+
+choco ALL=(ALL) NOPASSWD: /usr/local/bin/usb_recovery_helper *

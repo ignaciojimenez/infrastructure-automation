@@ -12,6 +12,7 @@ Complete reference for what is backed up, where backups live, and how to recover
 | cobra | Plex config (Preferences, Plug-ins) | Every 7 days | 04:00 | `backup_plex_config` | Latest per upload |
 | unifi-lxc | UniFi `.unf` autobackup | Daily | 03:00 | `backup_unifi` | Latest per upload |
 | proxmox | `/etc/pve/` + host configs | Every 7 days | 04:00 | `backup_proxmox_config.sh` | Latest per upload |
+| proxmox | vzdump snapshots (VM 100, LXC 101) → USB | Weekly (Sunday) | 05:00 | `sync_usb_recovery.sh` | 2 generations on USB |
 | opnsense | `/conf/config.xml` | Daily | 04:15 | `backup_opnsense.sh` | Latest per upload |
 | hifipi | — | — | — | Pure IaC, no unique state | — |
 | vinylstreamer | — | — | — | Pure IaC, no unique state | — |
@@ -189,6 +190,53 @@ Ordered by rebuild complexity (highest risk first).
 
 ---
 
+## USB Recovery Drive
+
+A 128GB ext4 USB drive mounted at `/mnt/usb-recovery` on the Proxmox host provides fast-path recovery for the "NVMe died" scenario. This supplements (does not replace) the curlbin offsite backups.
+
+**Contents:**
+- `current/` — Latest vzdump snapshots for each active guest + `/etc/pve/` backup
+- `previous/` — Previous week's copy (fallback if current is corrupt)
+- `RECOVERY.txt` — Standalone recovery checklist with actual commands
+- `MANIFEST.txt` — File sizes and MD5 checksums for integrity verification
+
+**Schedule:** Weekly (Sunday 05:00), after vzdump (03:00) and Proxmox config backup (04:00) complete.
+
+**Monitoring:** Slack alerts via `enhanced_monitoring_wrapper` on every sync. Backup freshness heartbeat via healthchecks.io (172h max age, checked every 2 hours).
+
+**How it works:** The `sync_usb_recovery.sh` script calls a root-owned `usb_recovery_helper` that mounts the USB, rotates `current/` → `previous/`, rsyncs the latest vzdump per guest, copies `/etc/pve/`, writes a manifest with checksums, and unmounts. If the USB is disconnected, the mount fails and the monitoring wrapper fires a Slack alert.
+
+**Restoring from USB:** See `RECOVERY.txt` on the drive itself, or the Proxmox recovery procedure above. Key commands:
+```bash
+# Mount USB
+mount /dev/sdX1 /mnt/usb
+
+# Restore VM (OPNsense)
+qmrestore /mnt/usb/current/100/vzdump-qemu-100-*.vma.zst 100
+
+# Restore LXC (UniFi) — note: must use local-zfs, not local
+pct restore 101 /mnt/usb/current/101/vzdump-lxc-101-*.tar.zst --storage local-zfs
+```
+
+**Limitation:** USB is physically co-located with the NVMe. A catastrophic event (fire, theft) loses both. The curlbin offsite backups remain the true disaster recovery path.
+
+---
+
+## Quarterly Restore Testing
+
+Every quarter, pick one backup and test the full restore chain: download/locate → decrypt (if curlbin) → restore → verify.
+
+| Quarter | Host | What to Test |
+|---------|------|-------------|
+| Q2 2026 | unifi-lxc | USB vzdump → temporary LXC (pct restore 999) |
+| Q3 2026 | dockassist | curlbin HA backup → decrypt → inspect contents |
+| Q4 2026 | opnsense | USB vzdump → temporary VM (qmrestore 999) |
+| Q1 2027 | cobra | curlbin Plex backup → decrypt → inspect contents |
+
+Results are logged in `docs/RESTORE_TEST_LOG.md`.
+
+---
+
 ## Known Gaps and Accepted Risks
 
 | Gap | Impact | Mitigation |
@@ -198,19 +246,22 @@ Ordered by rebuild complexity (highest risk first).
 | **Backup URLs only in Slack** | If Slack notification is missed, URL is gone — IDs are random and not discoverable | `do_backup` also logs URLs to `/tmp/backup_url_*.txt` on the source host, but this is volatile |
 | **Tado OAuth tokens** | Need re-auth on dockassist rebuild | Recoverable via `tado_setup.sh` (interactive OAuth2 flow) |
 | **curlbin single point of failure** | If curlbin is down, uploads fail | `do_backup` saves local fallback to `/tmp/backup_*.age`; 3 retries with 5s delay |
-| **No backup freshness monitoring** | Silent backup failures go undetected | Priority 3 in TODO: implement `check_backup_freshness.sh` |
 | **Plex library metadata** not backed up | Watch history and library scan data lost on rebuild | Re-scan from media files; metadata re-fetched from Plex servers |
+| **USB + NVMe co-located** | Catastrophic event (fire, theft) loses both USB and NVMe | curlbin offsite backups remain the true DR path; USB is fast-path for drive failure only |
+| **vzdump schedule not Ansible-managed** | Must reconfigure manually after Proxmox rebuild | Documented in USB recovery checklist (`RECOVERY.txt`) and this guide |
 
 ---
 
 ## Backup Schedule Overview
 
 ```
+03:00  proxmox      vzdump VM/LXC snapshots (daily, Proxmox-managed)
 03:00  unifi-lxc    UniFi backup (daily)
 04:00  dockassist   Home Assistant backup (daily)
 04:00  cobra        Plex config backup (every 7 days)
 04:00  proxmox      Proxmox config backup (every 7 days)
 04:15  opnsense     OPNsense config backup (daily)
+05:00  proxmox      USB recovery sync (Sunday)
 ```
 
-Staggered to avoid concurrent curlbin uploads.
+Curlbin uploads are staggered to avoid concurrency. USB sync runs after all backups complete.

@@ -124,3 +124,13 @@ Simple log of key technical decisions made in this project.
   - Each HA update leaves ~2GB of old images behind
   - Weekly schedule balances cleanup frequency vs unnecessary runs
   - Use `special_time: "weekly"` in Ansible cron tasks (not `cron_day` which is day-of-month)
+
+## Backup Strategy
+
+- **age encryption (asymmetric)** — Public key on all hosts, private key in password manager only. Hosts can encrypt without ever seeing the secret key.
+- **curlbin as offsite storage** — Simple HTTP upload/download. Encrypted backups are safe on any public endpoint.
+- **USB recovery drive is supplement, not replacement** — Fast-path for "NVMe died" scenario only. curlbin offsite backups remain the primary disaster recovery path. USB and NVMe are co-located — catastrophic event loses both.
+- **Mount-on-demand for USB** — fstab `nofail,x-systemd.automount` prevents boot dependency. Script mounts/unmounts around each sync. Disconnection triggers Slack alert via enhanced_monitoring_wrapper failure.
+- **Two-generation rotation on USB** — `current/` and `previous/` directories. Protects against copying a corrupt vzdump while fitting within drive capacity.
+- **Root-owned helper for privileged USB operations** — Follows `pve_backup_helper` pattern. Keeps sudoers rules minimal and auditable. One helper script = one sudoers entry.
+- **vzdump schedule is Proxmox-managed, not Ansible** — Proxmox UI/API manages `/etc/pve/jobs.cfg`. Accepted trade-off: simpler than fighting Proxmox's own scheduler, but must be manually reconfigured after a rebuild (documented in USB recovery checklist).

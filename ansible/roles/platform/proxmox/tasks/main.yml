@@ -104,6 +104,122 @@
   become_user: "{{ infrastructure_user }}"
   when: vault_healthcheck_backup_proxmox is defined
 
+# --- USB Recovery Drive ---
+
+- name: Create USB recovery mount point
+  ansible.builtin.file:
+    path: /mnt/usb-recovery
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  become: true
+  when: enable_usb_recovery | default(false)
+
+- name: Configure USB recovery drive in fstab
+  ansible.builtin.lineinfile:
+    path: /etc/fstab
+    regexp: '/mnt/usb-recovery'
+    line: "UUID={{ usb_recovery_uuid }} /mnt/usb-recovery ext4 defaults,noatime,nofail,x-systemd.automount,x-systemd.device-timeout=10 0 2"
+    state: present
+  become: true
+  when:
+    - enable_usb_recovery | default(false)
+    - usb_recovery_uuid is defined
+
+- name: Deploy USB recovery helper script (root-owned)
+  ansible.builtin.copy:
+    src: usb_recovery_helper
+    dest: /usr/local/bin/usb_recovery_helper
+    owner: root
+    group: root
+    mode: '0755'
+  become: true
+  when: enable_usb_recovery | default(false)
+
+- name: Configure sudoers for USB recovery
+  ansible.builtin.copy:
+    src: sudoers_usb_recovery
+    dest: /etc/sudoers.d/usb_recovery
+    owner: root
+    group: root
+    mode: '0440'
+    validate: 'visudo -cf %s'
+  become: true
+  when: enable_usb_recovery | default(false)
+
+- name: Deploy USB recovery sync script
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../scripts/services/proxmox/sync_usb_recovery.sh"
+    dest: "{{ scripts_dir }}/sync_usb_recovery.sh"
+    owner: "{{ infrastructure_user }}"
+    group: "{{ infrastructure_group }}"
+    mode: '0755'
+  become: true
+  when: enable_usb_recovery | default(false)
+
+- name: Deploy recovery checklist template
+  ansible.builtin.template:
+    src: RECOVERY.txt.j2
+    dest: "{{ scripts_dir }}/RECOVERY.txt"
+    owner: "{{ infrastructure_user }}"
+    group: "{{ infrastructure_group }}"
+    mode: '0644'
+  become: true
+  when: enable_usb_recovery | default(false)
+
+- name: Configure USB recovery sync cron job
+  ansible.builtin.cron:
+    name: "USB recovery drive sync"
+    minute: "0"
+    hour: "5"
+    weekday: "0"
+    job: >
+      {{ scripts_dir }}/enhanced_monitoring_wrapper
+      --heartbeat-interval=always
+      --notify-fixed=true
+      {{ logging_token }}
+      {{ alert_token }}
+      {{ scripts_dir }}/sync_usb_recovery.sh --silent
+      >> {{ logs_dir }}/usb_recovery_sync.log 2>&1
+    user: "{{ infrastructure_user }}"
+  become: true
+  become_user: "{{ infrastructure_user }}"
+  when:
+    - enable_usb_recovery | default(false)
+    - logging_token is defined and logging_token != ''
+    - alert_token is defined and alert_token != ''
+
+- name: Deploy USB recovery sync freshness heartbeat
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/../../scripts/common/heartbeat_backup.sh"
+    dest: "{{ scripts_dir }}/monitoring/heartbeat_backup_usb_recovery.sh"
+    owner: "{{ infrastructure_user }}"
+    group: "{{ infrastructure_group }}"
+    mode: '0755'
+  become: true
+  vars:
+    backup_heartbeat_name: "USB recovery sync"
+    backup_healthcheck_url: "{{ vault_healthcheck_backup_usb_recovery }}"
+    backup_state_file: "/home/{{ infrastructure_user }}/.log/sync_usb_recovery.sh.json"
+    backup_max_age_minutes: 10320
+  when:
+    - enable_usb_recovery | default(false)
+    - vault_healthcheck_backup_usb_recovery is defined
+
+- name: Configure USB recovery sync freshness heartbeat cron
+  ansible.builtin.cron:
+    name: "Healthchecks.io - USB recovery sync freshness"
+    minute: "45"
+    hour: "*/2"
+    job: "{{ scripts_dir }}/monitoring/heartbeat_backup_usb_recovery.sh"
+    user: "{{ infrastructure_user }}"
+  become: true
+  become_user: "{{ infrastructure_user }}"
+  when:
+    - enable_usb_recovery | default(false)
+    - vault_healthcheck_backup_usb_recovery is defined
+
 # --- Monitoring ---
 
 - name: Deploy VM/CT configuration file

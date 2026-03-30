@@ -1,0 +1,220 @@
+#!/bin/bash
+# Root-owned helper: sync vzdump snapshots and /etc/pve/ to USB recovery drive
+# Called by sync_usb_recovery.sh via sudo
+# Follows pve_backup_helper pattern: root-owned, minimal, auditable
+
+set -euo pipefail
+
+MOUNT_POINT=""
+GUEST_IDS=""
+RECOVERY_TXT=""
+VZDUMP_DIR="/var/lib/vz/dump"
+MIN_FREE_GB=20
+
+usage() {
+    echo "Usage: $0 sync --mount-point=PATH --guest-ids=ID1,ID2 [--recovery-txt=PATH]"
+    echo ""
+    echo "Syncs latest vzdump snapshots and /etc/pve/ to USB recovery drive."
+    echo "Must be run as root (via sudo)."
+    echo ""
+    echo "Options:"
+    echo "  --mount-point=PATH    USB mount point (required)"
+    echo "  --guest-ids=IDS       Comma-separated guest IDs to sync (required)"
+    echo "  --recovery-txt=PATH   Path to RECOVERY.txt to copy to USB root"
+}
+
+log_msg() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
+}
+
+die() {
+    log_msg "ERROR: $1" >&2
+    exit 1
+}
+
+# --- Argument parsing ---
+
+if [ $# -lt 1 ] || [ "$1" != "sync" ]; then
+    usage
+    exit 1
+fi
+shift
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --mount-point=*)
+            MOUNT_POINT="${1#--mount-point=}"
+            shift
+            ;;
+        --guest-ids=*)
+            GUEST_IDS="${1#--guest-ids=}"
+            shift
+            ;;
+        --recovery-txt=*)
+            RECOVERY_TXT="${1#--recovery-txt=}"
+            shift
+            ;;
+        --help)
+            usage
+            exit 0
+            ;;
+        *)
+            die "Unknown option: $1"
+            ;;
+    esac
+done
+
+[ -n "$MOUNT_POINT" ] || die "Mount point is required"
+[ -n "$GUEST_IDS" ] || die "Guest IDs are required"
+[ -d "$VZDUMP_DIR" ] || die "vzdump directory not found: $VZDUMP_DIR"
+
+# --- Mount USB ---
+
+if mountpoint -q "$MOUNT_POINT" 2>/dev/null; then
+    log_msg "USB already mounted at $MOUNT_POINT"
+else
+    log_msg "Mounting USB at $MOUNT_POINT..."
+    mount "$MOUNT_POINT" || die "Failed to mount $MOUNT_POINT — is the USB drive connected?"
+fi
+
+# Verify mount is real (not just the empty mount point directory)
+if ! mountpoint -q "$MOUNT_POINT"; then
+    die "Mount point $MOUNT_POINT is not a mounted filesystem"
+fi
+
+# --- Check available space ---
+
+avail_kb=$(df -k "$MOUNT_POINT" | tail -1 | awk '{print $4}')
+avail_gb=$((avail_kb / 1048576))
+log_msg "Available space on USB: ${avail_gb}G"
+
+if [ "$avail_gb" -lt "$MIN_FREE_GB" ]; then
+    # If previous/ exists and space is low, remove it to make room
+    if [ -d "$MOUNT_POINT/previous" ]; then
+        log_msg "Low space — removing previous/ to make room"
+        rm -rf "$MOUNT_POINT/previous"
+        avail_kb=$(df -k "$MOUNT_POINT" | tail -1 | awk '{print $4}')
+        avail_gb=$((avail_kb / 1048576))
+        log_msg "Available space after cleanup: ${avail_gb}G"
+    fi
+    if [ "$avail_gb" -lt "$MIN_FREE_GB" ]; then
+        die "Insufficient space on USB: ${avail_gb}G available, need ${MIN_FREE_GB}G"
+    fi
+fi
+
+# --- Rotate generations ---
+
+if [ -d "$MOUNT_POINT/previous" ]; then
+    log_msg "Removing previous generation..."
+    rm -rf "$MOUNT_POINT/previous"
+fi
+
+if [ -d "$MOUNT_POINT/current" ]; then
+    log_msg "Rotating current → previous..."
+    mv "$MOUNT_POINT/current" "$MOUNT_POINT/previous"
+fi
+
+mkdir -p "$MOUNT_POINT/current"
+
+# --- Sync vzdump snapshots ---
+
+IFS=',' read -ra IDS <<< "$GUEST_IDS"
+total_size=0
+files_copied=0
+
+for id in "${IDS[@]}"; do
+    id=$(echo "$id" | tr -d ' ')
+    log_msg "Processing guest $id..."
+
+    # Find latest vzdump file (newest by mtime)
+    latest=$(find "$VZDUMP_DIR" -maxdepth 1 -name "vzdump-*-${id}-*.tar.zst" -o -name "vzdump-*-${id}-*.vma.zst" -o -name "vzdump-*-${id}-*.tar.lzo" -o -name "vzdump-*-${id}-*.vma.lzo" -o -name "vzdump-*-${id}-*.tar.gz" -o -name "vzdump-*-${id}-*.vma.gz" | sort | tail -1)
+
+    if [ -z "$latest" ]; then
+        log_msg "  WARNING: No vzdump found for guest $id — skipping"
+        continue
+    fi
+
+    basename_latest=$(basename "$latest")
+    file_size=$(stat -c %s "$latest" 2>/dev/null || stat -f %z "$latest")
+    file_size_mb=$((file_size / 1048576))
+
+    mkdir -p "$MOUNT_POINT/current/$id"
+    log_msg "  Syncing $basename_latest (${file_size_mb}M)..."
+    rsync --archive --no-compress "$latest" "$MOUNT_POINT/current/$id/"
+    files_copied=$((files_copied + 1))
+    total_size=$((total_size + file_size))
+
+    # Also copy matching .log and .notes files
+    base_no_ext="${latest%%.tar.*}"
+    base_no_ext="${base_no_ext%%.vma.*}"
+    for ext in log notes; do
+        sidecar="${base_no_ext}.${ext}"
+        # Also check with original extension prefix
+        sidecar2="${latest}.${ext}"
+        for f in "$sidecar" "$sidecar2"; do
+            if [ -f "$f" ]; then
+                rsync --archive "$f" "$MOUNT_POINT/current/$id/"
+                log_msg "  Copied $(basename "$f")"
+            fi
+        done
+    done
+done
+
+if [ "$files_copied" -eq 0 ]; then
+    die "No vzdump files found for any guest — aborting"
+fi
+
+# --- Copy /etc/pve/ ---
+
+log_msg "Copying /etc/pve/..."
+mkdir -p "$MOUNT_POINT/current/etc-pve"
+cp -a /etc/pve/. "$MOUNT_POINT/current/etc-pve/"
+chmod -R a+rX "$MOUNT_POINT/current/etc-pve/"
+log_msg "  /etc/pve/ copied"
+
+# --- Copy RECOVERY.txt ---
+
+if [ -n "$RECOVERY_TXT" ] && [ -f "$RECOVERY_TXT" ]; then
+    cp "$RECOVERY_TXT" "$MOUNT_POINT/RECOVERY.txt"
+    log_msg "Copied RECOVERY.txt to USB root"
+fi
+
+# --- Write manifest ---
+
+log_msg "Writing manifest..."
+manifest="$MOUNT_POINT/current/MANIFEST.txt"
+{
+    echo "USB Recovery Sync Manifest"
+    echo "========================="
+    echo "Date: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+    echo "Host: $(hostname)"
+    echo "Proxmox: $(pveversion 2>/dev/null || echo 'unknown')"
+    echo ""
+    echo "Files:"
+    echo "------"
+    find "$MOUNT_POINT/current" -type f -not -name MANIFEST.txt | sort | while read -r f; do
+        rel=${f#"$MOUNT_POINT/current/"}
+        size=$(stat -c %s "$f" 2>/dev/null || stat -f %z "$f")
+        size_mb=$((size / 1048576))
+        echo "  $rel  (${size_mb}M)"
+    done
+    echo ""
+    echo "Checksums (MD5):"
+    echo "----------------"
+    find "$MOUNT_POINT/current" -type f -not -name MANIFEST.txt -name "vzdump-*" | sort | while read -r f; do
+        rel=${f#"$MOUNT_POINT/current/"}
+        hash=$(md5sum "$f" | awk '{print $1}')
+        echo "  $hash  $rel"
+    done
+} > "$manifest"
+
+# --- Sync and unmount ---
+
+log_msg "Syncing filesystem..."
+sync
+
+log_msg "Unmounting USB..."
+umount "$MOUNT_POINT"
+
+total_size_mb=$((total_size / 1048576))
+log_msg "Sync complete: $files_copied vzdump files copied (${total_size_mb}M total)"

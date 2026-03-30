@@ -1,0 +1,120 @@
+PROXMOX USB RECOVERY KIT
+========================
+Generated: {{ ansible_date_time.iso8601 }}
+Host: {{ inventory_hostname }} ({{ ansible_host }})
+
+This drive contains vzdump snapshots for fast VM/LXC recovery.
+For full documentation, see docs/BACKUP_AND_RECOVERY.md in the
+infrastructure-automation repository.
+
+CONTENTS OF THIS DRIVE
+----------------------
+current/          Latest vzdump snapshots + /etc/pve/ backup
+previous/         Previous week's snapshots (if available)
+RECOVERY.txt      This file
+
+Guests backed up:
+{% for host in groups['all'] %}
+{% if hostvars[host].vm_id is defined and not hostvars[host].archived | default(false) %}
+  VM {{ hostvars[host].vm_id }} — {{ host }} ({{ hostvars[host].primary_function }})
+{% endif %}
+{% endfor %}
+{% for host in groups['all'] %}
+{% if hostvars[host].container_id is defined and not hostvars[host].archived | default(false) %}
+  CT {{ hostvars[host].container_id }} — {{ host }} ({{ hostvars[host].primary_function }})
+{% endif %}
+{% endfor %}
+
+PREREQUISITES FOR RECOVERY
+---------------------------
+1. age secret key (password manager: one-line AGE-SECRET-KEY-1...)
+   - Needed ONLY for curlbin backups (service configs)
+   - NOT needed for vzdump restores from this USB drive
+2. Ansible Vault password (macOS Keychain: ansible-vault-master)
+3. SSH key (Secretive / Secure Enclave)
+4. Internet access (for curlbin service config backups + git clone)
+5. This repository: git clone the infrastructure-automation repo
+
+SCENARIO 1: NVMe DIED — FULL PROXMOX REBUILD
+----------------------------------------------
+1. Boot Proxmox installer (download from proxmox.com or use a saved ISO)
+2. Install Proxmox VE on replacement NVMe
+   - Use same network config: check current/etc-pve/ for reference
+3. Mount this USB drive:
+     mkdir -p /mnt/usb && mount /dev/sdX1 /mnt/usb
+4. Restore network configuration:
+     cp /mnt/usb/current/etc-pve/nodes/{{ ansible_hostname }}/network /etc/network/interfaces
+     ifreload -a
+5. Restore /etc/pve/ configuration:
+     CAUTION: /etc/pve/ uses pmxcfs (cluster filesystem).
+     Consult official Proxmox docs for the correct restore procedure.
+     A naive cp may not work. Typically:
+     - Copy storage.cfg, user.cfg, datacenter.cfg individually
+     - Copy VM/CT configs from nodes/{{ ansible_hostname }}/qemu-server/ and lxc/
+6. Import ZFS pools (if data disks survived):
+     zpool import -f <poolname>
+7. Restore VMs and LXCs from vzdump snapshots:
+   NOTE: LXC restores require --storage local-zfs (local dir doesn't support rootdir)
+{% for host in groups['all'] %}
+{% if hostvars[host].vm_id is defined and not hostvars[host].archived | default(false) %}
+     qmrestore /mnt/usb/current/{{ hostvars[host].vm_id }}/vzdump-qemu-{{ hostvars[host].vm_id }}-*.vma.zst {{ hostvars[host].vm_id }}
+{% endif %}
+{% endfor %}
+{% for host in groups['all'] %}
+{% if hostvars[host].container_id is defined and not hostvars[host].archived | default(false) %}
+     pct restore {{ hostvars[host].container_id }} /mnt/usb/current/{{ hostvars[host].container_id }}/vzdump-lxc-{{ hostvars[host].container_id }}-*.tar.zst --storage local-zfs
+{% endif %}
+{% endfor %}
+8. Start VMs/LXCs in order:
+   a. OPNsense FIRST (provides networking for everything else)
+   b. Then remaining containers
+9. Run Ansible to restore monitoring, backup crons, and scripts:
+     ansible-playbook ansible/playbooks/site.yml --limit proxmox
+10. Reconfigure vzdump schedule (not Ansible-managed):
+      Datacenter > Backup > Add job
+      Schedule: daily 03:00
+      Guests: {% for host in groups['all'] %}{% if hostvars[host].vm_id is defined and not hostvars[host].archived | default(false) %}{{ hostvars[host].vm_id }}{% if not loop.last %},{% endif %}{% endif %}{% endfor %}{% for host in groups['all'] %}{% if hostvars[host].container_id is defined and not hostvars[host].archived | default(false) %},{{ hostvars[host].container_id }}{% endif %}{% endfor %}
+
+      Compression: zstd, Retention: keep-daily=15, Storage: local
+
+SCENARIO 2: VM/LXC CORRUPTION (NVMe OK)
+-----------------------------------------
+Restore a single guest from this USB drive:
+  mount /dev/sdX1 /mnt/usb
+{% for host in groups['all'] %}
+{% if hostvars[host].vm_id is defined and not hostvars[host].archived | default(false) %}
+  qmrestore /mnt/usb/current/{{ hostvars[host].vm_id }}/vzdump-qemu-{{ hostvars[host].vm_id }}-*.vma.zst {{ hostvars[host].vm_id }} --force 1
+{% endif %}
+{% endfor %}
+{% for host in groups['all'] %}
+{% if hostvars[host].container_id is defined and not hostvars[host].archived | default(false) %}
+  pct restore {{ hostvars[host].container_id }} /mnt/usb/current/{{ hostvars[host].container_id }}/vzdump-lxc-{{ hostvars[host].container_id }}-*.tar.zst --force
+{% endif %}
+{% endfor %}
+
+SCENARIO 3: SERVICE CONFIG ONLY (VM/LXC OK)
+---------------------------------------------
+Service configs are backed up daily to curlbin (encrypted with age).
+URLs are posted to Slack on each backup run.
+
+To decrypt a curlbin backup:
+  curl -o backup.age "https://curlbin.ignacio.systems/FILE_ID"
+  age --decrypt -i key.txt -o backup.tar.gz backup.age
+  tar -xzf backup.tar.gz
+
+See docs/BACKUP_AND_RECOVERY.md for per-service restore procedures.
+
+VERIFYING FILE INTEGRITY
+--------------------------
+Check the MANIFEST.txt in current/ for file sizes and MD5 checksums.
+Compare with: md5sum /mnt/usb/current/<id>/vzdump-*
+
+BACKUP SCHEDULE REFERENCE
+---------------------------
+03:00  vzdump (daily) — VM/LXC snapshots to /var/lib/vz/dump/
+03:00  UniFi backup (daily) — .unf to curlbin
+04:00  Home Assistant backup (daily) — .tar.gz to curlbin
+04:00  Proxmox config backup (weekly) — /etc/pve/ to curlbin
+04:00  Plex config backup (weekly) — Preferences to curlbin
+04:15  OPNsense backup (daily) — config.xml to curlbin
+05:00  USB recovery sync (Sunday) — vzdump + /etc/pve/ to this drive

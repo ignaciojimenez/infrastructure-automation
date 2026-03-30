@@ -1,6 +1,6 @@
 # Infrastructure TODO — Prioritized Action List
 
-Updated: 2026-03-28 | Validated against live hosts
+Updated: 2026-03-30 | Validated against live hosts
 
 This document is the single source of truth for pending infrastructure work.
 Each item includes verified current state, concrete next steps, and acceptance criteria.
@@ -10,44 +10,17 @@ Items are ordered by risk × effort — highest-impact, most-actionable items fi
 
 ---
 
-## Priority 4 — Proxmox USB Recovery Kit + Backup Restore Testing
+## ~~Priority 4 — Proxmox USB Recovery Kit + Backup Restore Testing~~ RESOLVED
 
-**Risk:** All Proxmox data — OS, VM disk images, and vzdump backups — lives on a single 512GB NVMe (`rpool`). A drive failure loses everything including the local backup copies. The offsite curlbin backups cover service configs (config.xml, .unf, HA backup), but the fast-path recovery using vzdump snapshots would be gone. Additionally, no backup has ever been test-restored.
+**Resolved:** 2026-03-30
 
-### Verified State (2026-03-22)
-- Single NVMe pool `rpool`: 254G used / 472G total
-- vzdump runs daily at 03:00 for active guests (VM 100 + LXC 101), 15-day retention — **not Ansible-managed**, configured in Proxmox `jobs.cfg`
-- Latest vzdump sizes: OPNsense VM ~12G, UniFi LXC ~1.1G
-- vzdump backups consume 201G in `/var/lib/vz/dump/` — all on the same NVMe (consider removing stopped LXC 102/pihole from vzdump schedule)
-- No offsite or separate-media copy of vzdump snapshots exists
-- No backup restore has ever been tested end-to-end
-
-### Next Steps
-
-**Part A — USB Recovery Drive**
-1. Purchase a 64GB USB drive (fits latest vzdump of each guest ×3 days + Proxmox ISO + `/etc/pve/` backup, with room to grow)
-2. Format as ext4, mount on Proxmox (e.g., `/mnt/usb-recovery`)
-3. Create a script that copies the latest vzdump for each guest + `/etc/pve/` to the USB, run weekly via cron
-4. Include Proxmox installer ISO on the drive
-5. Add a recovery checklist text file on the drive itself
-
-**Part B — Quarterly Backup Restore Test**
-1. Pick one backup (rotate through hosts each quarter)
-2. Download from curlbin, decrypt, inspect contents
-3. For vzdump: test-restore to a temporary VM/LXC on Proxmox, verify it boots
-4. Document results and any issues found
-5. First test: OPNsense config.xml restore into a throwaway VM
-
-### Acceptance Criteria
-- [ ] USB drive mounted and receiving weekly copies of latest vzdump snapshots
-- [ ] Recovery checklist on the USB drive matches `docs/BACKUP_AND_RECOVERY.md`
-- [ ] At least one backup restore test completed and documented
-
-### Notes
-- 64GB is sufficient: latest vzdump total is ~14G per snapshot, ×3 days = ~42G plus ~5G for ISOs and overhead
-- The USB is not a replacement for curlbin offsite backups — it's a fast-path for the "NVMe died, ZFS data gone" scenario
-- vzdump backup schedule is in Proxmox `jobs.cfg`, not Ansible — consider managing it via Ansible in a future iteration
-- This complements Priority 3 (freshness monitoring): freshness catches silent cron failures, this catches hardware failure of the backup medium itself
+- 128GB USB drive at `/mnt/usb-recovery`, syncing weekly (Sunday 05:00) via `sync_usb_recovery.sh`
+- Two-generation rotation (`current/` + `previous/`), RECOVERY.txt checklist, MANIFEST.txt with checksums
+- Removed stopped LXC 102 (pihole) from vzdump schedule, reclaimed ~7.6G
+- Monitoring: Slack alerts via enhanced_monitoring_wrapper, healthchecks.io heartbeat (pending: create check and add `vault_healthcheck_backup_usb_recovery` to vault)
+- First restore test passed: UniFi LXC 101 vzdump → temporary CT 999, filesystem verified intact
+- Finding: LXC restores require `--storage local-zfs` (not `local`) — documented in RECOVERY.txt and BACKUP_AND_RECOVERY.md
+- See `docs/RESTORE_TEST_LOG.md` for test results
 
 ---
 
