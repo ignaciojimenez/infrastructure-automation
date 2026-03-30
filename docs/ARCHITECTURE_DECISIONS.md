@@ -66,6 +66,11 @@ Simple log of key technical decisions made in this project.
   - Container: `unifi-lxc` (actual hostname), DNS: `unifi` (user-friendly network name)
   - Handled automatically in inventory (`ansible_host` override)
 
+## Proxmox Host Management
+
+- **Inventory keys must match real hostnames** - bootstrap.yml writes `inventory_hostname` into `/etc/hosts`; a mismatch (e.g., key `proxmox` vs real hostname `cwwk`) corrupts hostname resolution and breaks sudo/PVE API
+- **Skip hostname management for Proxmox** - Proxmox manages its own hostname for cluster/API identity; bootstrap guards hostname tasks with `when: platform_type != 'proxmox'`
+
 ## DNS Architecture (Updated November 2025)
 
 - **Unbound over PiHole** - Chose OPNsense native Unbound with blocklists instead of separate PiHole LXC

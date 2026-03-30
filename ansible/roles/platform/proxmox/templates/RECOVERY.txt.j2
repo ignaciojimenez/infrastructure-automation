@@ -69,7 +69,7 @@ SCENARIO 1: NVMe DIED — FULL PROXMOX REBUILD
    a. OPNsense FIRST (provides networking for everything else)
    b. Then remaining containers
 9. Run Ansible to restore monitoring, backup crons, and scripts:
-     ansible-playbook ansible/playbooks/site.yml --limit proxmox
+     ansible-playbook ansible/playbooks/site.yml --limit {{ inventory_hostname }}
 10. Reconfigure vzdump schedule (not Ansible-managed):
       Datacenter > Backup > Add job
       Schedule: daily 03:00

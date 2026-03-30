@@ -236,6 +236,7 @@
     - name: Update hostname
       ansible.builtin.hostname:
         name: "{{ inventory_hostname }}"
+      when: platform_type | default('') != 'proxmox'  # Proxmox manages its own hostname
       tags: [bootstrap, hostname]
 
     - name: Update /etc/hosts
@@ -244,6 +245,7 @@
         regexp: '^127\.0\.1\.1'
         line: "127.0.1.1\t{{ inventory_hostname }}"
         state: present
+      when: platform_type | default('') != 'proxmox'  # Proxmox manages its own hostname
       tags: [bootstrap, hostname]
 
     - name: Configure locale
