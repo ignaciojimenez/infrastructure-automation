@@ -218,6 +218,7 @@
     - {src: 'check_container.sh', dest: 'check_container.sh'}
     - {src: 'docker_prune.sh', dest: 'docker_prune.sh'}
     - {src: 'dockassist_monitor.sh', dest: 'dockassist_monitor.sh'}
+    - {src: 'check_tado_health.sh', dest: 'check_tado_health.sh'}
   tags: [homeassistant, monitoring]
 
 - name: Configure Docker service monitoring cron job
@@ -268,6 +269,24 @@
       {{ alert_token }}
       {{ scripts_dir }}/check_ha_web.sh
       >> {{ logs_dir }}/homeassistant_web_interface.log 2>&1
+    user: "{{ ansible_user }}"
+  when:
+    - logging_token is defined and logging_token != ''
+    - alert_token is defined and alert_token != ''
+  tags: [homeassistant, monitoring, cron]
+
+- name: Configure Tado presence health check cron job
+  ansible.builtin.cron:
+    name: "Tado presence health check"
+    minute: "*/30"
+    job: >
+      {{ scripts_dir }}/enhanced_monitoring_wrapper
+      --heartbeat-interval=daily
+      --notify-fixed=true
+      {{ logging_token }}
+      {{ alert_token }}
+      {{ scripts_dir }}/check_tado_health.sh
+      >> {{ logs_dir }}/tado_health_check.log 2>&1
     user: "{{ ansible_user }}"
   when:
     - logging_token is defined and logging_token != ''

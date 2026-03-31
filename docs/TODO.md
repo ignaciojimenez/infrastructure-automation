@@ -40,27 +40,6 @@ Items are ordered by risk × effort — highest-impact, most-actionable items fi
 
 ---
 
-## Priority 6 — Tado Health Check Ansible Integration
-
-**Risk:** `check_tado_health.sh` is the only monitoring script not managed by Ansible. If dockassist is rebuilt, this monitoring silently disappears. However, the script is not currently deployed or running, and nobody has noticed — the heating system works regardless.
-
-### Verified State (2026-03-17)
-- Script exists in repo: `scripts/services/homeassistant/check_tado_health.sh`
-- Script was migrated from SQLite to HA REST API (commit `a7f6221`, Jan 2026)
-- Script is NOT deployed on dockassist — `ls /home/choco/scripts/check_tado_health.sh` returns NOT FOUND
-- No Ansible cron entry exists for it on dockassist
-- Script checks device tracker freshness via HA REST API (person.choco, person.candela, device trackers)
-
-### Next Steps
-1. Add script deployment to homeassistant role (`ansible/roles/services/homeassistant/tasks/main.yml`)
-2. Add cron scheduling (suggest every 30 minutes, using enhanced_monitoring_wrapper)
-3. Deploy and verify script runs successfully on dockassist
-
-### Acceptance Criteria
-- [ ] Script deployed to `/home/choco/.scripts/check_tado_health.sh` on dockassist
-- [ ] Ansible cron with `#Ansible:` prefix in dockassist crontab
-- [ ] Script returns OK when Tado devices are reporting
-
 ---
 
 ## Priority 7 — Ansible Playbook CI (Syntax + Lint)
@@ -308,5 +287,6 @@ These items have value but are not urgent. Revisit quarterly.
 - **VPN Country Switcher UUIDs** — All 4 UUIDs verified in `/conf/config.xml`. Script functional.
 - **Plex on Cobra** — Active since 2026-03-15. Monitoring and backup crons deployed.
 - **DNS Resilience** — 4-tunnel Mullvad + Cloudflare fallback operational. Failover every minute, health check every 5 minutes.
-- **Tado SQLite migration** — Completed (commit `a7f6221`). Uses HA REST API. Not yet deployed on host (see Priority 6).
+- **Tado Presence Health Check** — Completed 2026-03-31. Fixed broken heredoc syntax, updated stale device tracker entity IDs (`nexuschoky`, `iphone_de_candela_2`), rewrote as POSIX sh running on host (not Docker). Deployed to `/home/choco/.scripts/check_tado_health.sh` via Ansible, cron every 30min with `enhanced_monitoring_wrapper`. Alerts on `unavailable` tracker or `unknown`/`unavailable` person entity — complements the existing HA automations that monitor Tado climate device availability.
+- **Tado SQLite migration** — Completed (commit `a7f6221`). Uses HA REST API.
 - **vinylstreamer liquidsoap inactive** — Expected. Runs only during active streaming sessions.
