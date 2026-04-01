@@ -34,6 +34,28 @@
     - monitor_dns_failover.sh
   become: true
 
+- name: Remove legacy hyphenated monitoring scripts
+  ansible.builtin.file:
+    path: "{{ scripts_dir }}/monitoring/{{ item }}"
+    state: absent
+  loop:
+    - check-crowdsec.sh
+    - check-ddns.sh
+    - check-ddns-age.sh
+    - check-disk-space.sh
+    - check-gateway.sh
+    - check-interface.sh
+    - check-memory.sh
+    - check-system-load.sh
+    - check-wg.sh
+  become: true
+
+- name: Remove legacy monitoring wrapper script
+  ansible.builtin.file:
+    path: "{{ scripts_dir }}/monitoring-wrapper.sh"
+    state: absent
+  become: true
+
 - name: Deploy common monitoring wrapper (Bash version for OPNsense)
   ansible.builtin.copy:
     src: "{{ playbook_dir }}/../../scripts/common/enhanced_monitoring_wrapper"

@@ -10,25 +10,23 @@ Items are ordered by risk × effort — highest-impact, most-actionable items fi
 
 ---
 
-## Priority 5 — OPNsense Ansible Consolidation (Partially Complete)
+## Priority 5 — Refactor `monitor_dns_failover.sh` for Wrapper Consistency
 
-**Risk:** Remaining items are tech debt cleanup, not active breakage. Core issue (unmanaged crons) is resolved.
+**Risk:** Low. The script works correctly but bypasses the `enhanced_monitoring_wrapper` pattern used by all other monitoring scripts across all hosts. It's a 244-line state machine with its own Slack alerting, local logging fallback (`/var/log/dns_failover_alerts.log`), and state file tracking (`/tmp/dns_failover_state`). Token order is reversed from the wrapper convention (alert first, logging second) — documented in the role with comments.
 
-### Completed (2026-04-01)
-- [x] All OPNsense crons now have `#Ansible:` prefix — DNS failover cron brought under Ansible management
-- [x] Manual cron comments removed from crontab
-- [x] `monitor_dns_failover.sh` added to Ansible role script deployment list
-- [x] DNS failover runs directly (not via wrapper) — it's a state machine with its own Slack alerting
+### Why It Matters
+Inconsistency makes the monitoring setup harder to reason about. Every other cron on every host uses the wrapper for Slack notifications, state tracking, and heartbeats. This is the one exception.
 
-### Remaining Items
-1. **Monitoring gap evaluation** — 2 legacy scripts have no current equivalent:
-   - `check-interface.sh` (network interface health: link status, errors, dropped packets)
-   - `check-ddns-age.sh` (DDNS update staleness, not just IP match)
-   - Decide: write new equivalents, or accept current coverage is sufficient?
-2. **Remove legacy scripts from host** — 9 hyphenated `check-*.sh` files + old `monitoring-wrapper.sh` (only after gap evaluation)
-3. **Remove dead playbook** — `ansible/playbooks/tasks/opnsense_monitoring.yml` references nonexistent `scripts/freebsd/`, inert
-4. **Clean up `freebsd.yml`** — remove dead `opnsense_monitoring.yml` import and `scripts/freebsd/` copy task
-5. **Refactor `monitor_dns_failover.sh`** — currently bypasses `enhanced_monitoring_wrapper` pattern; evaluate whether to refactor for consistency across all hosts
+### Why It's Non-Trivial
+- The script modifies `/conf/config.xml` directly to switch DNS forwarders — it's not a passive check
+- Exit code semantics differ: a successful failover to Cloudflare is exit 0 (correct behavior), not a failure
+- Has its own duplicate-alert suppression and recovery notification logic
+- Wrapping naively would cause double Slack notifications
+- Any bug during refactor risks DNS resolution (internet access)
+
+### Next Steps
+1. Evaluate whether `enhanced_monitoring_wrapper` can be extended to support state-machine scripts, or whether the script's alerting should be stripped and replaced with wrapper calls
+2. Test thoroughly in a non-production context before deploying
 
 ---
 
@@ -279,6 +277,7 @@ These items have value but are not urgent. Revisit quarterly.
 - **VPN Country Switcher UUIDs** — All 4 UUIDs verified in `/conf/config.xml`. Script functional.
 - **Plex on Cobra** — Active since 2026-03-15. Monitoring and backup crons deployed.
 - **DNS Resilience** — 4-tunnel Mullvad + Cloudflare fallback operational. Failover every minute, health check every 5 minutes.
+- **OPNsense Ansible Consolidation** — Completed 2026-04-01. All 15 OPNsense crons now have `#Ansible:` prefixes. DNS failover cron brought under Ansible management (runs directly, not via wrapper — state machine with own alerting). 9 legacy hyphenated scripts + old `monitoring-wrapper.sh` removed from host. Dead `opnsense_monitoring.yml` playbook deleted, `freebsd.yml` cleaned up. Monitoring gap evaluation: `check-interface.sh` not needed (OPNsense is a VM, interface health covered by gateway/WG checks), `check-ddns-age.sh` not needed (IP match check sufficient). Remaining: wrapper refactor for `monitor_dns_failover.sh` (tracked as separate TODO).
 - **Tado Presence Health Check** — Completed 2026-03-31. Fixed broken heredoc syntax, updated stale device tracker entity IDs (`nexuschoky`, `iphone_de_candela_2`), rewrote as POSIX sh running on host (not Docker). Deployed to `/home/choco/.scripts/check_tado_health.sh` via Ansible, cron every 30min with `enhanced_monitoring_wrapper`. Alerts on `unavailable` tracker or `unknown`/`unavailable` person entity — complements the existing HA automations that monitor Tado climate device availability.
 - **Tado SQLite migration** — Completed (commit `a7f6221`). Uses HA REST API.
 - **vinylstreamer liquidsoap inactive** — Expected. Runs only during active streaming sessions.
