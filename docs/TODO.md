@@ -10,33 +10,25 @@ Items are ordered by risk × effort — highest-impact, most-actionable items fi
 
 ---
 
-## Priority 5 — OPNsense Ansible Consolidation
+## Priority 5 — OPNsense Ansible Consolidation (Partially Complete)
 
-**Risk:** Tech debt, not active breakage. Legacy scripts and a legacy playbook file coexist with the current role-based deployment. The legacy cron section has `enable_cron_monitoring | default(false)` so it won't fire accidentally, but the 9 old scripts waste disk space and 2 manual cron entries lack the `#Ansible:` prefix.
+**Risk:** Remaining items are tech debt cleanup, not active breakage. Core issue (unmanaged crons) is resolved.
 
-### Verified State (2026-03-17)
-- **9 legacy monitoring scripts** (hyphenated names, root-owned, Oct 2025) coexist with 10 current scripts:
-  - Legacy: `check-crowdsec.sh`, `check-ddns.sh`, `check-ddns-age.sh`, `check-disk-space.sh`, `check-gateway.sh`, `check-interface.sh`, `check-memory.sh`, `check-system-load.sh`, `check-wg.sh`
-  - Current (Ansible-managed): `check_crowdsec.sh`, `check_ddns.sh`, `check_dns_health.sh`, `check_gateway.sh`, `check_guest_agent.sh`, `check_system_health.sh`, `check_vpn_gateway.sh`, `check_wg.sh`, `heartbeat_opnsense_wan.sh`, `monitor_dns_failover.sh`
-- **2 manual cron entries** (no `#Ansible:` prefix):
-  - `# DNS failover monitoring (VPN-based)` — runs every minute
-  - `# DNS resolution health check` — runs every 5 minutes
-- **Two Ansible deployment paths**:
-  1. Role: `ansible/roles/platform/opnsense/tasks/main.yml` — deploys 8 scripts + crons with `#Ansible:` prefix (active)
-  2. Playbook tasks: `ansible/playbooks/tasks/opnsense_monitoring.yml` — uses legacy `scripts/freebsd/` paths, hardcoded `root` user, `enable_cron_monitoring | default(false)` (inert)
+### Completed (2026-04-01)
+- [x] All OPNsense crons now have `#Ansible:` prefix — DNS failover cron brought under Ansible management
+- [x] Manual cron comments removed from crontab
+- [x] `monitor_dns_failover.sh` added to Ansible role script deployment list
+- [x] DNS failover runs directly (not via wrapper) — it's a state machine with its own Slack alerting
 
-### Next Steps
-1. Add the 2 manual cron entries (DNS failover + DNS health) to the OPNsense Ansible role so they become Ansible-managed
-2. Add `state: absent` tasks in the role to remove the 9 legacy hyphenated scripts from `/usr/local/bin/monitoring/`
-3. Remove `ansible/playbooks/tasks/opnsense_monitoring.yml` (legacy path, inert)
-4. Verify with `--check --diff` that no duplicates would be created
-5. Deploy and confirm crontab matches expected state
-
-### Acceptance Criteria
-- [ ] All OPNsense crons have `#Ansible:` prefix
-- [ ] Legacy `check-*.sh` scripts removed from host
-- [ ] `opnsense_monitoring.yml` playbook tasks removed
-- [ ] `ansible-playbook deploy_monitoring.yml --limit opnsense --check --diff` shows clean state
+### Remaining Items
+1. **Monitoring gap evaluation** — 2 legacy scripts have no current equivalent:
+   - `check-interface.sh` (network interface health: link status, errors, dropped packets)
+   - `check-ddns-age.sh` (DDNS update staleness, not just IP match)
+   - Decide: write new equivalents, or accept current coverage is sufficient?
+2. **Remove legacy scripts from host** — 9 hyphenated `check-*.sh` files + old `monitoring-wrapper.sh` (only after gap evaluation)
+3. **Remove dead playbook** — `ansible/playbooks/tasks/opnsense_monitoring.yml` references nonexistent `scripts/freebsd/`, inert
+4. **Clean up `freebsd.yml`** — remove dead `opnsense_monitoring.yml` import and `scripts/freebsd/` copy task
+5. **Refactor `monitor_dns_failover.sh`** — currently bypasses `enhanced_monitoring_wrapper` pattern; evaluate whether to refactor for consistency across all hosts
 
 ---
 

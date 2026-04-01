@@ -31,6 +31,7 @@
     - check_guest_agent.sh
     - check_system_health.sh
     - check_vpn_gateway.sh
+    - monitor_dns_failover.sh
   become: true
 
 - name: Deploy common monitoring wrapper (Bash version for OPNsense)
@@ -140,6 +141,22 @@
   become: true
   become_user: "{{ infrastructure_user }}"
 
+# DNS failover runs directly (not via enhanced_monitoring_wrapper) because it's
+# a state machine with its own Slack alerting and local logging fallback.
+# Token order is REVERSED from wrapper pattern: alert_token first, logging_token second.
+- name: Configure DNS failover monitoring cron job
+  ansible.builtin.cron:
+    name: "OPNsense DNS failover monitoring"
+    minute: "*"
+    user: "{{ infrastructure_user }}"
+    job: "{{ scripts_dir }}/monitoring/monitor_dns_failover.sh {{ alert_token }} {{ logging_token }}"
+    state: present
+  become: true
+  become_user: "{{ infrastructure_user }}"
+  when:
+    - alert_token is defined and alert_token != ''
+    - logging_token is defined and logging_token != ''
+
 - name: Configure OPNsense healthchecks.io WAN heartbeat
   ansible.builtin.cron:
     name: "Healthchecks.io - OPNsense WAN connectivity"
@@ -161,6 +178,42 @@
   become: true
   become_user: "{{ infrastructure_user }}"
   when: vault_healthcheck_opnsense_dns is defined
+
+# --- Legacy cron cleanup ---
+# Remove manual cron entries that predate Ansible management
+
+- name: Remove legacy manual DNS failover cron comment
+  ansible.builtin.lineinfile:
+    path: "/var/cron/tabs/{{ infrastructure_user }}"
+    regexp: '^# DNS failover monitoring \(VPN-based\)'
+    state: absent
+  become: true
+
+- name: Remove orphaned DNS health check cron comment
+  ansible.builtin.lineinfile:
+    path: "/var/cron/tabs/{{ infrastructure_user }}"
+    regexp: '^# DNS resolution health check$'
+    state: absent
+  become: true
+
+- name: Remove duplicate manual DNS failover cron job line
+  ansible.builtin.shell:
+    cmd: |
+      CRONTAB=$(crontab -l -u {{ infrastructure_user }} 2>/dev/null)
+      MATCHES=$(echo "$CRONTAB" | grep -c 'monitor_dns_failover\.sh' || true)
+      if [ "$MATCHES" -gt 1 ]; then
+        echo "$CRONTAB" | awk '
+          /monitor_dns_failover\.sh/ && !seen { seen=1; next }
+          { print }
+        ' | crontab -u {{ infrastructure_user }} -
+        echo "CHANGED"
+      else
+        echo "OK"
+      fi
+    executable: /bin/sh
+  become: true
+  register: cron_dedup
+  changed_when: "'CHANGED' in cron_dedup.stdout"
 
 # --- Backup ---
 
