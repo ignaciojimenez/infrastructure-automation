@@ -114,60 +114,7 @@ Inconsistency makes the monitoring setup harder to reason about. Every other cro
 
 ---
 
-## Priority 9 — Proxmox WebUI User Migration
-
-**Risk:** WebUI uses `root@pam` which is a security anti-pattern. Low practical risk in home network but poor hygiene.
-
-### Verified State (2026-03-17)
-- `choco` Linux user exists on Proxmox (`choco:x:1000:1000`)
-- `choco@pam` exists in Proxmox user management (confirmed via `pveum user list`)
-- SSH already uses `choco` user (all Ansible crons run as choco)
-- `root@pam` still exists and is likely used for WebUI login
-- No `choco@pve` user exists (PVE realm user, which would be separate from PAM)
-- Unclear what permissions `choco@pam` has in Proxmox WebUI
-
-### Next Steps
-1. Check current `choco@pam` permissions: `pveum acl list` on cwwk
-2. Grant `choco@pam` appropriate PVE permissions (Administrator or PVEAdmin role on `/`)
-3. Test WebUI login with `choco@pam`
-4. If working, stop using `root@pam` for WebUI access
-5. Update Ansible bootstrap to handle this if not already covered
-
-### Acceptance Criteria
-- [ ] WebUI accessible via `choco@pam` with sufficient permissions
-- [ ] `root@pam` no longer used for routine WebUI access
-
-### Notes
-- This is the lowest-priority active item because `choco@pam` already exists and SSH is already non-root
-- The only gap is WebUI login habit, not infrastructure configuration
-
 ---
-
-## Priority 10 — TADO/HA Presence Notification Elegance
-
-**Risk:** Cosmetic — no functional impact. Current behavior sends two contradictory Slack notifications when user is nearby (~500m from home): HA fires "AWAY mode activated" after 10min debounce, then `tado_presence.sh` fires "TADO says device still home, skipping AWAY". Expected behavior producing confusing double-alerts.
-
-### Current State (2026-03-21)
-- HA automation `away_mode_everyone_left` triggers after 10min of `group.persons != home`
-- The automation immediately sends a Slack alert ("Away mode activated") AND calls `tado_set_away`
-- `tado_presence.sh` queries Tado's `mobileDevices` API before applying `presenceLock`
-- If any Tado device reports `atHome: true` (within ~500m geofence), the script skips AWAY and sends its own Slack alert
-- Result: user sees "AWAY activated" immediately followed by "TADO AWAY skipped — device still home"
-- No cron job involved — both notifications are triggered by the same HA automation action sequence
-
-### Proposed Fix
-Restructure the away automation to defer the Slack notification until after the TADO script confirms the away was applied:
-1. Remove the `slack_alert` call from the automation's action sequence
-2. Have `tado_presence.sh` send the appropriate notification based on outcome:
-   - AWAY applied → "Away mode activated, TADO set to AWAY"
-   - AWAY skipped → "HA detected away, but TADO device still home — heating unchanged"
-3. This way exactly one notification is sent, and it reflects the actual outcome
-4. Alternative: keep both notifications but downgrade the "skipped" message to the logging channel (since it's informational, not an alert)
-
-### Acceptance Criteria
-- [ ] Only one Slack notification when leaving home (whether TADO away succeeds or is skipped)
-- [ ] Notification accurately reflects the final state (TADO away vs. still home)
-- [ ] No functional change to the presence detection or TADO control logic
 
 ---
 
@@ -278,6 +225,8 @@ These items have value but are not urgent. Revisit quarterly.
 - **Plex on Cobra** — Active since 2026-03-15. Monitoring and backup crons deployed.
 - **DNS Resilience** — 4-tunnel Mullvad + Cloudflare fallback operational. Failover every minute, health check every 5 minutes.
 - **OPNsense Ansible Consolidation** — Completed 2026-04-01. All 15 OPNsense crons now have `#Ansible:` prefixes. DNS failover cron brought under Ansible management (runs directly, not via wrapper — state machine with own alerting). 9 legacy hyphenated scripts + old `monitoring-wrapper.sh` removed from host. Dead `opnsense_monitoring.yml` playbook deleted, `freebsd.yml` cleaned up. Monitoring gap evaluation: `check-interface.sh` not needed (OPNsense is a VM, interface health covered by gateway/WG checks), `check-ddns-age.sh` not needed (IP match check sufficient). Remaining: wrapper refactor for `monitor_dns_failover.sh` (tracked as separate TODO).
+- **TADO/HA Presence Notification Elegance** — Completed 2026-04-02. Removed unconditional Slack alert from `away_mode_everyone_left` automation. Moved success notification into `tado_presence.sh` so it only fires when AWAY is actually applied. Now exactly one notification per event: AWAY applied, AWAY skipped (device at home), or error. Note: `input_select.tado_mode` is still set to "Away" unconditionally by the automation — minor inaccuracy when AWAY is skipped, cosmetic only.
+- **Proxmox WebUI User Migration** — Completed 2026-04-02. `choco@pam` had no ACL permissions despite existing as a PVE user. Granted `Administrator` role on `/` with propagation. WebUI now accessible via `choco@pam` — stop using `root@pam` for routine access.
 - **Tado Presence Health Check** — Completed 2026-03-31. Fixed broken heredoc syntax, updated stale device tracker entity IDs (`nexuschoky`, `iphone_de_candela_2`), rewrote as POSIX sh running on host (not Docker). Deployed to `/home/choco/.scripts/check_tado_health.sh` via Ansible, cron every 30min with `enhanced_monitoring_wrapper`. Alerts on `unavailable` tracker or `unknown`/`unavailable` person entity — complements the existing HA automations that monitor Tado climate device availability.
 - **Tado SQLite migration** — Completed (commit `a7f6221`). Uses HA REST API.
 - **vinylstreamer liquidsoap inactive** — Expected. Runs only during active streaming sessions.

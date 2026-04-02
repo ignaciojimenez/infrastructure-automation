@@ -118,6 +118,9 @@ http_code=$(curl -s -o /dev/null -w "%{http_code}" \
 
 if [ "$http_code" -ge 200 ] && [ "$http_code" -lt 300 ]; then
     echo "Tado presence set to $MODE (HTTP $http_code)"
+    if [ "$MODE" = "AWAY" ]; then
+        slack_alert "Away mode activated — Tado set to AWAY"
+    fi
 else
     echo "ERROR: Failed to set Tado presence to $MODE (HTTP $http_code)" >&2
     slack_alert "⚠️ Tado presence script failed: HTTP $http_code setting $MODE"

@@ -95,9 +95,6 @@
     - service: light.turn_off
       target:
         entity_id: light.all_lights
-    - service: rest_command.slack_alert
-      data:
-        message: "Away mode activated — Tado set to AWAY"
   mode: single
 
 - id: "home_mode_first_arrives"
