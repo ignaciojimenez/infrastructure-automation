@@ -1,0 +1,40 @@
+---
+name: Ansible Lint
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "ansible/**"
+      - "scripts/**"
+      - ".ansible-lint"
+      - ".github/workflows/ansible-lint.yml"
+  pull_request:
+    paths:
+      - "ansible/**"
+      - "scripts/**"
+      - ".ansible-lint"
+      - ".github/workflows/ansible-lint.yml"
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ansible-lint
+        run: pip install ansible-lint
+
+      - name: Install Ansible collections
+        run: ansible-galaxy collection install community.general community.docker
+
+      - name: Create vault password file for CI
+        run: mkdir -p ~/.ansible && echo "ci-dummy" > ~/.ansible/vault_pass
+
+      - name: Run ansible-lint
+        run: ansible-lint
