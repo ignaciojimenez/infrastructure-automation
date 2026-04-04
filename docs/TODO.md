@@ -32,26 +32,7 @@ Inconsistency makes the monitoring setup harder to reason about. Every other cro
 
 ---
 
-## Priority 7 — Ansible Playbook CI (Syntax + Lint)
 
-**Risk:** Broken YAML or undefined variables are only caught during manual deploys. Low probability but easy to prevent.
-
-### Verified State (2026-03-17)
-- No `.github/workflows/` directory exists
-- `.ansible-lint` config exists (skips yaml[line-length], no-changed-when; warns on command-instead-of-shell)
-- No automated testing of any kind
-
-### Next Steps
-1. Create `.github/workflows/ansible-lint.yml` with `ansible-playbook --syntax-check` on all playbooks
-2. Add `ansible-lint` run using existing `.ansible-lint` config
-3. Optionally add YAML validation for inventory and group_vars
-
-### Acceptance Criteria
-- [ ] GitHub Actions workflow runs on push/PR
-- [ ] All playbooks pass syntax check
-- [ ] ansible-lint passes with current config
-
----
 
 ## Priority 8 — Ephemeral Ansible Testing Environment
 
@@ -217,6 +198,7 @@ These items have value but are not urgent. Revisit quarterly.
 
 ## Resolved Items
 
+- **Ansible Playbook CI (Syntax + Lint)** — Completed 2026-04-04. `.github/workflows/ansible-lint.yml` implemented, running `ansible-lint` on push/PR.
 - **Proxmox USB Recovery Kit + Backup Restore Testing** — Completed 2026-03-30. 128GB USB drive at `/mnt/usb-recovery`, syncing weekly (Sunday 05:00) via `sync_usb_recovery.sh`. Two-generation rotation (`current/` + `previous/`), RECOVERY.txt checklist, MANIFEST.txt with checksums. First restore test passed: UniFi LXC 101 vzdump → temporary CT 999, filesystem verified intact. LXC restores require `--storage local-zfs` — documented in RECOVERY.txt and BACKUP_AND_RECOVERY.md.
 - **Backup Freshness Monitoring** — Completed 2026-03-28. Added `heartbeat_backup.sh` reusable template in `scripts/common/`, deployed as standalone heartbeat scripts (one per backup host) following the existing healthchecks.io pattern. Each checks the `enhanced_monitoring_wrapper` state file for recent success, pings healthchecks.io every 2 hours. 5 checks: HA/OPNsense/UniFi daily (26h max age), Proxmox/Plex weekly (172h max age). Independent of Slack — catches silent cron failures, host reboots, and broken scripts.
 - **Backup Encryption Portability (GPG → age)** — Completed 2026-03-23. Migrated all 5 backup pipelines from GPG asymmetric to age asymmetric encryption. Decision: age keypair chosen over GPG (complex recovery), age passphrase (symmetric = security downgrade), openssl enc (no AEAD), and age+SSH keys (incompatible with Secretive). Recovery path: `brew install age` + paste one-line secret key from password manager → decrypt. Old `.gpg` backups remain decryptable with the GPG key.
