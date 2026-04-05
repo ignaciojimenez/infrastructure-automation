@@ -98,7 +98,7 @@ Service configs are backed up daily to curlbin (encrypted with age).
 URLs are posted to Slack on each backup run.
 
 To decrypt a curlbin backup:
-  curl -o backup.age "https://curlbin.ignacio.systems/FILE_ID"
+  curl -o backup.age "https://{{ curlbin_host }}/FILE_ID"
   age --decrypt -i key.txt -o backup.tar.gz backup.age
   tar -xzf backup.tar.gz
 

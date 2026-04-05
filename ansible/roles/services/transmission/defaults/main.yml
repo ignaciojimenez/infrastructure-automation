@@ -1,0 +1,20 @@
+---
+# Transmission role defaults
+# Override in group_vars/media.yml or host_vars/
+
+enable_transmission: true
+
+# Download directories (relative to external_drive_mount if defined)
+transmission_download_dir: "/home/{{ ansible_user }}/Downloads/ready"
+transmission_incomplete_dir: "/home/{{ ansible_user }}/Downloads/tmp"
+
+# RPC whitelist — override with your LAN subnets
+transmission_rpc_whitelist: "127.0.0.1,192.168.0.*"
+
+# Blocklist
+transmission_blocklist_enabled: true
+transmission_blocklist_url: "https://github.com/Naunter/BT_BlockLists/raw/master/bt_blocklists.gz"
+transmission_umask: 2
+
+# Incron (file-system trigger on completed downloads)
+enable_incron: false

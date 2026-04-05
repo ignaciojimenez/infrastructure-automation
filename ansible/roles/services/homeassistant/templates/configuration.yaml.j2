@@ -3,7 +3,7 @@
 
 # Core configuration
 homeassistant:
-  external_url: "https://ha.ignacio.systems"
+  external_url: "{{ homeassistant_external_url | default('http://homeassistant.local:8123') }}"
   internal_url: "http://localhost:8123"
   customize:
     climate.tado_smart_thermostat_ru3393984256:
@@ -102,17 +102,17 @@ template:
             mdi:home-outline
           {{ '{% endif %}' }}
       
-      # Choco presence (Companion App device tracker)
-      - name: "Choco Presence"
-        unique_id: choco_presence_combined
+      # Primary user presence (Companion App device tracker)
+      - name: "{{ ha_primary_person_display | default('Primary') }} Presence"
+        unique_id: "{{ ha_primary_person_display | default('primary') | lower }}_presence_combined"
         device_class: presence
-        state: '{{ "{{ is_state(\"device_tracker.nexuschoky\", \"home\") }}" }}'
+        state: '{{ "{{ is_state(\"" }}{{ ha_primary_device_tracker | default("device_tracker.phone") }}{{ "\", \"home\") }}" }}'
 
-      # Candela presence (Companion App device tracker)
-      - name: "Candela Presence"
-        unique_id: candela_presence_combined
+      # Secondary user presence (Companion App device tracker)
+      - name: "{{ ha_secondary_person_display | default('Secondary') }} Presence"
+        unique_id: "{{ ha_secondary_person_display | default('secondary') | lower }}_presence_combined"
         device_class: presence
-        state: '{{ "{{ is_state(\"device_tracker.iphone_de_candela_2\", \"home\") }}" }}'
+        state: '{{ "{{ is_state(\"" }}{{ ha_secondary_device_tracker | default("device_tracker.phone_secondary") }}{{ "\", \"home\") }}" }}'
 
 # Slack notifications (webhooks stored in secrets.yaml)
 rest_command:

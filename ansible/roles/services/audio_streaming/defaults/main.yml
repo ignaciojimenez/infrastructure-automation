@@ -1,0 +1,27 @@
+---
+# Audio Streaming role defaults
+# Override in group_vars/audio_streaming.yml or host_vars/
+
+enable_icecast: true
+enable_liquidsoap: true
+enable_audio_detection: true
+
+# Icecast
+icecast_port: 8000
+icecast_max_clients: 10
+# icecast_source_password and icecast_admin_password come from vault
+
+# Liquidsoap
+liquidsoap_input_device: "hw:0"
+liquidsoap_sample_rate: 48000
+liquidsoap_mount_point: "/stream"
+liquidsoap_stream_name: "Stream"
+liquidsoap_stream_description: "Audio Stream"
+
+# Audio detection
+audio_detection_device: "hw:0"
+audio_detection_threshold: 0.01
+
+# Platform
+disable_bluetooth: true
+disable_hdmi: true

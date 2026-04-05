@@ -2,27 +2,7 @@
 
 Personal infrastructure-as-code repository managing a home network of Raspberry Pis, an OPNsense firewall VM, a Proxmox hypervisor, and LXC containers via Ansible.
 
-## Repository Structure
-
-```
-ansible/
-  inventory/
-    hosts.yml                       # Unified multi-platform inventory
-    group_vars/all/main.yml         # Global defaults (source of truth)
-    group_vars/all/vault.yml        # Encrypted secrets (AES256)
-    group_vars/{function}.yml       # Role-specific vars (homeassistant, media, dns, etc.)
-  playbooks/
-    site.yml                        # Full orchestration: bootstrap → platform → services → monitoring
-    services.yml                    # Service deployment (loads roles by primary_function)
-    deploy_monitoring.yml           # Monitoring scripts to all hosts
-    system/                         # Bootstrap, baseline, updates, validation
-    platform/                       # Platform-specific (debian, freebsd, raspberrypi, lxc, proxmox)
-  roles/services/                   # One role per service (homeassistant, docker, plex, etc.)
-scripts/
-  common/enhanced_monitoring_wrapper  # Shared monitoring wrapper (heartbeats, state tracking, Slack)
-  services/{service}/               # Per-service monitoring/management scripts (POSIX sh)
-docs/                               # Architecture decisions, infrastructure state, monitoring docs
-```
+> For Ansible conventions, role creation, and testing strategy, see [AGENT_INSTRUCTIONS.md](AGENT_INSTRUCTIONS.md).
 
 ## Active Hosts
 
@@ -46,6 +26,7 @@ docs/                               # Architecture decisions, infrastructure sta
 - **Config loading order**: `group_vars/all/` → `group_vars/{platform}` → `group_vars/{function}` → host overrides
 - **Handlers**: notify with exact handler name to restart services on config change
 - **Templates**: Jinja2 templates in `roles/{role}/templates/` → deployed to remote host
+- **New roles**: set `primary_function` in inventory — `services.yml` auto-discovers the role
 
 ### Home Assistant Specifics
 - **Tado heating via direct API** — uses `presenceLock` endpoint to set home/away
@@ -57,7 +38,7 @@ docs/                               # Architecture decisions, infrastructure sta
   - Home trigger uses `for: minutes: 3` to debounce GPS bouncing
   - Away trigger uses `for: minutes: 10` with template `!= "home"` (treats `unknown` as away)
 - **HA Jinja2 in Ansible templates**: double-escape as `{{ '{{ ha_expression }}' }}`
-- **Config path on remote**: `/home/choco/homeassistant/`
+- **Config path on remote**: `/home/{{ infrastructure_user }}/homeassistant/`
 - **Docker containers**: `home-assistant`, `matter-server`, `cloudflared`
 - **Deploy command**: `ansible-playbook ansible/playbooks/services.yml --limit dockassist`
 
@@ -92,7 +73,7 @@ All hosts are reachable via SSH (key-based auth). Use the **SSH Hostname** from 
 - `proxmox` → `ssh cwwk`
 - `unifi-lxc` → `ssh unifi`
 
-For HA API queries: read the token from `/home/choco/homeassistant/secrets.yaml` on `dockassist`.
+For HA API queries: read the token from `{{ homeassistant_config_dir }}/secrets.yaml` on `dockassist`.
 
 ## Working with This Repo
 

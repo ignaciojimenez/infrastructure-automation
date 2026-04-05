@@ -1,0 +1,9 @@
+---
+# Docker role defaults
+# Override in group_vars/ or host_vars/
+
+# Docker GPG key and repository
+# Defaults target Debian/Raspbian; override for Ubuntu or other distros
+docker_key_url: "https://download.docker.com/linux/raspbian/gpg"
+docker_key_file: "/usr/share/keyrings/docker.asc"
+docker_distro_url: "https://download.docker.com/linux/debian"

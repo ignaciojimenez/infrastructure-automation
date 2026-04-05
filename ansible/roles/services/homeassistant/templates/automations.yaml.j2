@@ -259,7 +259,7 @@
   description: "Send NS train platform info when leaving for work (combined Tado + Companion app)"
   trigger:
     - platform: state
-      entity_id: binary_sensor.choco_presence
+      entity_id: "{{ ha_primary_presence_sensor | default('binary_sensor.primary_presence') }}"
       from: "on"
       to: "off"
   condition:

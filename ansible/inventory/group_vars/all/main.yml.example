@@ -1,51 +1,69 @@
 ---
 # Global Variables - Common to all hosts
-# Uses vault.yml for sensitive data
+# Copy to main.yml and fill in your values.
+# Secrets belong in vault.yml, not here.
 
 # ============================================================
-# Smart Defaults (override in hosts.yml or host_vars if needed)
+# Smart Defaults
 # ============================================================
 
-# Connection defaults - use inventory_hostname as ansible_host unless overridden
 ansible_host: "{{ inventory_hostname }}"
 
-# Infrastructure user - defaults to current user running Ansible
-# Can be overridden in vault.yml or host_vars
+# Infrastructure user — defaults to the user running Ansible
 infrastructure_user: "{{ vault_infrastructure_user | default(lookup('env', 'USER')) }}"
 ansible_user: "{{ infrastructure_user }}"
 
-# User configuration
+# User paths
 primary_user: "{{ ansible_user }}"
 home_dir: "/home/{{ primary_user }}"
-scripts_dir: "/home/{{ primary_user }}/scriptdir"
-logs_dir: "/home/{{ primary_user }}/logdir"
+scripts_dir: "/home/{{ primary_user }}/.scripts"
+logs_dir: "/home/{{ primary_user }}/.logs"
 
-# Connection fallback - try these users in order if infrastructure_user fails
-# Used by bootstrap to auto-detect initial user
+# Bootstrap fallback user order
 ansible_ssh_common_args: '-o ConnectTimeout=5'
 bootstrap_fallback_users:
-  - "{{ infrastructure_user }}"  # Try infrastructure user first (existing hosts)
-  - pi     # Try pi (fresh Raspberry Pi OS)
-  - root   # Try root (LXC containers, Proxmox)
+  - "{{ infrastructure_user }}"
+  - pi
+  - root
 
-# Locale and timezone
+# ============================================================
+# Locale / Timezone
+# ============================================================
 locale: "en_US.UTF-8"
-timezone: "Europe/Madrid"
+timezone: "UTC"  # e.g. "Europe/London", "America/New_York"
 
-# Git configuration (from vault)
+# ============================================================
+# Git (from vault)
+# ============================================================
 git_name: "{{ vault_git_name }}"
 git_mail: "{{ vault_git_mail }}"
 
-# GitHub profile for SSH keys (from vault)
+# ============================================================
+# GitHub (for SSH key provisioning)
+# ============================================================
 gh_profile: "{{ vault_gh_profile }}"
 gh_keys: "https://github.com/{{ gh_profile }}.keys"
-gh_pgp: "https://github.com/{{ gh_profile }}.gpg"
 
+# ============================================================
+# Backup encryption (age public key — from vault)
+# ============================================================
+backup_age_pubkey: "{{ vault_backup_age_pubkey | default('') }}"
+
+# ============================================================
 # Monitoring tokens (from vault)
+# ============================================================
 logging_token: "{{ vault_logging_token }}"
 alert_token: "{{ vault_alert_token }}"
 
-# System configuration
+# ============================================================
+# Curlbin (offsite backup storage)
+# ============================================================
+curlbin_host: "{{ vault_curlbin_host | default('curlbin.example.com') }}"
+curlbin_user: "{{ vault_curlbin_user }}"
+curlbin_password: "{{ vault_curlbin_password }}"
+
+# ============================================================
+# System toggles
+# ============================================================
 enable_unattended_upgrades: true
 enable_monitoring: true
-

@@ -40,18 +40,31 @@ git_mail: "{{ vault_git_mail }}"
 gh_profile: "{{ vault_gh_profile }}"
 gh_keys: "https://github.com/{{ gh_profile }}.keys"
 
-# Backup encryption - age public key (asymmetric, private key in password manager)
+# Backup encryption - age public key (asymmetric, safe to commit — private key stays in password manager)
 backup_age_pubkey: "age1yeuwd2t78jyxldxeja529djj8zt5et7h9j0fnwzn7r0cqfnww58qjqrttc"
 
 # Monitoring tokens (from vault)
 logging_token: "{{ vault_logging_token }}"
 alert_token: "{{ vault_alert_token }}"
 
-# Curlbin upload credentials (from vault)
+# Curlbin upload credentials (host is not secret; credentials come from vault)
+curlbin_host: "curlbin.ignacio.systems"
 curlbin_user: "{{ vault_curlbin_user }}"
 curlbin_password: "{{ vault_curlbin_password }}"
 
 # System configuration
 enable_unattended_upgrades: true
 enable_monitoring: true
+
+# ============================================================
+# Home Assistant person entities (override generic defaults in homeassistant.yml)
+# ============================================================
+homeassistant_external_url: "https://ha.ignacio.systems"
+ha_primary_person: "person.choco"
+ha_primary_person_display: "Choco"
+ha_primary_device_tracker: "device_tracker.nexuschoky"
+ha_secondary_person: "person.candela"
+ha_secondary_person_display: "Candela"
+ha_secondary_device_tracker: "device_tracker.iphone_de_candela_2"
+ha_primary_presence_sensor: "binary_sensor.choco_presence"
 

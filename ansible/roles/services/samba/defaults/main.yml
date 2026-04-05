@@ -1,0 +1,17 @@
+---
+# Samba role defaults
+# Override in group_vars/media.yml or host_vars/
+
+enable_samba: true
+
+# Define shares in group_vars or host_vars:
+# samba_shares:
+#   - name: "MyShare"
+#     path: "/mnt/data"
+#     comment: "Shared Data"
+#     browseable: yes
+#     guest_ok: yes
+#     read_only: no
+#     create_mask: "0755"
+#     directory_mask: "0755"
+samba_shares: []

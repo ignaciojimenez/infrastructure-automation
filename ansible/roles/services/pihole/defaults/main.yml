@@ -1,0 +1,15 @@
+---
+# Pi-hole role defaults
+# Override in group_vars/dns.yml or host_vars/
+
+enable_pihole: true
+enable_unbound: true
+
+# Pi-hole DNS (defaults to local Unbound)
+pihole_dns_1: "127.0.0.1#5335"
+# pihole_webpassword comes from vault_pihole_password
+
+# Backup
+enable_pihole_backup: true
+pihole_backup_frequency: "weekly"
+pihole_backup_retention_days: 14

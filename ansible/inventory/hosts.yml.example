@@ -1,0 +1,54 @@
+---
+# Example inventory — copy to hosts.yml and fill in your hosts.
+# Only override ansible_host when the SSH hostname differs from the inventory key.
+
+all:
+  children:
+    # ========== DEBIAN-BASED SYSTEMS ==========
+    debian_hosts:
+      vars:
+        os_family: debian
+        package_manager: apt
+        service_manager: systemd
+        ansible_python_interpreter: /usr/bin/python3
+        infrastructure_group: "{{ infrastructure_user }}"
+
+      children:
+        # Raspberry Pi hosts
+        raspberrypi:
+          vars:
+            platform_type: raspberrypi
+          hosts:
+            # mypi:
+            #   primary_function: media
+
+        # LXC containers
+        lxc_containers:
+          vars:
+            platform_type: lxc
+          hosts:
+            # mylxc:
+            #   ansible_host: mylxc-dns-name  # if different from inventory key
+            #   container_id: 101
+            #   primary_function: network_controller
+
+        # Proxmox host
+        proxmox_hosts:
+          vars:
+            platform_type: proxmox
+          hosts:
+            # myhypervisor:
+            #   primary_function: hypervisor
+
+    # ========== FREEBSD-BASED SYSTEMS ==========
+    freebsd_hosts:
+      vars:
+        os_family: freebsd
+        package_manager: pkg
+        service_manager: rc
+        ansible_python_interpreter: /usr/local/bin/python3
+        platform_type: opnsense
+        infrastructure_group: wheel
+      hosts:
+        # myfirewall:
+        #   primary_function: firewall

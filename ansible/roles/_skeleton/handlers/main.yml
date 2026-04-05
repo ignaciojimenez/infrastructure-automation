@@ -1,0 +1,7 @@
+---
+- name: restart {role_name}
+  become: true
+  ansible.builtin.service:
+    name: "{role_name}"
+    state: restarted
+  listen: "restart {role_name}"

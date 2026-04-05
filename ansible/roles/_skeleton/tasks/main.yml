@@ -1,0 +1,79 @@
+---
+# {role_name} service role
+#
+# Required variables (must be set before running):
+#   (none — document required vars here)
+#
+# Optional variables (see defaults/main.yml):
+#   enable_{role_name}: true
+
+# ============================================================
+# Package Installation
+# ============================================================
+
+- name: Install {role_name} packages
+  become: true
+  ansible.builtin.apt:
+    name: []  # Add package names here
+    state: present
+    update_cache: true
+  when: os_family == "debian"
+  tags: ["{role_name}", packages]
+
+# ============================================================
+# Configuration
+# ============================================================
+
+# - name: Deploy {role_name} configuration
+#   become: true
+#   ansible.builtin.template:
+#     src: {role_name}.conf.j2
+#     dest: /etc/{role_name}/{role_name}.conf
+#     owner: root
+#     group: root
+#     mode: '0644'
+#   notify: restart {role_name}
+#   tags: ["{role_name}", config]
+
+# ============================================================
+# Service Management
+# ============================================================
+
+- name: Ensure {role_name} service is enabled and started
+  become: true
+  ansible.builtin.service:
+    name: "{role_name}"
+    enabled: true
+    state: started
+  tags: ["{role_name}", service]
+
+# ============================================================
+# Monitoring (optional — remove if not needed)
+# ============================================================
+
+# - name: Deploy {role_name} monitoring script
+#   ansible.builtin.copy:
+#     src: "{{ inventory_dir }}/../../scripts/services/{role_name}/check_{role_name}.sh"
+#     dest: "{{ scripts_dir }}/check_{role_name}.sh"
+#     owner: "{{ ansible_user }}"
+#     group: "{{ ansible_user }}"
+#     mode: '0755'
+#   tags: ["{role_name}", monitoring]
+
+# - name: Configure {role_name} monitoring cron job
+#   ansible.builtin.cron:
+#     name: "{role_name} service check"
+#     special_time: "hourly"
+#     job: >
+#       {{ scripts_dir }}/enhanced_monitoring_wrapper
+#       --heartbeat-interval=daily
+#       --notify-fixed=true
+#       {{ logging_token }}
+#       {{ alert_token }}
+#       {{ scripts_dir }}/check_{role_name}.sh
+#       >> {{ logs_dir }}/{role_name}_service_check.log 2>&1
+#     user: "{{ ansible_user }}"
+#   when:
+#     - logging_token is defined and logging_token != ''
+#     - alert_token is defined and alert_token != ''
+#   tags: ["{role_name}", monitoring, cron]

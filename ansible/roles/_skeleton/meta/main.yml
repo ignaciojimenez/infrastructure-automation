@@ -1,0 +1,9 @@
+---
+# Role dependencies — list roles that must run before this one.
+# Example: depend on Docker being installed first.
+#
+# dependencies:
+#   - role: services/docker
+#     tags: [docker]
+
+dependencies: []

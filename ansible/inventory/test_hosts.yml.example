@@ -1,5 +1,8 @@
 ---
-# Test inventory for development
+# Test inventory for development and integration testing.
+# Copy to test_hosts.yml and replace the IP with your test host.
+# Usage: ansible-playbook -i ansible/inventory/test_hosts.yml ansible/playbooks/site.yml
+
 all:
   children:
     debian_hosts:
@@ -15,5 +18,5 @@ all:
           hosts:
             devpi:
               ansible_host: 192.168.1.100  # Replace with your test host IP
-              primary_function: media  
-              is_test_environment: true  # Skips hardware-dependent checks
+              primary_function: media       # Replace with the function you want to test
+              is_test_environment: true     # Skips hardware-dependent tasks

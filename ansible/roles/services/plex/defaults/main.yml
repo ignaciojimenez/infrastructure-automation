@@ -1,0 +1,13 @@
+---
+# Plex Media Server role defaults
+# Override in group_vars/media.yml or host_vars/
+
+enable_plex: true
+
+# Plex repository (override if Plex changes their signing key location)
+plex_key_url: "https://downloads.plex.tv/plex-keys/PlexSign.v2.key"
+plex_distro_url: "https://repo.plex.tv/deb/"
+
+# Backup
+enable_plex_backup: true
+plex_backup_frequency: "weekly"

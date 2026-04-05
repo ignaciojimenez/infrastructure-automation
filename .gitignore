@@ -1,6 +1,8 @@
 # Ansible
 *.retry
 .ansible/
+# Vault backup files (never commit)
+vault.yml.bak-*
 
 # Secrets
 vault_pass

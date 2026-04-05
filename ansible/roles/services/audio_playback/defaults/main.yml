@@ -1,0 +1,23 @@
+---
+# Audio Playback role defaults
+# Override in group_vars/audio_playback.yml or host_vars/
+
+enable_mpd: true
+enable_avahi: true
+enable_airplay: true
+enable_spotify: true
+
+# Hardware configuration
+configure_audio_volume: false
+enable_audio_output_check: false
+
+# HiFiBerry DAC overlay — set to the appropriate overlay for your hardware
+# Examples: hifiberry-dacplus, hifiberry-dacplushd, hifiberry-dac
+audio_dac_overlay: "hifiberry-dacplushd"
+
+# Raspberry Pi config file path (differs between OS versions)
+rpi_config_path: "/boot/firmware/config.txt"
+
+# Platform
+disable_bluetooth: true
+disable_hdmi: true

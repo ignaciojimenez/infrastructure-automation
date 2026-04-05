@@ -1,0 +1,55 @@
+---
+# Home Assistant role defaults
+# Override in group_vars/homeassistant.yml or host_vars/
+
+enable_docker: true
+enable_homeassistant: true
+enable_matter_server: true
+enable_cloudflare_tunnel: false  # Requires vault_cloudflare_tunnel_token
+
+# Container names
+homeassistant_container_name: "home-assistant"
+homeassistant_version: "stable"
+matter_server_version: "stable"
+
+# Config directories
+homeassistant_config_dir: "/home/{{ ansible_user }}/homeassistant"
+matter_server_data_dir: "/home/{{ ansible_user }}/matter-server"
+
+# External URL
+homeassistant_external_url: "http://homeassistant.local:8123"
+
+# Hardware
+disable_modemmanager: true
+
+# Backup
+enable_homeassistant_backup: true
+homeassistant_backup_frequency: "daily"
+homeassistant_backup_retention_days: 7
+
+# Internet speed monitoring
+enable_internet_speed_check: false
+internet_speed_min_download: 300
+internet_speed_min_upload: 150
+internet_speed_max_ping: 100
+internet_speed_tests: 3
+internet_speed_delay: 45
+
+# Person entities (override with your HA entity IDs)
+ha_primary_person: "person.primary"
+ha_primary_person_display: "Primary"
+ha_primary_device_tracker: "device_tracker.phone"
+ha_secondary_person: "person.secondary"
+ha_secondary_person_display: "Secondary"
+ha_secondary_device_tracker: "device_tracker.phone_secondary"
+ha_primary_presence_sensor: "binary_sensor.primary_presence"
+
+# Lights (override with your entity IDs)
+homeassistant_lights:
+  - light.main_light
+homeassistant_living_room_lights:
+  - light.main_light
+
+# Platform
+disable_bluetooth: false
+disable_hdmi: true

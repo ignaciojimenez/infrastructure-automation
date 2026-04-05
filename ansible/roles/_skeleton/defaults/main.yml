@@ -1,0 +1,16 @@
+---
+# Default variables for the {role_name} role.
+# Override in group_vars/{function}.yml or host_vars/{hostname}.yml.
+#
+# Document every variable here. Agents and users should not need to read
+# tasks/main.yml to understand what is configurable.
+#
+# Naming conventions:
+#   enable_{role_name}     — boolean toggle (default: true)
+#   {role_name}_port       — port number
+#   {role_name}_config_dir — configuration directory path
+#   {role_name}_version    — pinned version (default: "stable" or "latest")
+
+# enable_{role_name}: true
+# {role_name}_port: 8080
+# {role_name}_config_dir: "/etc/{role_name}"

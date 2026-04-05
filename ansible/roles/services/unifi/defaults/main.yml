@@ -1,0 +1,13 @@
+---
+# UniFi Network Controller role defaults
+# Override in group_vars/network_controller.yml or host_vars/
+
+enable_unifi: true
+
+# Firewall (enable if the host is internet-facing)
+enable_ufw: false
+
+# Backup
+enable_unifi_backup: true
+unifi_backup_frequency: "daily"
+unifi_backup_retention_days: 7

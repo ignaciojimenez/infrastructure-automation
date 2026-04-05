@@ -31,10 +31,43 @@ jobs:
         run: pip install ansible-lint
 
       - name: Install Ansible collections
-        run: ansible-galaxy collection install community.general community.docker
+        run: ansible-galaxy collection install community.general community.docker ansible.posix
 
       - name: Create vault password file for CI
         run: mkdir -p ~/.ansible && echo "ci-dummy" > ~/.ansible/vault_pass
 
+      - name: Create minimal inventory for syntax check
+        run: |
+          cp ansible/inventory/hosts.yml.example ansible/inventory/hosts.yml
+          cp ansible/inventory/group_vars/all/main.yml.example ansible/inventory/group_vars/all/main.yml
+          cp ansible/inventory/group_vars/all/vault.yml.example ansible/inventory/group_vars/all/vault.yml
+          # Encrypt dummy vault so ansible-vault can parse it
+          ansible-vault encrypt ansible/inventory/group_vars/all/vault.yml
+
       - name: Run ansible-lint
         run: ansible-lint
+
+      - name: Syntax check — main playbooks
+        run: |
+          for pb in ansible/playbooks/*.yml; do
+            echo "Checking: $pb"
+            ansible-playbook "$pb" --syntax-check
+          done
+
+      - name: Validate role structure
+        run: |
+          failed=0
+          for role in ansible/roles/services/*/; do
+            role_name=$(basename "$role")
+            # Skip the skeleton role
+            [ "$role_name" = "_skeleton" ] && continue
+            if [ ! -f "$role/tasks/main.yml" ]; then
+              echo "FAIL: $role missing tasks/main.yml"
+              failed=1
+            fi
+            if [ ! -f "$role/defaults/main.yml" ]; then
+              echo "FAIL: $role missing defaults/main.yml"
+              failed=1
+            fi
+          done
+          exit $failed

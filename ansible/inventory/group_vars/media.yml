@@ -14,7 +14,8 @@ external_drive_fstype: "exfat"
 # Transmission Configuration
 transmission_download_dir: "{{ external_drive_mount }}/Descargas/ready"
 transmission_incomplete_dir: "{{ external_drive_mount }}/Descargas/tmp"
-transmission_rpc_whitelist: "127.0.0.1,10.30.40.*,10.30.20.*,10.30.80.*,10.30.41.*"
+# Override transmission_rpc_whitelist with your LAN subnets
+transmission_rpc_whitelist: "127.0.0.1,192.168.0.*"
 transmission_blocklist_enabled: true
 transmission_blocklist_url: "https://github.com/Naunter/BT_BlockLists/raw/master/bt_blocklists.gz"
 transmission_umask: 2

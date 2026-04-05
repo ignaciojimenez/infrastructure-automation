@@ -1,8 +1,8 @@
 persons:
   name: persons
   entities:
-    - person.candela
-    - person.choco
+    - "{{ ha_primary_person | default('person.primary') }}"
+    - "{{ ha_secondary_person | default('person.secondary') }}"
 
 homekit_tado_climates:
   name: HomeKit Tado Climates

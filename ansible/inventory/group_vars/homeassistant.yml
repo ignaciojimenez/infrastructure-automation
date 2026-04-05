@@ -1,5 +1,6 @@
 ---
-# Home Assistant (dockassist)
+# Home Assistant function vars
+# Override ha_* person variables in group_vars/all/main.yml or host_vars/ for your setup.
 
 # Services
 enable_docker: true
@@ -16,6 +17,18 @@ homeassistant_backup_retention_days: 7
 # Container
 homeassistant_container_name: "home-assistant"
 homeassistant_config_dir: "/home/{{ ansible_user }}/homeassistant"
+
+# External URL (used in configuration.yaml)
+homeassistant_external_url: "http://homeassistant.local:8123"
+
+# Person entities — override these with your actual HA person/device_tracker entity IDs
+ha_primary_person: "person.primary"
+ha_primary_person_display: "Primary"
+ha_primary_device_tracker: "device_tracker.phone"
+ha_secondary_person: "person.secondary"
+ha_secondary_person_display: "Secondary"
+ha_secondary_device_tracker: "device_tracker.phone_secondary"
+ha_primary_presence_sensor: "binary_sensor.primary_presence"
 
 # Internet Speed Monitoring
 enable_internet_speed_check: true
