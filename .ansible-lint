@@ -15,6 +15,5 @@ warn_list:
 use_default_rules: true
 
 # Ansible-lint configuration
-parseable: true
 quiet: false
 strict: false
