@@ -57,6 +57,11 @@ enable_unattended_upgrades: true
 enable_monitoring: true
 
 # ============================================================
+# Media — user-specific overrides (same precedence reasoning as HA section below)
+# ============================================================
+transmission_rpc_whitelist: "127.0.0.1,10.30.40.*,10.30.20.*,10.30.80.*,10.30.41.*"
+
+# ============================================================
 # Home Assistant — user-specific overrides
 # These are loaded natively (group_vars/all, precedence 3) which correctly
 # overrides role defaults (precedence 1). Do NOT put these in

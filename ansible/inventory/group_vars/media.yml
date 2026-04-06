@@ -14,8 +14,10 @@ external_drive_fstype: "exfat"
 # Transmission Configuration
 transmission_download_dir: "{{ external_drive_mount }}/Descargas/ready"
 transmission_incomplete_dir: "{{ external_drive_mount }}/Descargas/tmp"
-# Override transmission_rpc_whitelist with your LAN subnets
-transmission_rpc_whitelist: "127.0.0.1,192.168.0.*"
+# NOTE: transmission_rpc_whitelist is intentionally NOT defined here.
+# Set it in group_vars/all/main.yml (native group_vars, precedence 3) to ensure
+# it overrides the role default (precedence 1). If defined here via include_vars
+# it would take precedence 17 and could not be overridden from main.yml.
 transmission_blocklist_enabled: true
 transmission_blocklist_url: "https://github.com/Naunter/BT_BlockLists/raw/master/bt_blocklists.gz"
 transmission_umask: 2

@@ -4,7 +4,7 @@
 
 - name: Deploy VPN country switcher script
   ansible.builtin.copy:
-    src: "{{ playbook_dir }}/../../../scripts/services/opnsense/switch_vpn_country.sh"
+    src: "{{ playbook_dir }}/../../scripts/services/opnsense/switch_vpn_country.sh"
     dest: /usr/local/bin/switch-vpn-country.sh
     owner: root
     group: wheel
