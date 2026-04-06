@@ -57,9 +57,14 @@ enable_unattended_upgrades: true
 enable_monitoring: true
 
 # ============================================================
-# Home Assistant person entities (override generic defaults in homeassistant.yml)
+# Home Assistant — user-specific overrides
+# These are loaded natively (group_vars/all, precedence 3) which correctly
+# overrides role defaults (precedence 1). Do NOT put these in
+# group_vars/homeassistant.yml — include_vars has precedence 17 and would
+# override these values.
 # ============================================================
 homeassistant_external_url: "https://ha.ignacio.systems"
+enable_cloudflare_tunnel: true  # Requires vault_cloudflare_tunnel_token
 ha_primary_person: "person.choco"
 ha_primary_person_display: "Choco"
 ha_primary_device_tracker: "device_tracker.nexuschoky"

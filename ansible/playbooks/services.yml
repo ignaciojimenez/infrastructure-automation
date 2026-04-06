@@ -78,41 +78,43 @@
         - primary_role_exists.stat.exists | default(false)
       tags: [services]
 
-    # Explicit install_* overrides for additional roles on a host
+    # Explicit install_* overrides and primary_function fallbacks.
+    # These cover roles where primary_function name ≠ role directory name,
+    # or where one function maps to multiple roles (media → plex+transmission+samba).
     - name: Deploy Docker (explicit install)
       ansible.builtin.include_role:
         name: services/docker
       when: install_docker | default(false)
       tags: [docker, services]
 
-    - name: Deploy Pi-hole (explicit install)
+    - name: Deploy Pi-hole
       ansible.builtin.include_role:
         name: services/pihole
-      when: install_pihole | default(false)
+      when: primary_function == "dns" or install_pihole | default(false)
       tags: [pihole, dns, services]
 
-    - name: Deploy UniFi (explicit install)
+    - name: Deploy UniFi Network Controller
       ansible.builtin.include_role:
         name: services/unifi
-      when: install_unifi | default(false)
+      when: primary_function == "network_controller" or install_unifi | default(false)
       tags: [unifi, network, services]
 
-    - name: Deploy Plex (explicit install)
+    - name: Deploy Plex Media Server
       ansible.builtin.include_role:
         name: services/plex
-      when: install_plex | default(false)
+      when: primary_function == "media" or install_plex | default(false)
       tags: [plex, media, services]
 
-    - name: Deploy Transmission (explicit install)
+    - name: Deploy Transmission
       ansible.builtin.include_role:
         name: services/transmission
-      when: install_transmission | default(false)
+      when: primary_function == "media" or install_transmission | default(false)
       tags: [transmission, media, services]
 
-    - name: Deploy Samba (explicit install)
+    - name: Deploy Samba
       ansible.builtin.include_role:
         name: services/samba
-      when: install_samba | default(false)
+      when: primary_function == "media" or install_samba | default(false)
       tags: [samba, media, services]
 
     - name: Deploy Home Assistant (explicit install)

@@ -30,7 +30,7 @@
 
     - name: Find all common scripts
       ansible.builtin.find:
-        paths: "{{ playbook_dir }}/../../../scripts/common/"
+        paths: "{{ playbook_dir }}/../../scripts/common/"
         file_type: file
       register: common_scripts_baseline
       delegate_to: localhost
@@ -67,7 +67,7 @@
 
     - name: Deploy curlbin .netrc credentials
       ansible.builtin.template:
-        src: "{{ playbook_dir }}/../../../templates/netrc_curlbin.j2"
+        src: "{{ playbook_dir }}/../../templates/netrc_curlbin.j2"
         dest: "{{ home_dir }}/.netrc"
         owner: "{{ primary_user }}"
         group: "{{ primary_user }}"
