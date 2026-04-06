@@ -31,6 +31,11 @@
 - ansible.builtin.import_playbook: system/baseline.yml
   tags: [baseline]
 
+# ========== PHASE 4b: Agent Access ==========
+# Deploys read-only read_agent user to all hosts
+- ansible.builtin.import_playbook: system/agent_access.yml
+  tags: [agent_access, baseline]
+
 # ========== PHASE 5: Platform-Specific Configuration ==========
 # Applies OS and platform-specific settings
 - ansible.builtin.import_playbook: platform/debian.yml

@@ -1,0 +1,4 @@
+---
+# Agent access defaults
+agent_access_user: read_agent
+agent_access_shell: /bin/sh

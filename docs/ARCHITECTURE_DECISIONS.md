@@ -139,3 +139,15 @@ Simple log of key technical decisions made in this project.
 - **Two-generation rotation on USB** — `current/` and `previous/` directories. Protects against copying a corrupt vzdump while fitting within drive capacity.
 - **Root-owned helper for privileged USB operations** — Follows `pve_backup_helper` pattern. Keeps sudoers rules minimal and auditable. One helper script = one sudoers entry.
 - **vzdump schedule is Proxmox-managed, not Ansible** — Proxmox UI/API manages `/etc/pve/jobs.cfg`. Accepted trade-off: simpler than fighting Proxmox's own scheduler, but must be manually reconfigured after a rebuild (documented in USB recovery checklist).
+
+## Agent Access
+
+- **Dedicated `read_agent` user** — Separate user for autonomous agent SSH access, not reusing human credentials. Read-only sudo rules, no group memberships.
+- **Password-protected SSH key outside Secretive** — Ed25519 key at `~/.ssh/read_agent_ed25519` on control machine, passphrase in Ansible Vault. Secretive blocks unattended access by design; agent key is intentionally outside it.
+- **IP-restricted authorized_keys** — `from="<control-machine-IP>"` on every host. Even if the key leaks, it's only usable from one source IP.
+- **Phased API rollout** — Phase 2: SSH + HA API + Proxmox API. Phase 3: OPNsense/UniFi/Plex APIs. Start lean, expand once SSH-based investigation proves the pattern.
+- **No secret access for agents** — Agent cannot read vault files, `.tado_tokens`, `secrets.yaml`, `.netrc`, or any credential files belonging to other users.
+- **SSH config aliases bypass Secretive** — Generic `Host *-agent` pattern uses `ProxyCommand` to strip the `-agent` suffix and `IdentityAgent SSH_AUTH_SOCK` to override Secretive. No per-host config — `ssh anyhost-agent` works for any resolvable hostname.
+- **OPNsense sshd reload, not restart** — `service openssh onereload` (SIGHUP) instead of restart. Full restart regenerates host keys and risks config overwrites by OPNsense's auto-generator.
+- **HA non-admin is not read-only** — HA non-admin users can call entity services (lights, switches). Only system operations (restart, add-ons) are blocked. Read-only is enforced by convention (GET requests only), not by HA permissions.
+- **Proxmox privsep requires user + token ACLs** — With `--privsep 1`, effective permissions = intersection of user and token. Both must have PVEAuditor role assigned, not just the token.

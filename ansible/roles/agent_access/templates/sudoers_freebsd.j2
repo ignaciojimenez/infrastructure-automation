@@ -1,0 +1,15 @@
+# {{ agent_access_user }} — read-only agent access
+# Managed by Ansible — do not edit manually
+
+# Process inspection
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/bin/pgrep *
+
+# Firewall state (read-only)
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /sbin/pfctl -s info
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /sbin/pfctl -s state
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /sbin/pfctl -s rules
+
+# OPNsense service status
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/local/sbin/configctl service list
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/local/sbin/configctl unbound status
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/local/sbin/configctl wireguard showconf

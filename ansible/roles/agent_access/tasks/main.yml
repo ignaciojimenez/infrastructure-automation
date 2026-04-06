@@ -1,0 +1,96 @@
+---
+# Agent Access Role
+# Creates a read-only read_agent user with SSH key and sudo rules
+# Cross-platform: Debian and FreeBSD
+
+- name: Remove old claude_agent sudoers (Debian)
+  ansible.builtin.file:
+    path: /etc/sudoers.d/claude_agent
+    state: absent
+  become: true
+  when: os_family == "debian"
+
+- name: Remove old claude_agent sudoers (FreeBSD)
+  ansible.builtin.file:
+    path: /usr/local/etc/sudoers.d/claude_agent
+    state: absent
+  become: true
+  when: os_family == "freebsd"
+
+- name: Remove old claude_agent user
+  ansible.builtin.user:
+    name: claude_agent
+    state: absent
+    remove: true
+  become: true
+
+- name: Create agent user (Debian)
+  ansible.builtin.user:
+    name: "{{ agent_access_user }}"
+    shell: "{{ agent_access_shell }}"
+    create_home: true
+    password: "!"
+    system: false
+    comment: "Read-only agent access"
+  become: true
+  when: os_family == "debian"
+
+- name: Create agent user (FreeBSD)
+  ansible.builtin.user:
+    name: "{{ agent_access_user }}"
+    shell: "{{ agent_access_shell }}"
+    create_home: true
+    password: "*"
+    comment: "Read-only agent access"
+  become: true
+  when: os_family == "freebsd"
+
+- name: Allow agent group in sshd AllowGroups (FreeBSD/OPNsense)
+  ansible.builtin.lineinfile:
+    path: /usr/local/etc/ssh/sshd_config
+    regexp: '^AllowGroups'
+    line: "AllowGroups wheel {{ agent_access_user }}"
+    validate: 'sshd -t -f %s'
+  become: true
+  when: os_family == "freebsd"
+  notify: Restart sshd freebsd
+
+- name: Ensure agent .ssh directory exists
+  ansible.builtin.file:
+    path: "/home/{{ agent_access_user }}/.ssh"
+    state: directory
+    owner: "{{ agent_access_user }}"
+    group: "{{ agent_access_user }}"
+    mode: '0700'
+  become: true
+
+- name: Deploy authorized_keys with IP restriction
+  ansible.builtin.template:
+    src: authorized_keys.j2
+    dest: "/home/{{ agent_access_user }}/.ssh/authorized_keys"
+    owner: "{{ agent_access_user }}"
+    group: "{{ agent_access_user }}"
+    mode: '0600'
+  become: true
+
+- name: Deploy sudoers for agent (Debian)
+  ansible.builtin.template:
+    src: sudoers_debian.j2
+    dest: /etc/sudoers.d/read_agent
+    owner: root
+    group: root
+    mode: '0440'
+    validate: 'visudo -cf %s'
+  become: true
+  when: os_family == "debian"
+
+- name: Deploy sudoers for agent (FreeBSD)
+  ansible.builtin.template:
+    src: sudoers_freebsd.j2
+    dest: /usr/local/etc/sudoers.d/read_agent
+    owner: root
+    group: wheel
+    mode: '0440'
+    validate: 'visudo -cf %s'
+  become: true
+  when: os_family == "freebsd"
