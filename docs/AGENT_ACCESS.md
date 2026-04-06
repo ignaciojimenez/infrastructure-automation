@@ -1,7 +1,7 @@
-# Agent Access — Phase 1 Discovery & Design
+# Agent Access — Read-Only Infrastructure Access
 
-Read-only infrastructure access for Claude agents. Enables autonomous investigation
-of any system (SSH, APIs, logs) without biometric authentication.
+Read-only infrastructure access for AI agents and automation tools. Enables autonomous
+investigation of any system (SSH, APIs, logs) without interactive authentication.
 
 **Status:** Phase 2 — SSH access deployed and validated on all 7 hosts (2026-04-06). HA + Proxmox API tokens pending.
 
@@ -9,10 +9,12 @@ of any system (SSH, APIs, logs) without biometric authentication.
 
 ## Problem
 
-All SSH keys are in Secretive (Secure Enclave), requiring biometric auth for each use.
-This blocks agents from SSHing to hosts, querying APIs via SSH tunnels, or running
-diagnostic commands autonomously. Every investigation requires the operator to manually
-authenticate, defeating the purpose of agent-driven diagnostics.
+SSH keys on this control machine are managed by [Secretive](https://github.com/maxgoedjen/secretive),
+which stores them in the macOS Secure Enclave and requires biometric (Touch ID) authentication
+for every use. This is great for human-interactive SSH but blocks any unattended access —
+AI agents, cron-driven scripts, or automation tools cannot SSH to hosts without a human
+physically present to authenticate. The same limitation applies to API queries routed
+through SSH tunnels.
 
 ---
 
@@ -24,7 +26,7 @@ Two access channels, both read-only. Phased rollout:
 - **Phase 3 (future TODO):** OPNsense API, UniFi API, Plex API (see [Future: API Expansion](#future-api-expansion))
 
 ```
-Claude Agent
+Agent (Claude Code, scripts, automation tools)
     |
     +-- SSH (Ed25519 key, password-protected, IP-restricted)
     |     +-- dockassist   (docker ps/logs, systemctl status, journalctl)
@@ -80,8 +82,8 @@ with a `from=` restriction limiting connections to the home LAN (`10.30.0.0/16`)
 from="10.30.0.0/16" ssh-ed25519 AAAA... read_agent@infrastructure
 ```
 
-At runtime, Claude Code uses `ssh -i ~/.ssh/read_agent_ed25519` with the passphrase
-loaded into `ssh-agent` at session start.
+At runtime, agents load the passphrase into their own `ssh-agent` instance and connect
+using `ssh hostname-agent` aliases (see [SSH Config](#step-4--ssh-config-on-control-machine)).
 
 ### Sudo Rules — Debian Hosts (dockassist, cobra, hifipi, vinylstreamer, cwwk, unifi)
 
@@ -170,7 +172,7 @@ These are available to the agent without any sudo rules:
 |----------|-------|
 | Auth method | Long-lived access token (Bearer) |
 | User | Dedicated `read_agent` HA user (local, non-admin) |
-| Token creation | HA UI > Profile > Long-Lived Access Tokens |
+| Token creation | See [Step 3](#step-3--create-api-userstokens-manual-one-time) for steps |
 | Token storage | Ansible Vault as `vault_ha_agent_token` |
 | Access scope | All entity states, history, logbook (read). No service calls, config changes, or automations. |
 
@@ -194,7 +196,7 @@ Verify this by creating the user and testing before granting the token.
 | User | `read_agent@pve` (Proxmox local user) |
 | Role | `PVEAuditor` — built-in read-only role |
 | Token name | `readonly` → full ID: `read_agent@pve!readonly` |
-| Token creation | `pveum user add read_agent@pve` + `pveum user token add read_agent@pve readonly --privsep 1` + `pveum acl modify / --tokens read_agent@pve!readonly --roles PVEAuditor` |
+| Token creation | See [Step 3](#step-3--create-api-userstokens-manual-one-time) for commands |
 | Token storage | Ansible Vault as `vault_proxmox_agent_token` |
 
 **Key endpoints:**
@@ -287,7 +289,7 @@ To revoke SSH without removing the user, clear `authorized_keys`:
 
 ### Audit
 
-- **SSH**: All logins appear in `/var/log/auth.log` (Debian) or `/var/log/auth.log` (FreeBSD).
+- **SSH**: All logins appear in `/var/log/auth.log` (Debian) or `/var/log/audit/audit_*.log` (OPNsense/FreeBSD).
   The username `read_agent` makes grep/filter trivial.
 - **Proxmox**: API token usage logged in Proxmox task log and syslog.
 - **HA**: API calls logged in HA system log at debug level.
@@ -307,24 +309,56 @@ ssh-keygen -t ed25519 -C "read_agent@infrastructure" \
 # Store public key in vault as vault_agent_ssh_pubkey
 ```
 
-### Step 2 — Ansible Role: `roles/system/agent_access`
-Create a role that:
-- Creates `read_agent` user (cross-platform: Debian + FreeBSD)
+### Step 2 — Ansible Role: `roles/agent_access`
+The role handles everything cross-platform (Debian + FreeBSD):
+- Creates `read_agent` user with locked password and `/bin/sh` shell
 - Deploys SSH `authorized_keys` with `from=` IP restriction (public key from vault)
 - Deploys platform-specific sudoers file to `/etc/sudoers.d/read_agent`
-- Validates sudoers syntax with `visudo -c` before applying
+- Validates sudoers syntax with `visudo -cf %s` before applying
+- On OPNsense: adds `read_agent` to sshd's `AllowGroups` (see caveats above)
+
+Deploy to all hosts:
+```bash
+ansible-playbook ansible/playbooks/system/agent_access.yml
+```
+Or as part of a full site deploy — the role is included in `site.yml` (Phase 4b).
 
 ### Step 3 — Create API Users/Tokens (Manual, One-Time)
-- **HA**: Create `read_agent` user (non-admin) in HA UI, generate long-lived token
-- **Proxmox**: Run `pveum` commands on cwwk to create user + PVEAuditor token
 
-Store tokens in `vault.yml`.
+**Home Assistant:**
+1. Go to HA UI → Settings → People → Users → Add User
+2. Create user `read_agent` with a strong password, **non-admin**
+3. Log in as `read_agent` → Profile → Long-Lived Access Tokens → Create Token
+4. Copy the token and store in vault as `vault_ha_agent_token`
+
+**Proxmox** (run on cwwk as root or with sudo):
+```bash
+pveum user add read_agent@pve --comment "AI agent read-only"
+pveum user token add read_agent@pve readonly --privsep 1
+# Note: quote the token ID to prevent bash ! expansion
+pveum acl modify / --tokens 'read_agent@pve!readonly' --roles PVEAuditor
+```
+Copy the token `value` from the output and store in vault as `vault_proxmox_agent_token`.
+
+Store all tokens in `vault.yml`.
 
 ### Step 4 — SSH Config on Control Machine
-Added to `~/.ssh/config` (before the `Host *` block with Secretive's `IdentityAgent`):
+
+**The problem:** If the control machine uses an SSH agent that requires interactive
+authentication (e.g., Secretive, FIDO2 keys, smartcards), the `IdentityAgent` directive
+in `~/.ssh/config` forces all SSH connections through that agent — including agent connections
+that need to be unattended. A normal `-i keyfile` flag is ignored when `IdentityAgent` is set.
+
+**The solution:** A generic `Host *-agent` pattern in `~/.ssh/config` that:
+1. Overrides the interactive agent with the standard `SSH_AUTH_SOCK` environment variable
+2. Strips the `-agent` suffix from the hostname to resolve the real target
+3. Uses a separate connection path to avoid conflicts with human SSH sessions
+
+Add this block **before** any `Host *` block in `~/.ssh/config`:
 ```
-# Agent access — bypasses Secretive for unattended SSH
-# Generic pattern — strips "-agent" suffix to resolve real hostname via ProxyCommand.
+# Agent access — bypasses interactive SSH agent for unattended connections
+# Usage: ssh <hostname>-agent "command"  (e.g., ssh dockassist-agent "uptime")
+# Generic: works for any resolvable hostname, no per-host config needed.
 Host *-agent
     User read_agent
     IdentityFile ~/.ssh/read_agent_ed25519
@@ -336,16 +370,35 @@ Host *-agent
 ```
 
 **How it works:**
-- `ssh dockassist-agent` → `ProxyCommand` strips `-agent` → connects to `dockassist:22`
-- `IdentityAgent SSH_AUTH_SOCK` overrides Secretive's agent set in `Host *`
-- No per-host config needed — add a new host and `ssh newhost-agent` works immediately
+- `ssh dockassist-agent` → `ProxyCommand` strips `-agent` → `nc dockassist 22`
+- `IdentityAgent SSH_AUTH_SOCK` tells SSH to use the real `SSH_AUTH_SOCK` env var
+  instead of the hardcoded interactive agent path (e.g., Secretive socket)
+- `IdentitiesOnly yes` ensures only the specified key is offered, not all agent keys
 - `ControlPath none` prevents multiplexing conflicts with human SSH sessions
 - `StrictHostKeyChecking accept-new` auto-accepts first-time host keys for `-agent` aliases
+- Adding a new host to the infrastructure requires zero SSH config changes
 
-**Agent workflow:**
-1. Start own ssh-agent: `eval $(ssh-agent -s)`
-2. Load the key: `ssh-add ~/.ssh/read_agent_ed25519` (supply passphrase)
-3. Connect: `ssh dockassist-agent "command"`
+**Agent workflow** (passphrase from Ansible Vault as `vault_agent_ssh_passphrase`):
+```bash
+# 1. Start a dedicated ssh-agent (isolated from the interactive agent)
+eval $(ssh-agent -s)
+
+# 2. Load the agent key (supply passphrase when prompted)
+ssh-add ~/.ssh/read_agent_ed25519
+
+# 3. Connect to any host using the -agent suffix
+ssh dockassist-agent "sudo docker ps"
+ssh opnsense-agent "sudo pfctl -s info"
+ssh cwwk-agent "sudo qm list"
+
+# 4. Clean up when done
+kill $SSH_AGENT_PID
+```
+
+**If not using Secretive:** The `Host *-agent` block still works — it's just a convenient
+alias pattern. The `IdentityAgent SSH_AUTH_SOCK` is a no-op when there's no conflicting
+agent override in `Host *`. The key benefit is the hostname suffix convention and
+dedicated user/key separation.
 
 ### Step 5 — Validation
 SSH validated on all 7 hosts (2026-04-06):
