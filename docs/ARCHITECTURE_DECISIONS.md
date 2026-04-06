@@ -139,3 +139,13 @@ Simple log of key technical decisions made in this project.
 - **Two-generation rotation on USB** — `current/` and `previous/` directories. Protects against copying a corrupt vzdump while fitting within drive capacity.
 - **Root-owned helper for privileged USB operations** — Follows `pve_backup_helper` pattern. Keeps sudoers rules minimal and auditable. One helper script = one sudoers entry.
 - **vzdump schedule is Proxmox-managed, not Ansible** — Proxmox UI/API manages `/etc/pve/jobs.cfg`. Accepted trade-off: simpler than fighting Proxmox's own scheduler, but must be manually reconfigured after a rebuild (documented in USB recovery checklist).
+
+## Agent Access
+
+- **Dedicated `read_agent` user** — Separate user for autonomous agent SSH access, not reusing human credentials. Read-only sudo rules, no group memberships.
+- **Password-protected SSH key outside Secretive** — Ed25519 key at `~/.ssh/read_agent_ed25519` on control machine, passphrase in Ansible Vault. Secretive blocks unattended access by design; agent key is intentionally outside it.
+- **IP-restricted authorized_keys** — `from="<control-machine-IP>"` on every host. Even if the key leaks, it's only usable from one source IP.
+- **Phased API rollout** — Phase 2: SSH + HA API + Proxmox API. Phase 3: OPNsense/UniFi/Plex APIs. Start lean, expand once SSH-based investigation proves the pattern.
+- **No secret access for agents** — Agent cannot read vault files, `.tado_tokens`, `secrets.yaml`, `.netrc`, or any credential files belonging to other users.
+- **SSH config aliases bypass Secretive** — `Host *-agent` entries use `IdentityAgent SSH_AUTH_SOCK` to override Secretive's `IdentityAgent`. Agents start their own ssh-agent, load the key, and use `hostname-agent` aliases.
+- **OPNsense sshd reload, not restart** — `service openssh onereload` (SIGHUP) instead of restart. Full restart regenerates host keys and risks config overwrites by OPNsense's auto-generator.

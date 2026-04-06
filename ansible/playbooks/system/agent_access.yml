@@ -1,0 +1,12 @@
+---
+# Deploy read-only agent access to all hosts
+# Creates claude_agent user with SSH key and restricted sudo rules
+
+- name: Deploy agent access
+  hosts: all
+  become: true
+  tasks:
+    - name: Deploy agent access role
+      ansible.builtin.include_role:
+        name: agent_access
+      tags: [agent_access]

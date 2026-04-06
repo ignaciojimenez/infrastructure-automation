@@ -1,0 +1,33 @@
+# {{ agent_access_user }} — read-only agent access
+# Managed by Ansible — do not edit manually
+
+# System diagnostics
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/bin/systemctl status *
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/bin/journalctl --no-pager *
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/bin/journalctl -u * --no-pager *
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/sbin/ss -tlnp
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/bin/lsof -i
+{% if primary_function | default('') == 'homeassistant' %}
+
+# Docker read-only (homeassistant host)
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/bin/docker ps *
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/bin/docker logs *
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/bin/docker inspect *
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/bin/docker stats --no-stream *
+{% endif %}
+{% if platform_type | default('') == 'proxmox' %}
+
+# Proxmox read-only
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/sbin/qm list
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/sbin/qm status *
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/sbin/qm config *
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/sbin/pct list
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/sbin/pct status *
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/sbin/pct config *
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/sbin/zpool status
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/sbin/zpool list
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/sbin/zfs list
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/bin/sensors
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/bin/pvesh get *
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/bin/dmesg
+{% endif %}

@@ -101,88 +101,44 @@ Inconsistency makes the monitoring setup harder to reason about. Every other cro
 
 ## Priority 11 — Read-Only Agent Access for Autonomous Investigation
 
-**Risk:** Currently, Claude agents require manual SSH authentication (Secretive biometric) or web API tokens to investigate issues. This blocks autonomous, real-time diagnostics across the infrastructure. Goal is to enable agents to investigate any system (SSH, web UIs, logs) without requiring human intervention or biometric auth, while maintaining strict read-only guarantees.
+**Risk:** Currently, Claude agents require manual SSH authentication (Secretive biometric) or web API tokens to investigate issues. This blocks autonomous, real-time diagnostics across the infrastructure.
 
-### Verified State (2026-03-21)
-- All SSH keys in Secretive (Secure Enclave) — non-exportable, require biometric auth for each use
-- Home Assistant API token exists and can be read from `/home/choco/homeassistant/secrets.yaml` on dockassist
-- Proxmox WebUI accessible via `choco@pam` with admin permissions (likely)
-- OPNsense WebUI accessible via SSH tunnel (requires SSH auth) or direct HTTPS
-- UniFi API documented but not tested for read-only access
-- No dedicated read-only SSH user or limited-privilege API tokens exist
+### Current State (2026-04-05)
+- **Phase 1 complete** — full design in [`docs/AGENT_ACCESS.md`](AGENT_ACCESS.md)
+- All SSH keys in Secretive (Secure Enclave) — non-exportable, require biometric auth
+- No dedicated read-only SSH user or API tokens exist yet
 
-### Approach
-
-**Phase 1 — Discovery & Planning (low effort)**
-1. Inventory all systems needing agent access:
-   - SSH: dockassist, cobra, hifipi, vinylstreamer (RPi), opnsense (FreeBSD), proxmox (Debian), unifi-lxc (LXC)
-   - Web UIs: Home Assistant, Proxmox, OPNsense, UniFi, Plex
-   - Log files: syslog/journald on each host, HA logs
-2. For each system, identify read-only access method:
-   - **SSH**: create dedicated agent-only user (e.g., `claude_agent`) with sudo access to specific read commands, shell restricted to `/bin/sh` or similar
-   - **Web APIs**: generate long-lived read-only API tokens where possible (HA, Proxmox, UniFi, Plex)
-   - **Logs**: either agent SSH user can read logs directly, or set up `tail -f` endpoints via authenticated HTTP proxy
-3. Document required authentication: which tokens/users go in repo vs. password manager vs. created at bootstrap time
-4. Security model: agent access is IP-scoped (Claude's IPs only) or uses API token rate limiting / audit logging
-
-**Phase 2 — Implementation (medium effort)**
-1. Create `claude_agent` user on each host with minimal sudo privileges: `sudo grep -r`, `sudo journalctl`, `sudo netstat`, `sudo ps`, read-only systemctl status
-2. Generate or configure read-only API tokens:
-   - Home Assistant: read-only token (already supports scoped tokens)
-   - Proxmox: PVE API token with read-only role (no VM/LXC control)
-   - UniFi: read-only API token (need to verify API supports this)
-   - Plex: read-only API token
-3. Store tokens in password manager or project secrets, document format for agent use
-4. Ansible bootstrap tasks: deploy user account, configure sudo rules, create tokens during initial setup
-5. Test agent can:
-   - SSH to each host, run read-only diagnostic commands
-   - Query each web API without human intervention
-   - Return meaningful diagnostics (service status, recent errors, resource usage)
-
-**Phase 3 — Agent Integration (medium effort)**
-1. Provision agent access credentials to Claude via environment or MCP server
-2. Create diagnostic playbooks/scripts agents can invoke: `check_host_health.sh`, `diagnose_service.sh`, etc.
-3. Document what information agents are authorized to collect (logs, metrics, config—no secrets)
-4. Set up audit logging so all agent actions are logged to a notification channel (for visibility)
-
-### What This Enables
-- **Real-time diagnosis**: agents can SSH to any host, check systemd status, tail logs, query APIs without waiting for user auth
-- **Faster incident response**: "the homeassistant Docker container is down" → agent can SSH, run `docker ps`, check logs, and propose a fix without human context-switching
-- **Pattern detection**: agents can correlate events across hosts (e.g., "cobra rebooted at 03:45, vinylstreamer lost connectivity at 03:46, both recovered by 04:00")
-- **Scheduled diagnostics**: agents can run periodic health checks and surface trends (disk usage growth, error rates, dependency version drift)
-
-### Safety Guardrails
-- Read-only enforcement: agent users cannot `sudo reboot`, `sudo systemctl restart`, `sudo rm`, etc.
-- SSH key restriction: agent keys accept commands via forced command in authorized_keys (if using key-based auth)
-- API token scoping: read-only tokens, optionally rate-limited
-- Audit trail: all agent access logged (syslog, API audit logs)
-- No secret access: agent cannot read vault.yml, .tado_tokens, SSL certs, API keys
-
-### Limitations to Accept
-- Agent cannot make changes; fixes still require human confirmation or separate privileged access
-- Agent access is one-way (agents can observe, not control)
-- Some diagnostics require running privileged commands (e.g., packet captures); agents can only read summaries
-- Network topology issues (VPN outage, gateway unreachable) may prevent agent SSH access to affected hosts
+### Phase 2 Scope (implementation)
+- **SSH**: `read_agent` user on all 7 hosts with platform-specific read-only sudo rules
+- **SSH key**: Ed25519, password-protected (passphrase in vault), IP-restricted to `10.30.0.0/16` via `from=`
+- **HA API**: Dedicated non-admin user + long-lived read-only token
+- **Proxmox API**: `read_agent@pve` with PVEAuditor role + API token
+- **Out of scope**: OPNsense/UniFi/Plex API tokens (deferred to Phase 3)
 
 ### Next Steps
-1. Document all systems and required read-only access methods (SSH user, API tokens)
-2. Design sudo rules for agent user on each host
-3. Create Ansible bootstrap tasks for agent user deployment
-4. Generate read-only API tokens where supported (HA, Proxmox, UniFi, Plex)
-5. Test agent can invoke all planned diagnostic commands
+1. Generate SSH key pair, store passphrase + public key in vault
+2. Create Ansible role `roles/system/agent_access` (user + authorized_keys + sudoers)
+3. Deploy to all hosts via `site.yml`
+4. Create HA user + token, Proxmox user + token (manual one-time)
+5. Store API tokens in vault
+6. Validate: SSH connects, sudo allowlist works, denials work, IP restriction works
 
 ### Acceptance Criteria
-- [ ] `claude_agent` user deployed on all production hosts via Ansible
-- [ ] Agent can SSH to any host and run read-only diagnostics without human auth
-- [ ] Agent can query HA, Proxmox, UniFi, Plex APIs using long-lived read-only tokens
-- [ ] Audit trail visible for all agent access (logged to Slack notification channel)
-- [ ] Documentation: what agent can access, how to revoke access, how to audit actions
+- [ ] `read_agent` user deployed on all production hosts via Ansible
+- [ ] Agent can SSH to any host and run read-only diagnostics without biometric auth
+- [ ] SSH key restricted to control machine IP via `from=` in authorized_keys
+- [ ] Agent can query HA and Proxmox APIs using read-only tokens
+- [ ] Sudo commands outside allowlist are denied
+- [ ] Agent cannot read secrets belonging to other users
+- [ ] Documentation complete: [`docs/AGENT_ACCESS.md`](AGENT_ACCESS.md)
 
 ---
 
 ## Lower Priority
 
 These items have value but are not urgent. Revisit quarterly.
+
+- **Agent API Expansion (Phase 3)** — Add read-only API access for OPNsense (key+secret, monitoring-api group), UniFi (session-based, read-only admin), and optionally Plex (account-scoped token, no role scoping). Depends on Priority 11 Phase 2 completion. Design notes already in `docs/AGENT_ACCESS.md` under "Future: API Expansion". SSH access to all three hosts is covered by Phase 2 — API access adds richer diagnostics on top.
 
 - **Slack Notification Strategy Review** — Current two-channel split (logging/alert) is architecturally sound but has some inconsistencies: train notifications go to `alert` (arguably informational), away mode goes to `alert` but home arrival goes to `notify`, DNS failover sends to both channels simultaneously, device offline alerts are split inconsistently between channels. A focused review session to audit all ~20 notification sources and reassign channels would improve signal-to-noise. Low effort, low urgency — current setup is functional and understood. May conclude that current state is good enough for a single-user system.
 - **Autonomous Infrastructure Agent** — Ambitious vision: an agent that monitors Slack alerts, host logs, and service health in real-time, then autonomously diagnoses, proposes solutions, and applies fixes without human intervention. Would need: Slack integration for alert intake, SSH access to hosts, diagnostic playbooks per failure type, a decision framework for when to auto-fix vs. notify, and safety guardrails to prevent cascading failures. High complexity — this is effectively building an SRE agent. Recommend scoping as a phased project: Phase 1 (alert aggregation + pattern matching), Phase 2 (diagnostic automation), Phase 3 (auto-remediation with approval gates). Worth exploring after Priorities 1-4 stabilize the monitoring foundation.

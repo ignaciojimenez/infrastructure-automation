@@ -1,0 +1,6 @@
+---
+- name: Restart sshd freebsd
+  ansible.builtin.command:
+    cmd: service openssh onereload
+  become: true
+  changed_when: true
