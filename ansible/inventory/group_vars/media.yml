@@ -25,9 +25,9 @@ samba_shares:
   - name: "Plex_Storage"
     path: "{{ external_drive_mount }}"
     comment: "Plex Media Storage"
-    browseable: yes
-    guest_ok: yes
-    read_only: no
+    browseable: true
+    guest_ok: true
+    read_only: false
     create_mask: "0777"
     directory_mask: "0777"
     owner: "nobody"

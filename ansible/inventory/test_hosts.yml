@@ -14,6 +14,6 @@ all:
             platform_type: raspberrypi
           hosts:
             devpi:
-              ansible_host: 192.168.1.100  # Replace with your test host IP
-              primary_function: media  
+              ansible_host: 10.30.100.247  # Different from key
+              primary_function: media
               is_test_environment: true  # Skips hardware-dependent checks

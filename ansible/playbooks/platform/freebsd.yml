@@ -5,13 +5,15 @@
   hosts: freebsd_hosts
   become: true
   tasks:
-    - ansible.builtin.import_tasks: ../tasks/freebsd_baseline.yml
+    - name: Apply FreeBSD baseline configuration
+      ansible.builtin.import_tasks: ../tasks/freebsd_baseline.yml
       tags: [freebsd, baseline]
 
 - name: Configure OPNsense firewall
   hosts: freebsd_hosts
   become: true
   tasks:
-    - ansible.builtin.import_tasks: ../tasks/opnsense_utilities.yml
+    - name: Apply OPNsense utilities
+      ansible.builtin.import_tasks: ../tasks/opnsense_utilities.yml
       when: platform_type == "opnsense"
       tags: [opnsense, utilities]

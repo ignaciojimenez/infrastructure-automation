@@ -67,4 +67,3 @@ ha_secondary_person: "person.candela"
 ha_secondary_person_display: "Candela"
 ha_secondary_device_tracker: "device_tracker.iphone_de_candela_2"
 ha_primary_presence_sensor: "binary_sensor.choco_presence"
-

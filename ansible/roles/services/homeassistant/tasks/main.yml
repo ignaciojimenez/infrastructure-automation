@@ -33,7 +33,7 @@
     name: ModemManager
     enabled: false
     state: stopped
-  when: 
+  when:
     - modemmanager_check.status is defined
     - not (is_test_environment | default(false))
   tags: [homeassistant]

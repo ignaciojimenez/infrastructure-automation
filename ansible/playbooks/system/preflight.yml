@@ -13,11 +13,11 @@
         - logs_dir
         - scripts_dir
       tags: [always]
-      
+
     - name: Test connectivity
       ansible.builtin.ping:
       tags: [always]
-      
+
     - name: Display host information
       ansible.builtin.debug:
         msg: |
@@ -34,7 +34,7 @@
       ansible.builtin.set_fact:
         host: "{{ inventory_hostname }}"
       tags: [always]
-    
+
     - name: Set os_family from ansible_os_family
       ansible.builtin.set_fact:
         os_family: "{{ ansible_os_family | lower }}"

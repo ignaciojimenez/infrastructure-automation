@@ -22,7 +22,7 @@
   register: fstab_check
   failed_when: false
   changed_when: false
-  when: 
+  when:
     - external_drive_uuid is defined
     - external_drive_mount is defined
   tags: [media, storage]
@@ -33,7 +33,7 @@
     path: /etc/fstab
     line: "UUID={{ external_drive_uuid }} {{ external_drive_mount }} {{ external_drive_fstype }} defaults,nofail,uid=1000,gid=media,dmask=002,fmask=113 0 0"
     state: present
-  when: 
+  when:
     - external_drive_uuid is defined
     - external_drive_mount is defined
     - fstab_check.rc != 0

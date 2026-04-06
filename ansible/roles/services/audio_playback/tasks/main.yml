@@ -17,7 +17,7 @@
         line: 'dtoverlay=vc4-kms-v3d,noaudio,nohdmi'
         create: false
       notify: reboot for hardware changes
-    
+
     - name: Disable onboard audio
       ansible.builtin.lineinfile:
         path: /boot/firmware/config.txt
@@ -25,7 +25,7 @@
         line: '#dtparam=audio=on'
         create: false
       notify: reboot for hardware changes
-    
+
     - name: Enable HiFiBerry DAC+ overlay
       ansible.builtin.lineinfile:
         path: /boot/firmware/config.txt
@@ -34,7 +34,7 @@
         insertafter: EOF
         create: false
       notify: reboot for hardware changes
-    
+
     - name: Set minimal GPU memory
       ansible.builtin.lineinfile:
         path: /boot/firmware/config.txt
@@ -69,13 +69,13 @@
         dest: /etc/mpd.conf
         regexp: '^bind_to_address'
         replace: '#bind_to_address'
-    
+
     - name: Enable mDNS announcement for MPD
       ansible.builtin.lineinfile:
         path: /etc/mpd.conf
         line: 'zeroconf_enabled "yes"'
         insertafter: EOF
-    
+
     - name: Set mDNS name for MPD
       ansible.builtin.lineinfile:
         path: /etc/mpd.conf
@@ -151,19 +151,19 @@
         cmd: autoreconf -i -f
         chdir: "/home/{{ primary_user }}/shairport-sync"
       changed_when: false
-    
+
     - name: Configure Shairport Sync
       ansible.builtin.command:
         cmd: ./configure --with-alsa --with-avahi --with-ssl=openssl --with-systemd --with-metadata --with-soxr --with-systemdsystemunitdir=/lib/systemd/system
         chdir: "/home/{{ primary_user }}/shairport-sync"
       changed_when: false
-    
+
     - name: Compile Shairport Sync
       ansible.builtin.command:
         cmd: make -j{{ ansible_processor_vcpus | default(2) }}
         chdir: "/home/{{ primary_user }}/shairport-sync"
       changed_when: false
-    
+
     - name: Install Shairport Sync
       ansible.builtin.command:
         cmd: make install
@@ -180,25 +180,25 @@
       ansible.builtin.apt:
         name: apt-transport-https
         state: present
-    
+
     - name: Add Raspotify repository key
       ansible.builtin.get_url:
         url: https://dtcooper.github.io/raspotify/key.asc
         dest: /usr/share/keyrings/raspotify-archive-keyring.asc
         mode: '0644'
-    
+
     - name: Add Raspotify repository
       ansible.builtin.apt_repository:
         repo: "deb [signed-by=/usr/share/keyrings/raspotify-archive-keyring.asc] https://dtcooper.github.io/raspotify raspotify main"
         filename: raspotify
         state: present
         update_cache: true
-    
+
     - name: Install Raspotify
       ansible.builtin.apt:
         name: raspotify
         state: present
-    
+
     - name: Configure Raspotify
       ansible.builtin.copy:
         dest: /etc/raspotify/conf

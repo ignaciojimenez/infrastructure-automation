@@ -10,9 +10,11 @@
   hosts: all
   become: true
   handlers:
-    - ansible.builtin.import_tasks: ../handlers/main.yml
+    - name: Import common handlers
+      ansible.builtin.import_tasks: ../handlers/main.yml
   tasks:
-    - ansible.builtin.import_tasks: tasks/ssh_hardening.yml
+    - name: Apply SSH hardening
+      ansible.builtin.import_tasks: tasks/ssh_hardening.yml
       tags: [security, ssh]
 
 - name: Pre-role setup tasks
@@ -37,7 +39,7 @@
         - role_config_file.stat.exists | default(false)
       tags: [always]
 
-    # Media host preparation — external storage must be mounted before service roles run
+    # Media host preparation - external storage and cobra scripts
     - name: Configure external storage for media hosts
       ansible.builtin.import_tasks: tasks/media_storage.yml
       when:
@@ -123,6 +125,7 @@
   hosts: all
   become: true
   tasks:
-    - ansible.builtin.import_tasks: tasks/deploy_monitoring.yml
+    - name: Deploy monitoring infrastructure
+      ansible.builtin.import_tasks: tasks/deploy_monitoring.yml
       when: enable_monitoring | default(true)
       tags: [monitoring, services]
