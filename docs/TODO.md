@@ -101,36 +101,26 @@ Inconsistency makes the monitoring setup harder to reason about. Every other cro
 
 ## Priority 11 — Read-Only Agent Access for Autonomous Investigation
 
-**Risk:** Currently, Claude agents require manual SSH authentication (Secretive biometric) or web API tokens to investigate issues. This blocks autonomous, real-time diagnostics across the infrastructure.
+**Risk:** All SSH keys are in Secretive (Secure Enclave), requiring biometric auth for every use. This blocks any unattended access — AI agents, automation tools, and cron-driven scripts cannot SSH to hosts or query APIs without a human physically present.
 
-### Current State (2026-04-05)
-- **Phase 1 complete** — full design in [`docs/AGENT_ACCESS.md`](AGENT_ACCESS.md)
-- All SSH keys in Secretive (Secure Enclave) — non-exportable, require biometric auth
-- No dedicated read-only SSH user or API tokens exist yet
+### Current State (2026-04-06)
+- **Phase 2 SSH deployed and validated** — `read_agent` user on all 7 hosts
+- Full design and implementation guide in [`docs/AGENT_ACCESS.md`](AGENT_ACCESS.md)
 
-### Phase 2 Scope (implementation)
-- **SSH**: `read_agent` user on all 7 hosts with platform-specific read-only sudo rules
-- **SSH key**: Ed25519, password-protected (passphrase in vault), IP-restricted to `10.30.0.0/16` via `from=`
-- **HA API**: Dedicated non-admin user + long-lived read-only token
-- **Proxmox API**: `read_agent@pve` with PVEAuditor role + API token
-- **Out of scope**: OPNsense/UniFi/Plex API tokens (deferred to Phase 3)
-
-### Next Steps
-1. Generate SSH key pair, store passphrase + public key in vault
-2. Create Ansible role `roles/system/agent_access` (user + authorized_keys + sudoers)
-3. Deploy to all hosts via `site.yml`
-4. Create HA user + token, Proxmox user + token (manual one-time)
-5. Store API tokens in vault
-6. Validate: SSH connects, sudo allowlist works, denials work, IP restriction works
+### Remaining Work
+1. Create HA read-only user + long-lived token (manual, one-time in HA UI)
+2. Create Proxmox `read_agent@pve` user + PVEAuditor API token (manual, one-time via `pveum`)
+3. Store API tokens in vault
+4. Validate: file access denial, IP restriction from outside `10.30.0.0/16`
 
 ### Acceptance Criteria
-- [ ] `read_agent` user deployed on all production hosts via Ansible
-- [ ] Agent can SSH to any host and run read-only diagnostics without biometric auth
-- [ ] SSH key restricted to control machine IP via `from=` in authorized_keys
+- [x] `read_agent` user deployed on all production hosts via Ansible
+- [x] Agent can SSH to any host and run read-only diagnostics without biometric auth
+- [x] SSH key restricted to LAN via `from=` in authorized_keys
+- [x] Sudo commands outside allowlist are denied
+- [x] Documentation complete: [`docs/AGENT_ACCESS.md`](AGENT_ACCESS.md)
 - [ ] Agent can query HA and Proxmox APIs using read-only tokens
-- [ ] Sudo commands outside allowlist are denied
-- [ ] Agent cannot read secrets belonging to other users
-- [ ] Documentation complete: [`docs/AGENT_ACCESS.md`](AGENT_ACCESS.md)
+- [ ] Agent cannot read secrets belonging to other users (validated)
 
 ---
 

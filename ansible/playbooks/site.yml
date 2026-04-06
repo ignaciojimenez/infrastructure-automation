@@ -32,7 +32,7 @@
   tags: [baseline]
 
 # ========== PHASE 4b: Agent Access ==========
-# Deploys read-only claude_agent user to all hosts
+# Deploys read-only read_agent user to all hosts
 - ansible.builtin.import_playbook: system/agent_access.yml
   tags: [agent_access, baseline]
 

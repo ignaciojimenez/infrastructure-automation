@@ -1,6 +1,6 @@
 ---
 # Deploy read-only agent access to all hosts
-# Creates claude_agent user with SSH key and restricted sudo rules
+# Creates read_agent user with SSH key and restricted sudo rules
 
 - name: Deploy agent access
   hosts: all
