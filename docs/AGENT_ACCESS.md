@@ -324,26 +324,28 @@ Store tokens in `vault.yml`.
 Added to `~/.ssh/config` (before the `Host *` block with Secretive's `IdentityAgent`):
 ```
 # Agent access — bypasses Secretive for unattended SSH
-# Requires: eval $(ssh-agent -s) && ssh-add ~/.ssh/read_agent_ed25519
-Host dockassist-agent cobra-agent hifipi-agent vinylstreamer-agent opnsense-agent cwwk-agent unifi-agent
+# Generic pattern — strips "-agent" suffix to resolve real hostname via ProxyCommand.
+Host *-agent
     User read_agent
     IdentityFile ~/.ssh/read_agent_ed25519
     IdentityAgent SSH_AUTH_SOCK
     IdentitiesOnly yes
     ControlPath none
-
-Host dockassist-agent
-    Hostname dockassist
-# ... (one block per host mapping alias to real hostname)
+    ProxyCommand sh -c 'nc $(echo %h | sed s/-agent$//) %p'
+    StrictHostKeyChecking accept-new
 ```
 
-**Key detail:** `IdentityAgent SSH_AUTH_SOCK` overrides the Secretive agent set in `Host *`,
-telling SSH to use the real `SSH_AUTH_SOCK` environment variable. Agents must:
-1. Start their own ssh-agent: `eval $(ssh-agent -s)`
-2. Load the key: `ssh-add ~/.ssh/read_agent_ed25519` (supply passphrase)
-3. Connect using alias: `ssh dockassist-agent "command"`
+**How it works:**
+- `ssh dockassist-agent` → `ProxyCommand` strips `-agent` → connects to `dockassist:22`
+- `IdentityAgent SSH_AUTH_SOCK` overrides Secretive's agent set in `Host *`
+- No per-host config needed — add a new host and `ssh newhost-agent` works immediately
+- `ControlPath none` prevents multiplexing conflicts with human SSH sessions
+- `StrictHostKeyChecking accept-new` auto-accepts first-time host keys for `-agent` aliases
 
-`ControlPath none` prevents connection multiplexing conflicts with human SSH sessions.
+**Agent workflow:**
+1. Start own ssh-agent: `eval $(ssh-agent -s)`
+2. Load the key: `ssh-add ~/.ssh/read_agent_ed25519` (supply passphrase)
+3. Connect: `ssh dockassist-agent "command"`
 
 ### Step 5 — Validation
 SSH validated on all 7 hosts (2026-04-06):
