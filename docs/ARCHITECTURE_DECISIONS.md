@@ -149,3 +149,5 @@ Simple log of key technical decisions made in this project.
 - **No secret access for agents** — Agent cannot read vault files, `.tado_tokens`, `secrets.yaml`, `.netrc`, or any credential files belonging to other users.
 - **SSH config aliases bypass Secretive** — Generic `Host *-agent` pattern uses `ProxyCommand` to strip the `-agent` suffix and `IdentityAgent SSH_AUTH_SOCK` to override Secretive. No per-host config — `ssh anyhost-agent` works for any resolvable hostname.
 - **OPNsense sshd reload, not restart** — `service openssh onereload` (SIGHUP) instead of restart. Full restart regenerates host keys and risks config overwrites by OPNsense's auto-generator.
+- **HA non-admin is not read-only** — HA non-admin users can call entity services (lights, switches). Only system operations (restart, add-ons) are blocked. Read-only is enforced by convention (GET requests only), not by HA permissions.
+- **Proxmox privsep requires user + token ACLs** — With `--privsep 1`, effective permissions = intersection of user and token. Both must have PVEAuditor role assigned, not just the token.

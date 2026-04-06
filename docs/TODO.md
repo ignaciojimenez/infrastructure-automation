@@ -108,19 +108,18 @@ Inconsistency makes the monitoring setup harder to reason about. Every other cro
 - Full design and implementation guide in [`docs/AGENT_ACCESS.md`](AGENT_ACCESS.md)
 
 ### Remaining Work
-1. Create HA read-only user + long-lived token (manual, one-time in HA UI)
-2. Create Proxmox `read_agent@pve` user + PVEAuditor API token (manual, one-time via `pveum`)
-3. Store API tokens in vault
-4. Validate: file access denial, IP restriction from outside `10.30.0.0/16`
+1. Validate `from=` IP restriction from outside `10.30.0.0/16` (requires off-LAN test)
 
 ### Acceptance Criteria
 - [x] `read_agent` user deployed on all production hosts via Ansible
 - [x] Agent can SSH to any host and run read-only diagnostics without biometric auth
 - [x] SSH key restricted to LAN via `from=` in authorized_keys
 - [x] Sudo commands outside allowlist are denied
+- [x] Agent cannot read secrets belonging to other users (`secrets.yaml`, `.tado_tokens`, `.netrc`, `config.xml`, `shadow.cfg`)
+- [x] HA API: reads entity states/config, rejects admin operations (401)
+- [x] Proxmox API: reads node status/VM/CT list, rejects control operations (403)
 - [x] Documentation complete: [`docs/AGENT_ACCESS.md`](AGENT_ACCESS.md)
-- [ ] Agent can query HA and Proxmox APIs using read-only tokens
-- [ ] Agent cannot read secrets belonging to other users (validated)
+- [ ] `from=` restriction validated from outside LAN (requires off-network test)
 
 ---
 

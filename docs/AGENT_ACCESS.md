@@ -184,9 +184,15 @@ These are available to the agent without any sudo rules:
 - `GET /api/config` — HA configuration overview
 - `GET /api/` — API health check (returns 200 + `{"message": "API running."}`)
 
-**Limitation:** HA long-lived tokens inherit the user's permissions. A non-admin user
-can read states and history but cannot call services, modify config, or install add-ons.
-Verify this by creating the user and testing before granting the token.
+**Limitation:** HA's non-admin role is **not truly read-only**. A non-admin user cannot
+manage the system (restart HA, install add-ons, manage users), but CAN call entity
+services (turn on lights, toggle switches, trigger automations). HA does not currently
+offer a built-in read-only role — category-based permissions exist but are experimental.
+
+**Mitigation:** Agents using this token MUST restrict themselves to `GET` requests only.
+The token is technically capable of `POST /api/services/*` calls, but agents should never
+use them. This is enforced by convention, not by HA's permission model. The token exists
+for reading states, history, and logs — not for controlling devices.
 
 ### Proxmox (cwwk:8006)
 
@@ -336,6 +342,10 @@ Or as part of a full site deploy — the role is included in `site.yml` (Phase 4
 pveum user add read_agent@pve --comment "AI agent read-only"
 pveum user token add read_agent@pve readonly --privsep 1
 # Note: quote the token ID to prevent bash ! expansion
+# IMPORTANT: grant PVEAuditor to BOTH the user AND the token.
+# With privsep=1, effective permissions = intersection of user + token permissions.
+# If only the token has the role, the intersection is empty and all API calls fail.
+pveum acl modify / --users read_agent@pve --roles PVEAuditor
 pveum acl modify / --tokens 'read_agent@pve!readonly' --roles PVEAuditor
 ```
 Copy the token `value` from the output and store in vault as `vault_proxmox_agent_token`.
@@ -401,14 +411,19 @@ agent override in `Host *`. The key benefit is the hostname suffix convention an
 dedicated user/key separation.
 
 ### Step 5 — Validation
-SSH validated on all 7 hosts (2026-04-06):
+All validated 2026-04-06:
 - [x] SSH connects without biometric auth — all 7 hosts
 - [x] Sudo commands in allowlist work — all 7 hosts
 - [x] Sudo commands NOT in allowlist are denied — all 7 hosts
-- [ ] Cannot read other users' files (`/home/choco/.netrc`, `secrets.yaml`, etc.)
-- [ ] `from=` restriction blocks connections from outside 10.30.0.0/16
-- [ ] HA API token returns entity states, rejects service calls
-- [ ] Proxmox API token returns VM status, rejects control operations
+- [x] Cannot read other users' files — tested `secrets.yaml`, `.tado_tokens`, `.netrc`, `shadow.cfg`, `config.xml`, `.ssh/` — all denied
+- [x] Proxmox API token returns node status, VM/CT list — rejects VM control (403)
+- [x] HA API token returns entity states (173 entities) and config
+- [x] HA API rejects admin operations (homeassistant/restart → 401)
+- [ ] `from=` restriction blocks connections from outside 10.30.0.0/16 (requires off-LAN test)
+
+**HA service call caveat (validated):** HA non-admin users CAN call entity services
+(lights, switches, automations) — only system-level operations are blocked. See
+[HA limitation note](#home-assistant-dockassist8123) for mitigation.
 
 ---
 
