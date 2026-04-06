@@ -127,6 +127,31 @@ Every service role that deploys monitoring follows this pattern:
   tags: [{service}, monitoring, cron]
 ```
 
+## Agent Access Role
+
+The `agent_access` role deploys a read-only `read_agent` SSH user to every host. It runs
+automatically as **Phase 4b** in `site.yml` (after baseline, before platform config).
+
+| What it does | Detail |
+|---|---|
+| Creates `read_agent` user | No password, key-only auth, shell `/bin/sh` |
+| Deploys `authorized_keys` | IP-restricted via `from=` to the control machine IP |
+| Deploys sudoers rules | Read-only diagnostics only (`systemctl status`, `journalctl`, etc.) |
+| Platform-aware | Separate sudoers templates for Debian and FreeBSD |
+| Removes legacy `claude_agent` | Cleans up prior naming if present |
+
+**Required vault variables** (add to `vault.yml`):
+
+```yaml
+vault_agent_control_ip: "192.168.1.x"   # IP of your control machine
+vault_agent_ssh_pubkey: "ssh-ed25519 AAAA..."  # Public key for the agent SSH key
+vault_agent_ssh_passphrase: "..."        # Passphrase for the private key
+```
+
+The private key lives at `~/.ssh/read_agent_ed25519` on the control machine (outside any
+hardware security key), so agents can use it unattended. See `docs/AGENT_ACCESS.md` for
+the full design and SSH config setup.
+
 ## Testing Strategy
 
 **Tier 1 — Static analysis (run before every commit):**

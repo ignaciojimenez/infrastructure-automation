@@ -188,12 +188,12 @@
               "title": "Presence",
               "entities": [
                 {
-                  "entity": "person.choco",
-                  "name": "Choco"
+                  "entity": "{{ ha_primary_person | default('person.primary') }}",
+                  "name": "{{ ha_primary_person_display | default('Primary') }}"
                 },
                 {
-                  "entity": "person.candela",
-                  "name": "Candela"
+                  "entity": "{{ ha_secondary_person | default('person.secondary') }}",
+                  "name": "{{ ha_secondary_person_display | default('Secondary') }}"
                 }
               ]
             }
