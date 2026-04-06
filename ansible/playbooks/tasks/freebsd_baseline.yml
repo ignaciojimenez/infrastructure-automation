@@ -9,7 +9,7 @@
   tags: [packages]
 
 - name: Install essential packages
-  ansible.builtin.pkgng:
+  community.general.pkgng:
     name:
       - curl
       - wget

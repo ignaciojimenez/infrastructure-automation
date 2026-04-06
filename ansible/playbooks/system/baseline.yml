@@ -15,7 +15,7 @@
         os_family: "{{ ansible_os_family | lower }}"
       when: os_family is not defined
       tags: [always]
-    
+
     - name: Ensure base directories exist
       ansible.builtin.file:
         path: "{{ item }}"
@@ -27,7 +27,7 @@
         - "{{ _scripts_dir }}"
         - "{{ _config_dir }}"
       tags: [baseline, directories]
-      
+
     - name: Find all common scripts
       ansible.builtin.find:
         paths: "{{ playbook_dir }}/../../../scripts/common/"
@@ -37,7 +37,7 @@
       become: false  # Don't sudo on control machine
       run_once: true
       tags: [baseline, scripts, monitoring]
-    
+
     - name: Deploy all common scripts
       ansible.builtin.copy:
         src: "{{ item.path }}"
@@ -48,7 +48,7 @@
         backup: true
       loop: "{{ common_scripts_baseline.files }}"
       tags: [baseline, scripts, monitoring]
-      
+
     - name: Install age encryption tool
       ansible.builtin.apt:
         name: age
@@ -64,7 +64,7 @@
         job: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
         user: "{{ primary_user }}"
       tags: [baseline, cron]
-    
+
     - name: Deploy curlbin .netrc credentials
       ansible.builtin.template:
         src: "{{ playbook_dir }}/../../../templates/netrc_curlbin.j2"
@@ -102,6 +102,7 @@
   hosts: all
   become: true
   tasks:
-    - ansible.builtin.import_tasks: ../tasks/install_base_software.yml
+    - name: Install base software
+      ansible.builtin.import_tasks: ../tasks/install_base_software.yml
       when: os_family == "debian"
       tags: [packages, base]

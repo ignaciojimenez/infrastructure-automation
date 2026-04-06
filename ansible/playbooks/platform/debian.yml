@@ -5,9 +5,11 @@
   hosts: debian_hosts
   become: true
   tasks:
-    - ansible.builtin.import_tasks: ../tasks/debian_baseline.yml
+    - name: Apply Debian baseline configuration
+      ansible.builtin.import_tasks: ../tasks/debian_baseline.yml
       tags: [debian, baseline]
-      
-    - ansible.builtin.import_tasks: ../tasks/debian_updates.yml
+
+    - name: Configure unattended upgrades
+      ansible.builtin.import_tasks: ../tasks/debian_updates.yml
       when: enable_unattended_upgrades | default(false)
       tags: [debian, updates]

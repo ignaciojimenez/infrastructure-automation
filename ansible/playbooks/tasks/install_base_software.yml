@@ -55,7 +55,7 @@
     name: fail2ban
     state: started
     enabled: true
-  when: 
+  when:
     - os_family == "debian"
     - fail2ban_check is not skipped
     - fail2ban_check.rc == 0

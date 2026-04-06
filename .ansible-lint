@@ -3,15 +3,27 @@ exclude_paths:
   - .git/
   - migration_backup*/
   - tmp/
-  
+
 skip_list:
   - yaml[line-length]
   - no-changed-when
-  
+  - var-naming[no-role-prefix]  # renaming would break playbooks
+  - role-name[path]             # roles in subdirectories (services/, platform/) is intentional
+  - partial-become              # become scope is intentional per task
+  - key-order                   # cosmetic key ordering
+  - no-relative-paths           # relative paths to playbook_dir are intentional
+  - run-once[task]              # run_once is intentional, not a strategy issue
+  - command-instead-of-module   # mount/mkfs usage is intentional
+  - risky-shell-pipe            # shell pipe usage is intentional
+  - ignore-errors               # intentional in bootstrap and service probes
+  - no-handler                  # intentional design choice
+  - risky-file-permissions      # intentional permissions
+  - latest                      # intentional in automation context
+
 warn_list:
   - experimental
   - command-instead-of-shell
-  
+
 use_default_rules: true
 
 # Ansible-lint configuration

@@ -5,13 +5,13 @@
   hosts: raspberrypi
   become: true
   handlers:
-    - name: reboot_required
+    - name: Reboot required
       ansible.builtin.debug:
         msg: "Reboot required - will be handled at end of playbook"
       listen: "reboot_required"
   tasks:
     - name: Raspberry Pi memory optimizations
-      ansible.builtin.sysctl:
+      ansible.posix.sysctl:
         name: "{{ item.name }}"
         value: "{{ item.value }}"
         state: present
@@ -21,7 +21,7 @@
         - { name: 'vm.vfs_cache_pressure', value: '50' }
       when: platform_type == "raspberrypi"
       tags: [raspberrypi, optimization]
-      
+
     - name: Disable Bluetooth overlay on Raspberry Pi
       ansible.builtin.lineinfile:
         path: /boot/config.txt
@@ -32,7 +32,7 @@
         - platform_type == "raspberrypi"
         - disable_bluetooth | default(true)
       tags: [raspberrypi, optimization, bluetooth]
-    
+
     - name: Disable Bluetooth services
       ansible.builtin.systemd:
         name: "{{ item }}"
@@ -48,19 +48,19 @@
       tags: [raspberrypi, optimization, bluetooth]
       # Note: hciuart.service only exists on very old Pi/Raspbian versions
       # Modern systems won't have it - that's expected and OK
-      
+
     - name: Create systemd service to disable HDMI on boot
       ansible.builtin.copy:
         content: |
           [Unit]
           Description=Disable HDMI to save power
           After=multi-user.target
-          
+
           [Service]
           Type=oneshot
           ExecStart=/usr/bin/tvservice -o
           RemainAfterExit=yes
-          
+
           [Install]
           WantedBy=multi-user.target
         dest: /etc/systemd/system/disable-hdmi.service
@@ -72,7 +72,7 @@
         - disable_hdmi | default(true)
       notify: reboot_required
       tags: [raspberrypi, optimization, hdmi]
-    
+
     - name: Enable HDMI disable service
       ansible.builtin.systemd:
         name: disable-hdmi

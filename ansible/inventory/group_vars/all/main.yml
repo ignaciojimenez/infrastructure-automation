@@ -54,4 +54,3 @@ curlbin_password: "{{ vault_curlbin_password }}"
 # System configuration
 enable_unattended_upgrades: true
 enable_monitoring: true
-

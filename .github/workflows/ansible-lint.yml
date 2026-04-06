@@ -31,7 +31,7 @@ jobs:
         run: pip install ansible-lint
 
       - name: Install Ansible collections
-        run: ansible-galaxy collection install community.general community.docker
+        run: ansible-galaxy collection install community.general community.docker ansible.posix
 
       - name: Create vault password file for CI
         run: mkdir -p ~/.ansible && echo "ci-dummy" > ~/.ansible/vault_pass

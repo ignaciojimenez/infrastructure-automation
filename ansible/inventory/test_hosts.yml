@@ -15,5 +15,5 @@ all:
           hosts:
             devpi:
               ansible_host: 10.30.100.247  # Different from key
-              primary_function: media  
+              primary_function: media
               is_test_environment: true  # Skips hardware-dependent checks
