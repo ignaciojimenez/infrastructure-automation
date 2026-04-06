@@ -46,17 +46,17 @@
       #!/bin/sh
       # Aggregate monitoring results
       # Note: system_health_check.sh includes disk and memory checks
-      
+
       MONITORING_DIR="{{ system_config_dir | default('/etc/monitoring') }}/results"
       mkdir -p "$MONITORING_DIR"
-      
+
       # Run comprehensive health check (includes disk, memory, load, services, network)
       echo "=== System Health Check ===" > "$MONITORING_DIR/latest.txt"
       {{ scripts_dir }}/system_health_check.sh >> "$MONITORING_DIR/latest.txt" 2>&1
-      
+
       # Keep historical data
       cp "$MONITORING_DIR/latest.txt" "$MONITORING_DIR/$(date +%Y%m%d_%H%M%S).txt"
-      
+
       # Clean old files (keep 7 days)
       find "$MONITORING_DIR" -name "*.txt" -mtime +7 -delete
     dest: "{{ scripts_dir }}/run_all_monitoring.sh"

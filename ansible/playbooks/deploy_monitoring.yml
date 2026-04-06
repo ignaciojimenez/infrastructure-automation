@@ -34,7 +34,7 @@
       become: false  # Don't sudo on control machine
       run_once: true
       tags: [monitoring, scripts]
-    
+
     - name: Deploy all common scripts
       ansible.builtin.copy:
         src: "{{ item.path }}"
@@ -44,7 +44,7 @@
         group: "{{ infrastructure_group }}"
       loop: "{{ common_scripts.files }}"
       tags: [monitoring, scripts]
-      
+
     - name: Restart monitoring services if needed
       ansible.builtin.systemd:
         name: "{{ item }}"
@@ -54,7 +54,7 @@
       when: ansible_service_mgr == "systemd"
       failed_when: false
       tags: [monitoring, services]
-      
+
     - name: Report common scripts deployment complete
       ansible.builtin.debug:
         msg: "✅ Common monitoring scripts deployed to {{ inventory_hostname }}"

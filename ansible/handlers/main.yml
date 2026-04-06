@@ -1,47 +1,48 @@
 ---
 # Common handlers for all playbooks
 
-- name: restart_ssh
+- name: Restart SSH
   ansible.builtin.service:
     name: "{{ 'ssh' if ansible_os_family == 'Debian' else 'sshd' }}"
     state: restarted
-  listen: 
+  listen:
+    - "restart_ssh"
     - "restart ssh"
     - "restart sshd"
 
-- name: restart rsyslog
+- name: Restart rsyslog
   ansible.builtin.service:
     name: rsyslog
     state: restarted
   when: os_family == "debian"
   listen: "restart rsyslog"
 
-- name: restart syslogd
+- name: Restart syslogd
   ansible.builtin.service:
     name: syslogd
-    state: restarted  
+    state: restarted
   when: os_family == "freebsd"
   listen: "restart syslogd"
 
-- name: reload systemd
+- name: Reload systemd
   ansible.builtin.systemd:
     daemon_reload: true
   when: os_family == "debian"
   listen: "reload systemd"
 
-- name: update apt cache
+- name: Update apt cache
   ansible.builtin.apt:
     update_cache: true
   when: os_family == "debian"
   listen: "update apt cache"
 
-- name: update pkg cache
+- name: Update pkg cache
   ansible.builtin.command:
     cmd: pkg update
   when: os_family == "freebsd"
   listen: "update pkg cache"
 
-- name: reboot_required
+- name: Reboot required
   ansible.builtin.debug:
     msg: "Reboot required - will be handled at end of playbook"
   listen: "reboot_required"

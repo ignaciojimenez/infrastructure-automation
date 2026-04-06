@@ -13,7 +13,7 @@
       changed_when: false
       when: enable_monitoring | default(true)
       tags: [validation]
-      
+
     - name: Display validation result
       ansible.builtin.debug:
         msg: |

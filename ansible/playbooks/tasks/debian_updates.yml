@@ -57,7 +57,7 @@
     content: |
       #!/bin/sh
       # Check unattended-upgrades status
-      
+
       if [ -f /var/log/unattended-upgrades/unattended-upgrades.log ]; then
           TODAY=$(date +%Y-%m-%d)
           if grep -q "$TODAY" /var/log/unattended-upgrades/unattended-upgrades.log; then

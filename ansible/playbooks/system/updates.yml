@@ -6,7 +6,8 @@
   hosts: all
   become: true
   tasks:
-    - ansible.builtin.import_tasks: ../tasks/update_upgrade_clean.yml
+    - name: Run system update and upgrade
+      ansible.builtin.import_tasks: ../tasks/update_upgrade_clean.yml
       when: os_family == "debian"
       tags: [updates, initial]
 
@@ -14,6 +15,7 @@
   hosts: all
   become: true
   tasks:
-    - ansible.builtin.import_tasks: ../tasks/update_upgrade_clean.yml
+    - name: Run system update and upgrade
+      ansible.builtin.import_tasks: ../tasks/update_upgrade_clean.yml
       when: os_family == "debian"
       tags: [updates, final]

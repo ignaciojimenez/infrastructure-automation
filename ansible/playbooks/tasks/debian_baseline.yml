@@ -25,7 +25,7 @@
   tags: [packages]
 
 - name: Set timezone
-  ansible.builtin.timezone:
+  community.general.timezone:
     name: "{{ timezone | default('Europe/Madrid') }}"
   tags: [timezone]
 
