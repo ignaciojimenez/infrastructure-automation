@@ -1,12 +1,10 @@
 # Infrastructure TODO — Prioritized Action List
 
-Updated: 2026-03-30 | Validated against live hosts
+Updated: 2026-04-07 | Validated against live hosts
 
 This document is the single source of truth for pending infrastructure work.
 Each item includes verified current state, concrete next steps, and acceptance criteria.
 Items are ordered by risk × effort — highest-impact, most-actionable items first.
-
----
 
 ---
 
@@ -30,9 +28,75 @@ Inconsistency makes the monitoring setup harder to reason about. Every other cro
 
 ---
 
+## Priority 6 — Autonomous Agent LXC
+
+**Risk:** Medium. New production container with network access to all hosts via SSH and read-only API tokens. Compromise would expose read-only infrastructure visibility. Scoped by IP restriction on authorized_keys and NOPASSWD-only sudo rules.
+
+### What It Is
+A permanent Debian 12 LXC (`vmid 103`, hostname `agent`, `onboot: 1`) running **Claude Code** on a schedule. It SSHs to all hosts using a container-resident key (not the laptop's read_agent key), calls Proxmox and HA APIs, and posts findings to Slack.
+
+### Why a Separate LXC (Not an Existing Host)
+- Always on — no laptop dependency, no Secretive auth required
+- Isolated blast radius — a compromised container's key gets revoked via one Ansible run
+- Can be rebuilt from Ansible end-to-end without touching other hosts
+- Clean separation: "infrastructure observer" is not an application host
+
+### Two-Tier Design
+**Tier 1 — shell (free, runs hourly):** SSH to each host, check disk space, service status, last monitoring wrapper run, ZFS health, container/VM status. Send Slack alert on anomaly. No Claude API call.
+
+**Tier 2 — Claude Code (API cost, runs on anomaly or on-demand):** When Tier 1 finds something anomalous, or you trigger it from Slack, Claude Code runs a structured investigation: correlates findings across hosts, checks HA entity states, queries Proxmox API, and produces a natural-language summary with actionable conclusions.
+
+**Cost estimate:** ~1–3 API calls per day at ~$0.01–0.05 each → under $2/month.
+
+### Resource Spec
+| Resource | Value | Reasoning |
+|----------|-------|-----------|
+| vCPU | 1 | Claude Code is single-threaded for most operations |
+| RAM | 2GB | Node.js + claude binary + SSH sessions |
+| Disk | 16GB | OS + Claude Code + logs |
+| Storage | local-zfs | Same pool as other CTs |
+| onboot | 1 | Must be 24/7 |
+| Network | vmbr0, 10.30.40.203 (static) | On same bridge as other CTs |
+
+### SSH Key Design
+New key pair generated inside the container: `agent_lxc_ed25519`. Added to `read_agent`'s `authorized_keys` on all hosts with `from="10.30.40.203"`. Retiring the container = one Ansible run to remove its key.
+
+### Ansible Implementation
+New Ansible role `roles/services/agent_lxc`:
+1. Creates LXC on Proxmox via `community.general.proxmox` module
+2. Bootstraps it via `site.yml`
+3. Installs Claude Code (`npm install -g @anthropic-ai/claude-code`) + sets `ANTHROPIC_API_KEY` from vault
+4. Deploys the container-resident SSH key
+5. Deploys Tier 1 shell scripts + cron
+
+The `agent_access` role gets a new task to add the container's key to `read_agent`'s `authorized_keys` on all hosts.
+
+**Note on Priority 8 overlap:** The LXC creation step (using `community.general.proxmox`) is also the core pattern needed for the Ephemeral Testing Environment (Priority 8). Implementing Priority 6 first proves out the Ansible provisioning pattern with a real production container. Priority 8 can then extend it to dynamic ephemeral containers without building the provisioning layer from scratch.
+
+### What It Enables (Not Possible Today)
+1. **Cross-host correlation** — one observer for the whole fleet, not 7 isolated scripts
+2. **Unattended investigation** — trigger `ssh agent "claude investigate"` from your phone, no laptop needed
+3. **Periodic digest** — weekly natural-language summary of fleet health
+4. **Escalating alerts** — Tier 1 detects, Tier 2 explains
+
+### What It Doesn't Change
+Existing `enhanced_monitoring_wrapper` + healthchecks.io setup stays as-is for real-time per-host alerting. The agent LXC is a diagnostic layer on top, not a replacement.
+
+### Next Steps
+1. Assign static IP `10.30.40.203` to the container in OPNsense/UniFi
+2. Write `roles/services/agent_lxc` role using `community.general.proxmox` to create the CT
+3. Add `ANTHROPIC_API_KEY` to vault
+4. Write Tier 1 health check scripts
+5. Add container key to `agent_access` role's `authorized_keys` template
+
+### Acceptance Criteria
+- [ ] Container created and bootstrapped via Ansible (single `ansible-playbook` run)
+- [ ] Tier 1 cron runs hourly and alerts on anomaly without any API cost
+- [ ] Claude Code installed and reachable via `ssh agent-lxc "claude --version"`
+- [ ] Container SSH key in `read_agent` authorized_keys on all 7 hosts, IP-restricted
+- [ ] Container can be fully destroyed and recreated by Ansible with no manual steps
+
 ---
-
-
 
 ## Priority 8 — Ephemeral Ansible Testing Environment
 
@@ -40,7 +104,7 @@ Inconsistency makes the monitoring setup harder to reason about. Every other cro
 
 ### Verified State (2026-03-17)
 - No testing infrastructure exists
-- No GitHub Actions CI (see Priority 7 for basic lint)
+- GitHub Actions CI runs `ansible-lint` (syntax/lint only, no execution)
 - Proxmox is available as a hypervisor and can create LXC containers and VMs via API
 - Current host types to simulate:
   - **Debian-based RPi hosts** (dockassist, cobra, hifipi, vinylstreamer) — LXC containers are a close match (same OS, ARM differences are minor for config management)
@@ -48,6 +112,8 @@ Inconsistency makes the monitoring setup harder to reason about. Every other cro
   - **FreeBSD OPNsense** — requires a FreeBSD VM; hardest to simulate accurately (OPNsense-specific tooling like `configctl`, Unbound, WireGuard)
   - **LXC containers** (unifi-lxc) — nested LXC or a regular container works
 - Ansible inventory already uses variable-driven configuration (`enable_*` toggles, `primary_function`) which makes test inventory creation straightforward
+
+**Note on Priority 6 overlap:** Both this and the Agent LXC (Priority 6) need `community.general.proxmox` for Ansible-driven container creation. Implement Priority 6 first — it establishes the provisioning pattern with a real production container. This testing environment then builds dynamic/ephemeral provisioning on top of the same pattern.
 
 ### Approach
 
@@ -66,11 +132,11 @@ Inconsistency makes the monitoring setup harder to reason about. Every other cro
 **Phase 3 — FreeBSD VM for OPNsense (high effort, medium value)**
 1. FreeBSD VM template on Proxmox for OPNsense role testing
 2. Cannot fully simulate OPNsense (no `configctl`, no Unbound config path) but can validate script deployment, cron scheduling, and POSIX compatibility
-3. Consider whether config backup/restore (Priority 1) makes this less critical
+3. Consider whether config backup/restore makes this less critical
 
 ### What This Enables
 - Confident reprovisioning of any host from scratch
-- Safe testing of major refactors (e.g., Priority 5's OPNsense consolidation)
+- Safe testing of major refactors (e.g., Priority 5's DNS failover refactor)
 - Pre-merge validation in CI (Phase 2+)
 - New host onboarding without fear of breaking existing patterns
 
@@ -95,65 +161,36 @@ Inconsistency makes the monitoring setup harder to reason about. Every other cro
 
 ---
 
----
-
----
-
-## Priority 11 — Read-Only Agent Access for Autonomous Investigation
-
-**Risk:** All SSH keys are in Secretive (Secure Enclave), requiring biometric auth for every use. This blocks any unattended access — AI agents, automation tools, and cron-driven scripts cannot SSH to hosts or query APIs without a human physically present.
-
-### Current State (2026-04-06)
-- **Phase 2 SSH deployed and validated** — `read_agent` user on all 7 hosts
-- Full design and implementation guide in [`docs/AGENT_ACCESS.md`](AGENT_ACCESS.md)
-
-### Remaining Work
-1. Validate `from=` IP restriction from outside `10.30.0.0/16` (requires off-LAN test)
-
-### Acceptance Criteria
-- [x] `read_agent` user deployed on all production hosts via Ansible
-- [x] Agent can SSH to any host and run read-only diagnostics without biometric auth
-- [x] SSH key restricted to LAN via `from=` in authorized_keys
-- [x] Sudo commands outside allowlist are denied
-- [x] Agent cannot read secrets belonging to other users (`secrets.yaml`, `.tado_tokens`, `.netrc`, `config.xml`, `shadow.cfg`)
-- [x] HA API: reads entity states/config, rejects admin operations (401)
-- [x] Proxmox API: reads node status/VM/CT list, rejects control operations (403)
-- [x] Documentation complete: [`docs/AGENT_ACCESS.md`](AGENT_ACCESS.md)
-- [ ] `from=` restriction validated from outside LAN (requires off-network test)
-
----
-
 ## Lower Priority
 
 These items have value but are not urgent. Revisit quarterly.
 
-- **Agent API Expansion (Phase 3)** — Add read-only API access for OPNsense (key+secret, monitoring-api group), UniFi (session-based, read-only admin), and optionally Plex (account-scoped token, no role scoping). Depends on Priority 11 Phase 2 completion. Design notes already in `docs/AGENT_ACCESS.md` under "Future: API Expansion". SSH access to all three hosts is covered by Phase 2 — API access adds richer diagnostics on top.
-
-- **Slack Notification Strategy Review** — Current two-channel split (logging/alert) is architecturally sound but has some inconsistencies: train notifications go to `alert` (arguably informational), away mode goes to `alert` but home arrival goes to `notify`, DNS failover sends to both channels simultaneously, device offline alerts are split inconsistently between channels. A focused review session to audit all ~20 notification sources and reassign channels would improve signal-to-noise. Low effort, low urgency — current setup is functional and understood. May conclude that current state is good enough for a single-user system.
-- **Autonomous Infrastructure Agent** — Ambitious vision: an agent that monitors Slack alerts, host logs, and service health in real-time, then autonomously diagnoses, proposes solutions, and applies fixes without human intervention. Would need: Slack integration for alert intake, SSH access to hosts, diagnostic playbooks per failure type, a decision framework for when to auto-fix vs. notify, and safety guardrails to prevent cascading failures. High complexity — this is effectively building an SRE agent. Recommend scoping as a phased project: Phase 1 (alert aggregation + pattern matching), Phase 2 (diagnostic automation), Phase 3 (auto-remediation with approval gates). Worth exploring after Priorities 1-4 stabilize the monitoring foundation.
-- **Mullvad DoT Fallback** — Encrypting DNS during full VPN outage. Low urgency with 4-tunnel architecture; full VPN outage is rare. Would only affect the Cloudflare fallback path.
-- **Certificate Expiration Monitoring** — Monitor Proxmox + OPNsense web certs. Low effort, medium value. Alert at 30 days warning, 7 days critical.
+- **Agent API Expansion (Phase 3)** — Add read-only API access for OPNsense (key+secret, monitoring-api group), UniFi (session-based, read-only admin), and optionally Plex (account-scoped token, no role scoping). SSH access to all three hosts is covered — API access adds richer diagnostics on top.
+- **Slack Notification Strategy Review** — Current two-channel split (logging/alert) is architecturally sound but has some inconsistencies. A focused audit of ~20 notification sources to reassign channels would improve signal-to-noise. Low effort, low urgency.
+- **Mullvad DoT Fallback** — Encrypting DNS during full VPN outage. Low urgency with 4-tunnel architecture.
+- **Certificate Expiration Monitoring** — Monitor Proxmox + OPNsense web certs. Alert at 30/7 days. Low effort, medium value.
 - **SMART Disk Health Monitoring** — Predict disk failures on Proxmox (ZFS) and cobra (media storage). Low effort, medium value.
-- **Full Infrastructure as Code (Proxmox/OPNsense)** — High complexity for rarely-changing configs. Good config backups (Priority 1) may be sufficient.
-- **Cobra Media Config Consolidation** — Merge separate cobra repo into media role. Cosmetic improvement.
-- **Tidal and Qobuz Receiver on hifipi** — Add Tidal and Qobuz receiver alongside existing Shairport/Raspotify. Never been necessary; hifipi already covers AirPlay and Spotify Connect. Low effort if a good open-source receiver emerges.
+- **Full Infrastructure as Code (Proxmox/OPNsense)** — High complexity for rarely-changing configs. Good config backups are likely sufficient.
+- **Cobra Media Config Consolidation** — Merge separate cobra repo into media role. Cosmetic.
+- **Tidal and Qobuz Receiver on hifipi** — Low effort if a good open-source receiver emerges.
 
 ---
 
-
 ## Resolved Items
 
+- **Read-Only Agent Access (Priority 11)** — Completed 2026-04-07. `read_agent` user deployed on all 7 hosts. SSH access validated from control machine via `Host *-agent` pattern bypassing Secretive. HA API (read + admin rejection validated), Proxmox API (read + write rejection validated). Secret files inaccessible. Documentation complete in `docs/AGENT_ACCESS.md`. Sudo blind spots fixed: added `zfs get`, `zpool iostat`, no-args variants for `zfs list`/`zpool list`/`zpool status`. One item not validated: `from=` IP restriction from outside LAN (requires off-network test — opportunistic, not blocking).
+- **Proxmox Performance Tuning** — Completed 2026-04-07. ZFS ARC cap raised from 3.1GB to 10GB (`/etc/modprobe.d/zfs.conf`). ARC config now managed by Ansible (`platform/proxmox.yml`, `zfs_arc_max_gb` var in inventory). `zpool upgrade rpool` completed (all features enabled). Compression already on for all datasets (LZ4, 1.76–2.09x ratio on key datasets).
 - **Ansible Playbook CI (Syntax + Lint)** — Completed 2026-04-04. `.github/workflows/ansible-lint.yml` implemented, running `ansible-lint` on push/PR.
 - **Proxmox USB Recovery Kit + Backup Restore Testing** — Completed 2026-03-30. 128GB USB drive at `/mnt/usb-recovery`, syncing weekly (Sunday 05:00) via `sync_usb_recovery.sh`. Two-generation rotation (`current/` + `previous/`), RECOVERY.txt checklist, MANIFEST.txt with checksums. First restore test passed: UniFi LXC 101 vzdump → temporary CT 999, filesystem verified intact. LXC restores require `--storage local-zfs` — documented in RECOVERY.txt and BACKUP_AND_RECOVERY.md.
-- **Backup Freshness Monitoring** — Completed 2026-03-28. Added `heartbeat_backup.sh` reusable template in `scripts/common/`, deployed as standalone heartbeat scripts (one per backup host) following the existing healthchecks.io pattern. Each checks the `enhanced_monitoring_wrapper` state file for recent success, pings healthchecks.io every 2 hours. 5 checks: HA/OPNsense/UniFi daily (26h max age), Proxmox/Plex weekly (172h max age). Independent of Slack — catches silent cron failures, host reboots, and broken scripts.
-- **Backup Encryption Portability (GPG → age)** — Completed 2026-03-23. Migrated all 5 backup pipelines from GPG asymmetric to age asymmetric encryption. Decision: age keypair chosen over GPG (complex recovery), age passphrase (symmetric = security downgrade), openssl enc (no AEAD), and age+SSH keys (incompatible with Secretive). Recovery path: `brew install age` + paste one-line secret key from password manager → decrypt. Old `.gpg` backups remain decryptable with the GPG key.
-- **Backup Automation (OPNsense + Proxmox)** — Completed 2026-03-22. Both scripts deployed via Ansible cron (OPNsense daily 04:15, Proxmox weekly 04:00), first backups verified in curlbin. Recovery guide: `docs/BACKUP_AND_RECOVERY.md`.
+- **Backup Freshness Monitoring** — Completed 2026-03-28. Added `heartbeat_backup.sh` reusable template, deployed as standalone heartbeat scripts (one per backup host). Each checks the `enhanced_monitoring_wrapper` state file for recent success, pings healthchecks.io every 2 hours. 5 checks: HA/OPNsense/UniFi daily (26h max age), Proxmox/Plex weekly (172h max age).
+- **Backup Encryption Portability (GPG → age)** — Completed 2026-03-23. Migrated all 5 backup pipelines from GPG to age asymmetric encryption. Recovery: `brew install age` + paste secret key from password manager.
+- **Backup Automation (OPNsense + Proxmox)** — Completed 2026-03-22. Both scripts deployed via Ansible cron, first backups verified in curlbin. Recovery guide: `docs/BACKUP_AND_RECOVERY.md`.
 - **VPN Country Switcher UUIDs** — All 4 UUIDs verified in `/conf/config.xml`. Script functional.
 - **Plex on Cobra** — Active since 2026-03-15. Monitoring and backup crons deployed.
 - **DNS Resilience** — 4-tunnel Mullvad + Cloudflare fallback operational. Failover every minute, health check every 5 minutes.
-- **OPNsense Ansible Consolidation** — Completed 2026-04-01. All 15 OPNsense crons now have `#Ansible:` prefixes. DNS failover cron brought under Ansible management (runs directly, not via wrapper — state machine with own alerting). 9 legacy hyphenated scripts + old `monitoring-wrapper.sh` removed from host. Dead `opnsense_monitoring.yml` playbook deleted, `freebsd.yml` cleaned up. Monitoring gap evaluation: `check-interface.sh` not needed (OPNsense is a VM, interface health covered by gateway/WG checks), `check-ddns-age.sh` not needed (IP match check sufficient). Remaining: wrapper refactor for `monitor_dns_failover.sh` (tracked as separate TODO).
-- **TADO/HA Presence Notification Elegance** — Completed 2026-04-02. Removed unconditional Slack alert from `away_mode_everyone_left` automation. Moved success notification into `tado_presence.sh` so it only fires when AWAY is actually applied. Now exactly one notification per event: AWAY applied, AWAY skipped (device at home), or error. Note: `input_select.tado_mode` is still set to "Away" unconditionally by the automation — minor inaccuracy when AWAY is skipped, cosmetic only.
-- **Proxmox WebUI User Migration** — Completed 2026-04-02. `choco@pam` had no ACL permissions despite existing as a PVE user. Granted `Administrator` role on `/` with propagation. WebUI now accessible via `choco@pam` — stop using `root@pam` for routine access.
-- **Tado Presence Health Check** — Completed 2026-03-31. Fixed broken heredoc syntax, updated stale device tracker entity IDs (`nexuschoky`, `iphone_de_candela_2`), rewrote as POSIX sh running on host (not Docker). Deployed to `/home/choco/.scripts/check_tado_health.sh` via Ansible, cron every 30min with `enhanced_monitoring_wrapper`. Alerts on `unavailable` tracker or `unknown`/`unavailable` person entity — complements the existing HA automations that monitor Tado climate device availability.
+- **OPNsense Ansible Consolidation** — Completed 2026-04-01. All 15 OPNsense crons now have `#Ansible:` prefixes. DNS failover cron brought under Ansible management. 9 legacy scripts removed. Dead playbook deleted, `freebsd.yml` cleaned up.
+- **TADO/HA Presence Notification Elegance** — Completed 2026-04-02. Removed unconditional Slack alert from away automation. Notification now fires only when AWAY is actually applied.
+- **Proxmox WebUI User Migration** — Completed 2026-04-02. `choco@pam` granted Administrator role on `/`. Stop using `root@pam` for routine access.
+- **Tado Presence Health Check** — Completed 2026-03-31. Deployed to `/home/choco/.scripts/check_tado_health.sh`, cron every 30min with `enhanced_monitoring_wrapper`.
 - **Tado SQLite migration** — Completed (commit `a7f6221`). Uses HA REST API.
 - **vinylstreamer liquidsoap inactive** — Expected. Runs only during active streaming sessions.
