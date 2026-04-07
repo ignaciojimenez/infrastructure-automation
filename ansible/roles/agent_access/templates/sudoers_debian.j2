@@ -25,8 +25,14 @@
 {{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/sbin/pct status *
 {{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/sbin/pct config *
 {{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/sbin/zpool status
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/sbin/zpool status *
 {{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/sbin/zpool list
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/sbin/zpool list *
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/sbin/zpool iostat
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/sbin/zpool iostat *
 {{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/sbin/zfs list
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/sbin/zfs list *
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/sbin/zfs get *
 {{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/bin/sensors
 {{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/bin/pvesh get *
 {{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/bin/dmesg

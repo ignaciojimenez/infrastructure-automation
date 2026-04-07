@@ -5,8 +5,24 @@
 - name: Proxmox platform configuration
   hosts: proxmox_hosts
   gather_facts: false
+  become: true
   tasks:
-    - name: Proxmox platform acknowledged
-      ansible.builtin.debug:
-        msg: "Proxmox monitoring deployed separately via deploy_monitoring.yml"
-      tags: [proxmox, platform]
+    - name: Configure ZFS ARC max size
+      ansible.builtin.copy:
+        content: |
+          # Managed by Ansible — do not edit manually
+          # ZFS ARC cache limit: {{ zfs_arc_max_gb }}GB
+          options zfs zfs_arc_max={{ zfs_arc_max_gb * 1024 * 1024 * 1024 }}
+        dest: /etc/modprobe.d/zfs.conf
+        owner: root
+        group: root
+        mode: '0644'
+      when: zfs_arc_max_gb is defined
+      register: zfs_arc_config
+      tags: [proxmox, tuning]
+
+    - name: Rebuild initramfs after ZFS config change
+      ansible.builtin.command:
+        cmd: update-initramfs -u
+      when: zfs_arc_config is changed
+      tags: [proxmox, tuning]
