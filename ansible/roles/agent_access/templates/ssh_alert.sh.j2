@@ -9,6 +9,12 @@ COOLDOWN=1800
 STATE_FILE="/tmp/read_agent_ssh_alert.last"
 HOST="$(hostname -s)"
 SENDER="${SSH_CLIENT%% *}"
+SENDER_HOST="$(getent hosts "$SENDER" 2>/dev/null | awk '{print $2; exit}')"
+if [ -n "$SENDER_HOST" ]; then
+    SENDER_LABEL="${SENDER_HOST} (${SENDER})"
+else
+    SENDER_LABEL="$SENDER"
+fi
 
 # Alert at most once per cooldown window
 now=$(date +%s)
@@ -20,7 +26,7 @@ if [ "$((now - last))" -ge "$COOLDOWN" ]; then
     printf '%s\n' "$now" > "$STATE_FILE"
     curl -s --max-time 5 -X POST "$SLACK_WEBHOOK" \
         -H 'Content-Type: application/json' \
-        -d "{\"text\":\":robot_face: Agent key in use on \`${HOST}\` from \`${SENDER}\`\"}" \
+        -d "{\"text\":\":robot_face: Agent key in use on \`${HOST}\` from \`${SENDER_LABEL}\`\"}" \
         >/dev/null 2>&1 &
 fi
 
