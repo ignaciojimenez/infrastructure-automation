@@ -48,17 +48,30 @@ add_warning() {
 }
 
 # Check memory usage
+# ZFS ARC is counted as "used" by free(1) but is fully reclaimable under pressure.
+# The PVE kernel does not expose ARC as SReclaimable, so MemAvailable understates
+# true availability. We subtract ARC size explicitly for an accurate reading.
 check_memory() {
-    local mem_total mem_used mem_percent
-    
+    local mem_total mem_used zfs_arc_mb mem_used_real mem_percent
+
     mem_total=$(free -m | awk '/^Mem:/ {print $2}')
     mem_used=$(free -m | awk '/^Mem:/ {print $3}')
-    mem_percent=$((mem_used * 100 / mem_total))
-    
+
+    zfs_arc_mb=0
+    if [ -f /proc/spl/kstat/zfs/arcstats ]; then
+        local arc_bytes
+        arc_bytes=$(awk '$1 == "size" {print $3}' /proc/spl/kstat/zfs/arcstats)
+        zfs_arc_mb=$(( arc_bytes / 1024 / 1024 ))
+    fi
+
+    mem_used_real=$(( mem_used - zfs_arc_mb ))
+    [ "$mem_used_real" -lt 0 ] && mem_used_real=0
+    mem_percent=$((mem_used_real * 100 / mem_total))
+
     if [ "$mem_percent" -ge "$MEMORY_CRITICAL" ]; then
-        add_issue "CRITICAL: Memory usage at ${mem_percent}% (${mem_used}MB/${mem_total}MB)"
+        add_issue "CRITICAL: Memory usage at ${mem_percent}% (${mem_used_real}MB real / ${mem_total}MB, ZFS ARC ${zfs_arc_mb}MB excluded)"
     elif [ "$mem_percent" -ge "$MEMORY_WARNING" ]; then
-        add_warning "WARNING: Memory usage at ${mem_percent}% (${mem_used}MB/${mem_total}MB)"
+        add_warning "WARNING: Memory usage at ${mem_percent}% (${mem_used_real}MB real / ${mem_total}MB, ZFS ARC ${zfs_arc_mb}MB excluded)"
     fi
 }
 
