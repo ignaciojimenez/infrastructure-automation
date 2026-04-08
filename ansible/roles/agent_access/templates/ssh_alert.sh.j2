@@ -1,0 +1,42 @@
+#!/bin/sh
+# ssh_alert.sh — Alert on read_agent key usage
+# Installed via command="" in authorized_keys as a compensating control
+# for the passphrase-free agent key. Fires a Slack alert once per 30 min
+# per host, then passes through the original SSH command unchanged.
+
+SLACK_WEBHOOK="https://hooks.slack.com/services/{{ vault_alert_token }}"
+COOLDOWN=1800
+STATE_FILE="/tmp/read_agent_ssh_alert.last"
+HOST="$(hostname -s)"
+SENDER="${SSH_CLIENT%% *}"
+
+# Alert at most once per cooldown window
+now=$(date +%s)
+last=0
+if [ -f "$STATE_FILE" ]; then
+    last=$(cat "$STATE_FILE" 2>/dev/null || echo 0)
+fi
+if [ "$((now - last))" -ge "$COOLDOWN" ]; then
+    printf '%s\n' "$now" > "$STATE_FILE"
+    curl -s --max-time 5 -X POST "$SLACK_WEBHOOK" \
+        -H 'Content-Type: application/json' \
+        -d "{\"text\":\":robot_face: Agent key in use on \`${HOST}\` from \`${SENDER}\`\"}" \
+        >/dev/null 2>&1 &
+fi
+
+# Pass through the original command
+case "${SSH_ORIGINAL_COMMAND:-}" in
+    */sftp-server*|sftp-server|sftp)
+        for p in /usr/lib/openssh/sftp-server \
+                 /usr/libexec/openssh/sftp-server \
+                 /usr/libexec/sftp-server; do
+            [ -x "$p" ] && exec "$p"
+        done
+        ;;
+    "")
+        exec /bin/sh
+        ;;
+    *)
+        exec /bin/sh -c "$SSH_ORIGINAL_COMMAND"
+        ;;
+esac

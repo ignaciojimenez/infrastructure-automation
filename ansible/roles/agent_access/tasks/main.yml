@@ -64,7 +64,25 @@
     mode: '0700'
   become: true
 
-- name: Deploy authorized_keys with IP restriction
+- name: Ensure agent scripts directory exists
+  ansible.builtin.file:
+    path: "/home/{{ agent_access_user }}/.scripts"
+    state: directory
+    owner: "{{ agent_access_user }}"
+    group: "{{ agent_access_user }}"
+    mode: '0755'
+  become: true
+
+- name: Deploy SSH alert script
+  ansible.builtin.template:
+    src: ssh_alert.sh.j2
+    dest: "/home/{{ agent_access_user }}/.scripts/ssh_alert.sh"
+    owner: "{{ agent_access_user }}"
+    group: "{{ agent_access_user }}"
+    mode: '0755'
+  become: true
+
+- name: Deploy authorized_keys with IP restriction and alert wrapper
   ansible.builtin.template:
     src: authorized_keys.j2
     dest: "/home/{{ agent_access_user }}/.ssh/authorized_keys"

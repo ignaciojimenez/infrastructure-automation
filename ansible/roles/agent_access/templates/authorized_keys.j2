@@ -1,1 +1,3 @@
-from="{{ vault_agent_control_ip }}" {{ vault_agent_ssh_pubkey }}
+{% for key in agent_access_keys %}
+from="{{ key.from }}",command="/home/{{ agent_access_user }}/.scripts/ssh_alert.sh" {{ key.pubkey }}
+{% endfor %}
