@@ -1,30 +1,10 @@
 # Infrastructure TODO — Prioritized Action List
 
-Updated: 2026-04-07 | Validated against live hosts
+Updated: 2026-04-08 | Validated against live hosts
 
 This document is the single source of truth for pending infrastructure work.
 Each item includes verified current state, concrete next steps, and acceptance criteria.
 Items are ordered by risk × effort — highest-impact, most-actionable items first.
-
----
-
-## Priority 5 — Refactor `monitor_dns_failover.sh` for Wrapper Consistency
-
-**Risk:** Low. The script works correctly but bypasses the `enhanced_monitoring_wrapper` pattern used by all other monitoring scripts across all hosts. It's a 244-line state machine with its own Slack alerting, local logging fallback (`/var/log/dns_failover_alerts.log`), and state file tracking (`/tmp/dns_failover_state`). Token order is reversed from the wrapper convention (alert first, logging second) — documented in the role with comments.
-
-### Why It Matters
-Inconsistency makes the monitoring setup harder to reason about. Every other cron on every host uses the wrapper for Slack notifications, state tracking, and heartbeats. This is the one exception.
-
-### Why It's Non-Trivial
-- The script modifies `/conf/config.xml` directly to switch DNS forwarders — it's not a passive check
-- Exit code semantics differ: a successful failover to Cloudflare is exit 0 (correct behavior), not a failure
-- Has its own duplicate-alert suppression and recovery notification logic
-- Wrapping naively would cause double Slack notifications
-- Any bug during refactor risks DNS resolution (internet access)
-
-### Next Steps
-1. Evaluate whether `enhanced_monitoring_wrapper` can be extended to support state-machine scripts, or whether the script's alerting should be stripped and replaced with wrapper calls
-2. Test thoroughly in a non-production context before deploying
 
 ---
 
@@ -71,7 +51,7 @@ New Ansible role `roles/services/agent_lxc`:
 
 The `agent_access` role gets a new task to add the container's key to `read_agent`'s `authorized_keys` on all hosts.
 
-**Note on Priority 8 overlap:** The LXC creation step (using `community.general.proxmox`) is also the core pattern needed for the Ephemeral Testing Environment (Priority 8). Implementing Priority 6 first proves out the Ansible provisioning pattern with a real production container. Priority 8 can then extend it to dynamic ephemeral containers without building the provisioning layer from scratch.
+**Note on Ephemeral Testing overlap:** The LXC creation step (using `community.general.proxmox`) is also the core pattern needed for the Ephemeral Ansible Testing Environment (see Lower Priority). Implementing this first proves out the Ansible provisioning pattern with a real production container, making that testing environment nearly free to build later.
 
 ### What It Enables (Not Possible Today)
 1. **Cross-host correlation** — one observer for the whole fleet, not 7 isolated scripts
@@ -98,81 +78,61 @@ Existing `enhanced_monitoring_wrapper` + healthchecks.io setup stays as-is for r
 
 ---
 
-## Priority 8 — Ephemeral Ansible Testing Environment
+## Priority 7 — SMART Disk Health Monitoring
 
-**Risk:** Ansible playbooks are only validated via `--check --diff` against live hosts. A full reprovision from scratch is untested — broken dependency ordering, missing template variables, or service startup failures would only surface during a real rebuild, which is exactly the worst time to discover them.
+**Risk:** Medium. Proxmox's ZFS pool (`rpool`) is the single storage layer for all VMs and containers. A disk failure with zero early warning means potential data loss and full infrastructure outage. Cobra's media storage (`/dev/sda`) is similarly unmonitored.
 
-### Verified State (2026-03-17)
-- No testing infrastructure exists
-- GitHub Actions CI runs `ansible-lint` (syntax/lint only, no execution)
-- Proxmox is available as a hypervisor and can create LXC containers and VMs via API
-- Current host types to simulate:
-  - **Debian-based RPi hosts** (dockassist, cobra, hifipi, vinylstreamer) — LXC containers are a close match (same OS, ARM differences are minor for config management)
-  - **Debian Proxmox** — LXC container with Proxmox packages is partial but useful
-  - **FreeBSD OPNsense** — requires a FreeBSD VM; hardest to simulate accurately (OPNsense-specific tooling like `configctl`, Unbound, WireGuard)
-  - **LXC containers** (unifi-lxc) — nested LXC or a regular container works
-- Ansible inventory already uses variable-driven configuration (`enable_*` toggles, `primary_function`) which makes test inventory creation straightforward
+### Why It Matters
+ZFS checksumming catches silent corruption, but SMART attributes predict mechanical failure *before* it happens — reallocated sectors, pending sectors, temperature trends. Without SMART monitoring, the first sign of disk trouble is a ZFS scrub error or a complete drive failure.
 
-**Note on Priority 6 overlap:** Both this and the Agent LXC (Priority 6) need `community.general.proxmox` for Ansible-driven container creation. Implement Priority 6 first — it establishes the provisioning pattern with a real production container. This testing environment then builds dynamic/ephemeral provisioning on top of the same pattern.
+### Scope
+| Host | Disk(s) | Why |
+|------|---------|-----|
+| `proxmox` | NVMe/SSD under `rpool` | All VMs, containers, and backups live here |
+| `cobra` | USB/SATA media drive | Plex library, irreplaceable if not backed up elsewhere |
 
-### Approach
+RPi hosts (dockassist, hifipi, vinylstreamer) use SD cards — SMART doesn't apply. OPNsense runs as a VM (virtual disk). UniFi is an LXC (Proxmox storage).
 
-**Phase 1 — Debian LXC test harness (medium effort, high value)**
-1. Create an Ansible playbook (`test_environment.yml`) that provisions ephemeral LXC containers on Proxmox via `community.general.proxmox` module
-2. Use a Debian 12 template matching RPi hosts — containers get temporary IPs and a test inventory
-3. Run `bootstrap.yml` + `services.yml` against test containers
-4. Run validation scripts that check expected state: services running, crons present, scripts deployed, config files rendered correctly
-5. Destroy containers after test completes (or on failure, for debugging)
-
-**Phase 2 — Validation framework (medium effort, high value)**
-1. Create per-role validation scripts (e.g., `validate_homeassistant.sh` checks Docker containers running, crons present, HA config rendered)
-2. These double as post-deploy smoke tests on real hosts
-3. Integrate with CI: provision → deploy → validate → destroy
-
-**Phase 3 — FreeBSD VM for OPNsense (high effort, medium value)**
-1. FreeBSD VM template on Proxmox for OPNsense role testing
-2. Cannot fully simulate OPNsense (no `configctl`, no Unbound config path) but can validate script deployment, cron scheduling, and POSIX compatibility
-3. Consider whether config backup/restore makes this less critical
-
-### What This Enables
-- Confident reprovisioning of any host from scratch
-- Safe testing of major refactors (e.g., Priority 5's DNS failover refactor)
-- Pre-merge validation in CI (Phase 2+)
-- New host onboarding without fear of breaking existing patterns
-
-### Limitations to Accept
-- ARM vs x86 differences won't be caught (RPi-specific hardware like GPIO, USB DAC passthrough)
-- Network topology differences (test LXCs won't have VPN tunnels, WireGuard, or real DNS)
-- Service-level integration (e.g., actual Tado API, curlbin uploads) can't be tested without mocking
-- OPNsense simulation will always be incomplete — real validation still needs the live host
-
-### Next Steps
-1. Create `ansible/playbooks/testing/provision_test_env.yml` using `community.general.proxmox` module
-2. Create test inventory template (`ansible/inventory/test_hosts.yml`) with `enable_*` toggles matching a target host
-3. Write a wrapper script (`scripts/testing/run_test.sh`) that orchestrates: create → provision → validate → destroy
-4. Start with one host type (dockassist/homeassistant) as proof of concept
-5. Expand to other host types incrementally
+### Implementation
+1. Install `smartmontools` on proxmox and cobra via Ansible (package task in platform/bootstrap)
+2. Create `check_smart_health.sh` — parse `smartctl -a` for key attributes (Reallocated_Sector_Ct, Current_Pending_Sector, Offline_Uncorrectable, temperature), exit non-zero on warning thresholds
+3. Schedule via `enhanced_monitoring_wrapper` cron (daily is sufficient — SMART degradation is gradual)
+4. Deploy to proxmox and cobra only (conditional on `enable_smart_monitoring: true`)
 
 ### Acceptance Criteria
-- [ ] Phase 1: Can provision a test LXC, run bootstrap + services playbook, and destroy it via a single command
-- [ ] Phase 1: At least one host type (homeassistant) fully testable
-- [ ] Phase 2: Validation scripts exist for homeassistant, media, and audio roles
-- [ ] Phase 2: CI integration runs on PR
+- [ ] `smartmontools` installed on proxmox and cobra
+- [ ] `check_smart_health.sh` alerts on concerning SMART attributes
+- [ ] Cron runs daily via `enhanced_monitoring_wrapper`
+- [ ] Slack alert fires on test with simulated threshold breach
 
 ---
 
 ## Lower Priority
 
-These items have value but are not urgent. Revisit quarterly.
+These items have value but are not urgent. Ranked by value-to-effort ratio to help pick low-hanging fruit. Revisit quarterly.
 
-- **Agent API Expansion (Phase 3)** — Add read-only API access for OPNsense (key+secret, monitoring-api group), UniFi (session-based, read-only admin), and optionally Plex (account-scoped token, no role scoping). SSH access to all three hosts is covered — API access adds richer diagnostics on top.
-- **Slack Notification Strategy Review** — Current two-channel split (logging/alert) is architecturally sound but has some inconsistencies. A focused audit of ~20 notification sources to reassign channels would improve signal-to-noise. Low effort, low urgency.
-- **Mullvad DoT Fallback** — Encrypting DNS during full VPN outage. Low urgency with 4-tunnel architecture.
-- **Certificate Expiration Monitoring** — Monitor Proxmox + OPNsense web certs. Alert at 30/7 days. Low effort, medium value.
-- **SMART Disk Health Monitoring** — Predict disk failures on Proxmox (ZFS) and cobra (media storage). Low effort, medium value.
-- **Full Infrastructure as Code (Proxmox/OPNsense)** — High complexity for rarely-changing configs. Good config backups are likely sufficient.
-- **Cobra Media Config Consolidation** — Merge separate cobra repo into media role. Cosmetic.
-- **Tidal and Qobuz Receiver on hifipi** — Low effort if a good open-source receiver emerges.
+### High Value/Effort — Quick wins worth picking up
+
+- **Vinylstreamer Session-Aware Monitoring** `V:Med E:Low` — `vinylstreamer_monitor.sh` currently alerts when `phono_liquidsoap.service` is inactive, but liquidsoap is intentionally off when not streaming. This generates false positives and unnecessary restart attempts. Fix: make liquidsoap/icecast checks conditional on `detect_audio` indicating an active streaming session. One script change.
+- **Slack Notification Strategy Review** `V:Low E:Low` — Current two-channel split (logging/alert) is architecturally sound but has some inconsistencies. A focused audit of ~20 notification sources to reassign channels would improve signal-to-noise.
+
+### Medium Value/Effort — Worth planning
+
+- **Backup Integrity Verification** `V:Med-High E:Med` — Backup freshness monitoring confirms "the script ran recently" but never validates that backups are actually restorable. A periodic script that downloads the latest backup, runs `age -d`, and validates tarball contents would close the gap. Could run weekly on Proxmox.
+- **Cobra Post-Processing Monitoring** `V:Med E:Med` — Plex, Transmission, and Samba are all monitored with hourly health checks. The gap is the tvnamer/rename pipeline: if RSS downloads content but post-processing fails to organize it, nothing alerts. Needs design work — what does "tvnamer failed" look like? (stale files in download dir? log parsing?)
+
+### Low Value/Effort — Deferred
+
+- **Cobra Media Config Consolidation** `V:Low E:Low` — Merge separate cobra repo into media role. Cosmetic, single-source-of-truth hygiene.
+- **Agent API Expansion (Phase 3)** `V:Low-Med E:Med` — Add read-only API access for OPNsense, UniFi, and optionally Plex. SSH access to all three hosts already covers the same ground — API access adds richer diagnostics on top, not new capability.
+- **Ephemeral Ansible Testing Environment** `V:High E:High` — Provision ephemeral LXC containers on Proxmox for end-to-end playbook testing. High payoff for major refactors, but current CI lint + `--check --diff` workflow has been sufficient. Revisit after Priority 6 proves out the `community.general.proxmox` provisioning pattern, which makes Phase 1 nearly free.
+
+### Very Low Value/Effort — Revisit only if conditions change
+
+- **Tidal and Qobuz Receiver on hifipi** `V:Low E:Blocked` — Depends on a good open-source receiver emerging. Not actionable today.
+- **DNS Failover Wrapper Consistency** `V:VLow E:High` — `monitor_dns_failover.sh` is intentionally standalone: it resolves Slack by IP when DNS is down, which the wrapper can't do. Risk of refactoring outweighs cosmetic benefit.
+- **Mullvad DoT Fallback** `V:VLow E:Med` — Encrypting DNS during full VPN outage. Near-irrelevant with 4-tunnel architecture.
+- **Full Infrastructure as Code (Proxmox/OPNsense)** `V:Med E:VHigh` — High complexity for rarely-changing configs. Good config backups are sufficient.
 
 ---
 
