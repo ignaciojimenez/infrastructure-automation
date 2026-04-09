@@ -4,6 +4,10 @@
 # Process inspection
 {{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/bin/pgrep *
 
+# Service status (read-only)
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/sbin/service * status
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/sbin/service -e
+
 # Firewall state (read-only)
 {{ agent_access_user }} ALL=(ALL) NOPASSWD: /sbin/pfctl -s info
 {{ agent_access_user }} ALL=(ALL) NOPASSWD: /sbin/pfctl -s state
@@ -13,3 +17,8 @@
 {{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/local/sbin/configctl service list
 {{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/local/sbin/configctl unbound status
 {{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/local/sbin/configctl wireguard showconf
+
+# CrowdSec read-only
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/local/bin/cscli decisions list *
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/local/bin/cscli alerts list *
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/local/bin/cscli metrics *

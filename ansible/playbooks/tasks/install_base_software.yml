@@ -49,11 +49,29 @@
   when: os_family == "debian"
   tags: [always]
 
-- name: Ensure fail2ban is enabled and started
+- name: Configure fail2ban sshd jail with systemd backend
+  become: true
+  ansible.builtin.copy:
+    content: |
+      [sshd]
+      enabled = true
+      backend = systemd
+    dest: /etc/fail2ban/jail.d/sshd.conf
+    owner: root
+    group: root
+    mode: '0644'
+  when:
+    - os_family == "debian"
+    - fail2ban_check is not skipped
+    - fail2ban_check.rc == 0
+  register: fail2ban_jail_config
+  tags: [security, fail2ban]
+
+- name: Ensure fail2ban is enabled and restarted if config changed
   become: true
   ansible.builtin.systemd:
     name: fail2ban
-    state: started
+    state: "{{ 'restarted' if (fail2ban_jail_config is changed) else 'started' }}"
     enabled: true
   when:
     - os_family == "debian"

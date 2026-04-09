@@ -134,7 +134,7 @@ check_services() {
     
     # Define critical services based on OS
     if [ "$OS_TYPE" = "debian" ]; then
-        SERVICES="ssh cron"
+        SERVICES="ssh cron fail2ban"
         
         for service in $SERVICES; do
             if systemctl is-active "$service" >/dev/null 2>&1; then

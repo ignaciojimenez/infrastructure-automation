@@ -58,7 +58,7 @@
 
           [Service]
           Type=oneshot
-          ExecStart=/usr/bin/tvservice -o
+          ExecStart=/usr/bin/vcgencmd display_power 0
           RemainAfterExit=yes
 
           [Install]
@@ -70,7 +70,18 @@
       when:
         - platform_type == "raspberrypi"
         - disable_hdmi | default(true)
-      notify: reboot_required
+      register: hdmi_service
+      tags: [raspberrypi, optimization, hdmi]
+
+    - name: Reload systemd and restart disable-hdmi if changed
+      ansible.builtin.systemd:
+        name: disable-hdmi
+        daemon_reload: true
+        state: restarted
+      when:
+        - platform_type == "raspberrypi"
+        - disable_hdmi | default(true)
+        - hdmi_service is changed
       tags: [raspberrypi, optimization, hdmi]
 
     - name: Enable HDMI disable service
