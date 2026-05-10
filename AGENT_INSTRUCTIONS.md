@@ -26,10 +26,23 @@ ansible/
     platform/{platform}/             # Platform monitoring and platform-specific config
 scripts/
   common/                            # Shared monitoring scripts (POSIX sh, FreeBSD-compatible)
-  services/{service}/                # Per-service scripts
+  services/{service}/                # Per-service monitoring/check scripts
+  ci/                                # Repo CI helpers (e.g. Jinja syntax check)
 templates/
   debian/                            # Shared Debian templates (sshd_config, unattended-upgrades)
 ```
+
+### Where to put scripts
+
+| Location | When to use | Deploy module |
+|----------|-------------|---------------|
+| `ansible/roles/services/<svc>/templates/*.j2` | Service **lifecycle** scripts that need Ansible vars (update, backup, start/stop). Live with the role they belong to. | `template:` |
+| `scripts/services/<svc>/*.sh` or `*.sh.j2` | **Health checks and per-service monitoring** scripts (one service, deployed only by that role). Use `.sh.j2` and `template:` only when variables are needed; otherwise `copy:`. | `copy:` or `template:` |
+| `scripts/common/` | **Cross-service utilities** (`enhanced_monitoring_wrapper`, `backup_last_mod`, `heartbeat_backup.sh`). POSIX `/bin/sh`, FreeBSD-compatible. | `copy:` |
+
+Never copy a `.j2` file via `copy:` (it's deployed verbatim and never rendered) or
+use `with_fileglob` over a directory that contains `.j2` files. Use `template:`
+with explicit `src:`/`dest:` entries.
 
 ## Creating a New Service Role
 
