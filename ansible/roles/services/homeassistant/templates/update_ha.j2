@@ -19,10 +19,13 @@ create_backup() {
     mkdir -p "$BACKUP_DIR"
     
     local backup_file="$BACKUP_DIR/ha_backup_$(date +%Y%m%d_%H%M%S).tar.gz"
-    
-    if tar -czf "$backup_file" -C "{{ homeassistant_config_dir }}" --exclude="backups" .; then
+
+    # HA's Docker container runs as root, so .storage/, the DB, .tado_tokens
+    # and rotating logs are root-owned. tar needs sudo to read them.
+    if sudo tar -czf "$backup_file" -C "{{ homeassistant_config_dir }}" --exclude="backups" .; then
+        sudo chown "$(id -u):$(id -g)" "$backup_file"
         log_message "✅ Backup created: $backup_file"
-        
+
         # Keep only last 5 backups
         cd "$BACKUP_DIR"
         ls -t ha_backup_*.tar.gz | tail -n +6 | xargs rm -f 2>/dev/null || true

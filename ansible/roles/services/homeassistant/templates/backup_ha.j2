@@ -24,8 +24,11 @@ create_backup() {
     # Create backup directory
     mkdir -p "$BACKUP_DIR"
     
-    # Create backup excluding the backups directory itself
-    if tar -czf "$backup_file" -C "$CONFIG_DIR" --exclude="backups" --exclude="*.log" .; then
+    # Create backup excluding the backups directory itself.
+    # HA's Docker container runs as root, so .storage/, the DB, .tado_tokens
+    # and rotating logs are root-owned. tar needs sudo to read them.
+    if sudo tar -czf "$backup_file" -C "$CONFIG_DIR" --exclude="backups" --exclude="*.log" .; then
+        sudo chown "$(id -u):$(id -g)" "$backup_file"
         local size=$(du -h "$backup_file" | cut -f1)
         log_message "✅ Backup created successfully: $backup_file ($size)"
         
@@ -111,11 +114,12 @@ restore_backup() {
     local temp_dir=$(mktemp -d)
     
     if tar -xzf "$backup_file" -C "$temp_dir"; then
-        # Remove current config (except backups)
-        find "$CONFIG_DIR" -mindepth 1 -maxdepth 1 ! -name "backups" -exec rm -rf {} +
-        
-        # Copy restored files
-        cp -r "$temp_dir"/* "$CONFIG_DIR"/
+        # Remove current config (except backups). HA writes some files as
+        # root from inside the container, so removal needs sudo.
+        sudo find "$CONFIG_DIR" -mindepth 1 -maxdepth 1 ! -name "backups" -exec rm -rf {} +
+
+        # Copy restored files preserving original ownership from the tarball
+        sudo cp -a "$temp_dir"/. "$CONFIG_DIR"/
         
         # Clean up temp directory
         rm -rf "$temp_dir"
