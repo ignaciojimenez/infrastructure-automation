@@ -41,15 +41,6 @@
   when: gh_keys is defined
   tags: [ssh, keys]
 
-- name: Backup current SSH configuration
-  ansible.builtin.copy:
-    src: /etc/ssh/sshd_config
-    dest: "/etc/ssh/sshd_config.backup.{{ ansible_date_time.epoch }}"
-    remote_src: true
-    owner: root
-    mode: '0600'
-  tags: [ssh, backup]
-
 - name: Deploy hardened sshd config
   become: true
   ansible.builtin.template:
@@ -92,18 +83,6 @@
     state: present
     validate: 'sshd -t -f %s'
   when: ssh_allowed_users is defined
-  notify: restart_ssh
-  tags: [ssh, configuration]
-
-- name: Configure SSH idle timeout
-  ansible.builtin.lineinfile:
-    path: /etc/ssh/sshd_config
-    regexp: "{{ item.regexp }}"
-    line: "{{ item.line }}"
-    state: present
-  with_items:
-    - { regexp: '^#?TCPKeepAlive', line: 'TCPKeepAlive yes' }
-    - { regexp: '^#?LoginGraceTime', line: 'LoginGraceTime 60' }
   notify: restart_ssh
   tags: [ssh, configuration]
 
