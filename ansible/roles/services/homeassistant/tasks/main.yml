@@ -190,15 +190,17 @@
   tags: [homeassistant, hacs]
 
 # Deploy management scripts
-- name: Deploy Home Assistant scripts
-  ansible.builtin.copy:
-    src: "{{ item }}"
-    dest: "{{ scripts_dir }}/{{ item | basename }}"
+- name: Deploy Home Assistant management scripts
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "{{ scripts_dir }}/{{ item }}"
     owner: "{{ ansible_user }}"
     group: "{{ ansible_user }}"
     mode: '0755'
-  with_fileglob:
-    - "{{ role_path }}/files/*"
+  loop:
+    - update_ha
+    - backup_ha
+    - stop_run_ha
   tags: [homeassistant, scripts]
 
 # ============================================================
@@ -207,18 +209,28 @@
 
 - name: Deploy Home Assistant service check scripts
   ansible.builtin.copy:
-    src: "{{ inventory_dir }}/../../scripts/services/homeassistant/{{ item.src }}"
-    dest: "{{ scripts_dir }}/{{ item.dest }}"
+    src: "{{ inventory_dir }}/../../scripts/services/homeassistant/{{ item }}"
+    dest: "{{ scripts_dir }}/{{ item }}"
     owner: "{{ ansible_user }}"
     group: "{{ ansible_user }}"
     mode: '0755'
   loop:
-    - {src: 'check_docker.sh', dest: 'check_docker.sh'}
-    - {src: 'check_ha_web.sh', dest: 'check_ha_web.sh'}
-    - {src: 'check_container.sh', dest: 'check_container.sh'}
-    - {src: 'docker_prune.sh', dest: 'docker_prune.sh'}
-    - {src: 'dockassist_monitor.sh', dest: 'dockassist_monitor.sh'}
-    - {src: 'check_tado_health.sh', dest: 'check_tado_health.sh'}
+    - check_docker.sh
+    - check_ha_web.sh
+    - check_container.sh
+    - docker_prune.sh
+    - check_tado_health.sh
+  tags: [homeassistant, monitoring]
+
+- name: Deploy Home Assistant templated monitor scripts
+  ansible.builtin.template:
+    src: "{{ inventory_dir }}/../../scripts/services/homeassistant/{{ item }}.j2"
+    dest: "{{ scripts_dir }}/{{ item }}"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0755'
+  loop:
+    - dockassist_monitor.sh
   tags: [homeassistant, monitoring]
 
 - name: Configure Docker service monitoring cron job

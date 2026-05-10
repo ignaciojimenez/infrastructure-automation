@@ -4,7 +4,7 @@
 set -euo pipefail
 
 # Configuration
-LOG_FILE="$HOME/.log/vinylstreamer_monitor.log"
+LOG_FILE="{{ logs_dir }}/vinylstreamer_monitor.log"
 ACTIONS_TAKEN=""
 
 # Function to log messages
@@ -164,9 +164,9 @@ check_stream_connected() {
 check_log_errors() {
     local error_count=0
     
-    # Check detect_audio logs
-    if [ -f "$HOME/.log/detect_audio.log" ]; then
-        local recent_errors=$(tail -100 "$HOME/.log/detect_audio.log" | grep -i error | wc -l)
+    # Check detect_audio logs (path matches detect_audio.py.j2)
+    if [ -f "{{ logs_dir }}/detect_audio.log" ]; then
+        local recent_errors=$(tail -100 "{{ logs_dir }}/detect_audio.log" | grep -i error | wc -l)
         if [ "$recent_errors" -gt 5 ]; then
             log_message "⚠️  Found $recent_errors recent errors in detect_audio.log"
             error_count=$((error_count + recent_errors))

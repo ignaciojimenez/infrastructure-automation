@@ -73,10 +73,14 @@
     - name: Deploy primary function role
       ansible.builtin.include_role:
         name: "services/{{ primary_function }}"
+        apply:
+          tags: [services]
       when:
         - primary_function is defined
         - primary_role_exists.stat.exists | default(false)
-      tags: [services]
+      # `always` lets the include itself run under any --tags filter; the role's
+      # own tasks still filter normally (e.g. --tags homeassistant runs only HA tasks).
+      tags: [services, always]
 
     # Explicit install_* overrides and primary_function fallbacks.
     # These cover roles where primary_function name ≠ role directory name,

@@ -4,9 +4,9 @@
 set -euo pipefail
 
 # Configuration
-CONTAINER_NAME="home-assistant"
+CONTAINER_NAME="{{ homeassistant_container_name | default('home-assistant') }}"
 HA_URL="http://localhost:8123"
-LOG_FILE="$HOME/logs/dockassist_monitor.log"
+LOG_FILE="{{ logs_dir }}/dockassist_monitor.log"
 ACTIONS_TAKEN=""
 
 # Function to log messages
@@ -81,7 +81,7 @@ check_ha_web_interface() {
 
 # Function to check disk space
 check_disk_space() {
-    local config_dir="$HOME/homeassistant"
+    local config_dir="{{ homeassistant_config_dir }}"
     local usage=$(df "$config_dir" | awk 'NR==2 {print $5}' | sed 's/%//')
     
     if [ "$usage" -lt 90 ]; then

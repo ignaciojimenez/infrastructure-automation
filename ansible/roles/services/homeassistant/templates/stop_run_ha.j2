@@ -3,7 +3,7 @@
 
 set -euo pipefail
 
-CONTAINER_NAME="{{ container_name }}"
+CONTAINER_NAME="{{ homeassistant_container_name | default('home-assistant') }}"
 LOG_FILE="{{ logs_dir }}/ha_control.log"
 
 # Function to log messages
@@ -107,7 +107,7 @@ show_status() {
     case $status in
         "running")
             echo "🟢 Home Assistant is RUNNING"
-            docker ps -f name="$CONTAINER_NAME" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+            docker ps -f name="$CONTAINER_NAME" --format {% raw %}"table {{.Names}}\t{{.Status}}\t{{.Ports}}"{% endraw %}
             
             # Check if web interface is accessible
             if curl -s http://localhost:8123 >/dev/null 2>&1; then
@@ -118,7 +118,7 @@ show_status() {
             ;;
         "stopped")
             echo "🔴 Home Assistant is STOPPED"
-            docker ps -a -f name="$CONTAINER_NAME" --format "table {{.Names}}\t{{.Status}}"
+            docker ps -a -f name="$CONTAINER_NAME" --format {% raw %}"table {{.Names}}\t{{.Status}}"{% endraw %}
             ;;
         "not_found")
             echo "❌ Home Assistant container NOT FOUND"

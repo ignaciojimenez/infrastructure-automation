@@ -3,10 +3,10 @@
 
 set -euo pipefail
 
-CONTAINER_NAME="home-assistant"
+CONTAINER_NAME="{{ homeassistant_container_name | default('home-assistant') }}"
 IMAGE_NAME="ghcr.io/home-assistant/home-assistant:stable"
-BACKUP_DIR="$HOME/homeassistant/backups"
-LOG_FILE="$HOME/logs/ha_update.log"
+BACKUP_DIR="{{ homeassistant_config_dir }}/backups"
+LOG_FILE="{{ logs_dir }}/ha_update.log"
 
 # Function to log messages
 log_message() {
@@ -20,7 +20,7 @@ create_backup() {
     
     local backup_file="$BACKUP_DIR/ha_backup_$(date +%Y%m%d_%H%M%S).tar.gz"
     
-    if tar -czf "$backup_file" -C "$HOME/homeassistant" --exclude="backups" .; then
+    if tar -czf "$backup_file" -C "{{ homeassistant_config_dir }}" --exclude="backups" .; then
         log_message "✅ Backup created: $backup_file"
         
         # Keep only last 5 backups
@@ -75,10 +75,10 @@ update_ha() {
         --name "$CONTAINER_NAME" \
         --restart=unless-stopped \
         --privileged \
-        -v "$HOME/homeassistant:/config" \
+        -v "{{ homeassistant_config_dir }}:/config" \
         -v "/etc/localtime:/etc/localtime:ro" \
         --network=host \
-        -e TZ="Europe/Madrid" \
+        -e TZ="{{ timezone | default('Europe/Madrid') }}" \
         "$IMAGE_NAME"; then
         log_message "✅ New container started successfully"
     else

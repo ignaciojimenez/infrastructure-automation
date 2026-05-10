@@ -3,7 +3,7 @@
 
 set -euo pipefail
 
-CONTAINER_NAME="{{ container_name }}"
+CONTAINER_NAME="{{ homeassistant_container_name | default('home-assistant') }}"
 CONFIG_DIR="{{ homeassistant_config_dir }}"
 BACKUP_DIR="$CONFIG_DIR/backups"
 LOG_FILE="{{ logs_dir }}/ha_backup.log"
