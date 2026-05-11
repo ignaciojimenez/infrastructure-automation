@@ -5,34 +5,23 @@ set -euo pipefail
 
 CONTAINER_NAME="{{ homeassistant_container_name | default('home-assistant') }}"
 IMAGE_NAME="ghcr.io/home-assistant/home-assistant:stable"
-BACKUP_DIR="{{ homeassistant_config_dir }}/backups"
 LOG_FILE="{{ logs_dir }}/ha_update.log"
+BACKUP_HA="{{ scripts_dir }}/backup_ha"
 
 # Function to log messages
 log_message() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" | tee -a "$LOG_FILE"
 }
 
-# Function to create backup
+# Delegate backup creation + off-host upload to backup_ha. Single source of
+# truth: same script the daily cron runs, same monitoring/healthcheck chain.
 create_backup() {
-    log_message "Creating backup before update..."
-    mkdir -p "$BACKUP_DIR"
-    
-    local backup_file="$BACKUP_DIR/ha_backup_$(date +%Y%m%d_%H%M%S).tar.gz"
-
-    # HA's Docker container runs as root, so .storage/, the DB, .tado_tokens
-    # and rotating logs are root-owned. tar needs sudo to read them.
-    if sudo tar -czf "$backup_file" -C "{{ homeassistant_config_dir }}" --exclude="backups" .; then
-        sudo chown "$(id -u):$(id -g)" "$backup_file"
-        log_message "✅ Backup created: $backup_file"
-
-        # Keep only last 5 backups
-        cd "$BACKUP_DIR"
-        ls -t ha_backup_*.tar.gz | tail -n +6 | xargs rm -f 2>/dev/null || true
-        
+    log_message "Creating pre-update backup via backup_ha..."
+    if "$BACKUP_HA" create pre_update >/dev/null; then
+        log_message "✅ Pre-update backup completed"
         return 0
     else
-        log_message "❌ Failed to create backup"
+        log_message "❌ Pre-update backup failed"
         return 1
     fi
 }

@@ -387,7 +387,7 @@
       --notify-fixed=true
       {{ logging_token }}
       {{ alert_token }}
-      {{ scripts_dir }}/backup_last_mod --silent --folder={{ homeassistant_config_dir | default('/home/' + ansible_user + '/homeassistant') }}/backups/ --recipient={{ backup_age_pubkey }}
+      {{ scripts_dir }}/backup_ha create auto
       >> {{ logs_dir }}/homeassistant_backup.log 2>&1
     user: "{{ ansible_user }}"
   when:
@@ -405,7 +405,10 @@
   vars:
     backup_heartbeat_name: "Home Assistant backup"
     backup_healthcheck_url: "{{ vault_healthcheck_backup_ha }}"
-    backup_state_file: "/home/{{ ansible_user }}/.log/backup_last_mod.json"
+    # State file is written by enhanced_monitoring_wrapper when it runs
+    # backup_ha. Heartbeat pings healthchecks.io only if that file is
+    # recent (mtime) AND records last_status=success.
+    backup_state_file: "/home/{{ ansible_user }}/.log/backup_ha.json"
     backup_max_age_minutes: 1560
   when: vault_healthcheck_backup_ha is defined
   tags: [homeassistant, backup, monitoring]

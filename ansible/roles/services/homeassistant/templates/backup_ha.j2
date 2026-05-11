@@ -7,6 +7,8 @@ CONTAINER_NAME="{{ homeassistant_container_name | default('home-assistant') }}"
 CONFIG_DIR="{{ homeassistant_config_dir }}"
 BACKUP_DIR="$CONFIG_DIR/backups"
 LOG_FILE="{{ logs_dir }}/ha_backup.log"
+DO_BACKUP="{{ scripts_dir }}/do_backup"
+AGE_RECIPIENT="{{ backup_age_pubkey }}"
 
 # Function to log messages
 log_message() {
@@ -27,20 +29,37 @@ create_backup() {
     # Create backup excluding the backups directory itself.
     # HA's Docker container runs as root, so .storage/, the DB, .tado_tokens
     # and rotating logs are root-owned. tar needs sudo to read them.
-    if sudo tar -czf "$backup_file" -C "$CONFIG_DIR" --exclude="backups" --exclude="*.log" .; then
-        sudo chown "$(id -u):$(id -g)" "$backup_file"
-        local size=$(du -h "$backup_file" | cut -f1)
-        log_message "✅ Backup created successfully: $backup_file ($size)"
-        
-        # Clean up old backups based on type
-        cleanup_old_backups "$backup_type"
-        
-        echo "$backup_file"
-        return 0
-    else
-        log_message "❌ Failed to create backup"
+    if ! sudo tar -czf "$backup_file" -C "$CONFIG_DIR" --exclude="backups" --exclude="*.log" .; then
+        log_message "❌ Failed to create local backup"
         return 1
     fi
+    sudo chown "$(id -u):$(id -g)" "$backup_file"
+    local size=$(du -h "$backup_file" | cut -f1)
+    log_message "✅ Local backup created: $backup_file ($size)"
+
+    # Encrypt + upload off-host. Lean on enhanced_monitoring_wrapper for
+    # notifications, so call do_backup in --silent mode and let its exit
+    # code propagate. Wrapper or interactive caller will see the failure.
+    if [ ! -x "$DO_BACKUP" ]; then
+        log_message "❌ do_backup not found at $DO_BACKUP"
+        return 1
+    fi
+    if [ -z "$AGE_RECIPIENT" ]; then
+        log_message "❌ AGE_RECIPIENT is empty — refusing to upload unencrypted"
+        return 1
+    fi
+
+    log_message "🔐 Encrypting and uploading $(basename "$backup_file")..."
+    if "$DO_BACKUP" --silent "$backup_file" "$AGE_RECIPIENT"; then
+        log_message "✅ Backup uploaded off-host"
+    else
+        log_message "❌ Off-host upload failed"
+        return 1
+    fi
+
+    cleanup_old_backups "$backup_type"
+    echo "$backup_file"
+    return 0
 }
 
 # Function to cleanup old backups
