@@ -36,7 +36,7 @@
     owner: root
     mode: "755"
     content: |
-      #!/bin/bash
+      #!/bin/sh
       curl -sf "{{ gh_keys }}"
   when: gh_keys is defined
   tags: [ssh, keys]
