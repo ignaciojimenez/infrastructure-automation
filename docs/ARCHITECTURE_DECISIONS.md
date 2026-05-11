@@ -19,6 +19,7 @@ Simple log of key technical decisions made in this project.
 
 - **SD card provisioning is optional** - Can flash vanilla Raspberry Pi OS and let Ansible handle everything
 - **SSH key management via GitHub** - Pull authorized_keys from GitHub profile for easy setup
+- **Ansible Vault password in macOS Keychain** - Stored under item `ansible-vault-master`, fetched by `bin/vault_pass.sh`; synced via iCloud Keychain so a fresh laptop only needs the repo clone
 
 ## Naming Conventions
 
