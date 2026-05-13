@@ -22,7 +22,7 @@
       entity_id: group.persons
       state: home
     - condition: state
-      entity_id: light.living_room_lights
+      entity_id: light.all_lights
       state: "off"
   action:
     - service: scene.turn_on
@@ -42,7 +42,7 @@
   action:
     - service: light.turn_off
       target:
-        entity_id: light.living_room_lights
+        entity_id: light.all_lights
   mode: single
 
 - id: '1638916130644'
@@ -56,7 +56,7 @@
   action:
     - service: light.turn_off
       target:
-        entity_id: light.living_room_lights
+        entity_id: light.all_lights
   mode: single
 
 # Daily backups

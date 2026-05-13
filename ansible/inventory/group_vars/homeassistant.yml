@@ -33,3 +33,12 @@ internet_speed_delay: 75
 # Platform
 disable_bluetooth: false  # Keep for BLE integrations
 disable_hdmi: true
+
+# Lights — members of the `light.all_lights` group used by automations and dashboards
+homeassistant_lights:
+  - light.floor_lamp
+  - light.book_floor_lamp
+  - light.table_lamp
+  - light.floor_lamp_new
+  - light.shelly_luz_outdoor
+  - light.shelly_luz_salon

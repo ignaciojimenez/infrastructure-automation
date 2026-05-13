@@ -41,20 +41,16 @@ scene: !include scenes.yaml
 #### Manual configs from this point
 group: !include groups.yaml
 
+{% if homeassistant_lights | default([]) | length > 0 %}
 # Light Groups
 light:
   - platform: group
     name: All lights
     entities:
-{% for light in homeassistant_lights | default(['light.floor_lamp', 'light.book_floor_lamp', 'light.table_lamp', 'light.floor_lamp_new', 'light.shelly_luz_outdoor', 'light.shelly_luz_salon']) %}
+{% for light in homeassistant_lights %}
       - {{ light }}
 {% endfor %}
-  - platform: group
-    name: Living room lights
-    entities:
-{% for light in homeassistant_living_room_lights | default(['light.floor_lamp', 'light.book_floor_lamp', 'light.table_lamp', 'light.floor_lamp_new', 'light.shelly_luz_outdoor', 'light.shelly_luz_salon']) %}
-      - {{ light }}
-{% endfor %}
+{% endif %}
 
 # Logger configuration
 logger:
