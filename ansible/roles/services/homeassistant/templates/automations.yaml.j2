@@ -331,3 +331,167 @@
           {{ '{{ msg }}' }}
   mode: queued
   max: 10
+
+# ─── Shelly Gas detectors (mains-powered, always online) ───────────────────
+# Life-safety: the detector's own siren is primary; Slack is the remote-warning
+# layer. Critical events (alarm, sensor fault) -> slack_alert; the rest -> notify.
+# Friendly name resolves to the HA Area if set (assign both units to an Area for
+# clean messages), else falls back to the device's entity name.
+
+- id: "shelly_gas_alarm"
+  alias: "Shelly Gas - Alarm"
+  trigger:
+    - platform: state
+      entity_id:
+        - sensor.shellygas_8c4f0059f510_gas_detected
+        - sensor.shellygas_8c4f0059fb5f_gas_detected
+      to:
+        - "mild"
+        - "heavy"
+  action:
+    - service: rest_command.slack_alert
+      data:
+        message: "{{ '{{' }} \"🚨🔥 GAS ALARM — \" ~ (area_name(trigger.entity_id) | default(trigger.to_state.attributes.friendly_name | replace(\" Gas detected\", \"\"), true)) ~ \": \" ~ (trigger.to_state.state | upper) ~ \" (\" ~ states(trigger.entity_id | replace(\"_gas_detected\", \"_gas_concentration\")) ~ \" ppm)\" {{ '}}' }}"
+  mode: parallel
+
+- id: "shelly_gas_self_test"
+  alias: "Shelly Gas - Self-test Running"
+  trigger:
+    - platform: state
+      entity_id:
+        - sensor.shellygas_8c4f0059f510_gas_detected
+        - sensor.shellygas_8c4f0059fb5f_gas_detected
+      to: "test"
+  action:
+    - service: rest_command.slack_notify
+      data:
+        message: "{{ '{{' }} \"🧪 Gas detector self-test running — \" ~ (area_name(trigger.entity_id) | default(trigger.to_state.attributes.friendly_name | replace(\" Gas detected\", \"\"), true)) {{ '}}' }}"
+  mode: parallel
+
+- id: "shelly_gas_cleared"
+  alias: "Shelly Gas - Cleared"
+  trigger:
+    - platform: state
+      entity_id:
+        - sensor.shellygas_8c4f0059f510_gas_detected
+        - sensor.shellygas_8c4f0059fb5f_gas_detected
+      from:
+        - "mild"
+        - "heavy"
+      to: "none"
+  action:
+    - service: rest_command.slack_alert
+      data:
+        message: "{{ '{{' }} \"✅ Gas cleared — \" ~ (area_name(trigger.entity_id) | default(trigger.to_state.attributes.friendly_name | replace(\" Gas detected\", \"\"), true)) {{ '}}' }}"
+  mode: parallel
+
+- id: "shelly_gas_fault"
+  alias: "Shelly Gas - Sensor Fault or Offline"
+  trigger:
+    - platform: state
+      entity_id:
+        - sensor.shellygas_8c4f0059f510_operation
+        - sensor.shellygas_8c4f0059fb5f_operation
+      to:
+        - "fault"
+        - "unavailable"
+      for:
+        minutes: 5
+  action:
+    - service: rest_command.slack_alert
+      data:
+        message: "{{ '{{' }} \"⚠️ Gas detector FAULT/OFFLINE — \" ~ (area_name(trigger.entity_id) | default(trigger.to_state.attributes.friendly_name | replace(\" Operation\", \"\"), true)) ~ \" (state: \" ~ trigger.to_state.state ~ \")\" {{ '}}' }}"
+  mode: parallel
+
+- id: "shelly_gas_fault_recovery"
+  alias: "Shelly Gas - Sensor Recovered"
+  trigger:
+    - platform: state
+      entity_id:
+        - sensor.shellygas_8c4f0059f510_operation
+        - sensor.shellygas_8c4f0059fb5f_operation
+      from:
+        - "fault"
+        - "unavailable"
+      to: "normal"
+  action:
+    - service: rest_command.slack_alert
+      data:
+        message: "{{ '{{' }} \"✅ Gas detector back to normal — \" ~ (area_name(trigger.entity_id) | default(trigger.to_state.attributes.friendly_name | replace(\" Operation\", \"\"), true)) {{ '}}' }}"
+  mode: parallel
+
+# ─── Shelly Plus Smoke detector (battery-powered, sleeping device) ──────────
+# Life-safety: the detector's own siren is primary; Slack is the remote layer.
+# Alarm / cleared / low-battery / offline -> slack_alert; recovery -> notify.
+# Test the alarm path by pressing the unit's physical test button (it drives
+# the smoke binary_sensor "on", firing the alarm automation to #home-alerts).
+# Offline uses a long (26h) debounce: this device only wakes to report
+# periodically, so a short "unavailable" window is normal, not a fault.
+
+- id: "shelly_smoke_alarm"
+  alias: "Shelly Smoke - Alarm"
+  trigger:
+    - platform: state
+      entity_id:
+        - binary_sensor.shellyplussmoke_3076f523fd68_smoke
+      to: "on"
+  action:
+    - service: rest_command.slack_alert
+      data:
+        message: "{{ '{{' }} \"🚨🔥 SMOKE ALARM — \" ~ (area_name(trigger.entity_id) | default(trigger.to_state.attributes.friendly_name | replace(\" Smoke\", \"\"), true)) {{ '}}' }}"
+  mode: parallel
+
+- id: "shelly_smoke_cleared"
+  alias: "Shelly Smoke - Cleared"
+  trigger:
+    - platform: state
+      entity_id:
+        - binary_sensor.shellyplussmoke_3076f523fd68_smoke
+      from: "on"
+      to: "off"
+  action:
+    - service: rest_command.slack_alert
+      data:
+        message: "{{ '{{' }} \"✅ Smoke cleared — \" ~ (area_name(trigger.entity_id) | default(trigger.to_state.attributes.friendly_name | replace(\" Smoke\", \"\"), true)) {{ '}}' }}"
+  mode: parallel
+
+- id: "shelly_smoke_low_battery"
+  alias: "Shelly Smoke - Low Battery"
+  trigger:
+    - platform: numeric_state
+      entity_id:
+        - sensor.shellyplussmoke_3076f523fd68_battery
+      below: 15
+  action:
+    - service: rest_command.slack_alert
+      data:
+        message: "{{ '{{' }} \"🪫 Smoke detector low battery — \" ~ (area_name(trigger.entity_id) | default(trigger.to_state.attributes.friendly_name | replace(\" Battery\", \"\"), true)) ~ \": \" ~ trigger.to_state.state ~ \"%\" {{ '}}' }}"
+  mode: parallel
+
+- id: "shelly_smoke_offline"
+  alias: "Shelly Smoke - Offline (not reporting)"
+  trigger:
+    - platform: state
+      entity_id:
+        - binary_sensor.shellyplussmoke_3076f523fd68_smoke
+      to: "unavailable"
+      for:
+        hours: 26
+  action:
+    - service: rest_command.slack_alert
+      data:
+        message: "{{ '{{' }} \"⚠️ Smoke detector OFFLINE (not reporting) — \" ~ (area_name(trigger.entity_id) | default(trigger.to_state.attributes.friendly_name | replace(\" Smoke\", \"\"), true)) {{ '}}' }}"
+  mode: parallel
+
+- id: "shelly_smoke_online_recovery"
+  alias: "Shelly Smoke - Back Online"
+  trigger:
+    - platform: state
+      entity_id:
+        - binary_sensor.shellyplussmoke_3076f523fd68_smoke
+      from: "unavailable"
+  action:
+    - service: rest_command.slack_notify
+      data:
+        message: "{{ '{{' }} \"✅ Smoke detector back online — \" ~ (area_name(trigger.entity_id) | default(trigger.to_state.attributes.friendly_name | replace(\" Smoke\", \"\"), true)) {{ '}}' }}"
+  mode: parallel
