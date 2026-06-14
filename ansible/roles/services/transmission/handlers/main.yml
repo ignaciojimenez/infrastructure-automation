@@ -1,14 +1,14 @@
 ---
 # Transmission handlers
 
-- name: restart transmission
+- name: Restart transmission
   become: true
   ansible.builtin.service:
     name: transmission-daemon
     state: restarted
   listen: restart transmission
 
-- name: reload transmission
+- name: Reload transmission
   become: true
   ansible.builtin.service:
     name: transmission-daemon

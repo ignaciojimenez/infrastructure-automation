@@ -97,7 +97,7 @@
         cmd: pihole -g
       changed_when: false
       tags: [pihole, update]
-    
+
     - name: Add custom DNS records
       ansible.builtin.lineinfile:
         path: /etc/pihole/custom.list
@@ -107,13 +107,13 @@
       when: pihole_custom_dns is defined
       notify: restart pihole-FTL
       tags: [pihole, dns]
-    
+
     - name: Check if setupVars.conf exists
       ansible.builtin.stat:
         path: /etc/pihole/setupVars.conf
       register: setupvars_exists
       tags: [pihole, dns]
-    
+
     - name: Configure upstream DNS servers
       ansible.builtin.lineinfile:
         path: /etc/pihole/setupVars.conf
@@ -167,7 +167,7 @@
 #         path: /usr/lib/unifi
 #       register: unifi_installed
 #       tags: [unifi, check]
-#     
+#
 #     - name: Install Unifi Controller using GlennR's script
 #       when: not unifi_installed.stat.exists
 #       block:
@@ -177,7 +177,7 @@
 #             dest: /tmp/unifi-install.sh
 #             mode: '0755'
 #           tags: [unifi, install]
-#         
+#
 #         - name: Run Unifi installer
 #           become: true
 #           ansible.builtin.command:
@@ -185,7 +185,7 @@
 #           environment:
 #             DEBIAN_FRONTEND: noninteractive
 #           tags: [unifi, install]
-#     
+#
 #     - name: Configure firewall for Unifi
 #       become: true
 #       community.general.ufw:

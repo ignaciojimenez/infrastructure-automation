@@ -3,6 +3,7 @@ exclude_paths:
   - .git/
   - migration_backup*/
   - tmp/
+  - ansible/roles/_skeleton/  # role template, not a real role (CI role-check skips it too)
 
 skip_list:
   - yaml[line-length]

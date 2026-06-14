@@ -37,7 +37,8 @@
 
 # ========== PHASE 4b: Agent Access ==========
 # Deploys read-only read_agent user to all hosts
-- ansible.builtin.import_playbook: system/agent_access.yml
+- name: Phase 4b - Agent access
+  ansible.builtin.import_playbook: system/agent_access.yml
   tags: [agent_access, baseline]
 
 # ========== PHASE 5: Platform-Specific Configuration ==========

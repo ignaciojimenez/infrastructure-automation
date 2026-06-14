@@ -1,7 +1,7 @@
 ---
 # Samba handlers
 
-- name: restart samba
+- name: Restart samba
   become: true
   ansible.builtin.service:
     name: "{{ item }}"
@@ -11,7 +11,7 @@
     - nmbd
   listen: restart samba
 
-- name: reload samba
+- name: Reload samba
   become: true
   ansible.builtin.service:
     name: smbd

@@ -99,17 +99,17 @@
     content: |
       #!/bin/sh
       # Monitor SSH failed login attempts
-      
+
       LOG_FILE="/var/log/auth.log"
       if [ -f "/var/log/secure" ]; then
           LOG_FILE="/var/log/secure"
       fi
-      
+
       # Check for failed SSH attempts in the last hour
       FAILED=$(grep "Failed password" "$LOG_FILE" 2>/dev/null | \
                grep "$(date '+%b %e %H')" | \
                wc -l)
-      
+
       if [ "$FAILED" -gt 10 ]; then
           echo "❌ Warning: $FAILED failed SSH attempts in the last hour"
           exit 1
