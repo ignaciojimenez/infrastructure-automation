@@ -19,6 +19,10 @@ on:
 jobs:
   lint:
     runs-on: ubuntu-latest
+    env:
+      # Override ansible.cfg's vault_password_file (bin/vault_pass.sh reads the
+      # macOS Keychain, which doesn't exist on the Linux runner — exits 127).
+      ANSIBLE_VAULT_PASSWORD_FILE: ${{ github.workspace }}/.ansible-ci-vault-pass
     steps:
       - uses: actions/checkout@v4
 
@@ -34,7 +38,7 @@ jobs:
         run: ansible-galaxy collection install community.general community.docker ansible.posix
 
       - name: Create vault password file for CI
-        run: mkdir -p ~/.ansible && echo "ci-dummy" > ~/.ansible/vault_pass
+        run: echo "ci-dummy" > "$ANSIBLE_VAULT_PASSWORD_FILE"
 
       - name: Create minimal inventory for syntax check
         run: |
