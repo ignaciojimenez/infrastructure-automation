@@ -317,3 +317,36 @@
   become: true
   become_user: "{{ infrastructure_user }}"
   when: vault_healthcheck_proxmox_health is defined
+
+# --- Diagnostics: thermal history ---
+# The 30-min health check only samples instantaneous temperature; a thermal crash
+# (silicon THERMTRIP leaves no kernel log) is invisible afterward. This records a
+# dense temperature + hardware-throttle-counter timeline so such an event can be
+# reconstructed. Root cron, mirroring the existing dmesg diagnostic logger.
+
+- name: Ensure diagnostics directory exists
+  ansible.builtin.file:
+    path: /var/log/diagnostics
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  become: true
+
+- name: Deploy thermal history logger (root-owned)
+  ansible.builtin.copy:
+    src: save_temps.sh
+    dest: /usr/local/bin/save_temps.sh
+    owner: root
+    group: root
+    mode: '0755'
+  become: true
+
+- name: Configure thermal history logger cron job
+  ansible.builtin.cron:
+    name: "Thermal history logger"
+    minute: "*/2"
+    job: "/usr/local/bin/save_temps.sh"
+    user: root
+    state: present
+  become: true

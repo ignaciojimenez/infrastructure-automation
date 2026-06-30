@@ -1,10 +1,41 @@
 # Infrastructure TODO — Prioritized Action List
 
-Updated: 2026-05-11 | Validated against live hosts via read_agent autonomous assessment
+Updated: 2026-06-30 | Validated against live hosts via read_agent autonomous assessment
 
 This document is the single source of truth for pending infrastructure work.
 Each item includes verified current state, concrete next steps, and acceptance criteria.
 Items are ordered by risk × effort — highest-impact, most-actionable items first.
+
+---
+
+## cwwk Thermal Stability — Root Cause + Headroom (#3 pending)
+
+**Risk:** High operational impact — cwwk hosts the OPNsense firewall (VM 100, onboot), so a cwwk crash takes down all internet. Recurring silent resets.
+
+### Root cause (investigated 2026-06-30)
+cwwk hard-reset at 18:50 on 2026-06-30 with **no kernel log, panic, MCE, OOM, or thermal trip recorded** — the journal just stops mid-write. Whole fleet was fine (only cwwk dropped), no software/kernel/package change, temps/RAM/ECC/storage all clean. The smoking gun: `package_throttle_count` = **22,841** since the 18:51 boot (a healthy box reads ~0), proving the CPU repeatedly slammed Tjmax (105°C). Cause: girlfriend turned off the fan facing cwwk during a heatwave → thermal runaway → silicon-level **THERMTRIP** (instant power-off, leaves no log). Note: the per-event syslog throttle line is rate-limited/suppressed on this kernel, so *only the hardware counter* reveals throttling — instantaneous `sensors` reads a calm 56°C between throttle cycles. Distinct from the 2026-06-29 ~10:17 event, which was fleet-wide (real house power blip).
+
+### Done — thermal logging (#2)
+`save_temps.sh` (root cron `*/2`) logs temps + `package_throttle_count` + delta to `/var/log/diagnostics/thermal-history.log` (~3 days retained, 644 so read_agent can read it). Deployed + verified on cwwk. Fills the gap that made today's crash un-quantifiable. Role: `platform/proxmox`.
+
+### Next Steps — thermal headroom (#3)
+- **Fan:** ensure the cwwk fan can't be casually switched off (physical / labelling).
+- **Cap peak heat in BIOS or kernel:** lower turbo / set a package power limit (e.g. `intel-rapl` / `powercap`, or BIOS PL1/PL2) so the cooler can keep up under heatwave + VM load. Cheapest insurance.
+- **BIOS:** currently 5.27 (2024-11-26), board reports "Default string" — check CWWK for a newer release.
+- **Forensics for hangs vs power:** consider netconsole / pstore-ramoops + a panic watchdog so a *hang* (vs power cut) is distinguishable next time.
+- **Close the alerting blind spot:** `check_proxmox_health.sh` only alerts on instantaneous temp (≥85°C) and misses sustained throttling. Fold `throttle_delta`-based detection (from `save_temps.sh`'s signal) into a Slack alert.
+
+### Acceptance Criteria
+- [ ] cwwk holds 105°C-throttle-free under summer load (thermal-history shows `throttle_delta=0` through a hot afternoon)
+- [ ] Power cap / BIOS change applied and documented in decisions log
+- [ ] Throttle-aware alert fires to #home-alerts before a THERMTRIP
+
+### Incidental findings (this session, lower priority)
+- `save-dmesg` cron + `/var/log/diagnostics` predate Ansible and are unmanaged drift — adopt into the `platform/proxmox` role alongside `save_temps.sh`.
+- Stale-looking cron `#Ansible: Proxmox health check → /home/choco/.scripts/proxmox_health.sh` (old path, separate from `scripts_dir/monitoring/`) — verify it's not a leftover duplicate.
+- postfix can't deliver local/cron mail: `/etc/aliases.db` missing → root mail piling up `deferred`. `newaliases` to fix.
+- **cobra** is running in **BST**, not CEST (1h skew) — set timezone to Europe/Amsterdam.
+- No UPS monitoring (NUT/apcupsd) on cwwk; today's split (cwwk down, Pis up) suggests cwwk may not share the Pis' power protection — worth confirming UPS topology.
 
 ---
 
