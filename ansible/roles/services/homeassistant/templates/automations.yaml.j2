@@ -414,6 +414,13 @@
         - "fault"
         - "unavailable"
       to: "normal"
+  condition:
+    # Mirror the FAULT automation's 5-min debounce: only announce recovery if the
+    # sensor was genuinely unavailable/fault long enough to have raised a FAULT
+    # alert. Suppresses phantom "back to normal" messages from brief CoIoT/Wi-Fi
+    # poll blips and from HA restarts (where the prior-state duration is ~0).
+    - condition: template
+      value_template: "{{ '{{' }} trigger.from_state is not none and (trigger.to_state.last_changed - trigger.from_state.last_changed).total_seconds() >= 300 {{ '}}' }}"
   action:
     - service: rest_command.slack_alert
       data:
