@@ -1,0 +1,10 @@
+---
+# platform/proxmox role defaults
+
+# Thermal headroom tuning (see docs/ARCHITECTURE_DECISIONS.md).
+# The N355 is a ~15W-class part but ships with RAPL PL1=35W into a marginal cooler;
+# capping sustained power keeps a future airflow loss in graceful-throttle territory
+# instead of a silent THERMTRIP. No throughput impact at a 1 Gbps WAN.
+enable_proxmox_power_tuning: true
+proxmox_rapl_pl1_watts: 20        # sustained (long-term) package power cap; PL2 burst left at firmware default
+proxmox_cpu_governor: powersave   # intel_pstate dynamic mode; still boosts to max under load

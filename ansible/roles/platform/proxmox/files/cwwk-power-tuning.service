@@ -1,0 +1,12 @@
+[Unit]
+Description=cwwk thermal-headroom tuning (RAPL PL1 cap + CPU governor)
+Documentation=https://github.com/ignaciojimenez/infrastructure-automation/blob/main/docs/ARCHITECTURE_DECISIONS.md
+ConditionPathExists=/usr/local/bin/cwwk_power_tuning.sh
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/cwwk_power_tuning.sh
+
+[Install]
+WantedBy=multi-user.target
