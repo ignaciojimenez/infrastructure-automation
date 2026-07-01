@@ -275,7 +275,9 @@
     minute: "{{ item.minute }}"
     hour: "{{ item.hour | default('*') }}"
     user: "{{ infrastructure_user }}"
-    job: "{{ scripts_dir }}/enhanced_monitoring_wrapper --heartbeat-interval={{ item.heartbeat | default('daily') }} --monitoring-name={{ item.monitoring_name }} {{ logging_token }} {{ alert_token }} {{ scripts_dir }}/monitoring/{{ item.script }}"
+    # Redirect stdout/stderr to a per-check log so cron doesn't email the wrapper's
+    # output every run (matches the backup/system crons; alerting is via Slack).
+    job: "{{ scripts_dir }}/enhanced_monitoring_wrapper --heartbeat-interval={{ item.heartbeat | default('daily') }} --monitoring-name={{ item.monitoring_name }} {{ logging_token }} {{ alert_token }} {{ scripts_dir }}/monitoring/{{ item.script }} >> {{ logs_dir }}/{{ item.monitoring_name }}.log 2>&1"
     state: present
   loop:
     - name: "Proxmox system health check"
@@ -357,6 +359,34 @@
     state: present
   become: true
 
+- name: Deploy kernel dmesg snapshot script (root-owned)
+  ansible.builtin.copy:
+    src: save-dmesg
+    dest: /usr/local/bin/save-dmesg
+    owner: root
+    group: root
+    mode: '0755'
+  become: true
+
+- name: Configure kernel dmesg snapshot cron job
+  ansible.builtin.cron:
+    name: "Kernel dmesg snapshot"
+    minute: "*/10"
+    job: "/usr/local/bin/save-dmesg"
+    user: root
+    state: present
+  become: true
+
+- name: Configure ZFS ARC summary log cron job
+  ansible.builtin.cron:
+    name: "ZFS ARC summary log"
+    minute: "0"
+    hour: "*/6"
+    job: "arc_summary 2>/dev/null | head -30 >> /var/log/diagnostics/zfs-arc.log"
+    user: root
+    state: present
+  become: true
+
 # --- Thermal headroom: RAPL power cap + CPU governor ---
 # The N355 (~15W-class) ships with PL1=35W into a marginal cooler, so a loss of
 # airflow runs past throttling into a silent THERMTRIP. Cap sustained power and use
@@ -397,3 +427,23 @@
   when:
     - enable_proxmox_power_tuning | default(true)
     - not ansible_check_mode
+
+# --- Drift cleanup: retire orphaned/legacy config ---
+
+- name: Remove stale standalone Proxmox health cron
+  # Superseded by the wrapper-based "Proxmox system health check" in the user
+  # crontab. Its target (~/.scripts/proxmox_health.sh) no longer exists, so it
+  # failed every 4h and generated undeliverable root mail.
+  ansible.builtin.cron:
+    name: "Proxmox health check"
+    user: root
+    state: absent
+  become: true
+
+- name: Ensure postfix aliases database exists
+  # Missing /etc/aliases.db left all local/cron mail stuck 'deferred'. Building it
+  # unblocks delivery. Idempotent via the creates guard.
+  ansible.builtin.command:
+    cmd: newaliases
+    creates: /etc/aliases.db
+  become: true

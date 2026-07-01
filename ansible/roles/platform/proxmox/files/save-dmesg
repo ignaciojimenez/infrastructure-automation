@@ -1,0 +1,13 @@
+#!/bin/bash
+# save-dmesg -- MANAGED BY ANSIBLE (platform/proxmox role)
+# Periodic timestamped snapshot of the kernel ring buffer. Companion to
+# save_temps.sh: dmesg -T is captured to /var/log/diagnostics so hardware/driver
+# events are retained even after the ring buffer wraps or the host reboots.
+
+DIAG_DIR=/var/log/diagnostics
+dmesg -T > "$DIAG_DIR/dmesg-$(date +%Y%m%d-%H%M).log" 2>/dev/null || true
+
+# Keep only the most recent 50 snapshots. Filenames are date-stamped (no spaces or
+# special characters), so ls -t is safe and clearer than a find pipeline here.
+# shellcheck disable=SC2012
+ls -t "$DIAG_DIR"/dmesg-*.log 2>/dev/null | tail -n +51 | xargs -r rm -f 2>/dev/null || true

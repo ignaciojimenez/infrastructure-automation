@@ -37,12 +37,12 @@ All as code in the `platform/proxmox` role (toggle `enable_proxmox_power_tuning`
 - [x] Alert proven end-to-end — synthetic WARNING delivered a real #home-alerts message; returns to OK silently (no `--notify-fixed`, consistent with other checks — add it if closure pings are wanted)
 - [ ] cwwk holds throttle-free under summer load (thermal-history shows `throttle_delta=0` through a hot afternoon)
 
-### Incidental findings (this session, lower priority)
-- `save-dmesg` cron + `/var/log/diagnostics` predate Ansible and are unmanaged drift — adopt into the `platform/proxmox` role alongside `save_temps.sh`.
-- Stale-looking cron `#Ansible: Proxmox health check → /home/choco/.scripts/proxmox_health.sh` (old path, separate from `scripts_dir/monitoring/`) — verify it's not a leftover duplicate.
-- postfix can't deliver local/cron mail: `/etc/aliases.db` missing → root mail piling up `deferred`. `newaliases` to fix.
+### Incidental findings (this session)
+- ✅ **cwwk cron/mail drift reconciled** (2026-07-01): adopted `save-dmesg` + `arc_summary` into the `platform/proxmox` role as managed root crons; removed the stale `Proxmox health check` cron (its target `proxmox_health.sh` didn't exist → failed every 4h). Root cause of the deferred-mail pileup was the 6 monitoring crons emitting the wrapper's stdout every run → now redirected to `~/.logs/proxmox_*.log` (matches the backup crons). Built `/etc/aliases.db` and flushed 2201 stale cron mails. cwwk root crontab is now 100% Ansible-managed.
+- ⚠️ **Move webhook tokens out of cron arg lines** (elevated) — the Slack tokens are literal in every monitoring cron `job`, so they leak into `crontab -l`, `--diff` output, and cron-mail subjects (seen repeatedly this session). Move to a sourced env file read by `enhanced_monitoring_wrapper`. Given the repeated exposure, **consider rotating the two webhooks**. Cross-host (all monitored hosts).
+- Monitoring logs (`~/.logs/proxmox_*.log`) and `zfs-arc.log` have no rotation — add logrotate if they grow.
 - **cobra** is running in **BST**, not CEST (1h skew) — set timezone to Europe/Amsterdam.
-- No UPS monitoring (NUT/apcupsd) on cwwk; today's split (cwwk down, Pis up) suggests cwwk may not share the Pis' power protection — worth confirming UPS topology.
+- No UPS monitoring (NUT/apcupsd) on cwwk; the 2026-06-30 split (cwwk down, Pis up) suggests cwwk may not share the Pis' power protection — worth confirming UPS topology.
 
 ---
 
