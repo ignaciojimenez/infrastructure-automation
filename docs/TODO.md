@@ -34,8 +34,8 @@ All as code in the `platform/proxmox` role (toggle `enable_proxmox_power_tuning`
 ### Acceptance Criteria
 - [x] Power cap + governor applied as code and documented in decisions log
 - [x] Throttle-aware dedicated alert deployed (logic verified)
+- [x] Alert proven end-to-end — synthetic WARNING delivered a real #home-alerts message; returns to OK silently (no `--notify-fixed`, consistent with other checks — add it if closure pings are wanted)
 - [ ] cwwk holds throttle-free under summer load (thermal-history shows `throttle_delta=0` through a hot afternoon)
-- [ ] Alert proven end-to-end with a real #home-alerts message + recovery
 
 ### Incidental findings (this session, lower priority)
 - `save-dmesg` cron + `/var/log/diagnostics` predate Ansible and are unmanaged drift — adopt into the `platform/proxmox` role alongside `save_temps.sh`.
