@@ -245,6 +245,7 @@
     - check_zfs_health.sh
     - check_kernel_errors.sh
     - check_crash_dumps.sh
+    - check_thermal.sh
   become: true
 
 - name: Deploy Proxmox heartbeat script
@@ -304,6 +305,11 @@
       heartbeat: "daily"
       monitoring_name: "proxmox_crashes"
       script: "check_crash_dumps.sh"
+    - name: "Proxmox thermal check"
+      minute: "*/5"
+      heartbeat: "daily"
+      monitoring_name: "proxmox_thermal"
+      script: "check_thermal.sh"
   become: true
   become_user: "{{ infrastructure_user }}"
 
@@ -350,3 +356,44 @@
     user: root
     state: present
   become: true
+
+# --- Thermal headroom: RAPL power cap + CPU governor ---
+# The N355 (~15W-class) ships with PL1=35W into a marginal cooler, so a loss of
+# airflow runs past throttling into a silent THERMTRIP. Cap sustained power and use
+# a dynamic governor so degraded airflow throttles gracefully instead of crashing.
+# Applied at boot via a oneshot systemd unit. See docs/ARCHITECTURE_DECISIONS.md.
+
+- name: Deploy CPU power tuning script
+  ansible.builtin.template:
+    src: cwwk_power_tuning.sh.j2
+    dest: /usr/local/bin/cwwk_power_tuning.sh
+    owner: root
+    group: root
+    mode: '0755'
+  become: true
+  notify: Restart cwwk power tuning
+  when: enable_proxmox_power_tuning | default(true)
+
+- name: Deploy CPU power tuning systemd unit
+  ansible.builtin.copy:
+    src: cwwk-power-tuning.service
+    dest: /etc/systemd/system/cwwk-power-tuning.service
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+  notify: Restart cwwk power tuning
+  when: enable_proxmox_power_tuning | default(true)
+
+- name: Enable and start CPU power tuning service
+  ansible.builtin.systemd:
+    name: cwwk-power-tuning.service
+    enabled: true
+    state: started
+    daemon_reload: true
+  become: true
+  # Skipped under --check: the unit file isn't written in check mode, so systemd
+  # can't find it yet. Real runs write the unit first, then this succeeds.
+  when:
+    - enable_proxmox_power_tuning | default(true)
+    - not ansible_check_mode

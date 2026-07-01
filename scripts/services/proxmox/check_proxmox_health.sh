@@ -20,8 +20,7 @@ CPU_WARNING=80
 CPU_CRITICAL=95
 DISK_WARNING=80
 DISK_CRITICAL=90
-TEMP_WARNING=70
-TEMP_CRITICAL=85
+# CPU temperature + throttle alerting lives in check_thermal.sh (counter-based).
 
 # Color output
 RED='\033[0;31m'
@@ -141,32 +140,11 @@ check_disk() {
     fi
 }
 
-# Check temperature (if sensors available)
-check_temperature() {
-    if ! command -v sensors >/dev/null 2>&1; then
-        return
-    fi
-    
-    # Get CPU package temperature
-    local temp
-    temp=$(sensors 2>/dev/null | grep -i 'package\|core 0' | head -1 | awk '{print $3}' | tr -d '+°C' | cut -d. -f1)
-    
-    # Validate temp is a number
-    if [ -n "$temp" ] && [ "$temp" -eq "$temp" ] 2>/dev/null && [ "$temp" -gt 0 ]; then
-        if [ "$temp" -ge "$TEMP_CRITICAL" ]; then
-            add_issue "CRITICAL: CPU temperature at ${temp}°C"
-        elif [ "$temp" -ge "$TEMP_WARNING" ]; then
-            add_warning "WARNING: CPU temperature at ${temp}°C"
-        fi
-    fi
-}
-
 # Run all checks
 check_memory
 check_swap
 check_cpu
 check_disk
-check_temperature
 
 # Output results
 if [ ${#issues[@]} -gt 0 ]; then

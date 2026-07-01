@@ -15,6 +15,15 @@ Simple log of key technical decisions made in this project.
 - **Reboot handlers for hardware changes** - When firmware config changes, trigger automatic reboot
 - **Resilient volume controls** - Audio mixer configuration checks available controls dynamically, doesn't fail on missing hardware
 
+### cwwk Thermal Management (2026-06-30)
+
+- **Why** - cwwk (Intel Core 3 N355, ~15W-class) hosts the OPNsense firewall (VM 100), so any thermal crash drops all internet. On 2026-06-30 it hard-reset with no kernel log/panic — a silicon **THERMTRIP** after a fan facing it was switched off during a heatwave. Root cause was confirmed by `package_throttle_count` (22,841 throttle events/boot; healthy ≈ 0), not by `sensors` (which reads a calm ~56°C between throttle cycles, and the kernel suppresses the throttle log line).
+- **RAPL power cap** - Board ships with PL1 (sustained) = 35W into a marginal cooler. Capped PL1 to **20W** (still above the chip's 15W base TDP), PL2 (burst) left at 35W. Applied at boot by `cwwk-power-tuning.service` (oneshot, in `platform/proxmox` role); tunable via `proxmox_rapl_pl1_watts` / `enable_proxmox_power_tuning`. **No throughput cost** — at a 1 Gbps WAN the line is the bottleneck, not the CPU, so WireGuard/routing is unaffected. The cap is *insurance*: degraded airflow now throttles gracefully instead of THERMTRIP-ing.
+- **Governor** - Host CPU governor set to `powersave` (intel_pstate dynamic; still boosts to max under load) — lower idle heat, no peak-performance cost.
+- **Thermal forensics** - `save_temps.sh` (root cron `*/2`) logs temps + throttle counter to `/var/log/diagnostics/thermal-history.log` so a future thermal event is quantifiable (instantaneous-sample monitoring can't catch a fast runaway).
+- **Thermal alerting** - `check_thermal.sh` (cron `*/5`, via `enhanced_monitoring_wrapper` → #home-alerts) alerts on the throttle-counter **delta** — the reliable signal. Temperature alerting was moved out of `check_proxmox_health.sh` into this dedicated check to avoid double-alerts. `check_kernel_errors.sh`'s `"temperature above threshold"` pattern is a no-op on this kernel (line suppressed) and is superseded by the counter-based check.
+- **Still required** - The fan is the actual fix; the cap only widens the margin. Pending: confirm cwwk's UPS topology, consider a BIOS newer than 5.27 (2024-11).
+
 ## Deployment & Provisioning
 
 - **SD card provisioning is optional** - Can flash vanilla Raspberry Pi OS and let Ansible handle everything

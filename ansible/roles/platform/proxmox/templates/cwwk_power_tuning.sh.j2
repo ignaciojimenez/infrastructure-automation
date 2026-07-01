@@ -1,0 +1,40 @@
+#!/bin/sh
+# cwwk_power_tuning.sh -- MANAGED BY ANSIBLE (platform/proxmox role)
+#
+# Applies thermal-headroom tuning on the Proxmox host at boot (via
+# cwwk-power-tuning.service):
+#   - RAPL package long-term power limit (PL1) cap
+#   - CPU frequency governor
+#
+# Rationale: the Intel Core 3 N355 (~15W-class) ships here with PL1=35W into a
+# marginal cooler, so a loss of airflow drives it past throttling into a silent
+# THERMTRIP (instant power-off, no kernel log -- this crashed the OPNsense firewall
+# on 2026-06-30). Capping sustained power keeps degraded airflow in graceful-throttle
+# territory. At a 1 Gbps WAN this has no routing/WireGuard throughput impact.
+# See docs/ARCHITECTURE_DECISIONS.md.
+
+set -eu
+
+PL1_WATTS={{ proxmox_rapl_pl1_watts }}
+GOVERNOR={{ proxmox_cpu_governor }}
+
+# --- RAPL PL1 (long_term, constraint_0) cap on every package domain ---
+# PL2 (short_term, constraint_1) is left at the firmware default so brief bursts
+# still turbo.
+pl1_uw=$(( PL1_WATTS * 1000000 ))
+for d in /sys/class/powercap/intel-rapl:*; do
+    [ -e "$d/name" ] || continue
+    case "$(cat "$d/name" 2>/dev/null)" in
+        package-*) ;;
+        *) continue ;;
+    esac
+    if [ -w "$d/constraint_0_power_limit_uw" ]; then
+        echo "$pl1_uw" > "$d/constraint_0_power_limit_uw" || true
+    fi
+done
+
+# --- CPU frequency governor on every core ---
+for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+    [ -w "$g" ] || continue
+    echo "$GOVERNOR" > "$g" || true
+done

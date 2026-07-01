@@ -1,0 +1,9 @@
+---
+# platform/proxmox role handlers
+
+- name: Restart cwwk power tuning
+  ansible.builtin.systemd:
+    name: cwwk-power-tuning.service
+    state: restarted
+    daemon_reload: true
+  become: true

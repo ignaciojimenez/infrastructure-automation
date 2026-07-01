@@ -8,7 +8,7 @@ Items are ordered by risk × effort — highest-impact, most-actionable items fi
 
 ---
 
-## cwwk Thermal Stability — Root Cause + Headroom (#3 pending)
+## cwwk Thermal Stability — Root Cause + Headroom (mitigations deployed)
 
 **Risk:** High operational impact — cwwk hosts the OPNsense firewall (VM 100, onboot), so a cwwk crash takes down all internet. Recurring silent resets.
 
@@ -18,17 +18,24 @@ cwwk hard-reset at 18:50 on 2026-06-30 with **no kernel log, panic, MCE, OOM, or
 ### Done — thermal logging (#2)
 `save_temps.sh` (root cron `*/2`) logs temps + `package_throttle_count` + delta to `/var/log/diagnostics/thermal-history.log` (~3 days retained, 644 so read_agent can read it). Deployed + verified on cwwk. Fills the gap that made today's crash un-quantifiable. Role: `platform/proxmox`.
 
-### Next Steps — thermal headroom (#3)
-- **Fan:** ensure the cwwk fan can't be casually switched off (physical / labelling).
-- **Cap peak heat in BIOS or kernel:** lower turbo / set a package power limit (e.g. `intel-rapl` / `powercap`, or BIOS PL1/PL2) so the cooler can keep up under heatwave + VM load. Cheapest insurance.
+### Done — thermal headroom (#3, deployed 2026-06-30)
+All as code in the `platform/proxmox` role (toggle `enable_proxmox_power_tuning`):
+- **RAPL power cap:** PL1 (sustained) 35W → **20W**, PL2 (burst) left at 35W. Applied at boot via `cwwk-power-tuning.service`. Verified live: `PL1=20000000`, `PL2=35000000`. No throughput cost at 1 Gbps WAN.
+- **Governor:** `performance` → **`powersave`** (intel_pstate; still boosts under load). Verified: all 8 cores `powersave`.
+- **Dedicated thermal alert:** `check_thermal.sh` (cron `*/5`, via `enhanced_monitoring_wrapper` → #home-alerts) alerts on throttle-counter **delta**. Logic verified across OK/WARN/CRIT/reboot. Temp alerting moved out of `check_proxmox_health.sh` (no double-alerts).
+
+### Next Steps — remaining
+- **Fan:** ensure the cwwk fan can't be casually switched off (physical / labelling). *Still the actual fix — the cap only widens the margin.*
+- **Validate under load:** `stress-ng` comparison at 35W vs 20W to quantify the temp drop (brief router-core load — schedule for a quiet window).
+- **Live-fire the alert:** trigger a synthetic throttle delta and confirm the #home-alerts message + recovery end-to-end.
 - **BIOS:** currently 5.27 (2024-11-26), board reports "Default string" — check CWWK for a newer release.
 - **Forensics for hangs vs power:** consider netconsole / pstore-ramoops + a panic watchdog so a *hang* (vs power cut) is distinguishable next time.
-- **Close the alerting blind spot:** `check_proxmox_health.sh` only alerts on instantaneous temp (≥85°C) and misses sustained throttling. Fold `throttle_delta`-based detection (from `save_temps.sh`'s signal) into a Slack alert.
 
 ### Acceptance Criteria
-- [ ] cwwk holds 105°C-throttle-free under summer load (thermal-history shows `throttle_delta=0` through a hot afternoon)
-- [ ] Power cap / BIOS change applied and documented in decisions log
-- [ ] Throttle-aware alert fires to #home-alerts before a THERMTRIP
+- [x] Power cap + governor applied as code and documented in decisions log
+- [x] Throttle-aware dedicated alert deployed (logic verified)
+- [ ] cwwk holds throttle-free under summer load (thermal-history shows `throttle_delta=0` through a hot afternoon)
+- [ ] Alert proven end-to-end with a real #home-alerts message + recovery
 
 ### Incidental findings (this session, lower priority)
 - `save-dmesg` cron + `/var/log/diagnostics` predate Ansible and are unmanaged drift — adopt into the `platform/proxmox` role alongside `save_temps.sh`.
