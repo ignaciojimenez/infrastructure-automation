@@ -33,6 +33,54 @@ stream_mount = "{{ liqs_name }}.ogg"
 stream_name = "{{ str_name }}"  # Stream name from Icecast metadata
 expected_stream_url = f"http://{my_ip}:{icecast_port}/{stream_mount}"
 
+# Transient MPC/hifipi failure handling
+# mpc talks to hifipi over the network; a brief DNS/connectivity blip (typically
+# right after a reboot, before the network is up) is self-recovering. Logging it as
+# ERROR is misleading and, worse, trips the vinylstreamer health monitor's log-error
+# check into paging on stale, already-resolved noise. Such transients are logged at
+# WARNING and only escalate to ERROR if they persist (a genuinely stuck hifipi).
+MPC_ESCALATE_SECONDS = 120  # sustained-failure window before a transient becomes a real ERROR
+
+def is_transient_mpc_error(text):
+    """True for network/name-resolution errors that are expected to self-recover."""
+    t = (text or "").lower()
+    return any(s in t for s in (
+        "failed to resolve host name",
+        "name or service not known",
+        "connection refused",
+        "could not connect",
+        "no route to host",
+        "connection timed out",
+        "host is unreachable",
+    ))
+
+class MpcFailureLog:
+    """Logs mpc failures with debounce: a transient network error is logged at
+    WARNING and only escalated to ERROR if it persists past escalate_seconds; any
+    successful mpc call resets the clock. Non-transient errors are ERROR immediately.
+    `now` is injectable for testing."""
+    def __init__(self, logger, escalate_seconds=MPC_ESCALATE_SECONDS):
+        self._logger = logger
+        self._escalate_seconds = escalate_seconds
+        self._fail_since = None
+
+    def ok(self):
+        """Record a successful mpc call (connection healthy)."""
+        self._fail_since = None
+
+    def fail(self, message, stderr_text, now=None):
+        """Record an mpc failure and log it at the appropriate severity."""
+        if not is_transient_mpc_error(stderr_text):
+            self._logger.error(message)
+            return
+        now = time.time() if now is None else now
+        if self._fail_since is None:
+            self._fail_since = now
+        if now - self._fail_since >= self._escalate_seconds:
+            self._logger.error(message)
+        else:
+            self._logger.warning(message)
+
 # Direct logging class for reliability
 class DirectLogger:
     def __init__(self, log_file):
@@ -139,7 +187,8 @@ def listen():
     p = pyaudio.PyAudio()
     snd_started = False
     silent_periods = 0
-    
+    mpc_log = MpcFailureLog(logger)  # debounces transient hifipi/network failures
+
     # Calibrate noise floor and set dynamic thresholds
     try:
         dynamic_start, dynamic_stop = calibrate_noise_floor(p)
@@ -179,6 +228,7 @@ def listen():
                     start = subprocess.run(["mpc", f"--host={hifipi_ip}", "play"], capture_output=True, text=True)
                     
                     if start.stdout:
+                        mpc_log.ok()  # mpc responded -> connection healthy
                         received_stream = start.stdout.splitlines()[0]
                         # Accept either the URL or the stream name (metadata from Icecast)
                         if received_stream not in [expected_stream_url, stream_name]:
@@ -188,14 +238,15 @@ def listen():
                             snd_started = True
                             silent_periods = 0
                     elif start.stderr:
-                        logger.error(f"MPC play error. Full command result: {start}. Resetting playlist...")
+                        mpc_log.fail(f"MPC play error. Full command result: {start}. Resetting playlist...", start.stderr)
                         # Reset the playlist
                         subprocess.run(["mpc", f"--host={hifipi_ip}", "clear"], capture_output=True)
                         # Add stream back to playlist
                         add_result = subprocess.run(["mpc", f"--host={hifipi_ip}", "add", expected_stream_url], capture_output=True, text=True)
                         if add_result.stderr:
-                            logger.error(f"Failed to add stream back to playlist: {add_result.stderr}")
+                            mpc_log.fail(f"Failed to add stream back to playlist: {add_result.stderr}", add_result.stderr)
                         else:
+                            mpc_log.ok()  # add succeeded -> connection healthy
                             logger.info(f"Added stream URL: {expected_stream_url}")
                             # Try playing again
                             subprocess.run(["mpc", f"--host={hifipi_ip}", "play"], capture_output=True)
@@ -206,10 +257,11 @@ def listen():
                 if silent_periods >= MIN_SILENT_PERIODS:
                     logger.info(f"Stopping stream. Volume level: {max_level}")
                     stop = subprocess.run(["mpc", f"--host={hifipi_ip}", "stop"], capture_output=True, text=True)
-                    if stop.stdout: 
+                    if stop.stdout:
+                        mpc_log.ok()  # mpc responded -> connection healthy
                         logger.info(f"MPC output: {stop.stdout.strip()}")
-                    if stop.stderr: 
-                        logger.error(f"MPC error output: {stop.stderr.strip()}")
+                    if stop.stderr:
+                        mpc_log.fail(f"MPC error output: {stop.stderr.strip()}", stop.stderr)
                     snd_started = False
                     silent_periods = 0
             else:

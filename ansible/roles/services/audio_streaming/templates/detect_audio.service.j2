@@ -1,6 +1,7 @@
 [Unit]
 Description=Audio Detection Service for Vinyl Streaming
-After=network.target icecast2.service {{ liqs_name }}_liquidsoap.service
+After=network-online.target icecast2.service {{ liqs_name }}_liquidsoap.service
+Wants=network-online.target
 Requires=icecast2.service {{ liqs_name }}_liquidsoap.service
 
 [Service]

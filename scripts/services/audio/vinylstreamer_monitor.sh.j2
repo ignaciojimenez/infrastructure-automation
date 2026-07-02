@@ -165,8 +165,12 @@ check_log_errors() {
     local error_count=0
     
     # Check detect_audio logs (path matches detect_audio.py.j2)
+    # Count ERROR-*level* entries only (DirectLogger format: "TS - ERROR - msg"), not
+    # every line containing the word "error". Transient hifipi/network blips are logged
+    # at WARNING by detect_audio.py, so a self-recovered boot-time DNS hiccup no longer
+    # trips this check; a genuinely stuck hifipi still escalates to ERROR and alerts.
     if [ -f "{{ logs_dir }}/detect_audio.log" ]; then
-        local recent_errors=$(tail -100 "{{ logs_dir }}/detect_audio.log" | grep -i error | wc -l)
+        local recent_errors=$(tail -100 "{{ logs_dir }}/detect_audio.log" | grep ' - ERROR - ' | wc -l)
         if [ "$recent_errors" -gt 5 ]; then
             log_message "⚠️  Found $recent_errors recent errors in detect_audio.log"
             error_count=$((error_count + recent_errors))
