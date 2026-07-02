@@ -35,7 +35,7 @@ All as code in the `platform/proxmox` role (toggle `enable_proxmox_power_tuning`
 - [x] Power cap + governor applied as code and documented in decisions log
 - [x] Throttle-aware dedicated alert deployed (logic verified)
 - [x] Alert proven end-to-end — synthetic WARNING delivered a real #home-alerts message; returns to OK silently (no `--notify-fixed`, consistent with other checks — add it if closure pings are wanted)
-- [ ] cwwk holds throttle-free under summer load (thermal-history shows `throttle_delta=0` through a hot afternoon)
+- [x] cwwk holds throttle-free under summer load — validated over 2 days (2026-06-30→07-02, 1445 samples): package temp mean 46.7°C, peak 70°C (vs 105°C throttle point), **zero throttle events**; counter flat at 22,841.
 
 ### Incidental findings (this session)
 - ✅ **cwwk cron/mail drift reconciled** (2026-07-01): adopted `save-dmesg` + `arc_summary` into the `platform/proxmox` role as managed root crons; removed the stale `Proxmox health check` cron (its target `proxmox_health.sh` didn't exist → failed every 4h). Root cause of the deferred-mail pileup was the 6 monitoring crons emitting the wrapper's stdout every run → now redirected to `~/.logs/proxmox_*.log` (matches the backup crons). Built `/etc/aliases.db` and flushed 2201 stale cron mails. cwwk root crontab is now 100% Ansible-managed.
