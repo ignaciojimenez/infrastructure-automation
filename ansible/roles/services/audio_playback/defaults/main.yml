@@ -18,6 +18,16 @@ audio_dac_overlay: "hifiberry-dacplushd"
 # Raspberry Pi config file path (differs between OS versions)
 rpi_config_path: "/boot/firmware/config.txt"
 
+# Shairport Sync — AirPlay receiver name (defaults to hostname)
+shairport_airplay_name: "{{ ansible_hostname }}"
+
+# Shairport Sync — MQTT now-playing publishing (broker = Mosquitto on dockassist)
+shairport_mqtt_enabled: true
+shairport_mqtt_broker: "dockassist"
+shairport_mqtt_port: 1883
+shairport_mqtt_topic: "shairport"
+shairport_mqtt_publish_cover: false   # cover art over MQTT adds broker load
+
 # Platform
 disable_bluetooth: true
 disable_hdmi: true

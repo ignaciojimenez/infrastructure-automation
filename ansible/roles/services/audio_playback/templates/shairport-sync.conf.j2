@@ -1,0 +1,34 @@
+// Shairport Sync — {{ ansible_managed }}
+// AirPlay receiver on {{ ansible_hostname }}. Only non-default settings are
+// listed; everything else uses the built-in defaults (ALSA output, etc.).
+
+general =
+{
+	name = "{{ shairport_airplay_name | default(ansible_hostname) }}";
+};
+
+{% if shairport_mqtt_enabled | default(true) %}
+// Metadata must be solicited for MQTT to have anything to publish. (Building
+// with --with-mqtt-client already defaults this to "yes"; set explicitly.)
+metadata =
+{
+	enabled = "yes";
+	include_cover_art = "{{ 'yes' if shairport_mqtt_publish_cover | default(false) else 'no' }}";
+};
+
+// Publish now-playing metadata to the Mosquitto broker for Home Assistant.
+// Requires the binary to be built with --with-mqtt-client.
+mqtt =
+{
+	enabled = "yes";
+	hostname = "{{ shairport_mqtt_broker | default('dockassist') }}";
+	port = {{ shairport_mqtt_port | default(1883) }};
+	username = "{{ vault_mqtt_username }}";
+	password = "{{ vault_mqtt_password }}";
+	topic = "{{ shairport_mqtt_topic | default('shairport') }}";
+	publish_parsed = "yes";   // artist, album, title, genre, format, volume, play_* events
+	publish_cover = "{{ 'yes' if shairport_mqtt_publish_cover | default(false) else 'no' }}";
+	enable_autodiscovery = "yes";
+	autodiscovery_prefix = "homeassistant";
+};
+{% endif %}

@@ -130,6 +130,7 @@
       - uuid-dev
       - libgcrypt-dev
       - libpulse-dev
+      - libmosquitto-dev   # Required for --with-mqtt-client
     state: present
   when: enable_airplay | default(true)
   tags: [audio_playback, airplay, build]
@@ -154,7 +155,7 @@
 
     - name: Configure Shairport Sync
       ansible.builtin.command:
-        cmd: ./configure --with-alsa --with-avahi --with-ssl=openssl --with-systemd --with-metadata --with-soxr --with-systemdsystemunitdir=/lib/systemd/system
+        cmd: ./configure --with-alsa --with-avahi --with-ssl=openssl --with-systemd --with-metadata --with-mqtt-client --with-soxr --with-systemdsystemunitdir=/lib/systemd/system
         chdir: "/home/{{ primary_user }}/shairport-sync"
       changed_when: false
 
@@ -171,6 +172,21 @@
       changed_when: false
       notify: restart shairport-sync
   when: enable_airplay | default(true)
+  tags: [audio_playback, airplay]
+
+# Deploy the managed config only after the (re)build, so the binary already
+# supports MQTT by the time the mqtt block is present. sysconfdir is
+# /usr/local/etc for the source build (no -c flag in the unit's ExecStart).
+- name: Deploy Shairport Sync configuration
+  become: true
+  ansible.builtin.template:
+    src: shairport-sync.conf.j2
+    dest: /usr/local/etc/shairport-sync.conf
+    owner: root
+    group: root
+    mode: '0644'
+  when: enable_airplay | default(true)
+  notify: restart shairport-sync
   tags: [audio_playback, airplay]
 
 - name: Install Raspotify (Spotify Connect)
