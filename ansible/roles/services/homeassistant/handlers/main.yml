@@ -22,3 +22,11 @@
     state: absent
   become_user: "{{ ansible_user }}"
   listen: stop homeassistant
+
+- name: Restart mosquitto
+  community.docker.docker_container:
+    name: "{{ mosquitto_container_name | default('mosquitto') }}"
+    state: started
+    restart: true
+  become_user: "{{ ansible_user }}"
+  listen: restart mosquitto

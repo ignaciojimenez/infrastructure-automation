@@ -1,0 +1,20 @@
+# Mosquitto MQTT broker — {{ ansible_managed }}
+# Consumed by Home Assistant (localhost) and shairport-sync on hifipi (LAN).
+
+listener {{ mosquitto_port | default(1883) }}
+protocol mqtt
+
+# Persistence — retained messages and subscriptions survive restarts
+persistence true
+persistence_location /mosquitto/data/
+autosave_interval 60
+
+# Logging to stdout (captured by Docker / journald)
+log_dest stdout
+log_type warning
+log_type notice
+connection_messages true
+
+# Authentication — no anonymous access; credentials from Ansible Vault
+allow_anonymous false
+password_file /mosquitto/config/passwd

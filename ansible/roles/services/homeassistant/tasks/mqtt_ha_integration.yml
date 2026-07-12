@@ -1,0 +1,21 @@
+---
+# Wire Home Assistant to the local Mosquitto broker.
+# The broker connection has no YAML form (removed in HA 2022.9), so it is
+# injected as a config entry into .storage/core.config_entries by a small
+# idempotent helper. Credentials pass via the environment, never argv/logs.
+
+- name: Inject Home Assistant MQTT config entry (idempotent)
+  ansible.builtin.command:
+    cmd: python3 -
+    stdin: "{{ lookup('ansible.builtin.file', 'inject_mqtt_config_entry.py') }}"
+  become: true
+  environment:
+    HA_STORAGE: "{{ homeassistant_config_dir | default('/home/' + ansible_user + '/homeassistant') }}/.storage/core.config_entries"
+    MQTT_USERNAME: "{{ vault_mqtt_username }}"
+    MQTT_PASSWORD: "{{ vault_mqtt_password }}"
+    MQTT_PORT: "{{ mosquitto_port | default(1883) }}"
+  register: ha_mqtt_inject
+  changed_when: "'CHANGED' in ha_mqtt_inject.stdout"
+  no_log: true
+  notify: Restart Home Assistant
+  tags: [homeassistant, mqtt, ha_integration]

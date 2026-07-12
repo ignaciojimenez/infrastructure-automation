@@ -543,6 +543,20 @@
   tags: [homeassistant, matter, monitoring, cron]
 
 # ============================================================
+# MQTT Broker (Mosquitto) + Home Assistant integration
+# ============================================================
+
+- name: Deploy MQTT broker (Mosquitto)
+  ansible.builtin.import_tasks: mqtt.yml
+  when: enable_mqtt_broker | default(true)
+  tags: [homeassistant, mqtt]
+
+- name: Wire Home Assistant to the MQTT broker
+  ansible.builtin.import_tasks: mqtt_ha_integration.yml
+  when: enable_mqtt_broker | default(true)
+  tags: [homeassistant, mqtt, ha_integration]
+
+# ============================================================
 # Dashboard Configuration
 # ============================================================
 

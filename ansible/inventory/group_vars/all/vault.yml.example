@@ -31,3 +31,7 @@ vault_wifi_password: "YourWiFiPassword"
 # Curlbin upload credentials
 vault_curlbin_user: "myusername"
 vault_curlbin_password: "mypassword"
+
+# MQTT broker credentials (Mosquitto — used by Home Assistant and shairport-sync)
+vault_mqtt_username: "mqtt"
+vault_mqtt_password: "changeme"

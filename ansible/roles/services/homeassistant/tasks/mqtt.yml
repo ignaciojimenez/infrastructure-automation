@@ -1,0 +1,101 @@
+---
+# MQTT broker (Mosquitto) — co-located with Home Assistant on this host.
+# HA connects over localhost; shairport-sync (hifipi) publishes over the LAN.
+# Both authenticate with the single credential stored in Ansible Vault.
+
+- name: Create Mosquitto directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0755'
+  loop:
+    - "{{ mosquitto_data_dir }}"
+    - "{{ mosquitto_data_dir }}/config"
+    - "{{ mosquitto_data_dir }}/data"
+  tags: [homeassistant, mqtt]
+
+- name: Deploy Mosquitto configuration
+  ansible.builtin.template:
+    src: mosquitto.conf.j2
+    dest: "{{ mosquitto_data_dir }}/config/mosquitto.conf"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0644'
+  notify: restart mosquitto
+  tags: [homeassistant, mqtt]
+
+- name: Pull Mosquitto Docker image
+  community.docker.docker_image:
+    name: "eclipse-mosquitto:{{ mosquitto_version | default('2') }}"
+    source: pull
+  become_user: "{{ ansible_user }}"
+  tags: [homeassistant, mqtt, docker]
+
+# The password file must exist before the broker starts (allow_anonymous=false).
+# mosquitto_passwd lives inside the image, so generate it with a throwaway
+# container. Guarded by stat so the hash is written once and stays idempotent.
+- name: Check if Mosquitto password file exists
+  ansible.builtin.stat:
+    path: "{{ mosquitto_data_dir }}/config/passwd"
+  register: mosquitto_passwd_file
+  tags: [homeassistant, mqtt]
+
+- name: Generate Mosquitto password file (first run only)
+  ansible.builtin.command:
+    cmd: >
+      docker run --rm
+      -v {{ mosquitto_data_dir }}/config:/mosquitto/config
+      eclipse-mosquitto:{{ mosquitto_version | default('2') }}
+      mosquitto_passwd -b -c /mosquitto/config/passwd
+      {{ vault_mqtt_username }} {{ vault_mqtt_password }}
+  become_user: "{{ ansible_user }}"
+  when: not mosquitto_passwd_file.stat.exists
+  no_log: true
+  notify: restart mosquitto
+  tags: [homeassistant, mqtt]
+
+# mosquitto_passwd runs as root in the throwaway container, so the file lands
+# root-owned. The broker runs as uid/gid 1883 (fixed in the eclipse-mosquitto
+# image) and must be able to read it, or it exits with code 13.
+- name: Ensure Mosquitto password file is owned by the broker user
+  ansible.builtin.file:
+    path: "{{ mosquitto_data_dir }}/config/passwd"
+    owner: "1883"
+    group: "1883"
+    mode: '0600'
+  become: true
+  notify: restart mosquitto
+  tags: [homeassistant, mqtt]
+
+- name: Create and start Mosquitto container
+  community.docker.docker_container:
+    name: "{{ mosquitto_container_name | default('mosquitto') }}"
+    image: "eclipse-mosquitto:{{ mosquitto_version | default('2') }}"
+    restart_policy: unless-stopped
+    network_mode: host
+    volumes:
+      - "{{ mosquitto_data_dir }}/config:/mosquitto/config"
+      - "{{ mosquitto_data_dir }}/data:/mosquitto/data"
+    state: started
+  become_user: "{{ ansible_user }}"
+  tags: [homeassistant, mqtt, docker]
+
+- name: Configure Mosquitto container monitoring cron job
+  ansible.builtin.cron:
+    name: "Mosquitto container check"
+    minute: "*/10"
+    job: >
+      {{ scripts_dir }}/enhanced_monitoring_wrapper
+      --heartbeat-interval=daily
+      --notify-fixed=true
+      {{ logging_token }}
+      {{ alert_token }}
+      {{ scripts_dir }}/check_container.sh {{ alert_token }} {{ mosquitto_container_name | default('mosquitto') }}
+      >> {{ logs_dir }}/mosquitto_container_check.log 2>&1
+    user: "{{ ansible_user }}"
+  when:
+    - logging_token is defined and logging_token != ''
+    - alert_token is defined and alert_token != ''
+  tags: [homeassistant, mqtt, monitoring, cron]

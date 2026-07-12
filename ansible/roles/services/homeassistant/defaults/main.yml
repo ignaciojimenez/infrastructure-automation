@@ -6,15 +6,22 @@ enable_docker: true
 enable_homeassistant: true
 enable_matter_server: true
 enable_cloudflare_tunnel: false  # Requires vault_cloudflare_tunnel_token
+enable_mqtt_broker: true         # Mosquitto broker for HA + shairport-sync
 
 # Container names
 homeassistant_container_name: "home-assistant"
 homeassistant_version: "stable"
 matter_server_version: "stable"
+mosquitto_container_name: "mosquitto"
+mosquitto_version: "2"
 
 # Config directories
 homeassistant_config_dir: "/home/{{ ansible_user }}/homeassistant"
 matter_server_data_dir: "/home/{{ ansible_user }}/matter-server"
+mosquitto_data_dir: "/home/{{ ansible_user }}/mosquitto"
+
+# MQTT broker
+mosquitto_port: 1883
 
 # External URL
 homeassistant_external_url: "http://homeassistant.local:8123"
