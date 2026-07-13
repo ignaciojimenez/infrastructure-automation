@@ -46,6 +46,24 @@ All as code in the `platform/proxmox` role (toggle `enable_proxmox_power_tuning`
 
 ---
 
+## Now-Playing Amp Control — RM IR Input Switching (hardware pending ~2026-07-14)
+
+**Status:** Power control DONE and live (merged #4, 2026-07-13). HA drives the vintage Pioneer SA-508's Shelly plug (`switch.living_room_shellyplugsg3_pioneer`) from source activity — `binary_sensor.amp_source_active` (OR of hifipi AirPlay/Spotify/MPD playing or TV on) → on/off automations with a 5-min idle grace + a start-reconcile. What remains is **input selection**, gated on hardware.
+
+**Hardware:** Broadlink RM IR blaster + an external **4-way RCA IR switch**. The SA-508 has no IR and a single input; the 4-way switch (driven by the RM) selects which source feeds it. HA already computes the target via `sensor.amp_active_source` (`pi`/`tv`/`none`; Pi playback prioritised over a merely-on TV).
+
+**Steps when the RM arrives:**
+1. **Verify the power path first — no RM needed.** Wire the amp into the Shelly plug, play a source, confirm the amp powers on, and confirm auto-off after the 5-min idle grace. Closes the power E2E that couldn't be tested unconnected (draw currently 0 W by design).
+2. **Add the Broadlink RM integration** (needs the RM's LAN IP; local-push → config entry). Capture in IaC via the same `.storage` config-entry injection pattern as MQTT where practical (see memory `mqtt-broker-dockassist`).
+3. **Learn the IR codes** for the 4-way switch via `remote.learn_command` — at least the `pi` and `tv` positions; store the base64 codes in the repo/vault.
+4. **Add the input-select automation** (`automations.yaml.j2`, IaC): trigger on `sensor.amp_active_source` change → `remote.send_command` the matching input code; only when the plug is on; short debounce so a brief source flip doesn't thrash the switch.
+5. **Confirm the both-active policy:** current default = Pi playback wins over TV-on (starting Spotify while watching TV would switch the amp input to Pi). Keep or adjust the `amp_active_source` template.
+6. **End-to-end verify:** each source (AirPlay/Spotify/vinyl/TV) selects the right input and is audible; idle → amp off.
+
+**Optional later:** TV idle auto-off (a left-on TV keeps the amp on). `cobi_tv_3` exposes `is_volume_muted`/`volume_level`/`app_id` (optimistic `assumed_state`) if a signal is needed. Also confirm the exact OFF value of `cobi_tv_3` (off/standby/unavailable) with the TV powered down. Full context in memory `now-playing-ir-automation-plan`.
+
+---
+
 ## Priority 1 — Deploy disable-hdmi Fix (hifipi + vinylstreamer)
 
 **Risk:** Low operational impact but masks real failures. The `disable-hdmi.service` on Raspberry Pi hosts uses `/usr/bin/tvservice -o` which was removed in Debian Trixie. Both Trixie hosts (hifipi, vinylstreamer) show a permanent failed service.
