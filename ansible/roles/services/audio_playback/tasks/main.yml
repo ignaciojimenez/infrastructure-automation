@@ -215,6 +215,39 @@
         name: raspotify
         state: present
 
+    - name: Install MQTT client for the now-playing hook
+      ansible.builtin.apt:
+        name: mosquitto-clients
+        state: present
+      when: raspotify_mqtt_enabled | default(true)
+
+    - name: Deploy Raspotify MQTT event hook
+      ansible.builtin.copy:
+        src: spotify_event.sh
+        dest: /usr/local/bin/spotify_event.sh
+        owner: root
+        group: root
+        mode: '0755'
+      when: raspotify_mqtt_enabled | default(true)
+      notify: restart raspotify
+
+    - name: Create Raspotify systemd drop-in directory
+      ansible.builtin.file:
+        path: /etc/systemd/system/raspotify.service.d
+        state: directory
+        mode: '0755'
+      when: raspotify_mqtt_enabled | default(true)
+
+    - name: Reset retained MQTT state on Raspotify (re)start
+      ansible.builtin.copy:
+        src: raspotify-mqtt-reset.conf
+        dest: /etc/systemd/system/raspotify.service.d/mqtt-reset.conf
+        owner: root
+        group: root
+        mode: '0644'
+      when: raspotify_mqtt_enabled | default(true)
+      notify: restart raspotify
+
     - name: Configure Raspotify
       ansible.builtin.copy:
         dest: /etc/raspotify/conf
@@ -225,7 +258,19 @@
           LIBRESPOT_QUIET=
           LIBRESPOT_DISABLE_AUDIO_CACHE=
           TMPDIR=/tmp
+          {% if raspotify_mqtt_enabled | default(true) %}
+          # MQTT now-playing hook: librespot --onevent -> spotify_event.sh -> HA.
+          # MQTT_* are inherited by the onevent child process; they live here
+          # (this file is mode 0600) to keep credentials out of the script.
+          LIBRESPOT_ONEVENT=/usr/local/bin/spotify_event.sh
+          MQTT_BROKER={{ shairport_mqtt_broker | default('dockassist') }}
+          MQTT_PORT={{ shairport_mqtt_port | default(1883) }}
+          MQTT_USERNAME={{ vault_mqtt_username }}
+          MQTT_PASSWORD={{ vault_mqtt_password }}
+          MQTT_TOPIC={{ raspotify_mqtt_base_topic | default('raspotify/' + ansible_hostname) }}
+          {% endif %}
         mode: '0600'
+      no_log: true
       notify: restart raspotify
 
     - name: Remove legacy raspotify config

@@ -61,6 +61,11 @@ enable_monitoring: true
 # ============================================================
 transmission_rpc_whitelist: "127.0.0.1,10.30.40.*,10.30.20.*,10.30.80.*,10.30.41.*"
 
+# MQTT base topic Raspotify publishes to on hifipi. Shared here (all hosts) so
+# the publisher (audio_playback on hifipi) and the consumer (Home Assistant on
+# dockassist) agree on one value — ansible_hostname would differ per host.
+raspotify_mqtt_base_topic: "raspotify/hifipi"
+
 # ============================================================
 # Home Assistant — user-specific overrides
 # These are loaded natively (group_vars/all, precedence 3) which correctly

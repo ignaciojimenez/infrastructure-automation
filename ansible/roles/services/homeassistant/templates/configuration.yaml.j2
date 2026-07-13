@@ -110,6 +110,34 @@ template:
         device_class: presence
         state: '{{ "{{ is_state(\"" }}{{ ha_secondary_device_tracker | default("device_tracker.phone_secondary") }}{{ "\", \"home\") }}" }}'
 
+# MQTT entities — Raspotify (Spotify Connect) now-playing state from hifipi.
+# shairport-sync publishes its own entities via MQTT autodiscovery; librespot
+# has no discovery, so its play/stop state is defined explicitly here.
+mqtt:
+  binary_sensor:
+    - name: "Playing"
+      unique_id: raspotify_hifipi_playing
+      state_topic: "{{ raspotify_mqtt_base_topic | default('raspotify/hifipi') }}/playing"
+      payload_on: "1"
+      payload_off: "0"
+      device_class: running
+      icon: mdi:spotify
+      device:
+        identifiers: ["raspotify_hifipi"]
+        name: "Raspotify (hifipi)"
+        manufacturer: "librespot"
+        model: "Spotify Connect"
+  sensor:
+    - name: "State"
+      unique_id: raspotify_hifipi_state
+      state_topic: "{{ raspotify_mqtt_base_topic | default('raspotify/hifipi') }}/state"
+      icon: mdi:spotify
+      device:
+        identifiers: ["raspotify_hifipi"]
+        name: "Raspotify (hifipi)"
+        manufacturer: "librespot"
+        model: "Spotify Connect"
+
 # Slack notifications (webhooks stored in secrets.yaml)
 rest_command:
   slack_notify:
