@@ -192,8 +192,16 @@
         - climate.tado_smart_radiator_thermostat_va1065432832
         - climate.tado_smart_radiator_thermostat_va2323724032
       to: "unavailable"
+      # 20 min: these entities are monitoring-only (heads heat on their local
+      # schedule regardless), so short RF blips are immaterial — don't page them.
       for:
-        minutes: 10
+        minutes: 20
+  # Global 6h cooldown: a flapping head pages once per 6h, not every outage.
+  # Heads keep heating on their local schedule while unavailable in HA, so a
+  # page delayed by the shared cooldown is an accepted trade for zero helpers.
+  condition:
+    - condition: template
+      value_template: "{{ '{{' }} this.attributes.last_triggered is none or now() - this.attributes.last_triggered > timedelta(hours=6) {{ '}}' }}"
   action:
     - service: rest_command.slack_alert
       data:
