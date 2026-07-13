@@ -110,6 +110,23 @@ template:
         device_class: presence
         state: '{{ "{{ is_state(\"" }}{{ ha_secondary_device_tracker | default("device_tracker.phone_secondary") }}{{ "\", \"home\") }}" }}'
 
+      # Amp power control — is any source feeding the Pioneer? OR of every input:
+      # hifipi AirPlay/Spotify/MPD actively playing, or the TV powered on. Drives
+      # the Shelly plug (switch.living_room_shellyplugsg3_pioneer) via automations.
+      - name: "Amp Source Active"
+        unique_id: amp_source_active
+        device_class: running
+        state: >
+          {{ '{{ is_state("binary_sensor.shairport_sync_hifipi_playing", "on") or is_state("binary_sensor.raspotify_hifipi_playing", "on") or is_state("media_player.music_player_daemon", "playing") or is_state("media_player.cobi_tv_3", "on") }}' }}
+  - sensor:
+      # Amp input selection — which source the RM IR switch should select once the
+      # blaster is installed (RM not yet present; this is the hook it will consume).
+      # Active Pi playback wins over a merely powered-on TV. Values: pi / tv / none.
+      - name: "Amp Active Source"
+        unique_id: amp_active_source
+        state: >
+          {{ '{% if is_state("binary_sensor.shairport_sync_hifipi_playing", "on") or is_state("binary_sensor.raspotify_hifipi_playing", "on") or is_state("media_player.music_player_daemon", "playing") %}pi{% elif is_state("media_player.cobi_tv_3", "on") %}tv{% else %}none{% endif %}' }}
+
 # MQTT entities — Raspotify (Spotify Connect) now-playing state from hifipi.
 # shairport-sync publishes its own entities via MQTT autodiscovery; librespot
 # has no discovery, so its play/stop state is defined explicitly here.
