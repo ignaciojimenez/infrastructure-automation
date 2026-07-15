@@ -142,9 +142,9 @@
         entity_id: automation.away_mode_everyone_left
   mode: single
 
-# Wyze bulb monitoring - alerts when specific bulbs go offline/online
-- id: "wyze_bulb_offline_alert"
-  alias: "Wyze Bulb Offline Alert"
+# Shelly bulb monitoring - alerts when specific bulbs go offline/online
+- id: "shelly_bulb_offline_alert"
+  alias: "Shelly Bulb Offline Alert"
   trigger:
     - platform: state
       entity_id:
@@ -158,11 +158,11 @@
   action:
     - service: rest_command.slack_notify
       data:
-        message: "{{ '{{' }} \"⚠️ Wyze bulb offline: \" ~ (trigger.to_state.attributes.friendly_name | default(trigger.entity_id)) {{ '}}' }}"
+        message: "{{ '{{' }} \"⚠️ Shelly bulb offline: \" ~ (trigger.to_state.attributes.friendly_name | default(trigger.entity_id)) {{ '}}' }}"
   mode: parallel
 
-- id: "wyze_bulb_online_recovery"
-  alias: "Wyze Bulb Online Recovery"
+- id: "shelly_bulb_online_recovery"
+  alias: "Shelly Bulb Online Recovery"
   trigger:
     - platform: state
       entity_id:
@@ -174,7 +174,7 @@
   action:
     - service: rest_command.slack_notify
       data:
-        message: "{{ '{{' }} \"✅ Wyze bulb back online: \" ~ (trigger.to_state.attributes.friendly_name | default(trigger.entity_id)) {{ '}}' }}"
+        message: "{{ '{{' }} \"✅ Shelly bulb back online: \" ~ (trigger.to_state.attributes.friendly_name | default(trigger.entity_id)) {{ '}}' }}"
   mode: parallel
 
 # HomeKit heating availability monitoring
