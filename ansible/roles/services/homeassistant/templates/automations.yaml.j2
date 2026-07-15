@@ -142,23 +142,42 @@
         entity_id: automation.away_mode_everyone_left
   mode: single
 
-# Shelly bulb monitoring - alerts when specific bulbs go offline/online
+# Shelly bulb monitoring - alerts when bulbs go offline/online.
+# Watched list = homeassistant_lights (the light.all_lights group members).
 - id: "shelly_bulb_offline_alert"
   alias: "Shelly Bulb Offline Alert"
   trigger:
     - platform: state
       entity_id:
-        - light.floor_lamp
-        - light.floor_lamp_new
-        - light.book_floor_lamp
-        - light.table_lamp
-      to: "unavailable"
+{% for light in homeassistant_lights %}
+        - {{ light }}
+{% endfor %}
+      to:
+        - "unavailable"
+        - "unknown"
       for:
         minutes: 5
+    # Startup sweep: a bulb already dead when HA boots never transitions,
+    # so the state trigger alone misses it.
+    - platform: homeassistant
+      event: start
   action:
-    - service: rest_command.slack_notify
-      data:
-        message: "{{ '{{' }} \"⚠️ Shelly bulb offline: \" ~ (trigger.to_state.attributes.friendly_name | default(trigger.entity_id)) {{ '}}' }}"
+    - choose:
+        - conditions:
+            - condition: template
+              value_template: "{{ '{{ trigger is defined and trigger.platform == \'homeassistant\' }}' }}"
+          sequence:
+            - delay:
+                minutes: 5
+            - condition: template
+              value_template: "{{ '{{ expand(\'light.all_lights\') | selectattr(\'state\', \'in\', [\'unavailable\', \'unknown\']) | list | count > 0 }}' }}"
+            - service: rest_command.slack_notify
+              data:
+                message: "{{ '{{' }} \"⚠️ Shelly bulb(s) offline since HA start: \" ~ (expand('light.all_lights') | selectattr('state', 'in', ['unavailable', 'unknown']) | map(attribute='name') | join(', ')) {{ '}}' }}"
+      default:
+        - service: rest_command.slack_notify
+          data:
+            message: "{{ '{{' }} \"⚠️ Shelly bulb offline: \" ~ (trigger.to_state.attributes.friendly_name | default(trigger.entity_id)) {{ '}}' }}"
   mode: parallel
 
 - id: "shelly_bulb_online_recovery"
@@ -166,11 +185,15 @@
   trigger:
     - platform: state
       entity_id:
-        - light.floor_lamp
-        - light.floor_lamp_new
-        - light.book_floor_lamp
-        - light.table_lamp
-      from: "unavailable"
+{% for light in homeassistant_lights %}
+        - {{ light }}
+{% endfor %}
+      from:
+        - "unavailable"
+        - "unknown"
+      to:
+        - "on"
+        - "off"
   action:
     - service: rest_command.slack_notify
       data:
