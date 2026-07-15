@@ -212,6 +212,27 @@
   when: enable_audio_detection and not (is_test_environment | default(false))
   tags: [audio_streaming, detection]
 
+- name: Install MQTT client for vinyl now-playing push
+  become: true
+  ansible.builtin.apt:
+    name: mosquitto-clients
+    state: present
+  when: enable_audio_detection and enable_vinyl_mqtt and not (is_test_environment | default(false))
+  tags: [audio_streaming, detection]
+
+- name: Deploy MQTT credentials for detect_audio
+  become: true
+  ansible.builtin.template:
+    src: detect_audio.env.j2
+    dest: /etc/detect_audio.env
+    owner: "{{ primary_user }}"
+    group: "{{ primary_user }}"
+    mode: '0600'
+  when: enable_audio_detection and enable_vinyl_mqtt and not (is_test_environment | default(false))
+  no_log: true
+  notify: restart detect_audio
+  tags: [audio_streaming, detection]
+
 - name: Deploy audio detection script
   become: true
   ansible.builtin.template:
@@ -221,6 +242,7 @@
     group: "{{ primary_user }}"
     mode: '0755'
   when: enable_audio_detection and not (is_test_environment | default(false))
+  notify: restart detect_audio
   tags: [audio_streaming, detection]
 
 - name: Clear MPC playlist on hifipi

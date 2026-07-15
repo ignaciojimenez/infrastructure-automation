@@ -111,13 +111,15 @@ template:
         state: '{{ "{{ is_state(\"" }}{{ ha_secondary_device_tracker | default("device_tracker.phone_secondary") }}{{ "\", \"home\") }}" }}'
 
       # Amp power control — is any source feeding the Pioneer? OR of every input:
-      # hifipi AirPlay/Spotify/MPD actively playing, or the TV powered on. Drives
+      # hifipi AirPlay/Spotify/MPD actively playing, vinyl detected on the
+      # turntable (MQTT push from vinylstreamer — instant, unlike the ~10s MPD
+      # poll that also covers the same playback), or the TV powered on. Drives
       # the Shelly plug (switch.living_room_shellyplugsg3_pioneer) via automations.
       - name: "Amp Source Active"
         unique_id: amp_source_active
         device_class: running
         state: >
-          {{ '{{ is_state("binary_sensor.shairport_sync_hifipi_playing", "on") or is_state("binary_sensor.raspotify_hifipi_playing", "on") or is_state("media_player.music_player_daemon", "playing") or is_state("media_player.cobi_tv_3", "on") }}' }}
+          {{ '{{ is_state("binary_sensor.shairport_sync_hifipi_playing", "on") or is_state("binary_sensor.raspotify_hifipi_playing", "on") or is_state("binary_sensor.vinyl_vinylstreamer_playing", "on") or is_state("media_player.music_player_daemon", "playing") or is_state("media_player.cobi_tv_3", "on") }}' }}
   - sensor:
       # Amp input selection — which source the RM IR switch should select once the
       # blaster is installed (RM not yet present; this is the hook it will consume).
@@ -125,13 +127,42 @@ template:
       - name: "Amp Active Source"
         unique_id: amp_active_source
         state: >
-          {{ '{% if is_state("binary_sensor.shairport_sync_hifipi_playing", "on") or is_state("binary_sensor.raspotify_hifipi_playing", "on") or is_state("media_player.music_player_daemon", "playing") %}pi{% elif is_state("media_player.cobi_tv_3", "on") %}tv{% else %}none{% endif %}' }}
+          {{ '{% if is_state("binary_sensor.shairport_sync_hifipi_playing", "on") or is_state("binary_sensor.raspotify_hifipi_playing", "on") or is_state("binary_sensor.vinyl_vinylstreamer_playing", "on") or is_state("media_player.music_player_daemon", "playing") %}pi{% elif is_state("media_player.cobi_tv_3", "on") %}tv{% else %}none{% endif %}' }}
+
+# Amp plug cycling watchdog input — how many times the plug switched ON in the
+# last rolling hour. Phantom-start debounce lives in detect_audio on vinylstreamer
+# (the only place that sees the raw signal); the amp-on automation is deliberately
+# instant, so this counter is the safety net that pages instead of adding delay.
+sensor:
+  - platform: history_stats
+    name: "Amp Plug On Count 1h"
+    entity_id: switch.living_room_shellyplugsg3_pioneer
+    state: "on"
+    type: count
+    duration: "01:00:00"
+    end: "{{ '{{ now() }}' }}"
 
 # MQTT entities — Raspotify (Spotify Connect) now-playing state from hifipi.
 # shairport-sync publishes its own entities via MQTT autodiscovery; librespot
 # has no discovery, so its play/stop state is defined explicitly here.
 mqtt:
   binary_sensor:
+    # Vinyl playback detected on the turntable — pushed by detect_audio on
+    # vinylstreamer the moment sustained signal is confirmed. Feeds
+    # amp_source_active so the plug reacts instantly (the MPD entity covers
+    # the same playback but only via ~10s polling).
+    - name: "Playing"
+      unique_id: vinyl_vinylstreamer_playing
+      state_topic: "vinyl/vinylstreamer/playing"
+      payload_on: "1"
+      payload_off: "0"
+      device_class: running
+      icon: mdi:record-player
+      device:
+        identifiers: ["vinyl_vinylstreamer"]
+        name: "Vinyl (vinylstreamer)"
+        manufacturer: "detect_audio"
+        model: "Turntable stream"
     - name: "Playing"
       unique_id: raspotify_hifipi_playing
       state_topic: "{{ raspotify_mqtt_base_topic | default('raspotify/hifipi') }}/playing"

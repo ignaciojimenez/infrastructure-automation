@@ -21,8 +21,6 @@ liquidsoap_stream_name: "Phono"
 liquidsoap_stream_description: "Vinyl Streaming"
 
 # Audio detection config
-audio_detection_device: "hw:0"
-audio_detection_threshold: 0.01
 hifipi_ip: "hifipi"  # MPC target for audio detection
 str_name: "Phono"    # Stream name
 liqs_name: "phono"   # Liquidsoap service name

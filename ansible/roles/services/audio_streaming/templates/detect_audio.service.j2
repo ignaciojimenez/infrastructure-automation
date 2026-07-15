@@ -23,6 +23,11 @@ SyslogIdentifier=detect-audio
 
 # Environment
 Environment=PYTHONUNBUFFERED=1
+{% if enable_vinyl_mqtt %}
+# MQTT credentials for the now-playing push ("-" = optional, missing file
+# must not block audio detection)
+EnvironmentFile=-/etc/detect_audio.env
+{% endif %}
 
 [Install]
 WantedBy=multi-user.target
