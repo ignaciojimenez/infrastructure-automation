@@ -428,6 +428,39 @@
     - enable_proxmox_power_tuning | default(true)
     - not ansible_check_mode
 
+# --- Journald size cap ---
+# cwwk already persists its journal (that's what made the THERMTRIP forensics
+# possible) but only up to systemd's implicit min(10% fs, 4G) default. Make the
+# cap explicit at the same 4G (~3 months at the observed ~1.2G/month) and make
+# Storage=persistent explicit rather than relying on /var/log/journal existing.
+
+- name: Ensure journald drop-in directory exists
+  ansible.builtin.file:
+    path: /etc/systemd/journald.conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  become: true
+  when: enable_persistent_journal | default(true)
+
+- name: Configure persistent journald with size caps
+  ansible.builtin.copy:
+    content: |
+      # Managed by Ansible (platform/proxmox role) - do not edit
+      [Journal]
+      Storage=persistent
+      Compress=yes
+      SystemMaxUse={{ journald_system_max_use }}
+      SystemMaxFileSize={{ journald_system_max_file_size }}
+    dest: /etc/systemd/journald.conf.d/persistent.conf
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+  when: enable_persistent_journal | default(true)
+  notify: Restart journald
+
 # --- Drift cleanup: retire orphaned/legacy config ---
 
 - name: Remove stale standalone Proxmox health cron

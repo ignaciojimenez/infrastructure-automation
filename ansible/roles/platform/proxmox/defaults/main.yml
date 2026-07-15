@@ -8,3 +8,10 @@
 enable_proxmox_power_tuning: true
 proxmox_rapl_pl1_watts: 20        # sustained (long-term) package power cap; PL2 burst left at firmware default
 proxmox_cpu_governor: powersave   # intel_pstate dynamic mode; still boosts to max under load
+
+# Journald: explicit persistence + size cap (see docs/ARCHITECTURE_DECISIONS.md).
+# 4G matches systemd's implicit ceiling and keeps ~3 months of forensic history
+# at the observed ~1.2G/month; cwwk is the host where journal forensics matter most.
+enable_persistent_journal: true
+journald_system_max_use: 4G
+journald_system_max_file_size: 128M   # 32 rotation slots at 4G; finer-grained vacuuming
