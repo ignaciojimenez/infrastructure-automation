@@ -55,8 +55,6 @@ light:
 # Logger configuration
 logger:
   default: warning
-  logs:
-    custom_components.wyzeapi: debug
 
 # Input Select
 input_select:
@@ -80,11 +78,6 @@ input_boolean:
 # Template sensors (modern syntax)
 template:
   - binary_sensor:
-      - name: "Wyze Online"
-        unique_id: wyze_online
-        device_class: connectivity
-        state: >
-          {{ '{{ states(\'light.floor_lamp_new\') not in [\'unavailable\', \'unknown\'] }}' }}
       # Presence detection
       - name: "Home Occupied"
         unique_id: home_occupied

@@ -102,7 +102,7 @@ Simple log of key technical decisions made in this project.
 ## Home Assistant Architecture (Updated November 2025)
 
 - **HA as central brain** - All automation logic centralized in Home Assistant
-  - Wyze scenes/schedules → HA automations
+  - Bulb scenes/schedules → HA automations
   - Tado away/home mode → HA presence-based automations
   - Siri Shortcuts → Native HomeKit Bridge (no separate shortcuts needed)
 
@@ -133,6 +133,12 @@ Simple log of key technical decisions made in this project.
   - Containers: `home-assistant`, `matter-server`, `cloudflared`
   - Network mode: host (required for Matter/Thread)
   - Privileged mode: enabled for USB/Bluetooth access
+
+- **Shelly Duo G3 bulbs replace Wyze (July 2026)** - Local control over cloud dependency
+  - Wyze bulbs died with HA 2026.7.0: certifi dropped the retired DigiCert Global Root CA that Wyze's cloud API still chains to (upstream Wyze bug, no local fallback)
+  - Shelly integration is local push — no cloud, no optimistic-state lying, HA state reflects the device
+  - Bulbs renamed in the entity registry to the previous semantic IDs (`light.floor_lamp`, `light.book_floor_lamp`, `light.table_lamp`, `light.floor_lamp_new`) so scenes, `light.all_lights`, and automations carried over unchanged
+  - `wyzeapi` custom component + config entry removed
 
 - **Docker cleanup via weekly prune** - Prevents disk space issues from old images
   - `docker system prune -a -f` runs weekly via cron
