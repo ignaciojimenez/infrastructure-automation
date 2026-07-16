@@ -46,6 +46,8 @@ Simple log of key technical decisions made in this project.
 - **POSIX-compliant scripts** - All scripts use `/bin/sh` for FreeBSD compatibility
 - **Unified Slack webhooks** - All hosts share same monitoring/alert webhook configuration from vault
 - **Auto-upgrades: pending counts are informational only** - Pending updates naturally accumulate between daily runs; only service/config issues trigger alerts
+- **Persistent journald on all Pis (2026-07-14)** - `Storage=persistent` drop-in with SD-wear caps (100M total, 16M/file, compression) via the raspberrypi platform playbook (`enable_persistent_journal` toggle). Default volatile journal made the 2026-07-12 vinylstreamer reboot un-diagnosable. pstore/ramoops deliberately skipped: costs reserved RAM on 512MB Pis and wouldn't capture a power cut anyway
+- **Journald cap on cwwk: explicit 4G (2026-07-16)** - Same drop-in pattern via `platform/proxmox`. cwwk was already persistent but only bounded by systemd's implicit min(10% fs, 4G); made it explicit at 4G (~3 months at the observed ~1.2G/month) — cwwk is the forensics-critical host (THERMTRIP history), disk cost is ~2%. unifi-lxc persists at ~100M; opnsense is FreeBSD syslog (persistent by default) — neither needs action
 
 ## Configuration Loading Order
 
