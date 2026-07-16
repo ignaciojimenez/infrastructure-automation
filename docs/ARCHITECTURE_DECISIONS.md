@@ -46,6 +46,8 @@ Simple log of key technical decisions made in this project.
 - **POSIX-compliant scripts** - All scripts use `/bin/sh` for FreeBSD compatibility
 - **Unified Slack webhooks** - All hosts share same monitoring/alert webhook configuration from vault
 - **Auto-upgrades: pending counts are informational only** - Pending updates naturally accumulate between daily runs; only service/config issues trigger alerts
+- **Persistent journald on all Pis (2026-07-14)** - `Storage=persistent` drop-in with SD-wear caps (100M total, 16M/file, compression) via the raspberrypi platform playbook (`enable_persistent_journal` toggle). Default volatile journal made the 2026-07-12 vinylstreamer reboot un-diagnosable. pstore/ramoops deliberately skipped: costs reserved RAM on 512MB Pis and wouldn't capture a power cut anyway
+- **Journald cap on cwwk: explicit 4G (2026-07-16)** - Same drop-in pattern via `platform/proxmox`. cwwk was already persistent but only bounded by systemd's implicit min(10% fs, 4G); made it explicit at 4G (~3 months at the observed ~1.2G/month) — cwwk is the forensics-critical host (THERMTRIP history), disk cost is ~2%. unifi-lxc persists at ~100M; opnsense is FreeBSD syslog (persistent by default) — neither needs action
 
 ## Configuration Loading Order
 
@@ -102,7 +104,7 @@ Simple log of key technical decisions made in this project.
 ## Home Assistant Architecture (Updated November 2025)
 
 - **HA as central brain** - All automation logic centralized in Home Assistant
-  - Wyze scenes/schedules → HA automations
+  - Bulb scenes/schedules → HA automations
   - Tado away/home mode → HA presence-based automations
   - Siri Shortcuts → Native HomeKit Bridge (no separate shortcuts needed)
 
@@ -133,6 +135,12 @@ Simple log of key technical decisions made in this project.
   - Containers: `home-assistant`, `matter-server`, `cloudflared`
   - Network mode: host (required for Matter/Thread)
   - Privileged mode: enabled for USB/Bluetooth access
+
+- **Shelly Duo G3 bulbs replace Wyze (July 2026)** - Local control over cloud dependency
+  - Wyze bulbs died with HA 2026.7.0: certifi dropped the retired DigiCert Global Root CA that Wyze's cloud API still chains to (upstream Wyze bug, no local fallback)
+  - Shelly integration is local push — no cloud, no optimistic-state lying, HA state reflects the device
+  - Bulbs renamed in the entity registry to the previous semantic IDs (`light.floor_lamp`, `light.book_floor_lamp`, `light.table_lamp`, `light.floor_lamp_new`) so scenes, `light.all_lights`, and automations carried over unchanged
+  - `wyzeapi` custom component + config entry removed
 
 - **Docker cleanup via weekly prune** - Prevents disk space issues from old images
   - `docker system prune -a -f` runs weekly via cron

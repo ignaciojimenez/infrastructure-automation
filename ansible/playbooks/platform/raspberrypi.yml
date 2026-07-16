@@ -9,6 +9,17 @@
       ansible.builtin.debug:
         msg: "Reboot required - will be handled at end of playbook"
       listen: "reboot_required"
+
+    - name: Restart journald
+      ansible.builtin.systemd:
+        name: systemd-journald
+        state: restarted
+      listen: "journald_config_changed"
+
+    - name: Flush runtime journal to persistent storage
+      ansible.builtin.command: journalctl --flush
+      changed_when: true
+      listen: "journald_config_changed"
   tasks:
     - name: Raspberry Pi memory optimizations
       ansible.posix.sysctl:
@@ -21,6 +32,40 @@
         - { name: 'vm.vfs_cache_pressure', value: '50' }
       when: platform_type == "raspberrypi"
       tags: [raspberrypi, optimization]
+
+    # Persistent journal: default Storage=auto keeps logs in /run (lost on reboot),
+    # which made the 2026-07-12 vinylstreamer reboot un-post-mortemable. Size caps
+    # and compression bound SD-card wear on these small SD-backed hosts.
+    - name: Ensure journald drop-in directory exists
+      ansible.builtin.file:
+        path: /etc/systemd/journald.conf.d
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      when:
+        - platform_type == "raspberrypi"
+        - enable_persistent_journal | default(true)
+      tags: [raspberrypi, journald]
+
+    - name: Configure persistent journald with SD-wear caps
+      ansible.builtin.copy:
+        content: |
+          # Managed by Ansible (playbooks/platform/raspberrypi.yml) - do not edit
+          [Journal]
+          Storage=persistent
+          Compress=yes
+          SystemMaxUse={{ journald_system_max_use | default('100M') }}
+          SystemMaxFileSize={{ journald_system_max_file_size | default('16M') }}
+        dest: /etc/systemd/journald.conf.d/persistent.conf
+        owner: root
+        group: root
+        mode: '0644'
+      when:
+        - platform_type == "raspberrypi"
+        - enable_persistent_journal | default(true)
+      notify: "journald_config_changed"
+      tags: [raspberrypi, journald]
 
     - name: Disable Bluetooth overlay on Raspberry Pi
       ansible.builtin.lineinfile:
