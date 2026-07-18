@@ -537,8 +537,8 @@
 # ── Amp power control ──────────────────────────────────────────────────────────
 # Drive the Pioneer's Shelly plug from source activity. binary_sensor.amp_source_active
 # is the OR of all inputs (hifipi AirPlay/Spotify/MPD playing, or the TV powered on).
-# Input selection (TV vs Pi) is a future job for the RM IR blaster, keyed off
-# sensor.amp_active_source — not wired here yet.
+# Input selection (TV vs Pi) is handled by "Amp - select input" below, keyed off
+# sensor.amp_active_source.
 - id: "amp_power_on"
   alias: "Amp - power on when a source is active"
   trigger:
@@ -597,6 +597,42 @@
           target:
             entity_id: switch.living_room_shellyplugsg3_pioneer
   mode: single
+
+# Feed the amp the active source: the RM4 Mini IR blaster drives the 4-way RCA
+# switch sitting in front of the amp's single input. Positions learned on the
+# blaster: rca_switcher/input_pi and rca_switcher/input_tv (seed copy of the
+# learned codes lives in roles/services/homeassistant/files/). The second
+# trigger covers power-on: while the plug is off, source changes are skipped by
+# the condition, so re-align the switch the moment the amp comes on. The 3s
+# debounce keeps a brief source flip (e.g. a short playback gap with the TV on)
+# from thrashing the switch; power-on alignment stays instant.
+- id: "amp_input_select"
+  alias: "Amp - select input for active source"
+  trigger:
+    - platform: state
+      entity_id: sensor.amp_active_source
+      to:
+        - "pi"
+        - "tv"
+      for:
+        seconds: 3
+    - platform: state
+      entity_id: switch.living_room_shellyplugsg3_pioneer
+      to: "on"
+  condition:
+    - condition: state
+      entity_id: switch.living_room_shellyplugsg3_pioneer
+      state: "on"
+    - condition: template
+      value_template: "{{ '{{' }} states('sensor.amp_active_source') in ['pi', 'tv'] {{ '}}' }}"
+  action:
+    - service: remote.send_command
+      target:
+        entity_id: remote.rm4_mini_ir_blaster
+      data:
+        device: rca_switcher
+        command: "{{ '{{' }} 'input_' ~ states('sensor.amp_active_source') {{ '}}' }}"
+  mode: restart
 
 # Watchdog: the amp-on trigger is deliberately instant (phantom-start debounce
 # lives in detect_audio on vinylstreamer), so if the detector ever regresses the

@@ -46,9 +46,14 @@ All as code in the `platform/proxmox` role (toggle `enable_proxmox_power_tuning`
 
 ---
 
-## Now-Playing Amp Control — RM IR Input Switching (hardware pending ~2026-07-14)
+## Now-Playing Amp Control — RM IR Input Switching (automation live 2026-07-18; physical E2E pending)
 
-**Status:** Power control DONE and live (merged #4, 2026-07-13). HA drives the vintage Pioneer SA-508's Shelly plug (`switch.living_room_shellyplugsg3_pioneer`) from source activity — `binary_sensor.amp_source_active` (OR of hifipi AirPlay/Spotify/MPD/vinyl playing or TV on) → on/off automations with a 5-min idle grace + a start-reconcile. What remains is **input selection**, gated on hardware.
+**Status:** Power control DONE and live (merged #4, 2026-07-13). HA drives the vintage Pioneer SA-508's Shelly plug (`switch.living_room_shellyplugsg3_pioneer`) from source activity — `binary_sensor.amp_source_active` (OR of hifipi AirPlay/Spotify/MPD/vinyl playing or TV on) → on/off automations with a 5-min idle grace + a start-reconcile. **Input selection DONE 2026-07-18:** RM4 Mini installed (`remote.rm4_mini_ir_blaster`), `rca_switcher/input_pi` + `input_tv` IR positions learned, and `automation.amp_input_select` (IaC) sends the matching code on source change (3s debounce, plug-on gated) and on plug power-on (instant re-align). Learned codes captured in the repo (`roles/services/homeassistant/files/broadlink_remote_1cd1d72734d3_codes`) and seeded to `.storage` only-if-missing. Both-active policy confirmed as-is: Pi playback wins over a merely-on TV.
+
+**What remains — physical E2E (needs hands on the rack):**
+1. Wire the amp into the Shelly plug (draw currently 0 W by design) — closes the power-path E2E (amp on with source, off after the 5-min grace).
+2. Verify each source end-to-end: AirPlay/Spotify/vinyl → `input_pi` position audible; TV → `input_tv` audible; check the RM's line-of-sight to the switch is reliable.
+3. If the other two switch positions ever get used, learn their codes and re-capture the codes file into the role (seed is only-if-missing, so HA-side learning is never clobbered).
 
 **2026-07-15 — night-cycling fix:** the plug cycled all night because vinylstreamer `detect_audio` fired phantom starts on single-chunk noise spikes (~200 starts/18h). Fixed at the detector: start now requires 3 consecutive active chunks (~1s sustained signal), mirroring the existing stop-side hysteresis. detect_audio also publishes play state to MQTT (`vinyl/vinylstreamer/playing`, retained) → `binary_sensor.vinyl_vinylstreamer_playing`, so the plug reacts in ~1–2s instead of waiting for HA's ~10s MPD poll (measured 8.8s). Defense in depth is a watchdog, not a trigger delay: `sensor.amp_plug_on_count_1h` (history_stats) + `automation.amp_alert_on_plug_cycling` page #home-alerts when the plug switches on >3×/hour. **Validation pending:** watch one night — detect_audio journal should show `Ignoring transient audio spike` instead of starts, and the plug should hold state.
 
@@ -57,15 +62,7 @@ All as code in the `platform/proxmox` role (toggle `enable_proxmox_power_tuning`
 - `ip_ban_enabled: true` (threshold 5) banned `127.0.0.1` during API testing with a bad token — localhost monitoring queries then get 403 until `ip_bans.yaml` is cleared and HA restarted. Mind this when scripting against the API; failed auth from localhost counts.
 - TV entity `cobi_tv_3` sat `unavailable` all night 2026-07-14→15 (expected if the TV drops off the network when off, but worth confirming its real OFF state — already step 63 below).
 
-**Hardware:** Broadlink RM IR blaster + an external **4-way RCA IR switch**. The SA-508 has no IR and a single input; the 4-way switch (driven by the RM) selects which source feeds it. HA already computes the target via `sensor.amp_active_source` (`pi`/`tv`/`none`; Pi playback prioritised over a merely-on TV).
-
-**Steps when the RM arrives:**
-1. **Verify the power path first — no RM needed.** Wire the amp into the Shelly plug, play a source, confirm the amp powers on, and confirm auto-off after the 5-min idle grace. Closes the power E2E that couldn't be tested unconnected (draw currently 0 W by design).
-2. **Add the Broadlink RM integration** (needs the RM's LAN IP; local-push → config entry). Capture in IaC via the same `.storage` config-entry injection pattern as MQTT where practical (see memory `mqtt-broker-dockassist`).
-3. **Learn the IR codes** for the 4-way switch via `remote.learn_command` — at least the `pi` and `tv` positions; store the base64 codes in the repo/vault.
-4. **Add the input-select automation** (`automations.yaml.j2`, IaC): trigger on `sensor.amp_active_source` change → `remote.send_command` the matching input code; only when the plug is on; short debounce so a brief source flip doesn't thrash the switch.
-5. **Confirm the both-active policy:** current default = Pi playback wins over TV-on (starting Spotify while watching TV would switch the amp input to Pi). Keep or adjust the `amp_active_source` template.
-6. **End-to-end verify:** each source (AirPlay/Spotify/vinyl/TV) selects the right input and is audible; idle → amp off.
+**Hardware:** Broadlink RM4 Mini IR blaster + an external **4-way RCA IR switch**. The SA-508 has no IR and a single input; the 4-way switch (driven by the RM) selects which source feeds it. HA computes the target via `sensor.amp_active_source` (`pi`/`tv`/`none`; Pi playback prioritised over a merely-on TV).
 
 **Optional later:** TV idle auto-off (a left-on TV keeps the amp on). `cobi_tv_3` exposes `is_volume_muted`/`volume_level`/`app_id` (optimistic `assumed_state`) if a signal is needed. Also confirm the exact OFF value of `cobi_tv_3` (off/standby/unavailable) with the TV powered down. Full context in memory `now-playing-ir-automation-plan`.
 
