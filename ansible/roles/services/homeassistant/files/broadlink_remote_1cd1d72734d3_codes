@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "minor_version": 1,
+  "key": "broadlink_remote_1cd1d72734d3_codes",
+  "data": {
+    "rca_switcher": {
+      "input_tv": "JgBwAAABK48TEhMSExITERMSExITEhI3EzYTNhM1EzYTNhM2EzYTEhMSEhITNhM2ExETEhMTExITNRM2ExITERM2EzYTNhM2EwAE7AABK0gTAAv2AAErSBMAC/QAAStIEwAL9QABK0gTAAvzAAEsSBMADQU=",
+      "input_pi": "JgBYAAABK48TEhMSExITEhMRExITEhM1EzYTNhM2EzYTNhM1EzYTEhMRExITExMSEhITEhMSEhITNhM2EjYTNxM2EjYTNhM1EwAE7AABK0gTAAvzAAErSBMADQU="
+    }
+  }
+}

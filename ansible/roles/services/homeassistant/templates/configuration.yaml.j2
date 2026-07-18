@@ -114,8 +114,8 @@ template:
         state: >
           {{ '{{ is_state("binary_sensor.shairport_sync_hifipi_playing", "on") or is_state("binary_sensor.raspotify_hifipi_playing", "on") or is_state("binary_sensor.vinyl_vinylstreamer_playing", "on") or is_state("media_player.music_player_daemon", "playing") or is_state("media_player.cobi_tv_3", "on") }}' }}
   - sensor:
-      # Amp input selection — which source the RM IR switch should select once the
-      # blaster is installed (RM not yet present; this is the hook it will consume).
+      # Amp input selection — which source the RM4 IR blaster should select on the
+      # 4-way RCA switch (consumed by the "Amp - select input" automation).
       # Active Pi playback wins over a merely powered-on TV. Values: pi / tv / none.
       - name: "Amp Active Source"
         unique_id: amp_active_source

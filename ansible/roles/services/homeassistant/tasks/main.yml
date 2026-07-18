@@ -67,6 +67,21 @@
   notify: Restart Home Assistant
   tags: [homeassistant, config]
 
+# Disaster-recovery seed for the RM4 Mini's learned IR codes (rca_switcher
+# input positions for the amp). HA owns this file — learning a new command
+# rewrites it — so seed only when missing (fresh rebuild), never overwrite.
+# Re-capture into files/ after learning new codes to keep the seed current.
+- name: Seed Broadlink learned IR codes (only if missing)
+  ansible.builtin.copy:
+    src: broadlink_remote_1cd1d72734d3_codes
+    dest: "{{ homeassistant_config_dir | default('/home/' + ansible_user + '/homeassistant') }}/.storage/broadlink_remote_1cd1d72734d3_codes"
+    owner: root
+    group: root
+    mode: '0600'
+    force: false
+  become: true
+  tags: [homeassistant, config]
+
 - name: Deploy Home Assistant secrets
   ansible.builtin.template:
     src: secrets.yaml.j2
