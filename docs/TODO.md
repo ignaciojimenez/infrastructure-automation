@@ -48,7 +48,14 @@ All as code in the `platform/proxmox` role (toggle `enable_proxmox_power_tuning`
 
 ## Now-Playing Amp Control — RM IR Input Switching (hardware pending ~2026-07-14)
 
-**Status:** Power control DONE and live (merged #4, 2026-07-13). HA drives the vintage Pioneer SA-508's Shelly plug (`switch.living_room_shellyplugsg3_pioneer`) from source activity — `binary_sensor.amp_source_active` (OR of hifipi AirPlay/Spotify/MPD playing or TV on) → on/off automations with a 5-min idle grace + a start-reconcile. What remains is **input selection**, gated on hardware.
+**Status:** Power control DONE and live (merged #4, 2026-07-13). HA drives the vintage Pioneer SA-508's Shelly plug (`switch.living_room_shellyplugsg3_pioneer`) from source activity — `binary_sensor.amp_source_active` (OR of hifipi AirPlay/Spotify/MPD/vinyl playing or TV on) → on/off automations with a 5-min idle grace + a start-reconcile. What remains is **input selection**, gated on hardware.
+
+**2026-07-15 — night-cycling fix:** the plug cycled all night because vinylstreamer `detect_audio` fired phantom starts on single-chunk noise spikes (~200 starts/18h). Fixed at the detector: start now requires 3 consecutive active chunks (~1s sustained signal), mirroring the existing stop-side hysteresis. detect_audio also publishes play state to MQTT (`vinyl/vinylstreamer/playing`, retained) → `binary_sensor.vinyl_vinylstreamer_playing`, so the plug reacts in ~1–2s instead of waiting for HA's ~10s MPD poll (measured 8.8s). Defense in depth is a watchdog, not a trigger delay: `sensor.amp_plug_on_count_1h` (history_stats) + `automation.amp_alert_on_plug_cycling` page #home-alerts when the plug switches on >3×/hour. **Validation pending:** watch one night — detect_audio journal should show `Ignoring transient audio spike` instead of starts, and the plug should hold state.
+
+**Incidental findings (2026-07-15):**
+- HA's MPD integration is a UI config entry with ~10s polling and no YAML `scan_interval` knob — anything latency-sensitive should get an MQTT push path instead (pattern: `spotify_event.sh`, `detect_audio.py`).
+- `ip_ban_enabled: true` (threshold 5) banned `127.0.0.1` during API testing with a bad token — localhost monitoring queries then get 403 until `ip_bans.yaml` is cleared and HA restarted. Mind this when scripting against the API; failed auth from localhost counts.
+- TV entity `cobi_tv_3` sat `unavailable` all night 2026-07-14→15 (expected if the TV drops off the network when off, but worth confirming its real OFF state — already step 63 below).
 
 **Hardware:** Broadlink RM IR blaster + an external **4-way RCA IR switch**. The SA-508 has no IR and a single input; the 4-way switch (driven by the RM) selects which source feeds it. HA already computes the target via `sensor.amp_active_source` (`pi`/`tv`/`none`; Pi playback prioritised over a merely-on TV).
 

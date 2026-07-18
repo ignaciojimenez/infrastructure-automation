@@ -6,6 +6,7 @@ Based on working production version
 """
 
 from array import array
+import os
 import pyaudio
 import subprocess
 import sys
@@ -19,6 +20,7 @@ START_THRESHOLD = 1200  # Threshold for starting playback
 STOP_THRESHOLD = 100   # Threshold for stopping playback
 MIN_SILENT_PERIODS = 10  # Number of consecutive silent chunks before stopping
 MIN_ACTIVE_SAMPLES = 3  # Number of samples above threshold in a single chunk to trigger
+START_CONSECUTIVE_CHUNKS = 3  # Consecutive active chunks (~1s) required before starting playback
 CHUNK_SIZE = 4096
 FORMAT = pyaudio.paInt16
 RATE = 48000
@@ -111,6 +113,25 @@ class DirectLogger:
 # Create our logger instance
 logger = DirectLogger(log_file)
 
+def publish_vinyl_state(playing):
+    """Push play/stop state to MQTT (retained) so Home Assistant reacts
+    instantly instead of waiting for its ~10s MPD poll. Best-effort: a broker
+    blip must never break audio detection. MQTT_* come from the systemd
+    EnvironmentFile (/etc/detect_audio.env, mode 0600); when unset (MQTT
+    disabled) this is a no-op."""
+    broker = os.environ.get("MQTT_BROKER")
+    if not broker:
+        return
+    topic = os.environ.get("MQTT_TOPIC", "vinyl/vinylstreamer")
+    try:
+        subprocess.run(
+            ["mosquitto_pub", "-h", broker, "-p", os.environ.get("MQTT_PORT", "1883"),
+             "-u", os.environ.get("MQTT_USERNAME", ""), "-P", os.environ.get("MQTT_PASSWORD", ""),
+             "-r", "-t", f"{topic}/playing", "-m", "1" if playing else "0"],
+            capture_output=True, timeout=5)
+    except Exception as e:
+        logger.warning(f"MQTT publish failed: {e}")
+
 def is_silent(snd_data, threshold):
     """
     Returns 'True' if below the 'silent' threshold
@@ -187,7 +208,12 @@ def listen():
     p = pyaudio.PyAudio()
     snd_started = False
     silent_periods = 0
+    active_chunks = 0  # consecutive chunks above the start threshold
+    candidate_peak = 0  # loudest level seen during the current candidate run
     mpc_log = MpcFailureLog(logger)  # debounces transient hifipi/network failures
+
+    # Clear stale retained state (e.g. "playing" left over across a crash/reboot)
+    publish_vinyl_state(False)
 
     # Calibrate noise floor and set dynamic thresholds
     try:
@@ -221,10 +247,20 @@ def listen():
             if not snd_started:
                 # Count samples above threshold in this chunk
                 samples_above = count_samples_above_threshold(snd_data, dynamic_start)
-                
-                # If we have enough samples above threshold in a single chunk, start streaming
+
                 if samples_above >= MIN_ACTIVE_SAMPLES:
-                    logger.info(f"Starting stream. Volume level: {max_level}, samples above threshold: {samples_above}/{MIN_ACTIVE_SAMPLES}")
+                    active_chunks += 1
+                    candidate_peak = max(candidate_peak, max_level)
+                elif active_chunks:
+                    # Signal died before sustaining: a noise spike, not a record.
+                    # Single-chunk decisions used to flap MPD (and the amp plug) all night.
+                    logger.info(f"Ignoring transient audio spike: {active_chunks} chunk(s), peak level {candidate_peak}")
+                    active_chunks = 0
+                    candidate_peak = 0
+
+                # Only start once the signal has sustained across consecutive chunks
+                if active_chunks >= START_CONSECUTIVE_CHUNKS:
+                    logger.info(f"Starting stream. Volume level: {max_level}, samples above threshold: {samples_above}/{MIN_ACTIVE_SAMPLES}, sustained chunks: {active_chunks}")
                     start = subprocess.run(["mpc", f"--host={hifipi_ip}", "play"], capture_output=True, text=True)
                     
                     if start.stdout:
@@ -237,6 +273,9 @@ def listen():
                             logger.info(f"MPC output: {start.stdout.strip()}")
                             snd_started = True
                             silent_periods = 0
+                            active_chunks = 0
+                            candidate_peak = 0
+                            publish_vinyl_state(True)
                     elif start.stderr:
                         mpc_log.fail(f"MPC play error. Full command result: {start}. Resetting playlist...", start.stderr)
                         # Reset the playlist
@@ -264,6 +303,7 @@ def listen():
                         mpc_log.fail(f"MPC error output: {stop.stderr.strip()}", stop.stderr)
                     snd_started = False
                     silent_periods = 0
+                    publish_vinyl_state(False)
             else:
                 # Reset silent period counter if we detect sound while stream is active
                 if snd_started and not is_silent(snd_data, dynamic_stop):

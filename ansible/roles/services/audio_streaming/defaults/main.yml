@@ -18,9 +18,11 @@ liquidsoap_mount_point: "/stream"
 liquidsoap_stream_name: "Stream"
 liquidsoap_stream_description: "Audio Stream"
 
-# Audio detection
-audio_detection_device: "hw:0"
-audio_detection_threshold: 0.01
+# Vinyl now-playing state pushed to MQTT (HA reacts instantly instead of
+# waiting for its ~10s MPD poll — drives the amp plug automation)
+enable_vinyl_mqtt: true
+vinyl_mqtt_broker: "dockassist"
+vinyl_mqtt_port: 1883
 
 # Platform
 disable_bluetooth: true

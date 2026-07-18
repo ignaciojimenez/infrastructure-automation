@@ -597,3 +597,18 @@
           target:
             entity_id: switch.living_room_shellyplugsg3_pioneer
   mode: single
+
+# Watchdog: the amp-on trigger is deliberately instant (phantom-start debounce
+# lives in detect_audio on vinylstreamer), so if the detector ever regresses the
+# plug cycles again. Page on abnormal cycling instead of delaying the amp.
+- id: "amp_plug_cycling_watchdog"
+  alias: "Amp - alert on plug cycling"
+  trigger:
+    - platform: numeric_state
+      entity_id: sensor.amp_plug_on_count_1h
+      above: 3
+  action:
+    - service: rest_command.slack_alert
+      data:
+        message: "{{ '{{' }} \"🔌 Amp plug cycling: switched on \" ~ states(\"sensor.amp_plug_on_count_1h\") ~ \" times in the last hour — check detect_audio on vinylstreamer for phantom starts\" {{ '}}' }}"
+  mode: single
