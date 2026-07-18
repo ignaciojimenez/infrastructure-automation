@@ -75,5 +75,6 @@ The playbook automatically deploys **all scripts** in `scripts/common/` - no con
 ## Documentation
 
 - **[docs/ARCHITECTURE_DECISIONS.md](docs/ARCHITECTURE_DECISIONS.md)** - Key technical decisions and patterns
+- **[docs/AUDIO_AUTOMATION.md](docs/AUDIO_AUTOMATION.md)** - Living room audio: source-driven amp power + IR input routing
 - **[docs/BACKUP_AND_RECOVERY.md](docs/BACKUP_AND_RECOVERY.md)** - Backup inventory and per-host recovery procedures
 - **[docs/TODO.md](docs/TODO.md)** - Prioritized infrastructure work items
