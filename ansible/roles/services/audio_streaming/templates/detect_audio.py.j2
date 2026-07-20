@@ -12,9 +12,6 @@ import subprocess
 import sys
 import time
 
-# Configuration
-log_file = "{{ logs_dir }}/detect_audio.log"
-
 # Audio detection parameters
 START_THRESHOLD = 1200  # Threshold for starting playback
 STOP_THRESHOLD = 100   # Threshold for stopping playback
@@ -84,34 +81,29 @@ class MpcFailureLog:
             self._logger.warning(message)
 
 # Direct logging class for reliability
-class DirectLogger:
-    def __init__(self, log_file):
-        self.log_file = log_file
-        # Open the file in append mode with line buffering
-        self.file = open(log_file, 'a', buffering=1)
-        
+class JournalLogger:
+    """Logs to stdout only; systemd routes it to the persistent journal.
+    No log file on purpose: logrotate renames a held-open file out from
+    under a long-running writer, orphaning all subsequent writes."""
+
     def _log(self, level, message):
         timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
-        log_entry = f"{timestamp} - {level} - {message}\n"
-        # Write to both stdout and the file
-        print(log_entry, end='')
-        self.file.write(log_entry)
-        self.file.flush()  # Force flush after each write
-        
+        print(f"{timestamp} - {level} - {message}", flush=True)
+
     def info(self, message):
         self._log('INFO', message)
-        
+
     def error(self, message):
         self._log('ERROR', message)
-        
+
     def warning(self, message):
         self._log('WARNING', message)
-        
+
     def debug(self, message):
         self._log('DEBUG', message)
 
 # Create our logger instance
-logger = DirectLogger(log_file)
+logger = JournalLogger()
 
 def publish_vinyl_state(playing):
     """Push play/stop state to MQTT (retained) so Home Assistant reacts

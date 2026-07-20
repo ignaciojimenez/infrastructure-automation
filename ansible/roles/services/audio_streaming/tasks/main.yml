@@ -202,15 +202,14 @@
   when: enable_audio_detection and not (is_test_environment | default(false))
   tags: [audio_streaming, detection]
 
-- name: Ensure logs directory exists for detect_audio
+- name: Ensure logs directory exists for monitoring cron logs
   ansible.builtin.file:
     path: "{{ logs_dir }}"
     state: directory
     owner: "{{ primary_user }}"
     group: "{{ primary_user }}"
     mode: '0755'
-  when: enable_audio_detection and not (is_test_environment | default(false))
-  tags: [audio_streaming, detection]
+  tags: [audio_streaming, monitoring]
 
 - name: Install MQTT client for vinyl now-playing push
   become: true
