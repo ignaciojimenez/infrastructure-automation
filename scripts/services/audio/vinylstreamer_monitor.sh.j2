@@ -164,17 +164,18 @@ check_stream_connected() {
 check_log_errors() {
     local error_count=0
     
-    # Check detect_audio logs (path matches detect_audio.py.j2)
-    # Count ERROR-*level* entries only (DirectLogger format: "TS - ERROR - msg"), not
-    # every line containing the word "error". Transient hifipi/network blips are logged
-    # at WARNING by detect_audio.py, so a self-recovered boot-time DNS hiccup no longer
-    # trips this check; a genuinely stuck hifipi still escalates to ERROR and alerts.
-    if [ -f "{{ logs_dir }}/detect_audio.log" ]; then
-        local recent_errors=$(tail -100 "{{ logs_dir }}/detect_audio.log" | grep ' - ERROR - ' | wc -l)
-        if [ "$recent_errors" -gt 5 ]; then
-            log_message "⚠️  Found $recent_errors recent errors in detect_audio.log"
-            error_count=$((error_count + recent_errors))
-        fi
+    # Check detect_audio's journal (detect_audio.py logs to stdout only; systemd
+    # StandardOutput=journal captures it — the file-based log was retired 2026-07-20
+    # after logrotate was found emptying it out from under the long-held-open
+    # write handle). Count ERROR-*level* entries only (JournalLogger format:
+    # "TS - ERROR - msg"), not every line containing the word "error". Transient
+    # hifipi/network blips are logged at WARNING by detect_audio.py, so a
+    # self-recovered boot-time DNS hiccup no longer trips this check; a genuinely
+    # stuck hifipi still escalates to ERROR and alerts.
+    local recent_errors=$(journalctl --no-pager -u detect_audio -n 100 -o cat 2>/dev/null | grep ' - ERROR - ' | wc -l)
+    if [ "$recent_errors" -gt 5 ]; then
+        log_message "⚠️  Found $recent_errors recent errors in detect_audio journal"
+        error_count=$((error_count + recent_errors))
     fi
     
     # Check icecast logs
