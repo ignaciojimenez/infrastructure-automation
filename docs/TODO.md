@@ -119,49 +119,40 @@ Existing `enhanced_monitoring_wrapper` + healthchecks.io setup stays as-is for r
 
 ---
 
-## Priority 2 — Make read_agent Durable on OPNsense (create it as a real OPNsense user)
+## Priority 2 — read_agent on OPNsense: RESOLVED as far as it can be (detection is the remainder)
 
-**Risk:** Medium. Silently removes the firewall — the single most diagnostically valuable host — from all autonomous tooling, with no alert. Directly undermines Priority 1: the Agent LXC's whole premise is uniform `read_agent` SSH to all 7 hosts.
+**Status 2026-07-21: mitigated, not eliminated — and eliminating it is not possible without granting the agent full firewall admin.** Kept as a priority only for the detection half, which rides on Priority 1.
 
-### What Happened (found 2026-07-21)
-`ssh opnsense-agent` failed `Permission denied (publickey)` while the other 6 hosts were fine. Diagnosis on the host:
-- `id read_agent` → **no such user** — the account was gone
-- `/home/read_agent/` and `.ssh/authorized_keys` survived, owned by an orphaned numeric uid/gid `2001`
-- `sshd_config` had reverted to `AllowGroups wheel` (the role sets `AllowGroups wheel read_agent`)
-- The pubkey in the surviving `authorized_keys` still matched the laptop's key exactly (`SHA256:DV7ROy6mw1XXqUiZIxasQc8aBdSFqYv/JSK6BiS2TAk`)
+### What Happened
+`ssh opnsense-agent` failed `Permission denied (publickey)` while the other 6 hosts were fine. The `read_agent` account was **gone** — home dir and `authorized_keys` survived as orphaned uid 2001, and `sshd_config` had reverted to `AllowGroups wheel`. Cause: the 2026-06-13 upgrade to OPNsense 26.1.9 (`pkg query` timestamp), between the 2026-04-07 rollout and discovery. `local_sync_accounts` (`auth.inc`) enumerates accounts with uid ≥ 2000 and reconciles them against `config.xml`, deleting anything absent. `choco` survived because it is a config.xml user. Undetected for ~3 months.
 
-### Root Cause — confirmed 2026-07-21
-**A firmware upgrade rebuilt the system from `config.xml` and dropped the account.** Evidence:
+### Why the obvious fix is closed
+Creating the account in OPNsense's user manager so it lives in `config.xml` **was tried live and does not work for a least-privilege account.** `local_user_set` (`auth.inc:351`):
 
-1. **`/conf/config.xml` contains exactly two users: `root` (uid 0) and `choco` (uid 2000).** `read_agent` (uid 2001) is *not* among them — it only ever existed in `/etc/passwd`, created out-of-band by Ansible's `pw`. OPNsense treats `config.xml` as authoritative and regenerates `/etc/passwd` and `/usr/local/etc/ssh/sshd_config` from it, so anything absent from `config.xml` is discarded.
-2. **Timing fits.** `pkg query` puts the install of **OPNsense 26.1.9 at 2026-06-13 13:03** — squarely between the 2026-04-07 rollout (validated working, home dir created Apr 8 18:16) and today's discovery. `choco` survived the same event precisely *because* it lives in `config.xml`.
-3. **The home directory survived** because it is not part of that regeneration — which is exactly the asymmetry observed (dir + authorized_keys intact, account gone).
+```php
+$is_admin = userIsAdmin($user['name']);
+$user_shell = $is_admin && !empty($user['shell']) ? $user['shell'] : '/usr/sbin/nologin';
+```
 
-This is a **recurring failure, not a one-off**: it will happen again on the next firmware upgrade, and OPNsense upgrades are routine and UI-initiated.
+`userIsAdmin()` is `userHasPrivilege(…, 'page-all')` — full GUI administrator. **OPNsense has no concept of a non-admin account with a login shell**; the `<shell>` field is ignored unless the user is an admin. Observed exactly that: the UI-created user passed key auth, then `This account is currently not available`. It is also *worse* than `pw` management — a config.xml account has its shell reset on every config apply, not just upgrades. Granting `page-all` to fix it would hand a read-only agent complete control of the firewall. Route closed; see `docs/ARCHITECTURE_DECISIONS.md`.
 
-**Good news — the blast radius is narrower than feared.** `/usr/local/etc/sudoers.d/` is *not* regenerated: the file `opnsense` there is dated 2026-06-02, i.e. it survived the 2026-06-13 upgrade. So only the **user account itself** is fragile; sudoers rules and the home directory persist. The fix only needs to make the account durable.
+### What was done instead
+- **Account stays `pw`-managed**, expected to be wiped by firmware upgrades, with recovery reduced to one idempotent command: `ansible-playbook ansible/playbooks/system/agent_access.yml --limit opnsense` — **verified from a fully wiped account: ~9s, all access restored, second run `changed=0`.** Documented with symptoms in `docs/AGENT_ACCESS.md`.
+- **sshd `AllowGroups` made genuinely durable.** The role's `lineinfile` on `sshd_config` was erased by upgrades *and* by any SSH settings change (`openssh.inc` hardcodes `AllowGroups wheel`). Replaced with `/usr/local/etc/ssh/sshd_config.d/10-read_agent.conf`, the documented override point — `Include`d at the top of the generated config, and sshd takes the first value per keyword. `sshd_config` itself is now left at OPNsense's native `AllowGroups wheel`, so regeneration is a no-op. Verified by reverting sshd_config to its native state and confirming login still works, plus `sshd -T`.
 
-### Fix Forward — decided 2026-07-21
-**Create `read_agent` as a real OPNsense user, in the console (UI) or via the API, so it lives in `config.xml`.** That makes it durable by construction and removes the recurring break entirely — no monitoring for it, no re-apply step, no post-upgrade checklist. Deliberately chosen over detect-and-recreate: recreating on every firmware upgrade would be treating a self-inflicted, fully fixable problem as a permanent fact of life.
+So the sshd half is now upgrade-proof; only the account itself still needs the one-command repair.
 
-The API path is confirmed available on this box: `/usr/local/opnsense/mvc/app/controllers/OPNsense/Auth/Api/UserController.php` extends `ApiMutableModelControllerBase` and exposes `searchAction`, `getAction`, `addAction`, `setAction`, `delAction` (verified on 26.1.9). `search` makes an idempotent create-if-missing Ansible task straightforward. The `config.xml` schema is visible in the two existing entries: `<uid>`, `<name>`, `<disabled>`, `<scope>user</scope>`, `<shell>`, `<authorizedkeys>` — the SSH key lives there too, so key rotation would go through the same path.
+### Remaining work — detection only
+Nothing currently alerts when agent access breaks, on any host, for any reason. That is what turned a routine upgrade side-effect into a 3-month blind spot. **This is already covered by Priority 1**: `fleet_health_check.sh` (Phase A step 5) iterates `ssh <host>-agent` across the fleet hourly and fails on unreachability. No separate work — just don't drop that check from Tier 1.
 
-Doing it once by hand in the UI is a legitimate first step; the account only needs creating once, and it is durable from then on. Converting it to an idempotent Ansible task is the follow-up that keeps the box reproducible from the repo.
-
-**Decisions still open when implementing:**
-- UI once vs. Ansible-via-API — UI is faster now, Ansible keeps `agent_access` the single source of truth for all 7 hosts.
-- Whether the `agent_access` FreeBSD branch drops `pw` entirely once the account is durable, or keeps it as a fallback.
-- OPNsense API access needs an API key; confirm whether it can be scoped narrowly to user management.
-
-**Do not assume the payload shape** — read `/usr/local/opnsense/mvc/app/models/OPNsense/Auth/User.xml` for the exact fields and validation before writing the task.
-
-### Note on detection
-With the account durable, this specific failure disappears, so no monitoring is planned for it. Worth knowing what stays uncovered: **nothing currently alerts when agent access to any host breaks, for any reason.** That is what let this sit unnoticed for ~3 months on the firewall. Not being tracked as work here — but it is close to free to fold into the Agent LXC's Tier 1 sweep (Priority 1), which already SSHs to every host on a schedule; a failed login there is an anomaly it could report for nothing extra.
+Until the LXC lands, the gap is open and the only detection is someone trying to use it.
 
 ### Acceptance Criteria
-- [ ] `read_agent` exists as an OPNsense user in `config.xml` (visible in the UI user manager)
-- [ ] `ssh opnsense-agent` still works after the next firmware upgrade
-- [ ] If automated: the creating task is idempotent (`changed=0` on a second run)
+- [x] Recovery is a single idempotent command, verified from a fully wiped account
+- [x] sshd `AllowGroups` survives sshd_config regeneration
+- [x] The closed config.xml route is documented so it is not retried
+- [ ] Loss of agent access on any host raises an alert within a day (via Priority 1 Tier 1)
+- [ ] Survives the next real firmware upgrade — confirm `ssh opnsense-agent` afterwards, run the repair if not
 
 ---
 
