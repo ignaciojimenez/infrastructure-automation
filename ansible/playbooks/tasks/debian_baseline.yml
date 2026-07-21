@@ -27,6 +27,19 @@
 - name: Set timezone
   community.general.timezone:
     name: "{{ timezone | default('Europe/Madrid') }}"
+  register: timezone_set
+  tags: [timezone]
+
+# cron reads the timezone once at process start and never observes a later
+# /etc/localtime change, so without this every job keeps firing at the old
+# offset until something else restarts it. community.general.timezone does
+# not do this for us — verified on cobra 2026-07-21, where cron was still
+# running with the previous zone after the module reported "changed".
+- name: Restart cron so it picks up the new timezone
+  ansible.builtin.service:
+    name: cron
+    state: restarted
+  when: timezone_set is changed
   tags: [timezone]
 
 - name: Set ping capabilities for non-root users (LXC compatibility)

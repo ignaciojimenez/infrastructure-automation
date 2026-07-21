@@ -1,6 +1,6 @@
 # Infrastructure TODO — Prioritized Action List
 
-Updated: 2026-06-30 | Validated against live hosts via read_agent autonomous assessment
+Updated: 2026-07-21 | Validated against live hosts via read_agent autonomous assessment
 
 This document is the single source of truth for pending infrastructure work.
 Each item includes verified current state, concrete next steps, and acceptance criteria.
@@ -41,109 +41,17 @@ All as code in the `platform/proxmox` role (toggle `enable_proxmox_power_tuning`
 - ✅ **cwwk cron/mail drift reconciled** (2026-07-01): adopted `save-dmesg` + `arc_summary` into the `platform/proxmox` role as managed root crons; removed the stale `Proxmox health check` cron (its target `proxmox_health.sh` didn't exist → failed every 4h). Root cause of the deferred-mail pileup was the 6 monitoring crons emitting the wrapper's stdout every run → now redirected to `~/.logs/proxmox_*.log` (matches the backup crons). Built `/etc/aliases.db` and flushed 2201 stale cron mails. cwwk root crontab is now 100% Ansible-managed.
 - ⚠️ **Move webhook tokens out of cron arg lines** (elevated) — the Slack tokens are literal in every monitoring cron `job`, so they leak into `crontab -l`, `--diff` output, and cron-mail subjects (seen repeatedly this session). Move to a sourced env file read by `enhanced_monitoring_wrapper`. Given the repeated exposure, **consider rotating the two webhooks**. Cross-host (all monitored hosts).
 - Monitoring logs (`~/.logs/proxmox_*.log`) and `zfs-arc.log` have no rotation — add logrotate if they grow.
-- **cobra** is running in **BST**, not CEST (1h skew) — set timezone to Europe/Amsterdam.
+- ✅ **cobra timezone skew — RESOLVED 2026-07-21.** cobra was on `Europe/London` (BST, 1h behind the rest of the fleet). No code change was needed: `timezone: "Europe/Madrid"` already lives in `group_vars/all/main.yml` and `debian_baseline.yml --tags timezone` already applies it — cobra had simply drifted and was the only outlier (all 6 other hosts verified `Europe/Madrid`/CEST). Applied with `ansible-playbook ansible/playbooks/platform/debian.yml --tags timezone --limit cobra`. **Gotcha worth remembering:** `cron` caches the timezone at process start and does *not* pick up a `/etc/localtime` change on its own, and `community.general.timezone` did not restart it here — cobra's cron was still 901s old (pre-change) after the module reported `changed`, so every cobra cron would have kept firing an hour off. **Now codified** (2026-07-21): `debian_baseline.yml` registers the timezone task and restarts cron only when it actually changed — verified idempotent (`changed=0`, restart skipped, on a second run against cobra). Note the FreeBSD path (`freebsd_baseline.yml`, `tzsetup`) has the same latent gap and was deliberately left alone — opnsense is the firewall and its timezone is managed through `config.xml` anyway; revisit only if its zone ever needs changing.
 - No UPS monitoring (NUT/apcupsd) on cwwk; the 2026-06-30 split (cwwk down, Pis up) suggests cwwk may not share the Pis' power protection — worth confirming UPS topology.
 
 ---
 
 
-## Priority 1 — Deploy disable-hdmi Fix (hifipi + vinylstreamer)
-
-**Risk:** Low operational impact but masks real failures. The `disable-hdmi.service` on Raspberry Pi hosts uses `/usr/bin/tvservice -o` which was removed in Debian Trixie. Both Trixie hosts (hifipi, vinylstreamer) show a permanent failed service.
-
-### What Changed
-Codebase fix in `raspberrypi.yml`: replaced `tvservice -o` with `vcgencmd display_power 0` (confirmed available on all Pi hosts). Added daemon-reload + restart on change.
-
-### Next Steps (requires biometric/Touch ID)
-```bash
-ANSIBLE_LOCAL_TEMP="$TMPDIR/ansible-tmp" ansible-playbook ansible/playbooks/platform/raspberrypi.yml \
-  --tags hdmi --diff
-```
-
-### Acceptance Criteria
-- [ ] `disable-hdmi.service` active (not failed) on hifipi and vinylstreamer
-- [ ] No failed systemd units on either host
-
----
-
-## Priority 2 — Deploy read_agent Sudoers Expansion
-
-**Risk:** None operational. Expanding read-only diagnostic access enables fully autonomous infrastructure assessment. Current gaps discovered during the 2026-04-08 assessment: can't read fail2ban logs, unattended-upgrades logs, check failed services, view Docker disk usage, check crontabs, or query CrowdSec on opnsense.
-
-### What Changed
-Debian sudoers template additions:
-- `systemctl --failed`, `systemctl list-timers`
-- `journalctl -p * --no-pager *` (filter by priority, not just unit)
-- `cat /var/log/fail2ban.log`, `cat /var/log/unattended-upgrades/*`
-- `crontab -l -u *`
-- `docker system df *` (homeassistant host only)
-
-FreeBSD sudoers template additions:
-- `service * status`, `service -e`
-- `cscli decisions list`, `cscli alerts list`, `cscli metrics`
-
-### Next Steps (requires biometric/Touch ID)
-```bash
-ANSIBLE_LOCAL_TEMP="$TMPDIR/ansible-tmp" ansible-playbook ansible/playbooks/system/agent_access.yml --diff
-```
-
-### Acceptance Criteria
-- [ ] Sudoers deployed to all 7 hosts
-- [ ] `ssh cwwk-agent "sudo systemctl --failed --no-pager"` works
-- [ ] `ssh dockassist-agent "sudo cat /var/log/fail2ban.log"` works
-- [ ] `ssh opnsense-agent "sudo service crowdsec status"` works
-- [ ] `ssh opnsense-agent "sudo cscli decisions list"` works
-
----
-
-## Priority 3 — Deploy system_health_check.sh Update
-
-**Risk:** Low. The health check script monitors `ssh` and `cron` but not `fail2ban`. This is why fail2ban was broken for 6 months without alerting.
-
-### What Changed
-Added `fail2ban` to the `SERVICES` list in `check_services()` in `system_health_check.sh`.
-
-### Next Steps (requires biometric/Touch ID)
-```bash
-ANSIBLE_LOCAL_TEMP="$TMPDIR/ansible-tmp" ansible-playbook ansible/playbooks/deploy_monitoring.yml --diff
-```
-
-### Acceptance Criteria
-- [ ] system_health_check.sh deployed to all Debian hosts
-- [ ] Script checks fail2ban status on all hosts
-
----
-
-## Priority 4 — cwwk Memory Optimization (OPNsense VM)
-
-**Risk:** Low. OPNsense is allocated 12GB but only uses ~3.5GB (175M active + 2GB wired + 1.3GB ZFS ARC). 8.6GB is completely free inside the VM. Reducing the allocation from 12GB to 6GB would free 6GB for the hypervisor while leaving OPNsense with ~2.5GB headroom. Requires VM restart = brief network outage.
-
-### Current cwwk Memory Allocation
-| Resource | Allocated | Actual Use | Notes |
-|----------|-----------|------------|-------|
-| OPNsense (VM 100) | 12 GB | ~3.5 GB | 8.6GB free inside VM |
-| UniFi (LXC 101) | 4 GB | ~1.4 GB | Java 1.1G + MongoDB 270M |
-| pihole (LXC 102) | 2 GB | Stopped | `onboot: 0` |
-| ZFS ARC | 10.7 GB max | ~10.2 GB | Shrinks on demand |
-| **Total host** | **32 GB** | **~26 GB** | 5.4 GB available |
-
-### Recommended Changes
-- Reduce OPNsense from 12GB → 6GB (saves 6GB, requires VM restart)
-- Optionally reduce UniFi from 4GB → 2GB (saves 2GB, requires LXC restart)
-- Net result: ~13GB additional headroom for ZFS ARC and future LXCs
-
-### Next Steps
-1. Schedule a brief maintenance window (VM restart = ~30s network outage)
-2. `sudo qm set 100 -memory 6144` on cwwk
-3. Restart VM: `sudo qm shutdown 100 && sudo qm start 100`
-4. Verify OPNsense starts normally and all WireGuard tunnels come up
-5. Optionally: `sudo pct set 101 -memory 2048 && sudo pct restart 101`
-
----
-
-## Priority 5 — Autonomous Agent LXC
+## Priority 1 — Autonomous Agent LXC
 
 **Risk:** Medium. New production container with network access to all hosts via SSH and read-only API tokens. Compromise would expose read-only infrastructure visibility. Scoped by IP restriction on authorized_keys and NOPASSWD-only sudo rules.
+
+> **Prerequisite met 2026-07-21.** The `read_agent` foundation this depends on is now actually deployed and verified on all 7 hosts (expanded sudoers + opnsense access restored — see Resolved). Before that date the April rollout existed only in the repo, and opnsense had no `read_agent` account at all. Read Priority 2 before building Tier 1: agent access is not self-healing, and today nothing alerts when it breaks.
 
 ### What It Is
 A permanent Debian 12 LXC (`vmid 103`, hostname `agent`, `onboot: 1`) running **Claude Code** on a schedule. It SSHs to all hosts using a container-resident key (not the laptop's read_agent key), calls Proxmox and HA APIs, and posts findings to Slack.
@@ -211,7 +119,65 @@ Existing `enhanced_monitoring_wrapper` + healthchecks.io setup stays as-is for r
 
 ---
 
-## Priority 6 — SMART Disk Health Monitoring
+## Priority 2 — Make read_agent Durable on OPNsense (create it as a real OPNsense user)
+
+**Risk:** Medium. Silently removes the firewall — the single most diagnostically valuable host — from all autonomous tooling, with no alert. Directly undermines Priority 1: the Agent LXC's whole premise is uniform `read_agent` SSH to all 7 hosts.
+
+### What Happened (found 2026-07-21)
+`ssh opnsense-agent` failed `Permission denied (publickey)` while the other 6 hosts were fine. Diagnosis on the host:
+- `id read_agent` → **no such user** — the account was gone
+- `/home/read_agent/` and `.ssh/authorized_keys` survived, owned by an orphaned numeric uid/gid `2001`
+- `sshd_config` had reverted to `AllowGroups wheel` (the role sets `AllowGroups wheel read_agent`)
+- The pubkey in the surviving `authorized_keys` still matched the laptop's key exactly (`SHA256:DV7ROy6mw1XXqUiZIxasQc8aBdSFqYv/JSK6BiS2TAk`)
+
+### Root Cause — confirmed 2026-07-21
+**A firmware upgrade rebuilt the system from `config.xml` and dropped the account.** Evidence:
+
+1. **`/conf/config.xml` contains exactly two users: `root` (uid 0) and `choco` (uid 2000).** `read_agent` (uid 2001) is *not* among them — it only ever existed in `/etc/passwd`, created out-of-band by Ansible's `pw`. OPNsense treats `config.xml` as authoritative and regenerates `/etc/passwd` and `/usr/local/etc/ssh/sshd_config` from it, so anything absent from `config.xml` is discarded.
+2. **Timing fits.** `pkg query` puts the install of **OPNsense 26.1.9 at 2026-06-13 13:03** — squarely between the 2026-04-07 rollout (validated working, home dir created Apr 8 18:16) and today's discovery. `choco` survived the same event precisely *because* it lives in `config.xml`.
+3. **The home directory survived** because it is not part of that regeneration — which is exactly the asymmetry observed (dir + authorized_keys intact, account gone).
+
+This is a **recurring failure, not a one-off**: it will happen again on the next firmware upgrade, and OPNsense upgrades are routine and UI-initiated.
+
+**Good news — the blast radius is narrower than feared.** `/usr/local/etc/sudoers.d/` is *not* regenerated: the file `opnsense` there is dated 2026-06-02, i.e. it survived the 2026-06-13 upgrade. So only the **user account itself** is fragile; sudoers rules and the home directory persist. The fix only needs to make the account durable.
+
+### Fix Forward — decided 2026-07-21
+**Create `read_agent` as a real OPNsense user, in the console (UI) or via the API, so it lives in `config.xml`.** That makes it durable by construction and removes the recurring break entirely — no monitoring for it, no re-apply step, no post-upgrade checklist. Deliberately chosen over detect-and-recreate: recreating on every firmware upgrade would be treating a self-inflicted, fully fixable problem as a permanent fact of life.
+
+The API path is confirmed available on this box: `/usr/local/opnsense/mvc/app/controllers/OPNsense/Auth/Api/UserController.php` extends `ApiMutableModelControllerBase` and exposes `searchAction`, `getAction`, `addAction`, `setAction`, `delAction` (verified on 26.1.9). `search` makes an idempotent create-if-missing Ansible task straightforward. The `config.xml` schema is visible in the two existing entries: `<uid>`, `<name>`, `<disabled>`, `<scope>user</scope>`, `<shell>`, `<authorizedkeys>` — the SSH key lives there too, so key rotation would go through the same path.
+
+Doing it once by hand in the UI is a legitimate first step; the account only needs creating once, and it is durable from then on. Converting it to an idempotent Ansible task is the follow-up that keeps the box reproducible from the repo.
+
+**Decisions still open when implementing:**
+- UI once vs. Ansible-via-API — UI is faster now, Ansible keeps `agent_access` the single source of truth for all 7 hosts.
+- Whether the `agent_access` FreeBSD branch drops `pw` entirely once the account is durable, or keeps it as a fallback.
+- OPNsense API access needs an API key; confirm whether it can be scoped narrowly to user management.
+
+**Do not assume the payload shape** — read `/usr/local/opnsense/mvc/app/models/OPNsense/Auth/User.xml` for the exact fields and validation before writing the task.
+
+### Note on detection
+With the account durable, this specific failure disappears, so no monitoring is planned for it. Worth knowing what stays uncovered: **nothing currently alerts when agent access to any host breaks, for any reason.** That is what let this sit unnoticed for ~3 months on the firewall. Not being tracked as work here — but it is close to free to fold into the Agent LXC's Tier 1 sweep (Priority 1), which already SSHs to every host on a schedule; a failed login there is an anomaly it could report for nothing extra.
+
+### Acceptance Criteria
+- [ ] `read_agent` exists as an OPNsense user in `config.xml` (visible in the UI user manager)
+- [ ] `ssh opnsense-agent` still works after the next firmware upgrade
+- [ ] If automated: the creating task is idempotent (`changed=0` on a second run)
+
+---
+
+## Priority 3 — Healthchecks.io + Slack Tokens Out of Cron Command Lines
+
+**Risk:** Medium (hygiene, not exploitable in place). Promoted from Lower Priority on 2026-07-21: it should land *before* the Agent LXC bakes another consumer of `enhanced_monitoring_wrapper` into the fleet, rather than after.
+
+Every monitoring cron across the fleet embeds both healthchecks.io tokens and the Slack webhook as positional args to `enhanced_monitoring_wrapper`. Tokens surface in `ps`, `crontab -l`, `--diff` output, and cron-mail subjects — observed repeatedly during the 2026-07-01 cwwk session. For a personal box with no untrusted users it's tolerable (the tokens only authorize pings to a public endpoint), but it is not portfolio-clean.
+
+Cleaner pattern: env file at `/etc/monitoring/tokens.env` (`0600`) sourced by the wrapper. Scope: refactor the wrapper with a positional-arg fallback during rollout, deploy `tokens.env` from vault before any cron task uses it, strip token args from every `cron:` task across roles, then a coordinated redeploy. Given the repeated exposure, **rotate the two webhooks** as part of this.
+
+See `memory/followup_tokens_in_cron.md` for the full kickoff context.
+
+---
+
+## Priority 4 — SMART Disk Health Monitoring
 
 **Risk:** Medium. Proxmox's ZFS pool (`rpool`) is the single storage layer for all VMs and containers. A disk failure with zero early warning means potential data loss and full infrastructure outage. Cobra's media storage (`/dev/sda`) is similarly unmonitored.
 
@@ -241,6 +207,33 @@ RPi hosts (dockassist, hifipi, vinylstreamer) use SD cards — SMART doesn't app
 
 ---
 
+## Priority 5 — cwwk Memory Optimization (OPNsense VM)
+
+**Risk:** Low. OPNsense is allocated 12GB but only uses ~3.5GB (175M active + 2GB wired + 1.3GB ZFS ARC). 8.6GB is completely free inside the VM. Reducing the allocation from 12GB to 6GB would free 6GB for the hypervisor while leaving OPNsense with ~2.5GB headroom. Requires VM restart = brief network outage.
+
+### Current cwwk Memory Allocation
+| Resource | Allocated | Actual Use | Notes |
+|----------|-----------|------------|-------|
+| OPNsense (VM 100) | 12 GB | ~3.5 GB | 8.6GB free inside VM |
+| UniFi (LXC 101) | 4 GB | ~1.4 GB | Java 1.1G + MongoDB 270M |
+| pihole (LXC 102) | 2 GB | Stopped | `onboot: 0` |
+| ZFS ARC | 10.7 GB max | ~10.2 GB | Shrinks on demand |
+| **Total host** | **32 GB** | **~26 GB** | 5.4 GB available |
+
+### Recommended Changes
+- Reduce OPNsense from 12GB → 6GB (saves 6GB, requires VM restart)
+- Optionally reduce UniFi from 4GB → 2GB (saves 2GB, requires LXC restart)
+- Net result: ~13GB additional headroom for ZFS ARC and future LXCs
+
+### Next Steps
+1. Schedule a brief maintenance window (VM restart = ~30s network outage)
+2. `sudo qm set 100 -memory 6144` on cwwk
+3. Restart VM: `sudo qm shutdown 100 && sudo qm start 100`
+4. Verify OPNsense starts normally and all WireGuard tunnels come up
+5. Optionally: `sudo pct set 101 -memory 2048 && sudo pct restart 101`
+
+---
+
 ## Lower Priority
 
 These items have value but are not urgent. Ranked by value-to-effort ratio to help pick low-hanging fruit. Revisit quarterly.
@@ -255,8 +248,8 @@ These items have value but are not urgent. Ranked by value-to-effort ratio to he
 - **Unattended-Upgrades Config Drift (cobra + unifi)** `V:Med E:Low` — Both hosts have manually configured `/etc/apt/apt.conf.d/50unattended-upgrades` with `"origin=*"` wildcard (upgrades ALL packages). Ansible template enforces security-only origins. Re-running `site.yml` on these hosts will overwrite their configs. Decision needed: adopt the Ansible template (security-only, matching all other hosts) or update the template to support a toggle for full-upgrade mode. Recommend aligning to security-only — the 145-173 pending non-security packages on hifipi/vinylstreamer confirm that security-only is sufficient.
 - **Claude Code Autonomy — Sandbox Configuration** `V:Med E:Low` — SSH commands from Claude Code are blocked by the network sandbox proxy (can't resolve SSH config aliases like `dockassist-agent`). Fix already identified and tested: add `"excludedCommands": ["ssh", "scp", "ansible", "ansible-playbook", "ansible-vault", "ansible-lint"]` to `.claude/settings.local.json` sandbox config. This was used successfully via `dangerouslyDisableSandbox` workaround in the 2026-04-08 session but the settings watcher didn't pick up the config change mid-session. Will work in fresh sessions.
 - **Vinylstreamer Session-Aware Monitoring** `V:Med E:Low` — `vinylstreamer_monitor.sh` currently alerts when `phono_liquidsoap.service` is inactive, but liquidsoap is intentionally off when not streaming. This generates false positives and unnecessary restart attempts. Fix: make liquidsoap/icecast checks conditional on `detect_audio` indicating an active streaming session. One script change.
-- **`ssh_hardening` "Disable root user login" breaks OPNsense console** `V:Med E:Low` — Surfaced 2026-05-12 during the unifi+opnsense key-recovery work. The task in `ansible/playbooks/tasks/ssh_hardening.yml` sets `shell: /sbin/nologin` on root unconditionally. On OPNsense, root's shell is `/usr/local/sbin/opnsense-shell` — the console admin menu shown on VGA/serial. Replacing it with `nologin` would lock you out of console recovery. Fix: gate the shell change with `when: ansible_os_family != "FreeBSD"` (or read the current shell and skip if it's opnsense-shell). Until then, avoid running `--tags ssh` (which includes this task) on opnsense; `--tags keys` is the safe subset.
-- **`ssh_hardening` uri fetch skips in check mode → misleading diffs** `V:Low E:VLow` — Surfaced 2026-05-12. `Fetch authorized keys from GitHub` is an `ansible.builtin.uri` task with no `check_mode: false`, so in `--check --diff` it skips. The follow-up `Set authorized keys` task then sees `github_keys_fetched.content | default('')` → `""` and renders a diff that looks like "wipe all keys". It's a false positive but it's exactly the kind of diff you'd want to act on if you didn't know better. Fix: add `check_mode: false` to the uri task.
+- **`ssh_hardening` "Disable root user login" breaks OPNsense console — RESOLVED 2026-07-21** — Surfaced 2026-05-12; fixed 2026-07-21. The task in `ansible/playbooks/tasks/ssh_hardening.yml` set `shell: /sbin/nologin` on root unconditionally. On OPNsense root's shell is `/usr/local/sbin/opnsense-shell` — the console admin menu on VGA/serial — so applying it would have removed the console recovery path. Fixed by making the shell conditional on the inventory `os_family` var (the repo's own convention, used elsewhere in the same file) rather than the `ansible_os_family` fact: `shell: "{{ '/sbin/nologin' if os_family == 'debian' else omit }}"`. `omit` leaves the existing shell untouched on FreeBSD while `password_lock` still applies everywhere. Verified in check mode against opnsense: root's shell stays `/usr/local/sbin/opnsense-shell`. `--tags ssh` is now safe to run on opnsense. Note the task still reports `changed` on every run there — that is `password_lock` alone (see the FreeBSD idempotency wart below), not the shell.
+- **`ssh_hardening` uri fetch skips in check mode → misleading diffs — RESOLVED 2026-07-21** — Surfaced 2026-05-12; fixed 2026-07-21 by adding `check_mode: false` to the `Fetch authorized keys from GitHub` uri task. It is a read-only fetch, so it must run in check mode too; previously `--check --diff` skipped it, `github_keys_fetched.content | default('')` collapsed to `""`, and the follow-up task rendered a diff that looked like "wipe all authorized keys" — a false positive indistinguishable from a real one.
 - **Fresh-laptop bootstrap doc** `V:Low E:VLow` — The vault-password handoff (`bin/vault_pass.sh` → keychain item `ansible-vault-master`) is now documented as a one-liner in `docs/ARCHITECTURE_DECISIONS.md`. Consider adding a short "Set up a new control laptop" section to `README.md` (or a dedicated `docs/SETUP.md`) that lists the full handoff: clone repo → restore iCloud Keychain → done. So future-you doesn't have to grep decisions.md.
 - **unifi-lxc not fully standardized via codebase** `V:Med E:Med` — Surfaced 2026-05-12 while recovering SSH access. Several signals suggest unifi-lxc drifts from what Ansible would render: it was missing the touchid-agent ssh key in `authorized_keys` (so `services.yml` clearly hasn't been re-applied since the keychain rotation); the 2026-05-10/11 log-path audit explicitly listed verification across cobra, dockassist, hifipi, vinylstreamer, cwwk — unifi-lxc not in that list; the already-noted "Unattended-Upgrades Config Drift (cobra + unifi)" item is another instance of unifi drifting from the template. Audit: run `ansible-playbook ansible/playbooks/site.yml --limit unifi-lxc --check --diff`, review every changed task, decide per-item whether to align the host to the codebase or update the codebase to match the host (LXC-specific quirks may justify the latter). Note: container migrated from a dedicated Pi to LXC under Proxmox, which is when the divergence probably started.
 - **Slack Notification Strategy Review** `V:Low E:Low` — Current two-channel split (logging/alert) is architecturally sound but has some inconsistencies. A focused audit of ~20 notification sources to reassign channels would improve signal-to-noise.
@@ -267,13 +260,19 @@ These items have value but are not urgent. Ranked by value-to-effort ratio to he
 
 ### Medium Value/Effort — Worth planning
 
-- **Healthchecks.io Tokens out of Cron Command Lines** `V:Med E:Med` — Every monitoring cron across the fleet embeds both healthchecks.io tokens (logging + alert) as positional args to `enhanced_monitoring_wrapper`. Tokens surface in `ps`, `crontab -l`, and `/var/spool/cron/*`. For a personal box with no untrusted users it's tolerable (tokens only authorize pings to a public endpoint), but not portfolio-clean. Cleaner pattern: env file at `/etc/monitoring/tokens.env` (`0600`) sourced by the wrapper. Scope: refactor wrapper with positional-arg fallback during rollout, deploy `tokens.env` from vault before any cron task uses it, strip token args from every `cron:` task across roles, coordinated redeploy. See `memory/followup_tokens_in_cron.md` for the full kickoff context.
+- **Healthchecks.io Tokens out of Cron Command Lines** — *Promoted to Priority 3 on 2026-07-21* so it lands before the Agent LXC adds another consumer of `enhanced_monitoring_wrapper`. See above.
 - **CI: Undefined Jinja Variable Detection** `V:Med E:Med` — The Jinja2 syntax check added 2026-05-11 (`scripts/ci/check_jinja_syntax.py`) catches parse errors like the `{{ .Names }}` Docker-format collision that bit `stop_run_ha.j2`. It does NOT catch undefined variables like the `{{ container_name }}` reference that escaped to production for months — those need actual rendering against an inventory. Enhancement: extend CI to render every `.j2` against the `.example` inventory (vault dummified) and fail on `UndefinedError`. Closes the bigger bug class.
 - **Backup Integrity Verification** `V:Med-High E:Med` — Backup freshness monitoring confirms "the script ran recently" but never validates that backups are actually restorable. A periodic script that downloads the latest backup, runs `age -d`, and validates tarball contents would close the gap. Could run weekly on Proxmox.
 - **Cobra Post-Processing Monitoring** `V:Med E:Med` — Plex, Transmission, and Samba are all monitored with hourly health checks. The gap is the tvnamer/rename pipeline: if RSS downloads content but post-processing fails to organize it, nothing alerts. Needs design work — what does "tvnamer failed" look like? (stale files in download dir? log parsing?)
 
 ### Low Value/Effort — Deferred
 
+- **`user` module reports perpetual `changed` for `password_lock` on FreeBSD** `V:VLow E:Low` — Surfaced 2026-07-21 while fixing the OPNsense root-shell gate. `Disable root user login` reports `changed` on every run against opnsense even with the shell now left alone; isolating the module (`-m user -a "name=root state=present password_lock=true"`) reproduces it with no other attribute set. The module can't reliably read back the locked state on FreeBSD, so it always assumes a change. Purely cosmetic `--diff` noise, but it's the same class of "perpetually changed" wart cleaned up in the 2026-05 SSH-play idempotency pass, and it makes real diffs on opnsense harder to spot. Consider `changed_when: false` with a comment, or a `getent`-based guard.
+
+- **`scripts/ci/check_jinja_syntax.py` can't run under system python3** `V:VLow E:VLow` — Surfaced 2026-07-21. The script imports `jinja2`, which the Homebrew system `python3` doesn't have, so a local pre-push run dies with `ModuleNotFoundError` even though CI passes (CI's `pip install ansible-lint` pulls jinja2 in). Ran it locally via the ansible-lint venv's interpreter instead. Worth a one-line note in `AGENT_INSTRUCTIONS.md`, or a shebang/venv guard, so the local check isn't quietly skipped.
+
+
+- **`deploy_monitoring.yml` restarted cron unconditionally — FIXED 2026-07-21** `V:Med E:VLow` — The task literally named "Restart monitoring services if needed" had no condition on anything having changed, so every run of the playbook bounced `cron` on all 6 Debian hosts and reported `changed=1` per host forever. Two real costs: the permanent non-zero `changed` count masked genuine diffs (the playbook could never be used as a drift check), and it needlessly restarted cron fleet-wide. It also confused the cobra timezone diagnosis in this same session — cobra's cron looked "recently restarted" only because a `deploy_monitoring.yml` run 15 minutes earlier had bounced it. Fixed by registering the script-copy loop and gating the restart on `is changed`; the playbook now reports `changed=0` across all 7 hosts on a second run. **Open question:** the restart is probably unnecessary *at all* — cron re-reads modified crontabs by itself, and deployed shell scripts are read fresh at each invocation, so nothing is cached that a restart would clear. Left in place (now correctly gated) rather than deleted, because "cron never needs a restart here" is a claim worth verifying before acting on it. Delete if confirmed.
 - **Backup-State File Path Inconsistency** `V:Low E:Low` — Multiple roles (`platform/proxmox`, `platform/opnsense`, `services/homeassistant`, `services/unifi`, `services/plex`) write JSON state files to `{{ home_dir }}/.log/<script>.json` (singular `.log`), while all logs now live under `{{ logs_dir }}` (`.logs` plural). Surfaced during 2026-05 log-path audit. Decision: keep the split (state files ≠ logs, separate concern) or align under one directory. Working as intended today; cosmetic.
 - **Cobra Media Config Consolidation** `V:Low E:Low` — Merge separate cobra repo into media role. Cosmetic, single-source-of-truth hygiene.
 - **Bathroom Radiator flapping `unavailable` → "Heating offline" alert storm** `V:Med E:Low` — Surfaced 2026-07-12. `homekit_tado_climate_offline_alert` fired ~9× in 24h for **Bathroom Radiator** (`climate.tado_smart_radiator_thermostat_va0612513536`). Root cause is device-isolated: over an 18h window the bathroom head flapped `heat`↔`unavailable` in ~10–90 min bursts while **all 5 other Tado heads on the same Internet Bridge logged 0 unavailable** — so it's not the bridge, HA, or the network, it's that one thermostat's RF link to the bridge. Onset 2026-07-11 ~15:54 (rock-stable before). Heating itself is fine (runs its schedule locally; Tado app shows no issue). Two fixes: (1) **device — done 2026-07-12/13, validated**: batteries swapped ~17:30 CEST Jul 12 (the 3-min `unavailable` at 15:27 UTC is the swap itself). Post-swap: ~21h fully clean, then only 3 short blips in 24h (10/4/2 min vs the pre-swap 56–102 min hourly bursts) — one of them (Jul 13 18:08 UTC) was **all 8 entities simultaneously** (bridge/HA-side blip, not the bathroom). Tado cloud API cross-check (via `/homes/{id}/devices` inside the HA container, token rotation persisted): `batteryState=NORMAL`, `connectionState=true` for all devices. Residual: the bathroom still has occasional minutes-long RF blips its peers don't — marginal link (distance/tiles), harmless, heating unaffected; re-seat head / move bridge only if it worsens. (2) **monitoring — done 2026-07-12, validated end-to-end 2026-07-13**: global 6h cooldown condition on `homekit_tado_climate_offline_alert` via `this.attributes.last_triggered`. The Jul 13 13:01 UTC firing (a 10-min outage landing exactly on the `for:` threshold) proved trigger + condition + alert delivery live. Deliberately chose the one-line global cooldown over per-entity timer helpers — rejected as overengineered: HomeKit Tado entities are monitoring-only (heating runs locally when HA sees `unavailable`), so the worst case of the shared cooldown is one page delayed ≤6h if a *second* device fails inside another's window — acceptable. Upgrade to per-entity timers only if multi-device flapping ever becomes real. **Threshold bumped `for:` 10→20 min (2026-07-13), validated against 10 days of recorder history (37 outages / 8 entities):** healthy devices' blips are *all* <5 min (22 events, mostly bridge-wide) → zero pages at any threshold ≥10; the degraded bathroom head produced 10–102 min outages. At 20 min the blip class (≤10 min residual RF drops) never pages while a real episode still pages within ~30 min; 15 and 20 min are empirically identical against this dataset, 20 chosen for margin. With the 6h cooldown the threshold's only job is blip-vs-episode discrimination, so detection delay is immaterial (monitoring-only entities). Gas/smoke offline checks deliberately untouched (life-safety, tighter thresholds are correct there).
@@ -291,6 +290,17 @@ These items have value but are not urgent. Ranked by value-to-effort ratio to he
 ---
 
 ## Resolved Items
+
+- **April 2026 deployment backlog — deployed and verified 2026-07-21** — Three items (old Priorities 1–3) had been written, linted, and committed on 2026-04-08, then never applied: each one's "Next Steps" was gated on a Touch ID-backed Ansible run that never happened. They sat as *code in the repo describing infrastructure that did not exist* for ~3.5 months, while the doc read as though the work were essentially done. All now deployed and live-verified:
+  - **disable-hdmi fix** — `tvservice -o` → `vcgencmd display_power 0`. Deployed to hifipi (vinylstreamer had somehow already received it). **The April scoping was wrong on two counts:** it named only the two Trixie hosts, but `dockassist` (Bookworm) had the identical `status=203/EXEC` failure — `tvservice` is absent there too, so this was never Trixie-specific. Fixed on dockassist as well. Fleet now reports **0 failed systemd units on all 6 Debian hosts** (was 3).
+  - **read_agent sudoers expansion** — deployed to all 7 hosts. All four April acceptance criteria now PASS (`systemctl --failed` on cwwk, `fail2ban.log` on dockassist, `service crowdsec status` and `cscli decisions list` on opnsense). Two bugs found and fixed while verifying: the new `cscli decisions list *` / `alerts list *` / `metrics *` and `systemctl --failed *` / `list-timers *` rules all had a **trailing `*`, which sudo requires to match at least one argument** — so the bare, most obvious invocation (`sudo cscli decisions list`) still prompted for a password. Added explicit no-args variants alongside each wildcard rule, matching the pattern already used for `zpool list`/`zfs list` after the same bug was found there in April. Lesson: a trailing `*` in a sudoers rule is not "optional arguments".
+  - **system_health_check.sh** — `SERVICES="ssh cron fail2ban"` deployed to all 6 Debian hosts (verified by reading the rendered file on each). opnsense correctly keeps the FreeBSD branch (`sshd cron`) — it runs CrowdSec, not fail2ban.
+
+  The `read_agent` sudo expansion paid for itself immediately: the first fleet-wide `systemctl --failed` sweep it enabled is what surfaced the dockassist HDMI failure above, which no existing monitoring reported.
+
+  **Process takeaway:** "code merged" was recorded as "done". The acceptance criteria in this document were the right ones and would have caught all of it — they were simply never run. Prefer verifying against live hosts over trusting the doc; where a change can't be applied in-session, the item should stay conspicuously open rather than reading as complete.
+
+- **opnsense `read_agent` access restored** — 2026-07-21. Found fully broken (`Permission denied (publickey)`); root cause was the account having been dropped by OPNsense config regeneration, not a key problem. Re-running `agent_access.yml --limit opnsense` recreated the user, restored `AllowGroups wheel read_agent`, and reinstalled sudoers; verified `id`, `service crowdsec status`, and `cscli decisions list`. **This will recur** — tracked as Priority 2, which is about durability and detection, not this one-off recovery.
 
 - **Now-Playing Amp Control (power + IR input switching)** — Completed 2026-07-18, physical E2E verified same day. Full architecture + behavior documented in `docs/AUDIO_AUTOMATION.md`. Power control merged #4 (2026-07-13), phantom-start/night-cycling fix merged #6, input switching merged #10 (signed `dafc92a`): `automation.amp_input_select` drives the 4-way RCA switcher via the RM4 Mini (`rca_switcher/input_pi`|`input_tv`, 3s debounce on source change, instant re-align on plug power-on); learned codes checked into the role and seeded to `.storage` only-if-missing. Physical verification with the amp wired (recorder data 2026-07-18): instant power-on with ~12W idle draw, three full 5-min-grace auto-offs (13:06/13:11/14:19 UTC), input switching fired on real source changes (pi↔tv including the both-active Pi-wins case), cycling watchdog silent, zero Broadlink errors. Remaining ideas tracked separately: TV idle auto-off (Lower Priority), extra switcher positions only if new sources get wired.
 

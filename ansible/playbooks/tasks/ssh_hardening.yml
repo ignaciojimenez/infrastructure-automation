@@ -18,6 +18,9 @@
   register: github_keys_fetched
   when: gh_keys is defined
   changed_when: false
+  # Read-only fetch — must run in check mode too, otherwise the next task sees
+  # an empty content and renders a diff that looks like "wipe all keys".
+  check_mode: false
   tags: [ssh, keys]
 
 - name: Set authorized keys for standard user from github
@@ -63,7 +66,10 @@
     name: root
     state: present
     password_lock: true
-    shell: "/sbin/nologin"
+    # On FreeBSD (opnsense) root's shell is /usr/local/sbin/opnsense-shell — the
+    # console admin menu on VGA/serial. Replacing it with nologin would remove
+    # the console recovery path, so only lock the password there.
+    shell: "{{ '/sbin/nologin' if os_family == 'debian' else omit }}"
   when: ansible_user != "root"
   tags: [ssh, security]
 
