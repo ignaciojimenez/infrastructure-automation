@@ -3,7 +3,9 @@
 
 # System diagnostics
 {{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/bin/systemctl status *
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/bin/systemctl --failed
 {{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/bin/systemctl --failed *
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/bin/systemctl list-timers
 {{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/bin/systemctl list-timers *
 {{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/bin/journalctl --no-pager *
 {{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/bin/journalctl -u * --no-pager *

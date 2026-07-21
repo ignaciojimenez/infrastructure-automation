@@ -19,6 +19,11 @@
 {{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/local/sbin/configctl wireguard showconf
 
 # CrowdSec read-only
+# No-args variants listed separately — a trailing `*` requires at least one
+# argument, so `cscli decisions list` alone would not match `... list *`.
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/local/bin/cscli decisions list
 {{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/local/bin/cscli decisions list *
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/local/bin/cscli alerts list
 {{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/local/bin/cscli alerts list *
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/local/bin/cscli metrics
 {{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/local/bin/cscli metrics *

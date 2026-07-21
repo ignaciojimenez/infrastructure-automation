@@ -43,15 +43,23 @@
         owner: "{{ infrastructure_user }}"
         group: "{{ infrastructure_group }}"
       loop: "{{ common_scripts.files }}"
+      register: common_scripts_deployed
       tags: [monitoring, scripts]
 
+    # Only restart when something was actually deployed. This previously ran
+    # unconditionally, which made the whole playbook permanently report
+    # changed=1 per host (masking real diffs) and needlessly bounced cron on
+    # every run. See docs/TODO.md — the restart may be unnecessary altogether,
+    # since cron re-reads changed crontabs on its own.
     - name: Restart monitoring services if needed
       ansible.builtin.systemd:
         name: "{{ item }}"
         state: restarted
       loop:
         - cron
-      when: ansible_service_mgr == "systemd"
+      when:
+        - ansible_service_mgr == "systemd"
+        - common_scripts_deployed is changed
       failed_when: false
       tags: [monitoring, services]
 
