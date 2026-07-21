@@ -329,6 +329,35 @@ ansible-playbook ansible/playbooks/system/agent_access.yml
 ```
 Or as part of a full site deploy — the role is included in `site.yml` (Phase 4b).
 
+### Recovery — after every OPNsense firmware upgrade
+
+**An OPNsense firmware upgrade deletes the `read_agent` account.** This is expected and unavoidable
+(see `docs/ARCHITECTURE_DECISIONS.md` — OPNsense reconciles system accounts against `config.xml`, and
+the config.xml route is closed to us because it forces `nologin` on any non-administrator). SSH to
+opnsense as `read_agent` will fail with `Permission denied (publickey)`.
+
+Repair is one idempotent command:
+
+```bash
+ansible-playbook ansible/playbooks/system/agent_access.yml --limit opnsense
+```
+
+Takes ~9 seconds from a fully wiped account; a second run reports `changed=0`. Verify with:
+
+```bash
+ssh opnsense-agent "id"                          # expect uid=2001(read_agent) gid=2001(read_agent)
+ssh opnsense-agent "sudo cscli decisions list"   # expect no password prompt
+```
+
+Note the `--limit opnsense`: the un-limited playbook targets `all`, which will fail on any inventory
+host that does not yet exist (e.g. `agent-lxc` before it is provisioned).
+
+Symptoms and what they mean:
+- `Permission denied (publickey)` → the account was deleted. Run the repair.
+- Login succeeds then prints `This account is currently not available` → the account exists but its
+  shell is `/usr/sbin/nologin`. Something recreated it as a non-admin `config.xml` user. Remove it
+  from System → Access → Users in the UI, then run the repair.
+
 ### Step 3 — Create API Users/Tokens (Manual, One-Time)
 
 **Home Assistant:**

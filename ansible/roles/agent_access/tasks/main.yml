@@ -45,11 +45,32 @@
   become: true
   when: os_family == "freebsd"
 
+# OPNsense regenerates /usr/local/etc/ssh/sshd_config from config.xml
+# (openssh.inc hardcodes "AllowGroups wheel"), so editing that file in place
+# does not survive a firmware upgrade or an SSH settings change. sshd_config.d
+# is the documented override point — its contents are Include'd at the *start*
+# of the generated config, and sshd takes the first value for each keyword, so
+# this wins. Verified to survive the 2026-06-13 upgrade to 26.1.9.
 - name: Allow agent group in sshd AllowGroups (FreeBSD/OPNsense)
+  ansible.builtin.copy:
+    dest: "/usr/local/etc/ssh/sshd_config.d/10-{{ agent_access_user }}.conf"
+    content: |
+      # Managed by Ansible (agent_access role) — do not edit manually.
+      # Overrides the "AllowGroups wheel" that OPNsense regenerates.
+      AllowGroups wheel {{ agent_access_user }}
+    owner: root
+    group: wheel
+    mode: '0644'
+    validate: 'sshd -t -f %s'
+  become: true
+  when: os_family == "freebsd"
+  notify: Restart sshd freebsd
+
+- name: Drop superseded AllowGroups edit from generated sshd_config (FreeBSD/OPNsense)
   ansible.builtin.lineinfile:
     path: /usr/local/etc/ssh/sshd_config
-    regexp: '^AllowGroups'
-    line: "AllowGroups wheel {{ agent_access_user }}"
+    regexp: '^AllowGroups wheel {{ agent_access_user }}$'
+    line: "AllowGroups wheel"
     validate: 'sshd -t -f %s'
   become: true
   when: os_family == "freebsd"
