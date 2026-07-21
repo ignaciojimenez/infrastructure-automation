@@ -29,9 +29,18 @@ create_backup() {
     # Create backup excluding the backups directory itself.
     # HA's Docker container runs as root, so .storage/, the DB, .tado_tokens
     # and rotating logs are root-owned. tar needs sudo to read them.
-    if ! sudo tar -czf "$backup_file" -C "$CONFIG_DIR" --exclude="backups" --exclude="*.log" .; then
-        log_message "❌ Failed to create local backup"
+    #
+    # GNU tar exits 1 (not 2+) when a file changes while being read — this
+    # routinely happens to the live recorder DB since HA keeps writing to it
+    # during the backup. Exit 1 is non-fatal (archive was still produced);
+    # only treat 2+ as a real failure.
+    local tar_rc=0
+    sudo tar -czf "$backup_file" -C "$CONFIG_DIR" --exclude="backups" --exclude="*.log" . || tar_rc=$?
+    if [ "$tar_rc" -ge 2 ]; then
+        log_message "❌ Failed to create local backup (tar exit $tar_rc)"
         return 1
+    elif [ "$tar_rc" -eq 1 ]; then
+        log_message "⚠️  tar reported files changed during archiving (likely the live recorder DB) — continuing"
     fi
     sudo chown "$(id -u):$(id -g)" "$backup_file"
     local size=$(du -h "$backup_file" | cut -f1)
