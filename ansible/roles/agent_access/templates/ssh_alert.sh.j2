@@ -1,12 +1,24 @@
 #!/bin/sh
 # ssh_alert.sh — Alert on read_agent key usage
 # Installed via command="" in authorized_keys as a compensating control
-# for the passphrase-free agent key. Fires a Slack alert once per 30 min
-# per host, then passes through the original SSH command unchanged.
+# for the passphrase-free agent key. Fires a Slack alert once per cooldown
+# window, then passes through the original SSH command unchanged.
+#
+# Called with --quiet for keys whose use is scheduled and constant (the agent
+# container sweeps every host hourly). Alerting on expected traffic is not a
+# control: it floods the watched channel and anomalous use hides inside the
+# noise. Those keys are constrained by from= pinning, read-only sudo, and
+# revocation in one Ansible run, and remain fully attributable in the sshd
+# journal — `Accepted publickey ... <source-ip> ... SHA256:<fingerprint>`
+# records which key connected from where, persistently.
+
+QUIET=false
+if [ "${1:-}" = "--quiet" ]; then
+    QUIET=true
+fi
 
 SLACK_WEBHOOK="https://hooks.slack.com/services/{{ vault_alert_token }}"
 COOLDOWN=1800
-STATE_FILE="/tmp/read_agent_ssh_alert.last"
 HOST="$(hostname -s)"
 SENDER="${SSH_CLIENT%% *}"
 SENDER_HOST="$(getent hosts "$SENDER" 2>/dev/null | awk '{print $2; exit}')"
@@ -16,18 +28,27 @@ else
     SENDER_LABEL="$SENDER"
 fi
 
-# Alert at most once per cooldown window
-now=$(date +%s)
-last=0
-if [ -f "$STATE_FILE" ]; then
-    last=$(cat "$STATE_FILE" 2>/dev/null || echo 0)
-fi
-if [ "$((now - last))" -ge "$COOLDOWN" ]; then
-    printf '%s\n' "$now" > "$STATE_FILE"
-    curl -s --max-time 5 -X POST "$SLACK_WEBHOOK" \
-        -H 'Content-Type: application/json' \
-        -d "{\"text\":\":robot_face: Agent key in use on \`${HOST}\` from \`${SENDER_LABEL}\`\"}" \
-        >/dev/null 2>&1 &
+# Cooldown state is per sender, not per host. With a single shared state file
+# any one client's traffic silently suppressed every other client's alert for
+# the next 30 minutes — so a chatty key could mask the very key this control
+# exists to watch. SSH_CLIENT is set by sshd, but sanitize anyway since it
+# forms a filename.
+SENDER_KEY="$(printf '%s' "${SENDER:-unknown}" | tr -c 'A-Za-z0-9._-' '_')"
+STATE_FILE="/tmp/read_agent_ssh_alert.${SENDER_KEY}.last"
+
+if [ "$QUIET" = false ]; then
+    now=$(date +%s)
+    last=0
+    if [ -f "$STATE_FILE" ]; then
+        last=$(cat "$STATE_FILE" 2>/dev/null || echo 0)
+    fi
+    if [ "$((now - last))" -ge "$COOLDOWN" ]; then
+        printf '%s\n' "$now" > "$STATE_FILE"
+        curl -s --max-time 5 -X POST "$SLACK_WEBHOOK" \
+            -H 'Content-Type: application/json' \
+            -d "{\"text\":\":robot_face: Agent key in use on \`${HOST}\` from \`${SENDER_LABEL}\`\"}" \
+            >/dev/null 2>&1 &
+    fi
 fi
 
 # Pass through the original command

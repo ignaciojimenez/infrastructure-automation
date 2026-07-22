@@ -1,0 +1,5 @@
+---
+# No role dependencies. The container's access to the fleet is granted by the
+# agent_access role running on the *target* hosts, not by anything here.
+
+dependencies: []

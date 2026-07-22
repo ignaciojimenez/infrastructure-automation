@@ -1,0 +1,209 @@
+#!/bin/sh
+# fleet_health_check.sh — Tier 1 fleet sweep (managed by Ansible)
+#
+# One SSH round-trip per host as read_agent, checking what that account can
+# actually see. Exits non-zero on any finding, which makes the surrounding
+# enhanced_monitoring_wrapper post to #home-alerts.
+#
+# On a finding it also writes a machine-readable snapshot to
+# last_anomaly.json — the trigger input Tier 2 consumes later.
+#
+# POSIX /bin/sh: the probes run on FreeBSD as well as Debian.
+
+set -u
+
+DISK_THRESHOLD={{ agent_disk_threshold }}
+WRAPPER_MAX_AGE_HOURS={{ agent_wrapper_max_age_hours }}
+SSH_TIMEOUT={{ agent_ssh_timeout }}
+AGENT_DIR="{{ agent_state_dir }}"
+ANOMALY_FILE="$AGENT_DIR/last_anomaly.json"
+
+# name:kind pairs, from group_vars/agent.yml
+FLEET="{% for h in agent_fleet_hosts %}{{ h.name }}:{{ h.kind }} {% endfor %}"
+
+mkdir -p "$AGENT_DIR"
+
+FINDINGS=$(mktemp)
+PROBE_OUT=$(mktemp)
+trap 'rm -f "$FINDINGS" "$PROBE_OUT"' EXIT INT TERM
+
+note() {
+    # note <host> <message>
+    printf '%s: %s\n' "$1" "$2" >> "$FINDINGS"
+}
+
+ssh_probe() {
+    # ssh_probe <host> — probe script on stdin, KEY=VALUE lines on stdout
+    ssh -o BatchMode=yes \
+        -o ConnectTimeout="$SSH_TIMEOUT" \
+        -o StrictHostKeyChecking=accept-new \
+        "${1}-agent" "sh -s" 2>/dev/null
+}
+
+# Reads KEY from the probe output. Absent keys yield an empty string, so a
+# partial probe degrades to "unknown" rather than a bogus numeric comparison.
+field() {
+    sed -n "s/^${1}=//p" "$PROBE_OUT" | head -1
+}
+
+# A value is only comparable if it is a non-empty run of digits. Guards every
+# threshold test below: without this, an empty or error string silently
+# becomes 0 in arithmetic and reads as healthy.
+is_number() {
+    case "${1:-}" in
+        ''|*[!0-9]*) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+check_disk() {
+    disk=$(field DISK)
+    if is_number "$disk"; then
+        [ "$disk" -ge "$DISK_THRESHOLD" ] && \
+            note "$1" "disk usage ${disk}% (threshold ${DISK_THRESHOLD}%)"
+    else
+        note "$1" "disk usage unreadable"
+    fi
+}
+
+check_failed_units() {
+    failed=$(field FAILED)
+    if is_number "$failed"; then
+        [ "$failed" -gt 0 ] && \
+            note "$1" "$failed failed systemd unit(s): $(field FAILEDUNITS)"
+    else
+        note "$1" "failed-unit count unreadable"
+    fi
+}
+
+check_wrapper_freshness() {
+    last=$(field WRAPPER_LAST)
+    if is_number "$last"; then
+        age_h=$(( ( $(date +%s) - last ) / 3600 ))
+        [ "$age_h" -ge "$WRAPPER_MAX_AGE_HOURS" ] && \
+            note "$1" "monitoring last ran ${age_h}h ago (max ${WRAPPER_MAX_AGE_HOURS}h)"
+    else
+        note "$1" "no monitoring run found in the journal"
+    fi
+}
+
+# ============================================================
+# Probes — one per host kind
+# ============================================================
+
+probe_linux() {
+    ssh_probe "$1" > "$PROBE_OUT" <<'REMOTE'
+echo "DISK=$(df -P / | awk 'NR==2{print $5}' | tr -d '%')"
+echo "FAILED=$(sudo systemctl --failed --no-legend --no-pager 2>/dev/null | wc -l | tr -d ' ')"
+echo "FAILEDUNITS=$(sudo systemctl --failed --no-legend --no-pager 2>/dev/null | awk '{printf "%s ", $1}')"
+echo "WRAPPER_LAST=$(sudo journalctl -u cron --no-pager -o short-unix -n 500 2>/dev/null | grep enhanced_monitoring_wrapper | tail -1 | cut -d. -f1)"
+REMOTE
+}
+
+probe_proxmox() {
+    ssh_probe "$1" > "$PROBE_OUT" <<'REMOTE'
+echo "DISK=$(df -P / | awk 'NR==2{print $5}' | tr -d '%')"
+echo "FAILED=$(sudo systemctl --failed --no-legend --no-pager 2>/dev/null | wc -l | tr -d ' ')"
+echo "FAILEDUNITS=$(sudo systemctl --failed --no-legend --no-pager 2>/dev/null | awk '{printf "%s ", $1}')"
+echo "WRAPPER_LAST=$(sudo journalctl -u cron --no-pager -o short-unix -n 500 2>/dev/null | grep enhanced_monitoring_wrapper | tail -1 | cut -d. -f1)"
+echo "ZPOOL=$(sudo zpool list -H -o health rpool 2>/dev/null)"
+# Only guests set to start at boot are expected to be running. CT 102 is
+# deliberately stopped with onboot=0; reporting it would alarm forever.
+for id in $(sudo pct list 2>/dev/null | awk 'NR>1{print $1}'); do
+    [ "$(sudo pct config "$id" 2>/dev/null | awk '/^onboot:/{print $2}')" = "1" ] || continue
+    [ "$(sudo pct status "$id" 2>/dev/null | awk '{print $2}')" = "running" ] || echo "GUESTDOWN=CT-$id"
+done
+for id in $(sudo qm list 2>/dev/null | awk 'NR>1{print $1}'); do
+    [ "$(sudo qm config "$id" 2>/dev/null | awk '/^onboot:/{print $2}')" = "1" ] || continue
+    [ "$(sudo qm status "$id" 2>/dev/null | awk '{print $2}')" = "running" ] || echo "GUESTDOWN=VM-$id"
+done
+REMOTE
+}
+
+probe_freebsd() {
+    ssh_probe "$1" > "$PROBE_OUT" <<'REMOTE'
+echo "DISK=$(df -P / | awk 'NR==2{print $5}' | tr -d '%')"
+echo "GW=$(netstat -rn -f inet | awk '$1=="default"{print $2; exit}')"
+REMOTE
+}
+
+# ============================================================
+# Sweep
+# ============================================================
+
+reachable=0
+total=0
+
+for entry in $FLEET; do
+    host="${entry%%:*}"
+    kind="${entry##*:}"
+    total=$((total + 1))
+
+    : > "$PROBE_OUT"
+    "probe_${kind}" "$host"
+
+    # Every probe emits DISK. Its absence means the host never answered —
+    # the probe's own exit status is unreliable here, because the forced
+    # command wrapper on the far side masks it.
+    if [ -z "$(field DISK)" ]; then
+        note "$host" "UNREACHABLE (no response as read_agent)"
+        continue
+    fi
+    reachable=$((reachable + 1))
+
+    check_disk "$host"
+
+    case "$kind" in
+        linux|proxmox)
+            check_failed_units "$host"
+            check_wrapper_freshness "$host"
+            ;;
+    esac
+
+    if [ "$kind" = proxmox ]; then
+        zpool=$(field ZPOOL)
+        if [ -z "$zpool" ]; then
+            note "$host" "zpool health unreadable"
+        elif [ "$zpool" != "ONLINE" ]; then
+            note "$host" "zpool rpool is $zpool"
+        fi
+        sed -n 's/^GUESTDOWN=//p' "$PROBE_OUT" | while read -r guest; do
+            note "$host" "$guest is set onboot but not running"
+        done
+    fi
+
+    if [ "$kind" = freebsd ] && [ -z "$(field GW)" ]; then
+        note "$host" "no default route"
+    fi
+done
+
+# ============================================================
+# Report
+# ============================================================
+
+count=$(wc -l < "$FINDINGS" | tr -d ' ')
+
+if [ "$count" -eq 0 ]; then
+    echo "Fleet OK — ${reachable}/${total} hosts reachable, no findings"
+    exit 0
+fi
+
+echo "Fleet check found ${count} issue(s) across ${total} hosts:"
+cat "$FINDINGS"
+
+# Machine-readable snapshot for Tier 2. Escapes backslash first, then quote,
+# so the escaping is not applied twice to the same character.
+{
+    printf '{\n'
+    printf '  "timestamp": "%s",\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf '  "hosts_total": %s,\n' "$total"
+    printf '  "hosts_reachable": %s,\n' "$reachable"
+    printf '  "finding_count": %s,\n' "$count"
+    printf '  "findings": [\n'
+    sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' "$FINDINGS" | \
+        awk '{ printf "%s    \"%s\"", (NR>1 ? ",\n" : ""), $0 } END { print "" }'
+    printf '  ]\n'
+    printf '}\n'
+} > "$ANOMALY_FILE"
+
+exit 1

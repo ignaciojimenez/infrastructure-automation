@@ -1,0 +1,22 @@
+# Managed by Ansible — do not edit manually
+#
+# Fleet access for the Tier 1 sweep. Mirrors the laptop's `*-agent` pattern,
+# but with explicit per-host blocks rather than the laptop's ProxyCommand
+# trick: HostName resolves through the container's `search local` domain to
+# <host>.local via Unbound on the gateway, so no netcat hop is needed.
+
+Host {% for h in agent_fleet_hosts %}{{ h.name }}-agent {% endfor %}
+
+    User {{ agent_access_user | default('read_agent') }}
+    IdentityFile {{ agent_ssh_key_path }}
+    IdentitiesOnly yes
+    IdentityAgent none
+    BatchMode yes
+    ControlPath none
+    ConnectTimeout {{ agent_ssh_timeout }}
+    StrictHostKeyChecking accept-new
+
+{% for h in agent_fleet_hosts %}
+Host {{ h.name }}-agent
+    HostName {{ h.name }}
+{% endfor %}

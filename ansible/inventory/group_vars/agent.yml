@@ -1,0 +1,74 @@
+---
+# Agent LXC (agent-lxc) — fleet observer
+#
+# Tier 1 (this file, Phase A): a shell sweep over every host via the
+# container-resident read_agent key. Free, hourly, no AI involved.
+#
+# Tier 2 (Phase B): an agent runtime that explains Tier 1 anomalies.
+# Its toggles are declared here, defaulted off, so enabling them later is a
+# variable flip rather than a structural change.
+
+# Services
+enable_agent: true
+
+# ansible_host is the literal IP (see hosts.yml) rather than a name: the
+# container gets a static address from `pct create`, so it never appears in a
+# DHCP lease, and DNS for it is a separate manual override on the gateway.
+
+# Firewall — deliberately stricter than the sibling LXCs.
+# This box only ever initiates connections; nothing but SSH needs to reach it,
+# and it holds a key trusted by all 7 hosts. bootstrap.yml allows tcp/22
+# before enabling UFW, so there is no lockout path.
+#
+# enable_ufw is set on the host entry in hosts.yml, NOT here. This file is
+# loaded by services.yml via include_vars, which happens after bootstrap.yml
+# has already decided whether to install and enable ufw.
+
+# ============================================================
+# Tier 1 — fleet health sweep
+# ============================================================
+
+# Hosts the sweep checks, by their SSH name (not the inventory key).
+# Reached as <name>-agent, which resolves via the ~/.ssh/config deployed by
+# the agent role. Keep in sync with hosts.yml.
+#
+# `kind` selects which probes run, because the checks are not portable:
+#   linux    — disk, failed systemd units, monitoring-cron freshness
+#   proxmox  — linux checks plus zpool health and CT/VM run state
+#   freebsd  — disk and default route only (no systemd, no journal)
+agent_fleet_hosts:
+  - name: cobra
+    kind: linux
+  - name: dockassist
+    kind: linux
+  - name: hifipi
+    kind: linux
+  - name: vinylstreamer
+    kind: linux
+  - name: unifi
+    kind: linux
+  - name: cwwk
+    kind: proxmox
+  - name: opnsense
+    kind: freebsd
+
+# Disk usage percentage at or above which a host is flagged.
+agent_disk_threshold: 85
+
+# A host whose own monitoring has silently stopped is worth an alert in its
+# own right. The plan called for reading the wrapper's state file, but that
+# lives under the primary user's 0700 home and read_agent cannot see it
+# (verified on cobra). The journal records every wrapper invocation cron
+# makes, is readable via the existing sudo rules, and answers the same
+# question — "did this host's monitoring actually run recently?"
+agent_wrapper_max_age_hours: 26
+
+# Per-host SSH timeout for the sweep. Kept short: an unreachable host should
+# be reported quickly, not stall the whole run.
+agent_ssh_timeout: 15
+
+# ============================================================
+# Phase B — declared now, off until the agent runtime lands
+# ============================================================
+
+enable_agent_investigate: false

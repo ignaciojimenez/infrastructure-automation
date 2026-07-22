@@ -43,6 +43,13 @@ gh_keys: "https://github.com/{{ gh_profile }}.keys"
 # Backup encryption - age public key (asymmetric, safe to commit — private key stays in password manager)
 backup_age_pubkey: "age1yeuwd2t78jyxldxeja529djj8zt5et7h9j0fnwzn7r0cqfnww58qjqrttc"
 
+# Agent LXC (agent-lxc, CT 103) — the fleet observer's own SSH identity.
+# Public half only; the private key is generated on the container and never
+# leaves it, so a rebuild mints a new pair and this value is updated then.
+# Consumed by agent_access_keys to authorize the container on all 7 hosts.
+agent_lxc_ip: "10.30.40.203"
+agent_lxc_ssh_pubkey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBfzvelHaP6bcMDf21784H3AkY+AvKHN40Veqzh9A9dB agent-lxc fleet observer (read_agent)"
+
 # Monitoring tokens (from vault)
 logging_token: "{{ vault_logging_token }}"
 alert_token: "{{ vault_alert_token }}"

@@ -47,75 +47,41 @@ All as code in the `platform/proxmox` role (toggle `enable_proxmox_power_tuning`
 ---
 
 
-## Priority 1 — Autonomous Agent LXC
+## Priority 1 — Autonomous Agent LXC (Phase A delivered 2026-07-22)
 
-**Risk:** Medium. New production container with network access to all hosts via SSH and read-only API tokens. Compromise would expose read-only infrastructure visibility. Scoped by IP restriction on authorized_keys and NOPASSWD-only sudo rules.
+**Risk:** Medium. A production container with SSH reach to all 7 hosts. Compromise exposes read-only infrastructure visibility. Scoped by `from=` IP pinning on `authorized_keys`, read-only NOPASSWD sudo, UFW default-deny inbound, and revocation in one Ansible run.
 
-> **Prerequisite met 2026-07-21.** The `read_agent` foundation this depends on is now actually deployed and verified on all 7 hosts (expanded sudoers + opnsense access restored — see Resolved). Before that date the April rollout existed only in the repo, and opnsense had no `read_agent` account at all. Read Priority 2 before building Tier 1: agent access is not self-healing, and today nothing alerts when it breaks.
+### Status
 
-### What It Is
-A permanent Debian 12 LXC (`vmid 103`, hostname `agent`, `onboot: 1`) running **Claude Code** on a schedule. It SSHs to all hosts using a container-resident key (not the laptop's read_agent key), calls Proxmox and HA APIs, and posts findings to Slack.
+**Phase A is built and live.** CT 103 (`agent-lxc`, 10.30.40.203) exists, is managed end-to-end by this repo, and runs the free Tier 1 shell sweep. **No AI runtime, no API key, no spend** — that is Phase B and was deliberately not started.
 
-### Why a Separate LXC (Not an Existing Host)
-- Always on — no laptop dependency, no Secretive auth required
-- Isolated blast radius — a compromised container's key gets revoked via one Ansible run
-- Can be rebuilt from Ansible end-to-end without touching other hosts
-- Clean separation: "infrastructure observer" is not an application host
+The original sketch here called for Claude Code; the runtime decision was revisited and settled on **OpenCode** for Phase B, for its per-tool permission system (bash glob allow/deny) and native per-agent permission profiles. See `docs/ARCHITECTURE_DECISIONS.md`.
 
-### Two-Tier Design
-**Tier 1 — shell (free, runs hourly):** SSH to each host, check disk space, service status, last monitoring wrapper run, ZFS health, container/VM status. Send Slack alert on anomaly. No Claude API call.
+### What Phase A delivered
 
-**Tier 2 — Claude Code (API cost, runs on anomaly or on-demand):** When Tier 1 finds something anomalous, or you trigger it from Slack, Claude Code runs a structured investigation: correlates findings across hosts, checks HA entity states, queries Proxmox API, and produces a natural-language summary with actionable conclusions.
+- `ansible/playbooks/provision_agent_lxc.yml` — creates CT 103 via `pct` (unprivileged, 1 vCPU / 2GB / 16GB on `local-zfs`, `onboot: 1`, static 10.30.40.203, `searchdomain local`), installs the minimum for Ansible to adopt it, and seeds `authorized_keys`. Idempotent: second run is `changed=0`.
+- Inventory `agent-lxc` (`container_id: 103`, `primary_function: agent`, `enable_ufw: true`) + `group_vars/agent.yml`.
+- `roles/services/agent/` — generates the container-resident `agent_lxc_ed25519`, deploys the fleet `~/.ssh/config`, the Tier 1 script, and its hourly cron under `enhanced_monitoring_wrapper`.
+- `scripts/services/agent/fleet_health_check.sh.j2` — per host: reachability, disk, failed systemd units, monitoring-run freshness; plus zpool health and onboot-aware CT/VM state on cwwk, and disk/default-route on opnsense. Writes `~/.agent/last_anomaly.json` on a finding (the Phase B trigger input).
+- `agent_access` gained per-key `alert` control and a per-sender cooldown.
 
-**Cost estimate:** ~1–3 API calls per day at ~$0.01–0.05 each → under $2/month.
+### What remains
 
-### Resource Spec
-| Resource | Value | Reasoning |
-|----------|-------|-----------|
-| vCPU | 1 | Claude Code is single-threaded for most operations |
-| RAM | 2GB | Node.js + claude binary + SSH sessions |
-| Disk | 16GB | OS + Claude Code + logs |
-| Storage | local-zfs | Same pool as other CTs |
-| onboot | 1 | Must be 24/7 |
-| Network | vmbr0, 10.30.40.203 (static) | On same bridge as other CTs |
+**Phase B — OpenCode + Tier 2 investigation.** Separate branch. Pinned binary with checksum, `opencode.json` with `edit`/`write`/`webfetch` denied and bash deny-by-default, an `infra-monitor` agent definition, `ANTHROPIC_API_KEY` in a `0600` env file (never a cron argument), and `investigate.sh` consuming `last_anomaly.json`. Verify on the box before enabling cron: that `ask` fails closed in headless mode, how `opencode run` selects a named agent, and the exact `--format json` shape.
 
-### SSH Key Design
-New key pair generated inside the container: `agent_lxc_ed25519`. Added to `read_agent`'s `authorized_keys` on all hosts with `from="10.30.40.203"`. Retiring the container = one Ansible run to remove its key.
-
-### Ansible Implementation
-New Ansible role `roles/services/agent_lxc`:
-1. Creates LXC on Proxmox via `community.general.proxmox` module
-2. Bootstraps it via `site.yml`
-3. Installs Claude Code (`npm install -g @anthropic-ai/claude-code`) + sets `ANTHROPIC_API_KEY` from vault
-4. Deploys the container-resident SSH key
-5. Deploys Tier 1 shell scripts + cron
-
-The `agent_access` role gets a new task to add the container's key to `read_agent`'s `authorized_keys` on all hosts.
-
-**Note on Ephemeral Testing overlap:** The LXC creation step (using `community.general.proxmox`) is also the core pattern needed for the Ephemeral Ansible Testing Environment (see Lower Priority). Implementing this first proves out the Ansible provisioning pattern with a real production container, making that testing environment nearly free to build later.
-
-### What It Enables (Not Possible Today)
-1. **Cross-host correlation** — one observer for the whole fleet, not 7 isolated scripts
-2. **Unattended investigation** — trigger `ssh agent "claude investigate"` from your phone, no laptop needed
-3. **Periodic digest** — weekly natural-language summary of fleet health
-4. **Escalating alerts** — Tier 1 detects, Tier 2 explains
-
-### What It Doesn't Change
-Existing `enhanced_monitoring_wrapper` + healthchecks.io setup stays as-is for real-time per-host alerting. The agent LXC is a diagnostic layer on top, not a replacement.
-
-### Next Steps
-1. Assign static IP `10.30.40.203` to the container in OPNsense/UniFi
-2. Write `roles/services/agent_lxc` role using `community.general.proxmox` to create the CT
-3. Add `ANTHROPIC_API_KEY` to vault
-4. Write Tier 1 health check scripts
-5. Add container key to `agent_access` role's `authorized_keys` template
+**Phase C — operator mode.** Sketch only; needs its own decision round (passphrase key vs SSH-CA, sudo scope, audit logging).
 
 ### Acceptance Criteria
-- [ ] Container created and bootstrapped via Ansible (single `ansible-playbook` run)
-- [ ] Tier 1 cron runs hourly and alerts on anomaly without any API cost
-- [ ] Claude Code installed and reachable via `ssh agent-lxc "claude --version"`
-- [ ] Container SSH key in `read_agent` authorized_keys on all 7 hosts, IP-restricted
-- [ ] Container can be fully destroyed and recreated by Ansible with no manual steps
+- [x] CT 103 exists, runs, `onboot: 1`
+- [x] Provisioning playbook is idempotent — second run changes nothing
+- [x] `ssh agent-lxc` works from the laptop
+- [x] `site.yml --limit agent-lxc` converges to `changed=0` on the second pass
+- [x] Container SSH key accepted on all 7 hosts, IP-restricted — sweep reports `7/7 hosts reachable` in ~12s; `agent_access.yml` is `changed=0` fleet-wide on re-run
+- [x] A synthetic Tier 1 fault produces a real `#home-alerts` message, and recovery clears — verified in Slack (`ALERT: Script Failed on agent-lxc`, 09:06:02), plus a valid `last_anomaly.json`
+- [x] Opportunistic: the key is rejected from a source other than 10.30.40.203 — throwaway key pinned to `192.0.2.1` was denied from the container; file restored by re-running the role
+- [ ] Container can be destroyed and recreated by Ansible with no manual step beyond the vault password *(a Phase B criterion; the pieces exist but a full destroy/recreate has not been exercised)*
+
+**Amended from the original plan:** the criterion "each use fires the existing `ssh_alert` Slack ping" was deliberately dropped. At hourly × 7 hosts it meant ~168 pushes/day into the watched channel, and it would have kept the shared 30-minute cooldown permanently hot, *suppressing the laptop key's alerts* — the opposite of a control. Replaced with journal attribution, verified live: sshd records `Accepted publickey for read_agent from 10.30.40.203 ... SHA256:fpnOSa5…` persistently, and Slack shows the laptop's ping firing while the container produced none.
 
 ---
 
@@ -230,6 +196,26 @@ RPi hosts (dockassist, hifipi, vinylstreamer) use SD cards — SMART doesn't app
 These items have value but are not urgent. Ranked by value-to-effort ratio to help pick low-hanging fruit. Revisit quarterly.
 
 ### High Value/Effort — Quick wins worth picking up
+
+- **`read_agent` is pinned to a /16, not a single IP** `V:Med E:VLow` — Surfaced 2026-07-22 while verifying the container key. `vault_agent_control_ip` is `10.30.0.0/16`, so the laptop's `read_agent` key is accepted from anywhere on the internal network — including any host the agent itself can reach, and the new container. `docs/ARCHITECTURE_DECISIONS.md` describes this control as `from="<control-machine-IP>"` with the rationale "even if the key leaks, it's only usable from one source IP", which is not what is deployed. The container's own key *is* correctly pinned to the single `10.30.40.203` (verified: a key pinned elsewhere is rejected). Decide: tighten the vault value to the laptop's address, or correct the decision doc to describe a network-scoped restriction. Tightening risks lockout if the laptop's DHCP lease moves — check whether it is reserved first.
+
+- **Unexplained `Script Failed on dockassist` at 04:00, 2026-07-22** `V:Med E:Low` — Seen in `#home-alerts` while verifying the Tier 1 alert path; predates and is unrelated to the agent LXC work, and dockassist reports healthy since. Five wrapper-driven checks fire at 04:00 (`check_tado_health`, `check_container` ×2, `check_ha_web`, `heartbeat_ha`), and **which one failed cannot be determined from the agent account** — the per-script logs live under `/home/choco` (`0700`). Diagnose from the host itself, or grep `~/.logs/*.log` around 04:00. A concrete instance of the read_agent visibility gap noted below.
+
+
+- **`baseline.yml` had two broken `playbook_dir` paths — FIXED 2026-07-22** `V:High E:VLow` — Surfaced while onboarding agent-lxc. `playbook_dir` resolves to the directory of the *executing* playbook, so inside `system/baseline.yml` it is `ansible/playbooks/system/` and `../../` lands on the non-existent `ansible/` — not the repo root. Two consequences, one loud and one silent: `templates/netrc_curlbin.j2` **failed hard**, aborting `site.yml` for any host with `curlbin_user` defined; and `scripts/common/` **failed silently** — `find` matched nothing, the loop was empty, and "Deploy all common scripts" reported `skipping` with no error, so baseline never deployed the common scripts it appears to. Both corrected to `../../../`. Sibling files already used the correct depth (`tasks/debian_updates.yml`), which is why this was inconsistent rather than uniformly broken. **Fleet impact:** the next `site.yml` on any host will now actually deploy `scripts/common/*` from baseline (same files `deploy_monitoring.yml` pushes, so the end state is unchanged) and will deploy `~/.netrc`. Worth a `--check --diff` pass per host before applying.
+
+- **`bootstrap.yml` and `ssh_hardening.yml` were fighting over `UsePAM` — FIXED 2026-07-22** `V:Med E:VLow` — bootstrap's `lineinfile` set `UsePAM no`; `templates/debian/sshd_config.j2` sets `UsePAM yes`. Each run flipped it back, so every Debian host was permanently `changed` on `site.yml` and its effective value depended on which play ran last. bootstrap aligned to `yes` (the template is canonical, and it is also the Debian default and what hosts running `services.yml` already have). The other four directives in that loop already matched. Same bug class as the 2026-05-10 `TCPKeepAlive`/`LoginGraceTime` fix — worth a rule: **anything bootstrap sets with `lineinfile` must match the value the canonical template ships.**
+
+- **`apt` cleanup task reported `changed` forever — FIXED 2026-07-22** `V:Med E:VLow` — one task did `autoremove` + `autoclean` + `clean` together. `clean` empties the download cache, which the apt module always reports as changed (there is no "already clean" state), so every host was permanently changed twice per `site.yml`, masking real drift. Split: `autoremove`/`autoclean` report honestly (removing an orphaned package *is* real), `clean` carries `changed_when: false`. With this and the `UsePAM` fix, `site.yml --limit agent-lxc` now converges to a true `changed=0`.
+
+- **`read_agent` cannot read the monitoring wrapper's state files** `V:Med E:Low` — Confirmed on cobra: `/home/choco` is `0700`, so `~/.logs/*.json` are unreadable by the agent account. Any future "is this host's monitoring still alive?" check must not assume it can stat those files. Tier 1 uses `sudo journalctl -u cron` instead, which the existing sudoers already permits. Worth knowing before writing Phase B checks.
+
+- **Slack/healthchecks tokens are visible to `read_agent` via the journal** `V:Med E:Med` — `journalctl -u cron` prints each cron command line in full, including the webhook tokens embedded in `enhanced_monitoring_wrapper` invocations, and `read_agent` is permitted to read it. This widens Priority 3 (tokens out of cron command lines) from "hygiene" to "a read-only account can read the alerting credentials." Same fix closes both — an env file sourced by the wrapper.
+
+- **`enable_ufw` must be set on the host entry, not in `group_vars/{function}.yml`** `V:Low E:VLow` — `group_vars/{function}.yml` is loaded by `services.yml` via `include_vars`, which happens long after `bootstrap.yml` owns the ufw install/allow-22/enable sequence. Setting it in the function file silently does nothing. `bootstrap.yml:287` already documents "host vars"; noted here because agent-lxc is the first host to actually enable it. Recorded in `group_vars/agent.yml` as a comment.
+
+- **Ansible deprecation: `INJECT_FACTS_AS_VARS` removal in ansible-core 2.24** `V:Med E:Med` — Every play in this repo emits deprecation warnings for bare `ansible_os_family` / `ansible_user_id` style facts; the guidance is `ansible_facts['os_family']`. Currently harmless noise on ansible-core 2.21, but it will break broadly at 2.24. Mechanical, repo-wide, and best done as one sweep rather than incidentally.
+
 
 - **TV idle auto-off for the amp** `V:Low E:Med` — A left-on TV keeps the amp powered (by design: TV `on` → `amp_source_active`). If it bothers in practice, `cobi_tv_3` exposes `is_volume_muted`/`volume_level`/`app_id` (optimistic `assumed_state`) as candidate idle signals. First confirm the exact OFF value of `cobi_tv_3` (off vs standby vs unavailable) with the TV powered down — it sat `unavailable` overnight 2026-07-14→15. Context: `docs/AUDIO_AUTOMATION.md` + memory `now-playing-ir-automation-plan`.
 
