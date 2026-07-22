@@ -2,6 +2,19 @@
 # Agent access defaults
 agent_access_user: read_agent
 agent_access_shell: /bin/sh
+# Each entry: from (source IP pinned in authorized_keys), pubkey, and an
+# optional `alert` (default true) controlling the Slack ping on key use.
+# Set alert: false for keys whose use is scheduled and constant — see the
+# header of templates/ssh_alert.sh.j2 for why alerting on those is not a
+# control. Cooldown is tracked per sender, so a quiet key cannot mask a
+# noisy one.
 agent_access_keys:
+  # Laptop — occasional, interactive use. Each use is worth a ping.
   - from: "{{ vault_agent_control_ip }}"
     pubkey: "{{ vault_agent_ssh_pubkey }}"
+    alert: true
+  # Agent LXC — sweeps every host hourly. Alerting on it would post ~168
+  # times a day to the watched channel and bury the laptop's alerts.
+  - from: "{{ agent_lxc_ip }}"
+    pubkey: "{{ agent_lxc_ssh_pubkey }}"
+    alert: false

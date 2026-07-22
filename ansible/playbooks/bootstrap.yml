@@ -217,6 +217,11 @@
         shell: /sbin/nologin
       tags: [bootstrap, security]
 
+    # These must agree with templates/debian/sshd_config.j2, which
+    # ssh_hardening.yml later deploys as the canonical config. Where the two
+    # disagree, each run flips the value back and forth: the host is
+    # perpetually "changed" and its effective setting depends on which play
+    # ran last. UsePAM was exactly that case (here `no`, template `yes`).
     - name: Configure SSH daemon for key-only auth
       ansible.builtin.lineinfile:
         path: /etc/ssh/sshd_config
@@ -229,7 +234,7 @@
         - { regexp: '^#?PasswordAuthentication', line: 'PasswordAuthentication no' }
         - { regexp: '^#?PubkeyAuthentication', line: 'PubkeyAuthentication yes' }
         - { regexp: '^#?ChallengeResponseAuthentication', line: 'ChallengeResponseAuthentication no' }
-        - { regexp: '^#?UsePAM', line: 'UsePAM no' }
+        - { regexp: '^#?UsePAM', line: 'UsePAM yes' }
       notify: restart sshd
       tags: [bootstrap, ssh]
 

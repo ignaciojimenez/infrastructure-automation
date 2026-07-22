@@ -1,0 +1,351 @@
+---
+# Provision the agent LXC (CT 103) on Proxmox
+# Usage: ansible-playbook ansible/playbooks/provision_agent_lxc.yml
+#
+# This is the ONE place in this repo that creates infrastructure rather than
+# configuring it. It runs against the hypervisor (cwwk) and does the minimum
+# needed to hand a fresh container over to the standard pipeline:
+#
+#   provision_agent_lxc.yml  ->  bootstrap.yml  ->  site.yml
+#
+# It stops as soon as SSH-with-a-password works. Everything after that
+# (hardening, keys, monitoring, the agent role) is the normal path.
+#
+# Idempotent: every mutating step is guarded on live `pct`/`pveam` state, so
+# re-running is a no-op. Safe to run repeatedly.
+#
+# `pct` is used rather than the Proxmox API (community.general.proxmox):
+# the module needs API tokens with CT-create privileges plus proxmoxer on the
+# control node, to drive the same commands we can already run over the SSH
+# path this repo uses everywhere else. See docs/ARCHITECTURE_DECISIONS.md.
+
+- name: Provision agent LXC on Proxmox
+  hosts: proxmox_hosts
+  become: true
+  gather_facts: false
+  vars_files:
+    - "{{ playbook_dir }}/../inventory/group_vars/all/vault.yml"
+
+  vars:
+    # Container identity — must match the agent-lxc entry in hosts.yml
+    agent_lxc_vmid: 103
+    agent_lxc_hostname: agent-lxc
+    agent_lxc_ip: 10.30.40.203
+    agent_lxc_cidr: 24
+    agent_lxc_gateway: 10.30.40.254
+    agent_lxc_nameserver: 10.30.40.254
+    # Fleet hostnames resolve as <host>.local via Unbound on the gateway.
+    # Without this searchdomain, `ssh cobra-agent` cannot resolve from inside
+    # the container and the whole Tier 1 sweep fails.
+    agent_lxc_searchdomain: local
+    agent_lxc_bridge: vmbr0
+
+    # Resources — 1 vCPU / 2GB / 16GB is sized for shell monitoring plus a
+    # single-threaded agent runtime later (Phase B).
+    agent_lxc_cores: 1
+    agent_lxc_memory: 2048
+    agent_lxc_swap: 512
+    agent_lxc_rootfs_size: 16
+    agent_lxc_storage: local-zfs
+
+    # Template. Pinned deliberately: a fresh rebuild should reproduce a known
+    # image, not silently pick up whatever is newest. Bump when Debian does.
+    agent_lxc_template_storage: local
+    agent_lxc_template: debian-13-standard_13.6-1_amd64.tar.zst
+
+    # Minimum package set for Ansible to take over: sshd for transport,
+    # python3 for modules, sudo for become.
+    agent_lxc_bootstrap_packages:
+      - openssh-server
+      - python3
+      - sudo
+
+  tasks:
+    # ============================================================
+    # Template
+    # ============================================================
+
+    - name: Check for the pinned LXC template
+      ansible.builtin.command:
+        cmd: pveam list {{ agent_lxc_template_storage }}
+      register: agent_lxc_template_list
+      check_mode: false  # read-only probe; must run under --check
+      changed_when: false
+      tags: [provision, template]
+
+    # `command` tasks always report "skipping" under --check regardless of
+    # their `when`, so a dry run cannot show which of them would fire. This
+    # states the computed plan explicitly, which is the point of --check here.
+    - name: Report what provisioning would change
+      ansible.builtin.debug:
+        msg: >-
+          Template {{ agent_lxc_template }}:
+          {{ 'present' if agent_lxc_template in agent_lxc_template_list.stdout else 'WOULD DOWNLOAD' }}
+      tags: [provision, template]
+
+    - name: Download the pinned LXC template
+      ansible.builtin.command:
+        cmd: pveam download {{ agent_lxc_template_storage }} {{ agent_lxc_template }}
+      when: agent_lxc_template not in agent_lxc_template_list.stdout
+      changed_when: true
+      tags: [provision, template]
+
+    # ============================================================
+    # Container creation
+    # ============================================================
+
+    - name: Check whether the container already exists
+      ansible.builtin.command:
+        cmd: pct config {{ agent_lxc_vmid }}
+      register: agent_lxc_config
+      check_mode: false  # read-only probe; must run under --check
+      failed_when: false
+      changed_when: false
+      tags: [provision, create]
+
+    - name: Create the agent container
+      ansible.builtin.command:
+        cmd: >
+          pct create {{ agent_lxc_vmid }}
+          {{ agent_lxc_template_storage }}:vztmpl/{{ agent_lxc_template }}
+          --hostname {{ agent_lxc_hostname }}
+          --cores {{ agent_lxc_cores }}
+          --memory {{ agent_lxc_memory }}
+          --swap {{ agent_lxc_swap }}
+          --rootfs {{ agent_lxc_storage }}:{{ agent_lxc_rootfs_size }}
+          --net0 name=eth0,bridge={{ agent_lxc_bridge }},firewall=1,ip={{ agent_lxc_ip }}/{{ agent_lxc_cidr }},gw={{ agent_lxc_gateway }},type=veth
+          --nameserver {{ agent_lxc_nameserver }}
+          --searchdomain {{ agent_lxc_searchdomain }}
+          --ostype debian
+          --unprivileged 1
+          --onboot 1
+          --password {{ vault_bootstrap_password | quote }}
+      when: agent_lxc_config.rc != 0
+      changed_when: true
+      no_log: true  # the root password is on this command line
+      tags: [provision, create]
+
+    - name: Ensure the container starts on boot
+      ansible.builtin.command:
+        cmd: pct set {{ agent_lxc_vmid }} --onboot 1
+      when:
+        - agent_lxc_config.rc == 0
+        - "'onboot: 1' not in agent_lxc_config.stdout"
+      changed_when: true
+      tags: [provision, create]
+
+    - name: Report container state plan
+      ansible.builtin.debug:
+        msg: >-
+          CT {{ agent_lxc_vmid }}:
+          {{ 'exists' if agent_lxc_config.rc == 0 else 'WOULD CREATE' }}
+          {{ '(onboot already set)' if agent_lxc_config.rc == 0 and 'onboot: 1' in agent_lxc_config.stdout
+             else '(WOULD SET onboot=1)' if agent_lxc_config.rc == 0 else '' }}
+      tags: [provision, create]
+
+    - name: Check container run state
+      ansible.builtin.command:
+        cmd: pct status {{ agent_lxc_vmid }}
+      register: agent_lxc_status
+      check_mode: false  # read-only probe; must run under --check
+      # Non-zero simply means the container does not exist yet (it will have
+      # been created above in a real run). Empty stdout then reads as
+      # "not running", which is the correct conclusion either way.
+      failed_when: false
+      changed_when: false
+      tags: [provision, start]
+
+    - name: Start the container
+      ansible.builtin.command:
+        cmd: pct start {{ agent_lxc_vmid }}
+      when: "'status: running' not in agent_lxc_status.stdout"
+      changed_when: true
+      tags: [provision, start]
+
+    - name: Wait for the container to finish booting
+      ansible.builtin.command:
+        cmd: pct exec {{ agent_lxc_vmid }} -- systemctl is-system-running --wait
+      register: agent_lxc_boot
+      # `degraded` is a normal steady state on a fresh container (no swap unit,
+      # etc.) and must not fail the play — we only care that boot finished.
+      failed_when: agent_lxc_boot.rc != 0 and 'degraded' not in agent_lxc_boot.stdout
+      changed_when: false
+      retries: 12
+      delay: 5
+      until: agent_lxc_boot is not failed
+      # Skipped under --check: there is nothing to wait for when the container
+      # has not been created, and a skipped task registers no rc to test.
+      when: not ansible_check_mode
+      tags: [provision, start]
+
+    # ============================================================
+    # Inside the container: the minimum for Ansible to take over
+    # ============================================================
+
+    - name: Check which bootstrap packages are missing
+      ansible.builtin.command:
+        cmd: pct exec {{ agent_lxc_vmid }} -- dpkg-query -W -f=${Status} {{ item }}
+      register: agent_lxc_pkg_check
+      check_mode: false  # read-only probe; must run under --check
+      failed_when: false
+      changed_when: false
+      loop: "{{ agent_lxc_bootstrap_packages }}"
+      tags: [provision, packages]
+
+    - name: Install bootstrap packages in the container
+      ansible.builtin.command:
+        cmd: >
+          pct exec {{ agent_lxc_vmid }} -- env DEBIAN_FRONTEND=noninteractive
+          sh -c "apt-get update && apt-get install -y {{ agent_lxc_bootstrap_packages | join(' ') }}"
+      when: agent_lxc_pkg_check.results | rejectattr('stdout', 'search', 'install ok installed') | list | length > 0
+      changed_when: true
+      tags: [provision, packages]
+
+    - name: Check whether the infrastructure user exists in the container
+      ansible.builtin.command:
+        cmd: pct exec {{ agent_lxc_vmid }} -- id -u {{ infrastructure_user }}
+      register: agent_lxc_user_check
+      check_mode: false  # read-only probe; must run under --check
+      failed_when: false
+      changed_when: false
+      tags: [provision, user]
+
+    # bootstrap.yml can adopt a host that answers as either root or the
+    # infrastructure user. We create the user directly so root SSH login never
+    # has to be enabled, not even transiently.
+    - name: Create the infrastructure user in the container
+      ansible.builtin.command:
+        cmd: >
+          pct exec {{ agent_lxc_vmid }} -- useradd
+          --create-home --shell /bin/bash --groups sudo
+          --comment "Infrastructure Management User"
+          {{ infrastructure_user }}
+      when: agent_lxc_user_check.rc != 0
+      changed_when: true
+      tags: [provision, user]
+
+    - name: Set the infrastructure user's bootstrap password
+      ansible.builtin.command:
+        cmd: >
+          pct exec {{ agent_lxc_vmid }} -- sh -c
+          "echo '{{ infrastructure_user }}:{{ vault_bootstrap_password }}' | chpasswd"
+      when: agent_lxc_user_check.rc != 0
+      changed_when: true
+      no_log: true  # the bootstrap password is on this command line
+      tags: [provision, user]
+
+    # Seed the user's authorized_keys here rather than relying on bootstrap.
+    #
+    # bootstrap.yml only creates .ssh and installs GitHub keys inside its
+    # "connected as root" block. Adopted as the infrastructure user instead,
+    # it skips that block but still runs "Lock password authentication" and
+    # sets PasswordAuthentication no — so a container that never received a
+    # key locks itself out, and SSH connection multiplexing hides it until
+    # ControlPersist expires. Making the container key-reachable before
+    # bootstrap runs removes the ordering hazard entirely.
+    - name: Fetch authorized keys from GitHub
+      ansible.builtin.uri:
+        url: "{{ gh_keys }}"
+        return_content: true
+        timeout: 30
+        status_code: 200
+      register: agent_lxc_gh_keys
+      delegate_to: localhost
+      become: false
+      check_mode: false
+      changed_when: false
+      tags: [provision, ssh]
+
+    - name: Read the container's current authorized_keys
+      ansible.builtin.command:
+        cmd: pct exec {{ agent_lxc_vmid }} -- cat /home/{{ infrastructure_user }}/.ssh/authorized_keys
+      register: agent_lxc_authkeys
+      check_mode: false  # read-only probe; must run under --check
+      failed_when: false
+      changed_when: false
+      tags: [provision, ssh]
+
+    - name: Install authorized keys in the container
+      when: agent_lxc_authkeys.stdout | trim != agent_lxc_gh_keys.content | trim
+      tags: [provision, ssh]
+      block:
+        - name: Stage authorized keys on the hypervisor
+          ansible.builtin.copy:
+            content: "{{ agent_lxc_gh_keys.content }}"
+            dest: /tmp/agent_lxc_authorized_keys
+            owner: root
+            group: root
+            mode: '0600'
+
+        - name: Ensure the container's .ssh directory exists
+          ansible.builtin.command:
+            cmd: >-
+              pct exec {{ agent_lxc_vmid }} -- install -d -m 0700
+              -o {{ infrastructure_user }} -g {{ infrastructure_user }}
+              /home/{{ infrastructure_user }}/.ssh
+
+          changed_when: true
+
+        - name: Push authorized keys into the container
+          ansible.builtin.command:
+            cmd: >-
+              pct push {{ agent_lxc_vmid }} /tmp/agent_lxc_authorized_keys
+              /home/{{ infrastructure_user }}/.ssh/authorized_keys
+              --user 1000 --group 1000 --perms 0600
+          changed_when: true
+
+      always:
+        - name: Remove the staged key file
+          ansible.builtin.file:
+            path: /tmp/agent_lxc_authorized_keys
+            state: absent
+
+    # ansible.cfg sets `become_flags = -H -n`, so sudo can never prompt for a
+    # password — a fresh sudo-group user is therefore unusable by Ansible.
+    # bootstrap.yml converges to exactly this file (and this line), so
+    # pre-seeding it is not extra privilege, just removing a chicken-and-egg.
+    # Probes the mode, not just existence, so a half-written file from an
+    # interrupted run is corrected rather than accepted. sudo ignores
+    # world-writable drop-ins, and 0440 is what the rest of the fleet uses.
+    - name: Check the infrastructure user's sudoers entry
+      ansible.builtin.command:
+        cmd: pct exec {{ agent_lxc_vmid }} -- stat -c %a /etc/sudoers.d/{{ infrastructure_user }}
+      register: agent_lxc_sudoers_check
+      check_mode: false  # read-only probe; must run under --check
+      failed_when: false
+      changed_when: false
+      tags: [provision, user]
+
+    - name: Grant the infrastructure user passwordless sudo
+      ansible.builtin.command:
+        cmd: >-
+          pct exec {{ agent_lxc_vmid }} -- sh -c
+          "printf '%s\n' '{{ infrastructure_user }} ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/{{ infrastructure_user }}
+          && chmod 0440 /etc/sudoers.d/{{ infrastructure_user }}
+          && visudo -c -f /etc/sudoers.d/{{ infrastructure_user }}"
+      when: agent_lxc_sudoers_check.rc != 0 or agent_lxc_sudoers_check.stdout | trim != '440'
+      changed_when: true
+      tags: [provision, user]
+
+    # ============================================================
+    # Handover
+    # ============================================================
+
+    - name: Wait for SSH to answer on the container
+      ansible.builtin.wait_for:
+        host: "{{ agent_lxc_ip }}"
+        port: 22
+        timeout: 60
+      delegate_to: localhost
+      become: false
+      tags: [provision, verify]
+
+    - name: Report provisioning result
+      ansible.builtin.debug:
+        msg: |
+          ✅ CT {{ agent_lxc_vmid }} ({{ agent_lxc_hostname }}) provisioned at {{ agent_lxc_ip }}
+
+          Next:
+            ansible-playbook ansible/playbooks/bootstrap.yml --limit agent-lxc
+            ansible-playbook ansible/playbooks/site.yml --limit agent-lxc
+      tags: [provision]

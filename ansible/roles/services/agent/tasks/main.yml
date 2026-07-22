@@ -1,0 +1,157 @@
+---
+# Agent LXC service role — Phase A (Tier 1 fleet monitoring)
+#
+# Required variables:
+#   agent_fleet_hosts — list of {name, kind}; see group_vars/agent.yml
+#
+# Optional variables: see defaults/main.yml
+#
+# Phase A deliberately installs no agent runtime and no API credential. The
+# container's only capability is read-only SSH to the fleet as read_agent.
+
+# ============================================================
+# Packages
+# ============================================================
+
+- name: Install agent packages
+  become: true
+  ansible.builtin.apt:
+    name:
+      - openssh-client
+      - jq       # enhanced_monitoring_wrapper parses its state file with jq
+      - curl     # Slack delivery from the wrapper
+    state: present
+    update_cache: true
+  when: os_family == "debian"
+  tags: [agent, packages]
+
+# ============================================================
+# Container-resident SSH identity
+# ============================================================
+
+- name: Ensure .ssh directory exists
+  become: true
+  ansible.builtin.file:
+    path: "/home/{{ primary_user }}/.ssh"
+    state: directory
+    owner: "{{ primary_user }}"
+    group: "{{ infrastructure_group }}"
+    mode: '0700'
+  tags: [agent, ssh]
+
+# Generated on the box and never leaves it — the private half exists in
+# exactly one place. Only the public half is committed to the repo, so a
+# rebuild mints a new identity rather than restoring an old one.
+#
+# ssh-keygen rather than community.crypto.openssh_keypair: that collection is
+# not in this repo's dependency set and does not resolve under CI's
+# ansible-lint. `creates` makes this idempotent without a separate stat.
+- name: Check for the container's fleet SSH key
+  ansible.builtin.stat:
+    path: "{{ agent_ssh_key_path }}"
+  register: agent_key_stat
+  tags: [agent, ssh]
+
+- name: Generate the container's fleet SSH key
+  become: true
+  become_user: "{{ primary_user }}"
+  ansible.builtin.command:
+    cmd: >-
+      ssh-keygen -t {{ agent_ssh_key_type }} -N ''
+      -C "{{ agent_ssh_key_comment }}"
+      -f {{ agent_ssh_key_path }}
+    creates: "{{ agent_ssh_key_path }}"
+  tags: [agent, ssh]
+
+- name: Read the container's public key
+  become: true
+  ansible.builtin.slurp:
+    src: "{{ agent_ssh_key_path }}.pub"
+  register: agent_pubkey
+  when: not ansible_check_mode or agent_key_stat.stat.exists
+  tags: [agent, ssh]
+
+# Printed so it can be copied into group_vars/all/main.yml as
+# agent_lxc_ssh_pubkey, which is what agent_access deploys fleet-wide.
+- name: Show the container's public key
+  ansible.builtin.debug:
+    msg: "agent_lxc_ssh_pubkey: {{ agent_pubkey.content | b64decode | trim }}"
+  when: agent_pubkey.content is defined
+  tags: [agent, ssh]
+
+- name: Deploy fleet SSH client config
+  become: true
+  ansible.builtin.template:
+    src: ssh_config.j2
+    dest: "/home/{{ primary_user }}/.ssh/config"
+    owner: "{{ primary_user }}"
+    group: "{{ infrastructure_group }}"
+    mode: '0600'
+  tags: [agent, ssh, config]
+
+# ============================================================
+# Tier 1 fleet sweep
+# ============================================================
+
+- name: Ensure agent state directory exists
+  become: true
+  ansible.builtin.file:
+    path: "{{ agent_state_dir }}"
+    state: directory
+    owner: "{{ primary_user }}"
+    group: "{{ infrastructure_group }}"
+    mode: '0750'
+  tags: [agent, monitoring]
+
+# site.yml does not push scripts/common/ (only the standalone
+# deploy_monitoring.yml playbook does), so the role deploys the wrapper it
+# depends on rather than assuming it. Same approach as roles/services/unifi.
+- name: Deploy monitoring wrapper
+  become: true
+  ansible.builtin.copy:
+    src: "{{ inventory_dir }}/../../scripts/common/enhanced_monitoring_wrapper"
+    dest: "{{ scripts_dir }}/enhanced_monitoring_wrapper"
+    owner: "{{ primary_user }}"
+    group: "{{ infrastructure_group }}"
+    mode: '0755'
+  tags: [agent, monitoring, scripts]
+
+- name: Deploy fleet health check script
+  become: true
+  ansible.builtin.template:
+    src: "{{ inventory_dir }}/../../scripts/services/agent/fleet_health_check.sh.j2"
+    dest: "{{ scripts_dir }}/fleet_health_check.sh"
+    owner: "{{ primary_user }}"
+    group: "{{ infrastructure_group }}"
+    mode: '0755'
+  tags: [agent, monitoring, scripts]
+
+- name: Configure fleet health check cron job
+  become: true
+  ansible.builtin.cron:
+    name: "Fleet health check (Tier 1)"
+    minute: "{{ agent_sweep_minute }}"
+    hour: "{{ agent_sweep_hour }}"
+    job: >
+      {{ scripts_dir }}/enhanced_monitoring_wrapper
+      --heartbeat-interval=daily
+      --notify-fixed=true
+      {{ logging_token }}
+      {{ alert_token }}
+      {{ scripts_dir }}/fleet_health_check.sh
+      >> {{ logs_dir }}/fleet_health_check.log 2>&1
+    user: "{{ primary_user }}"
+  when:
+    - logging_token is defined and logging_token != ''
+    - alert_token is defined and alert_token != ''
+  tags: [agent, monitoring, cron]
+
+- name: Report agent deployment status
+  ansible.builtin.debug:
+    msg: |
+      ✅ Agent LXC (Tier 1) deployed
+      Fleet sweep: {{ agent_fleet_hosts | length }} hosts, hourly at :{{ agent_sweep_minute }}
+      Key: {{ agent_ssh_key_path }}
+      State: {{ agent_state_dir }}/last_anomaly.json
+      Phase B (agent runtime): not installed
+  tags: [agent]

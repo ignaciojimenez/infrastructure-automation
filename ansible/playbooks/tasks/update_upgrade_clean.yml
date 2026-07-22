@@ -14,11 +14,22 @@
     force_apt_get: true
   tags: [updates, upgrade]
 
-- name: Apt autoremove autoclean and clean application
+# Split from the cache clean below so this reports honestly: removing an
+# orphaned package is a real change worth seeing in a diff.
+- name: Apt autoremove and autoclean
   ansible.builtin.apt:
     autoremove: true
     autoclean: true
+  tags: [updates, cleanup]
+
+# `clean` empties /var/cache/apt/archives, which the apt module always reports
+# as changed — there is no "already clean" state to detect. Left unsuppressed
+# it makes every host permanently changed on every run, which hides real
+# drift. Emptying a download cache is not a system state change.
+- name: Apt clean package cache
+  ansible.builtin.apt:
     clean: true
+  changed_when: false
   tags: [updates, cleanup]
 
 - name: Check if reboot required

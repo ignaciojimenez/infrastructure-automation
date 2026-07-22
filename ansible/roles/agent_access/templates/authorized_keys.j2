@@ -1,3 +1,3 @@
 {% for key in agent_access_keys %}
-from="{{ key.from }}",command="/home/{{ agent_access_user }}/.scripts/ssh_alert.sh" {{ key.pubkey }}
+from="{{ key.from }}",command="/home/{{ agent_access_user }}/.scripts/ssh_alert.sh{{ ' --quiet' if not (key.alert | default(true)) else '' }}" {{ key.pubkey }}
 {% endfor %}
