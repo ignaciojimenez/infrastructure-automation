@@ -68,7 +68,18 @@ agent_wrapper_max_age_hours: 26
 agent_ssh_timeout: 15
 
 # ============================================================
-# Phase B — declared now, off until the agent runtime lands
+# Phase B — OpenCode runtime and Tier 2 investigation
 # ============================================================
 
-enable_agent_investigate: false
+enable_agent_investigate: true
+
+# Per-agent, provider-qualified models. Switching provider is a change here
+# plus a redeploy — no code change — which is what makes an open-weight A/B
+# cheap to run. See docs/ARCHITECTURE_DECISIONS.md.
+#
+# Triage is the high-volume, zero-blast-radius tier (it only reports, never
+# mutates), so it is the right place to trade capability for cost. The digest
+# is weekly and one-shot, so it gets a better model.
+agent_monitor_model: "anthropic/claude-haiku-4-5"
+agent_digest_model: "anthropic/claude-sonnet-5"
+agent_small_model: "anthropic/claude-haiku-4-5"

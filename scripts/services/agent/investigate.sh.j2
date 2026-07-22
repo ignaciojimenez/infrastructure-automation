@@ -21,6 +21,8 @@ AGENT_DIR="{{ agent_state_dir }}"
 PLANS_DIR="{{ agent_plans_dir }}"
 ANOMALY_FILE="$AGENT_DIR/last_anomaly.json"
 MARKER="$AGENT_DIR/.last_investigated"
+FAIL_MARKER="$AGENT_DIR/.last_failure_alert"
+FAIL_COOLDOWN_SECONDS={{ agent_failure_alert_cooldown_seconds }}
 OPENCODE="{{ opencode_bin }}"
 MONITOR_AGENT="infra-monitor"
 DIGEST_MODEL="{{ agent_digest_model }}"
@@ -55,6 +57,26 @@ slack() {
         -d "$_payload" >/dev/null 2>&1
 }
 
+# Alerts about *our own* failure, at most once per cooldown window.
+#
+# Without this, a persistent anomaly retries hourly (by design — the success
+# marker is only written on success, so transient failures recover), and every
+# retry would post another identical failure alert to the watched channel.
+# Same flooding bug as the ssh_alert cooldown in Phase A; same fix.
+alert_failure_throttled() {
+    _msg="$1"
+    _now=$(date +%s)
+    _last=0
+    [ -f "$FAIL_MARKER" ] && _last=$(cat "$FAIL_MARKER" 2>/dev/null || echo 0)
+    case "$_last" in ''|*[!0-9]*) _last=0 ;; esac
+    if [ "$((_now - _last))" -ge "$FAIL_COOLDOWN_SECONDS" ]; then
+        printf '%s\n' "$_now" > "$FAIL_MARKER"
+        slack "${AGENT_SLACK_ALERT:-}" "$_msg"
+    else
+        echo "failure alert suppressed (cooldown active)" >&2
+    fi
+}
+
 run_agent() {
     # run_agent <agent> <extra-args...> — prompt arrives on stdin.
     _agent="$1"
@@ -84,7 +106,7 @@ PROMPT
     rc=$?
     if [ $rc -ne 0 ]; then
         echo "digest failed (rc=$rc): $output" >&2
-        slack "${AGENT_SLACK_ALERT:-}" ":warning: Weekly fleet digest failed on agent-lxc (rc=$rc). See ~/.logs/investigate.log"
+        alert_failure_throttled ":warning: Weekly fleet digest failed on agent-lxc (rc=$rc). See ~/.logs/investigate.log"
         exit $rc
     fi
     slack "${AGENT_SLACK_LOGGING:-}" ":bar_chart: *Weekly fleet digest*
@@ -128,13 +150,14 @@ rc=$?
 
 if [ $rc -ne 0 ]; then
     echo "investigation failed (rc=$rc): $output" >&2
-    slack "${AGENT_SLACK_ALERT:-}" ":warning: Fleet investigation failed on agent-lxc (rc=$rc). The Tier 1 alert still stands and needs a human. See ~/.logs/investigate.log"
+    alert_failure_throttled ":warning: Fleet investigation failed on agent-lxc (rc=$rc). The Tier 1 alert still stands and needs a human. See ~/.logs/investigate.log"
     exit $rc
 fi
 
 # Mark handled only on success, so a transient failure retries next hour
 # rather than silently swallowing the anomaly.
 date -u +%Y-%m-%dT%H:%M:%SZ > "$MARKER"
+rm -f "$FAIL_MARKER"
 
 latest_plan=$(ls -1t "$PLANS_DIR"/*.md 2>/dev/null | head -1)
 if [ -n "$latest_plan" ]; then

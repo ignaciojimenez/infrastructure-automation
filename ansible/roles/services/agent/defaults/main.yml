@@ -78,6 +78,10 @@ agent_plans_dir: "{{ agent_state_dir }}/plans"
 # the snapshot is newer than the last one investigated.
 agent_investigate_minute: "47"
 
+# Cap on how often Tier 2 may alert about its OWN failure. A persistent
+# anomaly retries hourly by design; without this each retry re-alerts.
+agent_failure_alert_cooldown_seconds: 21600  # 6h
+
 # Weekly digest — Sunday morning, offset from the hourly sweep.
 agent_digest_weekday: "0"
 agent_digest_hour: "9"
