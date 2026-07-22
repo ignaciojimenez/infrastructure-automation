@@ -155,3 +155,189 @@
       State: {{ agent_state_dir }}/last_anomaly.json
       Phase B (agent runtime): not installed
   tags: [agent]
+
+# ============================================================
+# Phase B — OpenCode runtime and Tier 2 investigation
+# ============================================================
+#
+# Everything below is inert unless enable_agent_investigate is true AND the
+# vault holds an API key. A half-installed runtime with no credential would
+# fail on a cron schedule and page you nightly, so the role skips instead.
+
+- name: Configure Tier 2 investigation
+  when:
+    - enable_agent_investigate | bool
+    - vault_anthropic_api_key is defined
+  tags: [agent, investigate]
+  block:
+    - name: Check the installed OpenCode version
+      ansible.builtin.command:
+        cmd: "{{ opencode_bin }} --version"
+      register: opencode_installed
+      failed_when: false
+      changed_when: false
+
+    # Pinned + checksummed. get_url verifies the digest before anything is
+    # extracted, so a tampered or truncated download fails closed rather than
+    # installing. The expected hash comes from the GitHub release API, not
+    # from hashing whatever we downloaded first (which would verify nothing).
+    - name: Install the pinned OpenCode release
+      when: opencode_version not in (opencode_installed.stdout | default(''))
+      block:
+        - name: Download the OpenCode release
+          become: true
+          ansible.builtin.get_url:
+            url: "https://github.com/sst/opencode/releases/download/v{{ opencode_version }}/{{ opencode_asset }}"
+            dest: "/tmp/{{ opencode_asset }}"
+            checksum: "sha256:{{ opencode_sha256 }}"
+            mode: '0644'
+            timeout: 120
+
+        - name: Create the OpenCode install directory
+          become: true
+          ansible.builtin.file:
+            path: "{{ opencode_install_dir }}/{{ opencode_version }}"
+            state: directory
+            owner: root
+            group: root
+            mode: '0755'
+
+        - name: Extract OpenCode
+          become: true
+          ansible.builtin.unarchive:
+            src: "/tmp/{{ opencode_asset }}"
+            dest: "{{ opencode_install_dir }}/{{ opencode_version }}"
+            remote_src: true
+            owner: root
+            group: root
+
+        - name: Link the pinned OpenCode into PATH
+          become: true
+          ansible.builtin.file:
+            src: "{{ opencode_install_dir }}/{{ opencode_version }}/opencode"
+            dest: "{{ opencode_bin }}"
+            state: link
+            force: true
+
+      always:
+        - name: Remove the downloaded archive
+          become: true
+          ansible.builtin.file:
+            path: "/tmp/{{ opencode_asset }}"
+            state: absent
+
+    # ------------------------------------------------------------
+    # Configuration as code
+    # ------------------------------------------------------------
+
+    - name: Ensure OpenCode config directories exist
+      become: true
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ primary_user }}"
+        group: "{{ infrastructure_group }}"
+        mode: '0750'
+      loop:
+        - "/home/{{ primary_user }}/.config/opencode"
+        - "/home/{{ primary_user }}/.config/opencode/agents"
+        - "{{ agent_plans_dir }}"
+
+    - name: Deploy OpenCode configuration
+      become: true
+      ansible.builtin.template:
+        src: opencode.json.j2
+        dest: "/home/{{ primary_user }}/.config/opencode/opencode.json"
+        owner: "{{ primary_user }}"
+        group: "{{ infrastructure_group }}"
+        mode: '0640'
+
+    - name: Deploy the infra-monitor agent definition
+      become: true
+      ansible.builtin.template:
+        src: infra-monitor.md.j2
+        dest: "/home/{{ primary_user }}/.config/opencode/agents/infra-monitor.md"
+        owner: "{{ primary_user }}"
+        group: "{{ infrastructure_group }}"
+        mode: '0640'
+
+    - name: Deploy fleet context for the agent
+      become: true
+      ansible.builtin.template:
+        src: AGENTS.md.j2
+        dest: "/home/{{ primary_user }}/.config/opencode/AGENTS.md"
+        owner: "{{ primary_user }}"
+        group: "{{ infrastructure_group }}"
+        mode: '0640'
+
+    # ------------------------------------------------------------
+    # Credential — 0600, sourced by scripts, never in a cron argument
+    # ------------------------------------------------------------
+
+    - name: Ensure the agent credential directory exists
+      become: true
+      ansible.builtin.file:
+        path: "{{ agent_env_file | dirname }}"
+        state: directory
+        owner: root
+        group: "{{ infrastructure_group }}"
+        mode: '0750'
+
+    - name: Deploy the agent credential file
+      become: true
+      ansible.builtin.template:
+        src: agent.env.j2
+        dest: "{{ agent_env_file }}"
+        owner: root
+        group: "{{ infrastructure_group }}"
+        mode: '0640'
+      no_log: true
+
+    # ------------------------------------------------------------
+    # Tier 2 wiring
+    # ------------------------------------------------------------
+
+    - name: Deploy the investigate script
+      become: true
+      ansible.builtin.template:
+        src: "{{ inventory_dir }}/../../scripts/services/agent/investigate.sh.j2"
+        dest: "{{ scripts_dir }}/investigate.sh"
+        owner: "{{ primary_user }}"
+        group: "{{ infrastructure_group }}"
+        mode: '0755'
+
+    # Deliberately a separate cron from the Tier 1 sweep rather than being
+    # called by it: Tier 1 stays free, independent, and unable to be broken by
+    # a Tier 2 failure. This polls for a *newer* anomaly snapshot and exits
+    # without spending anything when there is nothing new.
+    - name: Configure the anomaly investigation cron job
+      become: true
+      ansible.builtin.cron:
+        name: "Fleet anomaly investigation (Tier 2)"
+        minute: "{{ agent_investigate_minute }}"
+        hour: "*"
+        job: >
+          {{ scripts_dir }}/investigate.sh
+          >> {{ logs_dir }}/investigate.log 2>&1
+        user: "{{ primary_user }}"
+
+    - name: Configure the weekly digest cron job
+      become: true
+      ansible.builtin.cron:
+        name: "Weekly fleet digest (Tier 2)"
+        minute: "{{ agent_digest_minute }}"
+        hour: "{{ agent_digest_hour }}"
+        weekday: "{{ agent_digest_weekday }}"
+        job: >
+          {{ scripts_dir }}/investigate.sh --digest
+          >> {{ logs_dir }}/investigate.log 2>&1
+        user: "{{ primary_user }}"
+
+    - name: Report Tier 2 deployment status
+      ansible.builtin.debug:
+        msg: |
+          ✅ Tier 2 (OpenCode {{ opencode_version }}) deployed
+          Monitor model: {{ agent_monitor_model }}
+          Digest model:  {{ agent_digest_model }}
+          Plans:         {{ agent_plans_dir }}
+          Investigate:   hourly at :{{ agent_investigate_minute }} (only when a new anomaly exists)

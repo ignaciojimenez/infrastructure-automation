@@ -1,0 +1,154 @@
+#!/bin/sh
+# investigate.sh — Tier 2 investigation (managed by Ansible)
+#
+# Two modes:
+#   (no args)   anomaly-triggered. Runs only when Tier 1 has written a NEWER
+#               anomaly snapshot than the last one investigated. Costs nothing
+#               on the overwhelming majority of runs, which is the point.
+#   --digest    weekly fleet summary on a better model, posted to #home-logging.
+#
+# Deliberately separate from fleet_health_check.sh: Tier 1 must keep working —
+# and stay free — even if this is broken, misconfigured, or out of credit.
+#
+# NOTE: never passes `--auto` to opencode. In headless mode `--auto` turns
+# every "ask" permission into "allow"; the config denies rather than asks
+# precisely so that this script needs no such flag.
+
+set -u
+
+ENV_FILE="{{ agent_env_file }}"
+AGENT_DIR="{{ agent_state_dir }}"
+PLANS_DIR="{{ agent_plans_dir }}"
+ANOMALY_FILE="$AGENT_DIR/last_anomaly.json"
+MARKER="$AGENT_DIR/.last_investigated"
+OPENCODE="{{ opencode_bin }}"
+MONITOR_AGENT="infra-monitor"
+DIGEST_MODEL="{{ agent_digest_model }}"
+
+if [ ! -r "$ENV_FILE" ]; then
+    echo "FATAL: cannot read $ENV_FILE — Tier 2 not configured" >&2
+    exit 1
+fi
+# shellcheck disable=SC1090
+. "$ENV_FILE"
+
+if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+    echo "FATAL: ANTHROPIC_API_KEY unset in $ENV_FILE" >&2
+    exit 1
+fi
+export ANTHROPIC_API_KEY
+[ -n "${FIREWORKS_API_KEY:-}" ] && export FIREWORKS_API_KEY
+
+mkdir -p "$PLANS_DIR"
+
+# Posts to Slack. Body is JSON-escaped via python3 rather than sed, because
+# investigation summaries contain quotes, newlines, and backslashes.
+slack() {
+    _webhook="$1"
+    _text="$2"
+    [ -z "$_webhook" ] && return 0
+    _payload=$(printf '%s' "$_text" | python3 -c \
+        'import json,sys; print(json.dumps({"text": sys.stdin.read()}))' 2>/dev/null) || return 0
+    curl -s --max-time 15 -X POST \
+        "https://hooks.slack.com/services/${_webhook}" \
+        -H 'Content-Type: application/json' \
+        -d "$_payload" >/dev/null 2>&1
+}
+
+run_agent() {
+    # run_agent <agent> <extra-args...> — prompt arrives on stdin.
+    _agent="$1"
+    shift
+    _prompt=$(cat)
+    "$OPENCODE" run --agent "$_agent" "$@" "$_prompt" 2>&1
+}
+
+# ============================================================
+# Weekly digest
+# ============================================================
+
+if [ "${1:-}" = "--digest" ]; then
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] weekly digest starting"
+    output=$(run_agent "$MONITOR_AGENT" --model "$DIGEST_MODEL" <<'PROMPT'
+Produce a weekly fleet health digest.
+
+Sweep every host for slow-moving trends rather than acute faults: disk growth,
+repeated service restarts, units that keep failing and self-healing, unusual
+journal volume, and any host whose own monitoring has gaps.
+
+Do not write a plan file for this. Output 5-10 bullet points, ordered by what
+most deserves attention. If the fleet is simply healthy, say so in one line
+rather than padding the list.
+PROMPT
+    )
+    rc=$?
+    if [ $rc -ne 0 ]; then
+        echo "digest failed (rc=$rc): $output" >&2
+        slack "${AGENT_SLACK_ALERT:-}" ":warning: Weekly fleet digest failed on agent-lxc (rc=$rc). See ~/.logs/investigate.log"
+        exit $rc
+    fi
+    slack "${AGENT_SLACK_LOGGING:-}" ":bar_chart: *Weekly fleet digest*
+
+$output"
+    echo "$output"
+    exit 0
+fi
+
+# ============================================================
+# Anomaly-triggered investigation
+# ============================================================
+
+[ -f "$ANOMALY_FILE" ] || { echo "no anomaly snapshot; nothing to do"; exit 0; }
+
+# Debounce: only investigate a snapshot newer than the last one handled.
+# Without this, a persistent fault would be re-investigated every hour and
+# bill for the same finding indefinitely.
+if [ -f "$MARKER" ] && [ ! "$ANOMALY_FILE" -nt "$MARKER" ]; then
+    echo "anomaly snapshot unchanged since last investigation; skipping"
+    exit 0
+fi
+
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] investigating new anomaly"
+anomaly=$(cat "$ANOMALY_FILE")
+
+output=$(run_agent "$MONITOR_AGENT" <<PROMPT
+The hourly Tier 1 fleet sweep reported the anomaly below. Investigate it and
+write a plan file as specified in your instructions.
+
+Treat these findings as a starting point, not as ground truth: the sweep is
+deliberately shallow and ran up to an hour ago. Confirm the symptom still
+holds before reasoning about causes.
+
+\`\`\`json
+$anomaly
+\`\`\`
+PROMPT
+)
+rc=$?
+
+if [ $rc -ne 0 ]; then
+    echo "investigation failed (rc=$rc): $output" >&2
+    slack "${AGENT_SLACK_ALERT:-}" ":warning: Fleet investigation failed on agent-lxc (rc=$rc). The Tier 1 alert still stands and needs a human. See ~/.logs/investigate.log"
+    exit $rc
+fi
+
+# Mark handled only on success, so a transient failure retries next hour
+# rather than silently swallowing the anomaly.
+date -u +%Y-%m-%dT%H:%M:%SZ > "$MARKER"
+
+latest_plan=$(ls -1t "$PLANS_DIR"/*.md 2>/dev/null | head -1)
+if [ -n "$latest_plan" ]; then
+    plan_note="
+Plan: \`$latest_plan\`"
+else
+    plan_note="
+(No plan file was written — check the log.)"
+fi
+
+slack "${AGENT_SLACK_ALERT:-}" ":mag: *Fleet investigation*
+
+$output
+$plan_note"
+
+echo "$output"
+exit 0

@@ -1,0 +1,74 @@
+# Fleet context
+
+Managed by Ansible — do not edit manually. Everything here was verified against
+the live fleet; trust it over your assumptions.
+
+## Hosts
+
+Reached as `ssh <name>-agent "<command>"`. Names resolve as `<name>.local`
+through Unbound on the gateway (10.30.40.254).
+
+| Host | Platform | Runs | Notes |
+|---|---|---|---|
+{% for h in agent_fleet_hosts %}
+{% if h.name == 'cwwk' %}
+| `cwwk` | Debian / Proxmox | Hypervisor | **Hosts the OPNsense VM (100).** Rebooting it or stopping VM 100 takes the whole network offline, including your own route in. Runs hot — thermal events are diagnosed via `package_throttle_count`, not `sensors`. |
+{% elif h.name == 'opnsense' %}
+| `opnsense` | FreeBSD | Firewall, Unbound DNS, WireGuard, CrowdSec | **No systemd and no journal** — `systemctl`/`journalctl` do not exist. Use `service`, `pfctl`, `cscli`. This is the internet and DNS gateway; restarting services here is user-visible immediately. |
+{% elif h.name == 'dockassist' %}
+| `dockassist` | RPi | Home Assistant, Matter, Mosquitto, Cloudflared (Docker) | **Controls the heating** (Tado, via HA automations). Restarting HA drops heating control and presence detection until it comes back. Treat as life-comfort critical; propose restarts only with a stated reason. |
+{% else %}
+| `{{ h.name }}` | {{ 'LXC' if h.name == 'unifi' else 'RPi' }} | {{ 'UniFi Network controller' if h.name == 'unifi' else ('Plex, Transmission, Samba' if h.name == 'cobra' else ('MPD, Shairport, Raspotify' if h.name == 'hifipi' else 'Icecast, Liquidsoap, detect_audio')) }} | |
+{% endif %}
+{% endfor %}
+
+You run on `agent-lxc` (10.30.40.203), an unprivileged LXC on `cwwk`. You are
+therefore downstream of both `cwwk` and `opnsense`: if either is broken, your
+own visibility is degraded and every host may appear unreachable. The Tier 1
+sweep pre-checks DNS for exactly this reason — if it reported a resolver fault,
+believe that over "all 7 hosts are down".
+
+## What `read_agent` can actually see
+
+Verified. Do not waste steps rediscovering these.
+
+**Works (via `sudo`, no password):**
+- `systemctl status <unit>`, `systemctl --failed`, `systemctl list-timers`
+- `journalctl --no-pager …`, `journalctl -u <unit> --no-pager …`
+- `ss -tlnp`, `lsof -i`
+- `cat /var/log/fail2ban.log`, `cat /var/log/unattended-upgrades/*`
+- `crontab -l -u <user>`
+- On `dockassist`: `docker ps|logs|inspect|stats|system df`
+- On `cwwk`: `qm list|status|config`, `pct list|status|config`, `zpool status|list|iostat`, `zfs list|get`, `sensors`, `pvesh get`, `dmesg`
+
+**Does not work — expect these to fail:**
+- **Anything under `/home/choco` — the home is `0700`.** This means the
+  `enhanced_monitoring_wrapper` state files and every per-script log
+  (`~/.logs/*.log`) are invisible to you. If a Slack alert said "Script Failed
+  on host X", you **cannot** determine from that host which script failed.
+  Say so rather than guessing; it is a known gap.
+- `pct exec` on cwwk — not permitted, so you cannot reach inside containers.
+- Any write, restart, or config change anywhere. By design.
+
+To check whether a host's own monitoring is still running, read the cron
+journal (`sudo journalctl -u cron --no-pager -o short-unix`) and look for
+recent `enhanced_monitoring_wrapper` invocations. That tells you it *ran* — it
+does not tell you whether it *passed*.
+
+## Monitoring already in place
+
+Do not propose rebuilding any of this.
+
+- Every host runs `enhanced_monitoring_wrapper` from cron, wrapping per-service
+  checks. Failures post to `#home-alerts`; heartbeats and recoveries go to
+  `#home-logging`.
+- Several checks self-heal (restart a unit) before alerting. An alert that
+  cleared on its own is expected behavior, not a mystery.
+- Backups run to Cloudflare R2, with healthchecks.io freshness pings.
+- Your own Tier 1 sweep runs hourly at :{{ agent_sweep_minute }} and is the
+  thing that produced the anomaly you are investigating.
+
+## Where your files go
+
+- `{{ agent_state_dir }}/last_anomaly.json` — the Tier 1 snapshot that triggered you.
+- `{{ agent_plans_dir }}/` — the plans you write. One per investigation.

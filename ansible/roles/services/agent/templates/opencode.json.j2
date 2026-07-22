@@ -1,0 +1,58 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+
+  "_comment_managed": "Managed by Ansible — do not edit manually.",
+
+  "_comment_permission": [
+    "TWO FOOTGUNS, both verified against opencode.ai/docs/permissions:",
+    "",
+    "1. bash defaults to ALLOW. If no pattern matches and no '*' catch-all is",
+    "   defined, the command runs. Omitting the catch-all below leaves an open",
+    "   shell on a box that holds keys trusted by all 7 hosts.",
+    "",
+    "2. Rules are LAST-MATCH-WINS, not first-match. '*': 'deny' must therefore",
+    "   be declared FIRST; the specific allows after it override it. Reversing",
+    "   the order denies everything and the sweep silently stops working.",
+    "",
+    "'ask' is deliberately unused here. In headless mode it is not a control:",
+    "with no TTY there is nobody to prompt, and `--auto` (which investigate.sh",
+    "never passes) turns every 'ask' into 'allow'. Anything that must not",
+    "happen is 'deny'. 'ask' is reserved for the Phase C operator, where a",
+    "human is present by construction."
+  ],
+
+  "model": "{{ agent_monitor_model }}",
+  "small_model": "{{ agent_small_model }}",
+
+  "permission": {
+    "edit": "deny",
+    "write": "deny",
+    "webfetch": "deny",
+
+    "bash": {
+      "*": "deny",
+
+      "_comment": "Read-only fleet access as read_agent. NOTE: glob matching on a command string is a coarse filter, not a security boundary — the real constraint is the key itself, which is IP-pinned to 10.30.40.203, maps to a read-only account, and is revocable fleet-wide in one Ansible run.",
+      "ssh *-agent *": "allow",
+
+      "_comment_local": "Local read-only inspection of its own state.",
+      "cat {{ agent_state_dir }}/*": "allow",
+      "ls {{ agent_state_dir }}*": "allow",
+      "date*": "allow"
+    }
+  },
+
+  "provider": {
+    "anthropic": {
+      "options": {
+        "timeout": {{ agent_provider_timeout_ms }}
+      }
+    }{% if vault_fireworks_api_key is defined %},
+    "fireworks": {
+      "options": {
+        "timeout": {{ agent_provider_timeout_ms }}
+      }
+    }{% endif %}
+
+  }
+}
