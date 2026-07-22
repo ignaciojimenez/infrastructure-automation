@@ -65,6 +65,27 @@ The original sketch here called for Claude Code; the runtime decision was revisi
 - `scripts/services/agent/fleet_health_check.sh.j2` — per host: reachability, disk, failed systemd units, monitoring-run freshness; plus zpool health and onboot-aware CT/VM state on cwwk, and disk/default-route on opnsense. Writes `~/.agent/last_anomaly.json` on a finding (the Phase B trigger input).
 - `agent_access` gained per-key `alert` control and a per-sender cooldown.
 
+### DNS for agent-lxc — one manual step outstanding
+
+The container has a **static IP set in its `pct` config**, so it never requests a DHCP lease and cannot be registered the way the Raspberry Pis are (they have DHCP static mappings, which Unbound registers automatically). The two statically-addressed hosts most like it — `unifi` (CT 101) and `cwwk` — are registered as **Unbound Host Overrides** in `config.xml` (`<host>` entries with `<domain>local</domain>`, `<rr>A</rr>`, `<addptr>1</addptr>`). That is the pattern to follow.
+
+Until this is added, `agent-lxc.local` does not resolve. Nothing is broken by its absence: the inventory pins `ansible_host: 10.30.40.203` deliberately, so Ansible can still reach the observer when DNS or OPNsense is the thing being diagnosed. This only affects typing `ssh agent-lxc` as a human.
+
+**To add** — Services → Unbound DNS → Overrides → Host Overrides → **+**:
+
+| Field | Value |
+|---|---|
+| Host | `agent-lxc` |
+| Domain | `local` |
+| Type | `A (address)` |
+| IP address | `10.30.40.203` |
+| Add reverse DNS | ☑ (matches `unifi`/`cwwk`) |
+| Description | `Agent LXC (CT 103) — fleet observer` |
+
+Then **Save** → **Apply**. Verify with `dig +short @10.30.40.254 agent-lxc.local` (expect `10.30.40.203`).
+
+There is no CLI path today: the only OPNsense-adjacent vault key is `vault_ns_api_key`, which is the Dutch railways key for HA train notifications, not an OPNsense API credential. Provisioning a scoped OPNsense API key would make this and future firewall changes automatable — worth considering separately, since it also unblocks any future infrastructure-as-code for OPNsense.
+
 ### What remains
 
 **Phase B — OpenCode + Tier 2 investigation.** Separate branch. Pinned binary with checksum, `opencode.json` with `edit`/`write`/`webfetch` denied and bash deny-by-default, an `infra-monitor` agent definition, `ANTHROPIC_API_KEY` in a `0600` env file (never a cron argument), and `investigate.sh` consuming `last_anomaly.json`. Verify on the box before enabling cron: that `ask` fails closed in headless mode, how `opencode run` selects a named agent, and the exact `--format json` shape.

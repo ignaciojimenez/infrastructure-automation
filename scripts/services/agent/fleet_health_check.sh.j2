@@ -133,11 +133,29 @@ REMOTE
 
 reachable=0
 total=0
+for entry in $FLEET; do total=$((total + 1)); done
 
-for entry in $FLEET; do
+# Resolver pre-check.
+#
+# Every fleet name resolves as <host>.local through Unbound on the gateway.
+# If that resolver is down, all seven SSH attempts fail and the sweep would
+# report the entire fleet as unreachable — technically true, useless as a
+# diagnosis, and actively misleading: it blames seven healthy hosts for one
+# broken dependency, at exactly the moment the observer is being relied on.
+# The gateway also runs as a VM on the same hypervisor as this container, so
+# this is a plausible failure, not a theoretical one.
+dns_probe="${FLEET%%:*}"
+
+if getent hosts "$dns_probe" >/dev/null 2>&1; then
+    fleet_to_check="$FLEET"
+else
+    note "resolver" "cannot resolve '${dns_probe}' — fleet names resolve as <host>.local via Unbound on the gateway. Per-host checks skipped: without DNS they would all report false failures."
+    fleet_to_check=""
+fi
+
+for entry in $fleet_to_check; do
     host="${entry%%:*}"
     kind="${entry##*:}"
-    total=$((total + 1))
 
     : > "$PROBE_OUT"
     "probe_${kind}" "$host"
