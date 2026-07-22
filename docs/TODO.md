@@ -65,11 +65,11 @@ The original sketch here called for Claude Code; the runtime decision was revisi
 - `scripts/services/agent/fleet_health_check.sh.j2` — per host: reachability, disk, failed systemd units, monitoring-run freshness; plus zpool health and onboot-aware CT/VM state on cwwk, and disk/default-route on opnsense. Writes `~/.agent/last_anomaly.json` on a finding (the Phase B trigger input).
 - `agent_access` gained per-key `alert` control and a per-sender cooldown.
 
-### DNS for agent-lxc — one manual step outstanding
+### DNS for agent-lxc — DONE 2026-07-22
 
 The container has a **static IP set in its `pct` config**, so it never requests a DHCP lease and cannot be registered the way the Raspberry Pis are (they have DHCP static mappings, which Unbound registers automatically). The two statically-addressed hosts most like it — `unifi` (CT 101) and `cwwk` — are registered as **Unbound Host Overrides** in `config.xml` (`<host>` entries with `<domain>local</domain>`, `<rr>A</rr>`, `<addptr>1</addptr>`). That is the pattern to follow.
 
-Until this is added, `agent-lxc.local` does not resolve. Nothing is broken by its absence: the inventory pins `ansible_host: 10.30.40.203` deliberately, so Ansible can still reach the observer when DNS or OPNsense is the thing being diagnosed. This only affects typing `ssh agent-lxc` as a human.
+Added via the UI on 2026-07-22 and verified: `dig +short @10.30.40.254 agent-lxc.local` returns `10.30.40.203`, reverse returns `agent-lxc.local.`, and `ssh agent-lxc` works (its host key needed adding to `known_hosts` under the new name). Note the inventory still pins `ansible_host: 10.30.40.203` deliberately, so Ansible can still reach the observer when DNS or OPNsense is the thing being diagnosed. This only affects typing `ssh agent-lxc` as a human.
 
 **To add** — Services → Unbound DNS → Overrides → Host Overrides → **+**:
 
@@ -260,6 +260,13 @@ These items have value but are not urgent. Ranked by value-to-effort ratio to he
 - **Shelly Gen1 device config (CoIoT peer, AP-roaming) not captured in IaC** `V:Low E:Med` — Surfaced 2026-06-30. The CoIoT unicast peer + `ap_roaming=false` set on the four Gen1 Shellys (`…f510`, `…fb5f` gas; `.229`, `.243` lights) live only on device flash — a factory reset or unit swap silently loses them and reintroduces the unavailable-flap → phantom-alert bug. Consider a small idempotent script/playbook asserting `coiot.peer` and `ap_roaming.enabled=false` per Gen1 device via its HTTP API, run opportunistically. Low urgency; documented so the dependency is known.
 
 ### Medium Value/Effort — Worth planning
+
+- **Provision a scoped OPNsense API key** `V:Med E:Med` — Raised 2026-07-22 after the `agent-lxc` DNS entry had to be added by hand in the web UI, against the standing "CLI over UI, always" rule. There is no OPNsense API credential anywhere today (`vault_ns_api_key` is the Dutch railways key used by HA's train notifications, not OPNsense). A key scoped to just what is needed would make Unbound host overrides, and firewall changes generally, automatable from Ansible instead of clicked. Worth doing before the next thing that needs a firewall change, not during it.
+  - Create in System → Access → Users → API keys, on a dedicated non-admin account, with the narrowest privilege set that covers the intended endpoints (start with Unbound: `/api/unbound/settings/*` + `reconfigure`).
+  - Store as `vault_opnsense_api_key` / `vault_opnsense_api_secret`; never in a cron line or command argument.
+  - Caveat worth respecting: OPNsense is the internet SPOF, and `config.xml` changes apply immediately. Any automation should be `--check`-able and touch one setting at a time.
+  - Related: this is also the prerequisite if "Full Infrastructure as Code (Proxmox/OPNsense)" (Very Low Value/Effort, currently deferred) is ever revisited, and it would remove the last manual step from an `agent-lxc` rebuild.
+
 
 - **Healthchecks.io Tokens out of Cron Command Lines** — *Promoted to Priority 3 on 2026-07-21* so it lands before the Agent LXC adds another consumer of `enhanced_monitoring_wrapper`. See above.
 - **CI: Undefined Jinja Variable Detection** `V:Med E:Med` — The Jinja2 syntax check added 2026-05-11 (`scripts/ci/check_jinja_syntax.py`) catches parse errors like the `{{ .Names }}` Docker-format collision that bit `stop_run_ha.j2`. It does NOT catch undefined variables like the `{{ container_name }}` reference that escaped to production for months — those need actual rendering against an inventory. Enhancement: extend CI to render every `.j2` against the `.example` inventory (vault dummified) and fail on `UndefinedError`. Closes the bigger bug class.
