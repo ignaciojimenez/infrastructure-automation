@@ -77,9 +77,12 @@ enable_agent_investigate: true
 # plus a redeploy — no code change — which is what makes an open-weight A/B
 # cheap to run. See docs/ARCHITECTURE_DECISIONS.md.
 #
-# Triage is the high-volume, zero-blast-radius tier (it only reports, never
-# mutates), so it is the right place to trade capability for cost. The digest
-# is weekly and one-shot, so it gets a better model.
-agent_monitor_model: "anthropic/claude-haiku-4-5"
+# Investigation drives real diagnosis a human acts on, so it runs on Sonnet 5.
+# The earlier Haiku choice optimized a tier where cost barely matters:
+# investigations are 1-3/day, so Sonnet costs ~$0.30-0.60/mo more — noise —
+# while being materially better at cross-host correlation and root cause.
+# Haiku confirmed non-issues fine but is shallow on real root cause.
+# small_model (session titles, incidental) stays cheap.
+agent_monitor_model: "anthropic/claude-sonnet-5"
 agent_digest_model: "anthropic/claude-sonnet-5"
 agent_small_model: "anthropic/claude-haiku-4-5"

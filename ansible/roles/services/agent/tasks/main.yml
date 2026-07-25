@@ -334,6 +334,22 @@
           >> {{ logs_dir }}/investigate.log 2>&1
         user: "{{ primary_user }}"
 
+    # Slack watch — only scheduled once a read token exists. The script itself
+    # also no-ops without the token, so this is belt-and-braces: no token means
+    # no cron and no work.
+    - name: Configure the Slack watch cron job
+      become: true
+      ansible.builtin.cron:
+        name: "Slack alert watch (Tier 2)"
+        minute: "{{ agent_slack_watch_minute }}"
+        hour: "*"
+        job: >
+          {{ scripts_dir }}/investigate.sh --slack
+          >> {{ logs_dir }}/investigate.log 2>&1
+        user: "{{ primary_user }}"
+        state: "{{ 'present' if vault_slack_read_token is defined else 'absent' }}"
+      tags: [agent, investigate, slack]
+
     - name: Report Tier 2 deployment status
       ansible.builtin.debug:
         msg: |

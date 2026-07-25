@@ -82,6 +82,27 @@ agent_investigate_minute: "47"
 # anomaly retries hourly by design; without this each retry re-alerts.
 agent_failure_alert_cooldown_seconds: 21600  # 6h
 
+# ------------------------------------------------------------
+# Slack watch — investigate failures the hourly sweep can't see
+# ------------------------------------------------------------
+# The Tier 1 sweep only sees what read_agent can see (failed systemd units,
+# disk, monitoring freshness). Per-service wrapper failures and Home Assistant
+# alerts (heating offline, Shelly) only ever appear in #home-alerts. This mode
+# reads that channel and investigates NEW failure alerts. The read is done by
+# the trusted script, not the agent — the agent's SSH-only allowlist is
+# untouched. Gated on vault_slack_read_token; inert until it exists.
+agent_slack_channel: "C01J36V2FPE"  # #home-alerts (channel IDs are not secret)
+agent_slack_watch_minute: "7"
+
+# Content-dedup window: a signature (e.g. "script failed on hifipi") is
+# investigated at most once per this many days, so a nightly-recurring failure
+# produces one plan a week, not one a night.
+agent_slack_dedup_days: 7
+
+# Safety cap: never launch more than this many investigations in a single poll,
+# so a burst of distinct alerts can't spiral cost or saturate the box.
+agent_slack_max_per_run: 3
+
 # Weekly digest — Sunday morning, offset from the hourly sweep.
 agent_digest_weekday: "0"
 agent_digest_hour: "9"
