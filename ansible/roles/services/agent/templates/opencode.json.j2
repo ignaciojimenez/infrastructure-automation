@@ -35,6 +35,12 @@
   "model": "{{ agent_monitor_model }}",
   "small_model": "{{ agent_small_model }}",
 
+  "agent": {
+    "infra-monitor": {
+      "steps": {{ agent_max_steps }}
+    }
+  },
+
   "permission": {
     "edit": "deny",
     "write": "deny",

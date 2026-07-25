@@ -27,6 +27,20 @@ OPENCODE="{{ opencode_bin }}"
 MONITOR_AGENT="infra-monitor"
 DIGEST_MODEL="{{ agent_digest_model }}"
 
+# Never run concurrently with ourselves. A single opencode run fans SSH out to
+# the whole fleet and leaves a short-lived server; two or three at once will
+# saturate this 1-CPU / 2GB box (learned the hard way during testing). In
+# normal operation the crons never overlap, but a real investigation that ran
+# long past the hour would otherwise collide with the next tick. Second caller
+# exits immediately as a clean no-op.
+LOCK="$AGENT_DIR/.investigate.lock"
+mkdir -p "$AGENT_DIR"
+exec 9>"$LOCK"
+if ! flock -n 9; then
+    echo "another investigate.sh holds the lock; exiting" >&2
+    exit 0
+fi
+
 if [ ! -r "$ENV_FILE" ]; then
     echo "FATAL: cannot read $ENV_FILE — Tier 2 not configured" >&2
     exit 1
