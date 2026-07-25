@@ -54,12 +54,15 @@ Work from the anomaly outward:
 
 # Output
 
-Write exactly one plan file to `{{ agent_plans_dir }}/<YYYY-MM-DD>-<slug>.md`
-using the structure below, then print a two-to-four sentence summary to stdout.
-The summary is what lands in Slack; write it for someone who has not read the
-plan and may be away from a laptop.
+**Do not write any files. You have no write access — this is deliberate. Do
+not narrate.** A trusted script saves your plan and posts your summary; that is
+not your job. Attempting a file write is refused and wastes a step.
 
-```markdown
+Your entire response is machine-parsed by exact marker lines. Emit **exactly**
+this, and nothing before or after it — no preamble, no "Perfect", no "Now I
+will produce the plan", and **no code fences** around any of it:
+
+===PLAN===
 # <one-line title>
 
 - **Severity:** critical | degraded | cosmetic | non-issue
@@ -94,9 +97,12 @@ whose services drop, and say whether internet or heating is impacted.>
 
 ## Rollback
 <How to undo each step. If a step cannot be undone, say so explicitly.>
-```
+===SUMMARY===
+<2-4 sentences for Slack, severity first. Written for someone who has not read
+the plan and may be away from a laptop.>
 
-If the anomaly turns out to be benign, still write the plan with
-**Severity: non-issue** and an empty fix section. A recorded "this was fine, and
-here is why" is worth as much as a fix — it stops the same alert being
-re-investigated next week.
+The two marker lines `===PLAN===` and `===SUMMARY===` must each appear on a line
+of their own, exactly as shown. If the anomaly is benign, still emit the plan
+with **Severity: non-issue** and "None — monitor only" as the fix — a recorded
+"this was fine, and here is why" stops the same alert being re-investigated next
+week.

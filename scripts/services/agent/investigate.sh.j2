@@ -77,12 +77,78 @@ alert_failure_throttled() {
     fi
 }
 
+# run_agent <agent> <extra-args...> — prompt on stdin.
+#
+# Uses --format json, NOT the default text mode. Text mode dumps the entire
+# session to stdout — every tool call, the agent's narration, and any
+# permission-rejection error with its full rules payload — all wrapped in ANSI
+# colour codes. Parsing a clean plan out of that is hopeless. The JSON stream
+# is newline-delimited events; we keep only the text parts of the FINAL
+# assistant message (the plan), and sum step costs for the log.
+#
+# Sets three globals: AGENT_OUTPUT (clean final text), AGENT_RC, AGENT_COST.
 run_agent() {
-    # run_agent <agent> <extra-args...> — prompt arrives on stdin.
     _agent="$1"
     shift
     _prompt=$(cat)
-    "$OPENCODE" run --agent "$_agent" "$@" "$_prompt" 2>&1
+
+    _raw=$("$OPENCODE" run --agent "$_agent" --format json "$@" "$_prompt" 2>&1)
+    AGENT_RC=$?
+
+    # On a hard failure (credit/config/network) the output is an error string,
+    # not JSON — the extractor yields nothing and we surface the raw error.
+    if [ "$AGENT_RC" -ne 0 ]; then
+        AGENT_OUTPUT="$_raw"
+        AGENT_COST="0"
+        return
+    fi
+
+    AGENT_OUTPUT=$(printf '%s' "$_raw" | python3 -c '
+import json, sys
+msgs, order = {}, []
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        ev = json.loads(line)
+    except ValueError:
+        continue
+    if ev.get("type") == "text":
+        p = ev.get("part", {})
+        mid = p.get("messageID")
+        if mid not in msgs:
+            msgs[mid] = []
+            order.append(mid)
+        msgs[mid].append(p.get("text", ""))
+# The final assistant message is the plan; earlier ones are narration.
+print("".join(msgs[order[-1]]) if order else "")
+' 2>/dev/null)
+
+    AGENT_COST=$(printf '%s' "$_raw" | python3 -c '
+import json, sys
+total = 0.0
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        ev = json.loads(line)
+    except ValueError:
+        continue
+    if ev.get("type") == "step_finish":
+        total += ev.get("part", {}).get("cost", 0) or 0
+print(f"{total:.4f}")
+' 2>/dev/null)
+    [ -z "$AGENT_COST" ] && AGENT_COST="0"
+
+    # An empty extraction after a clean exit means the contract broke (no text
+    # events). Treat it as a failure so we alert rather than write an empty plan.
+    if [ -z "$(printf '%s' "$AGENT_OUTPUT" | tr -d '[:space:]')" ]; then
+        AGENT_RC=1
+        AGENT_OUTPUT="agent exited 0 but produced no text output. Raw head:
+$(printf '%s' "$_raw" | head -c 500)"
+    fi
 }
 
 # ============================================================
@@ -91,28 +157,27 @@ run_agent() {
 
 if [ "${1:-}" = "--digest" ]; then
     echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] weekly digest starting"
-    output=$(run_agent "$MONITOR_AGENT" --model "$DIGEST_MODEL" <<'PROMPT'
+    run_agent "$MONITOR_AGENT" --model "$DIGEST_MODEL" <<'PROMPT'
 Produce a weekly fleet health digest.
 
 Sweep every host for slow-moving trends rather than acute faults: disk growth,
 repeated service restarts, units that keep failing and self-healing, unusual
 journal volume, and any host whose own monitoring has gaps.
 
-Do not write a plan file for this. Output 5-10 bullet points, ordered by what
+Do not write any files. Output 5-10 bullet points to stdout, ordered by what
 most deserves attention. If the fleet is simply healthy, say so in one line
 rather than padding the list.
 PROMPT
-    )
-    rc=$?
-    if [ $rc -ne 0 ]; then
-        echo "digest failed (rc=$rc): $output" >&2
-        alert_failure_throttled ":warning: Weekly fleet digest failed on agent-lxc (rc=$rc). See ~/.logs/investigate.log"
-        exit $rc
+    echo "digest cost: \$${AGENT_COST}"
+    if [ "$AGENT_RC" -ne 0 ]; then
+        echo "digest failed (rc=$AGENT_RC): $AGENT_OUTPUT" >&2
+        alert_failure_throttled ":warning: Weekly fleet digest failed on agent-lxc (rc=$AGENT_RC). See ~/.logs/investigate.log"
+        exit "$AGENT_RC"
     fi
-    slack "${AGENT_SLACK_LOGGING:-}" ":bar_chart: *Weekly fleet digest*
+    slack "${AGENT_SLACK_LOGGING:-}" ":bar_chart: *Weekly fleet digest* (cost \$${AGENT_COST})
 
-$output"
-    echo "$output"
+$AGENT_OUTPUT"
+    echo "$AGENT_OUTPUT"
     exit 0
 fi
 
@@ -133,9 +198,9 @@ fi
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] investigating new anomaly"
 anomaly=$(cat "$ANOMALY_FILE")
 
-output=$(run_agent "$MONITOR_AGENT" <<PROMPT
+run_agent "$MONITOR_AGENT" <<PROMPT
 The hourly Tier 1 fleet sweep reported the anomaly below. Investigate it and
-write a plan file as specified in your instructions.
+produce a plan following your output contract.
 
 Treat these findings as a starting point, not as ground truth: the sweep is
 deliberately shallow and ran up to an hour ago. Confirm the symptom still
@@ -145,33 +210,62 @@ holds before reasoning about causes.
 $anomaly
 \`\`\`
 PROMPT
-)
-rc=$?
+echo "investigation cost: \$${AGENT_COST}"
 
-if [ $rc -ne 0 ]; then
-    echo "investigation failed (rc=$rc): $output" >&2
-    alert_failure_throttled ":warning: Fleet investigation failed on agent-lxc (rc=$rc). The Tier 1 alert still stands and needs a human. See ~/.logs/investigate.log"
-    exit $rc
+if [ "$AGENT_RC" -ne 0 ]; then
+    echo "investigation failed (rc=$AGENT_RC): $AGENT_OUTPUT" >&2
+    alert_failure_throttled ":warning: Fleet investigation failed on agent-lxc (rc=$AGENT_RC). The Tier 1 alert still stands and needs a human. See ~/.logs/investigate.log"
+    exit "$AGENT_RC"
 fi
+output="$AGENT_OUTPUT"
 
 # Mark handled only on success, so a transient failure retries next hour
 # rather than silently swallowing the anomaly.
 date -u +%Y-%m-%dT%H:%M:%SZ > "$MARKER"
 rm -f "$FAIL_MARKER"
 
-latest_plan=$(ls -1t "$PLANS_DIR"/*.md 2>/dev/null | head -1)
-if [ -n "$latest_plan" ]; then
-    plan_note="
-Plan: \`$latest_plan\`"
+# The agent is read-only by design and cannot write files. It emits its output
+# bounded by two exact marker lines — ===PLAN=== <plan> ===SUMMARY=== <summary>.
+# THIS script — trusted, running as the primary user, outside OpenCode's
+# permission layer — extracts between the markers (discarding any narration or
+# code fences the model added outside them), persists the plan, and posts the
+# summary. Bounding by markers rather than trusting the model to emit no
+# preamble is what makes this robust.
+plan_body=$(printf '%s\n' "$output" \
+    | awk '/^===PLAN===[[:space:]]*$/{f=1;next} /^===SUMMARY===[[:space:]]*$/{f=0} f' \
+    | grep -v '^```')
+summary=$(printf '%s\n' "$output" | sed '1,/^===SUMMARY===[[:space:]]*$/d' | grep -v '^```')
+
+# Missing markers means the model broke the contract. Don't lose the
+# investigation — persist the raw output and summarize its head so a human
+# still gets something actionable.
+if [ -z "$(printf '%s' "$plan_body" | tr -d '[:space:]')" ]; then
+    echo "WARN: no ===PLAN=== marker in agent output; persisting raw output" >&2
+    plan_body="$output"
+fi
+if [ -z "$(printf '%s' "$summary" | tr -d '[:space:]')" ]; then
+    summary=$(printf '%s\n' "$plan_body" | grep -v '^[[:space:]]*$' | head -6)
+fi
+
+# Slug from the plan's own title line, else the timestamp.
+slug=$(printf '%s\n' "$plan_body" | sed -n 's/^#[[:space:]]*//p' | head -1 \
+       | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' \
+       | sed 's/^-*//;s/-*$//' | cut -c1-50)
+[ -z "$slug" ] && slug="anomaly"
+plan_file="$PLANS_DIR/$(date -u +%Y-%m-%d)-${slug}.md"
+
+if printf '%s\n' "$plan_body" > "$plan_file"; then
+    plan_note="Plan: \`$plan_file\`"
 else
-    plan_note="
-(No plan file was written — check the log.)"
+    plan_note="(Could not write the plan file — check the log.)"
 fi
 
 slack "${AGENT_SLACK_ALERT:-}" ":mag: *Fleet investigation*
 
-$output
+$summary
+
 $plan_note"
 
 echo "$output"
+echo "--- wrote: $plan_file ---"
 exit 0
