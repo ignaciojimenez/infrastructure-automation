@@ -18,7 +18,14 @@
 {{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/bin/cat /var/log/unattended-upgrades/*
 {{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/bin/ls -la /var/log/unattended-upgrades/
 {{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/bin/crontab -l -u *
+
+# Monitoring logs and check scripts under the infrastructure user's 0700 home.
+# Read-only, name-validated helper (no traversal) — see agent_read.sh.
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/local/bin/agent_read *
 {% if primary_function | default('') == 'homeassistant' %}
+
+# Home Assistant read-only entity state (GET /api/states only; token stays host-side)
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/local/bin/ha_state *
 
 # Docker read-only (homeassistant host)
 {{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/bin/docker ps *

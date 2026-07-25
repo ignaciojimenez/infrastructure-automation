@@ -112,6 +112,31 @@
     mode: '0600'
   become: true
 
+# Root-owned read helpers, invoked by read_agent via sudo. Root ownership +
+# 0755 (not group/other-writable) is load-bearing: if read_agent could write
+# the script it sudo-runs, it could read anything. See agent_read.sh header.
+- name: Deploy agent_read helper (monitoring logs and scripts)
+  ansible.builtin.template:
+    src: agent_read.sh.j2
+    dest: /usr/local/bin/agent_read
+    owner: root
+    group: root
+    mode: '0755'
+  become: true
+  when: os_family == "debian"
+
+- name: Deploy ha_state helper (read-only HA entity state)
+  ansible.builtin.template:
+    src: ha_state.sh.j2
+    dest: /usr/local/bin/ha_state
+    owner: root
+    group: root
+    mode: '0755'
+  become: true
+  when:
+    - os_family == "debian"
+    - primary_function | default('') == "homeassistant"
+
 - name: Deploy sudoers for agent (Debian)
   ansible.builtin.template:
     src: sudoers_debian.j2

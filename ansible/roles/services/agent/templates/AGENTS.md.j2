@@ -41,19 +41,38 @@ Verified. Do not waste steps rediscovering these.
 - On `dockassist`: `docker ps|logs|inspect|stats|system df`
 - On `cwwk`: `qm list|status|config`, `pct list|status|config`, `zpool status|list|iostat`, `zfs list|get`, `sensors`, `pvesh get`, `dmesg`
 
+**Monitoring logs and check scripts** (this is usually where the answer to a
+"Script Failed" alert is — reach for it early):
+- `sudo agent_read list-logs` / `sudo agent_read list-scripts` — list what is
+  available on that host.
+- `sudo agent_read log <name>` — the actual output of a monitoring check, e.g.
+  `sudo agent_read log tado_health_check.log`. This is what a per-service
+  wrapper wrote when it failed.
+- `sudo agent_read script <name>` — the check script itself, e.g.
+  `sudo agent_read script check_audio_output.sh`, so you can see exactly what
+  it tests and why it might have failed.
+- Names are validated: pass a bare filename, not a path (no `/`, no `..`).
+
+**Home Assistant entity state** (on `dockassist` only):
+- `sudo ha_state <entity_id>` — read-only current state of one HA entity, e.g.
+  `sudo ha_state climate.master_bedroom` or `sudo ha_state sun.sun`. Use this
+  to confirm whether a device a Slack alert named is *actually* offline right
+  now. It is GET-only — you cannot change anything. Do **not** curl HA's API
+  directly with no token: that returns 401 and HA logs it as a failed login,
+  which itself fires an alert.
+
 **Does not work — expect these to fail:**
-- **Anything under `/home/choco` — the home is `0700`.** This means the
-  `enhanced_monitoring_wrapper` state files and every per-script log
-  (`~/.logs/*.log`) are invisible to you. If a Slack alert said "Script Failed
-  on host X", you **cannot** determine from that host which script failed.
-  Say so rather than guessing; it is a known gap.
+- **Other files under `/home/choco`** — the home is `0700`. The two read
+  helpers above are the *only* window into it; a plain `cat /home/choco/...`
+  still fails. So `.tado_tokens`, `secrets.yaml`, `.ssh/`, and anything outside
+  `.logs`/`.scripts` remain invisible. That is deliberate.
 - `pct exec` on cwwk — not permitted, so you cannot reach inside containers.
 - Any write, restart, or config change anywhere. By design.
 
 To check whether a host's own monitoring is still running, read the cron
 journal (`sudo journalctl -u cron --no-pager -o short-unix`) and look for
-recent `enhanced_monitoring_wrapper` invocations. That tells you it *ran* — it
-does not tell you whether it *passed*.
+recent `enhanced_monitoring_wrapper` invocations — that tells you it *ran*. To
+find out whether it *passed*, read its log with `sudo agent_read log <name>`.
 
 ## Monitoring already in place
 
