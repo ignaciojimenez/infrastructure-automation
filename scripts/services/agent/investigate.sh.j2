@@ -262,14 +262,21 @@ for m in d.get("messages", []):
     for a in m.get("attachments", []) or []:
         text += " " + (a.get("text", "") or a.get("fallback", "") or "")
     low = text.lower()
-    looks_alert = (":x:" in text) or ("❌" in text) or \
-        any(w in low for w in ("alert", "offline", "failed", "critical", "error"))
+    t = text.strip()
+    # A genuine alert STARTS with an alert emoji (wrapper uses :x:, HA uses
+    # :warning:/:rotating_light:), or carries the "ALERT:" header the wrapper
+    # emits. Requiring the prefix (not just a keyword anywhere) excludes leaked
+    # plan text ("# ...", "The sweep reported..."), journal dumps (start with a
+    # digit), and other prose that merely mentions failed/error.
+    # NOTE: no apostrophes in this block — it is inside python3 -c '...' and a
+    # single quote would terminate the shell quoting.
+    looks_alert = t.startswith((":x:", ":warning:", ":rotating_light:",
+                                "❌", "🚨", "⚠️")) or ("ALERT:" in text)
     if not looks_alert:
         continue
     # our own output / channel noise
     if "agent-lxc" in low or "fleet investigation" in low:
         continue
-    t = text.strip()
     if t.startswith(":mag:") or t.startswith(":robot_face:"):
         continue
     if any(w in low for w in ("agent key in use", "trains to", "away mode",
