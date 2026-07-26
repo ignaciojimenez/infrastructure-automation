@@ -92,11 +92,8 @@ There is no CLI path today: the only OPNsense-adjacent vault key is `vault_ns_ap
 
 **Phase C — operator mode.** Sketch only; needs its own decision round (passphrase key vs SSH-CA, sudo scope, audit logging). The plan files Phase B now writes are its input, already in a stable format.
 
-**Follow-ups surfaced while building/closing Phase B** (small, not blocking):
-- **cobra `smartmontools.service` is failing** (no SMART-capable device on the Pi) — the agent's own digest proposes `sudo systemctl disable --now smartmontools.service`. Safe cleanup, silences a permanently-failing unit.
+**Follow-up surfaced while building Phase B** (small, not blocking):
 - **`read_agent` can read Slack tokens via the cron journal** — the wrapper cron lines carry the webhook tokens, and `journalctl -u cron` is permitted. This is Priority 3 (tokens out of cron); Phase B's `0600` env-file pattern is the model to extend fleet-wide.
-- **Rotate the credentials exposed in chat** during setup — the Anthropic key and the (unused) HA long-lived token were pasted in a session transcript. The Anthropic key is spend-capped; the HA token was never needed (the `ha_state` helper uses the existing `vault_ha_monitor_token`) and should be deleted in HA → Profile → Long-Lived Tokens.
-- **Confirm the Anthropic Console spend cap is set** on the dedicated workspace — logged per-run cost is low, but the hard cap is the backstop and is user-side.
 
 **Rebuild reproducibility + agent SSH-key management — `V:High E:Med`, deferred 2026-07-25.** The "destroy and recreate CT 103 from Ansible with nothing but the vault password" criterion (below) is **unverified**, and there is a known reason to expect it currently *fails* as written: `roles/services/agent` generates `agent_lxc_ed25519` fresh on the container, and its public half is hard-committed in `group_vars/all/main.yml` as `agent_lxc_ssh_pubkey`. A rebuild therefore mints a **new** keypair whose pubkey must be copied back into `group_vars` and pushed fleet-wide via `agent_access.yml` — a manual step beyond the vault password. Two ways to close it, decide before testing:
   1. **Accept + document** — a rebuild is rare; treat "capture the printed pubkey → commit → re-run agent_access" as a documented two-command step, and reword the criterion.
