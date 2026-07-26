@@ -1,0 +1,14 @@
+---
+# Deploy SMART disk-health monitoring.
+# No-op on hosts that don't set enable_smart_monitoring (currently cwwk + cobra —
+# the two flash drives whose failure means data loss with no redundancy).
+
+- name: Deploy SMART disk-health monitoring
+  hosts: all
+  become: true
+  tasks:
+    - name: Deploy smart_monitoring role
+      ansible.builtin.include_role:
+        name: smart_monitoring
+      when: enable_smart_monitoring | default(false)
+      tags: [smart_monitoring, monitoring]

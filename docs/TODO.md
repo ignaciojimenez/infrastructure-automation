@@ -167,33 +167,38 @@ See `memory/followup_tokens_in_cron.md` for the full kickoff context.
 
 ---
 
-## Priority 4 — SMART Disk Health Monitoring
+## Priority 4 — SMART Disk Health Monitoring — DONE 2026-07-26
 
-**Risk:** Medium. Proxmox's ZFS pool (`rpool`) is the single storage layer for all VMs and containers. A disk failure with zero early warning means potential data loss and full infrastructure outage. Cobra's media storage (`/dev/sda`) is similarly unmonitored.
+**Risk (was):** Medium. `rpool` on cwwk is the single storage layer under every VM/CT (including the agent LXC); cobra's T7 holds the Plex library. Neither had any early-warning signal — first sign of trouble would have been a ZFS scrub error or a dead drive.
 
-### Why It Matters
-ZFS checksumming catches silent corruption, but SMART attributes predict mechanical failure *before* it happens — reallocated sectors, pending sectors, temperature trends. Without SMART monitoring, the first sign of disk trouble is a ZFS scrub error or a complete drive failure.
+**Delivered:** `smart_monitoring` role (top-level, gated on `enable_smart_monitoring`, mirrors the `agent_access` cross-cutting pattern) + shared `scripts/services/storage/check_smart_health.sh`, deployed to cwwk and cobra via `ansible/playbooks/system/smart_monitoring.yml` (wired into `site.yml` Phase 6b and `deploy_monitoring.yml`). Daily cron (06:17) under `enhanced_monitoring_wrapper`.
 
-### Scope
-| Host | Disk(s) | Why |
-|------|---------|-----|
-| `proxmox` | NVMe/SSD under `rpool` | All VMs, containers, and backups live here |
-| `cobra` | USB/SATA media drive | Plex library, irreplaceable if not backed up elsewhere |
+### What the original sketch got wrong (verified on hardware 2026-07-25)
+Both drives are **NVMe**, not ATA — so there is no attribute table, no `Reallocated_Sector_Ct` / `Current_Pending_Sector`. The check parses the **NVMe health log** instead (`smartctl -j -x`, JSON via `jq`):
+- cwwk `rpool` = `/dev/nvme0n1`, native NVMe (`nvme:` spec).
+- cobra media = Samsung **T7**, an NVMe SSD behind an **ASMedia USB bridge**. Plain smartctl and `-d sat` both fail to pass SMART through; it needs **`-d sntasmedia`** (`sntasmedia:` spec). This was the make-or-break unknown and is the main reason the parser had to be designed against real output, not the sketch.
+- Boot media (cwwk USB-flash recovery, cobra SD card) deliberately out of scope — no useful SMART, and the recovery drive is already covered by backup-freshness monitoring.
 
-RPi hosts (dockassist, hifipi, vinylstreamer) use SD cards — SMART doesn't apply. OPNsense runs as a VM (virtual disk). UniFi is an LXC (Proxmox storage).
+### Thresholds (env-overridable)
+`smart_status.passed == false`, `critical_warning != 0`, or `available_spare < available_spare_threshold` (compared against each drive's **own** reported threshold — they differ, 1% vs 10%) → CRITICAL. `media_errors >= 100`, `temperature >= 75°C` → CRITICAL; `media_errors >= 1`, `percentage_used >= 90%`, `temperature >= 65°C` → WARNING. Unreadable/wrong-bridge output → WARNING (doesn't hard-fail on a transient USB hiccup).
 
-### Implementation
-1. Install `smartmontools` on proxmox and cobra via Ansible (package task in platform/bootstrap)
-2. Create `check_smart_health.sh` — parse `smartctl -a` for key attributes (Reallocated_Sector_Ct, Current_Pending_Sector, Offline_Uncorrectable, temperature), exit non-zero on warning thresholds
-3. Schedule via `enhanced_monitoring_wrapper` cron (daily is sufficient — SMART degradation is gradual)
-4. Deploy to proxmox and cobra only (conditional on `enable_smart_monitoring: true`)
+### Privilege
+Cron runs as `choco` (already `NOPASSWD: ALL`, like every other privileged check); the script escalates via `sudo -n /usr/sbin/smartctl`. No dedicated sudoers rule — it would be redundant and inconsistent with the rest of the monitoring.
+
+### smartd masked (resolves the "failing smartmontools unit" the agent LXC found)
+Installing the package auto-enables the `smartd` daemon. We poll on-demand via cron, not the daemon, so the role masks `smartmontools.service` and clears its lingering failed state (`reset-failed`). On cobra smartd was *failing* — it can't poll the T7 through its USB bridge without `-d sntasmedia`, which its default `DEVICESCAN` doesn't apply — which is exactly the failed unit the Tier 1 sweep flagged. One SMART path now, no dead daemon; both hosts report 0 failed units.
 
 ### Acceptance Criteria
-- [ ] `smartmontools` installed on proxmox and cobra
-- [ ] `check_smart_health.sh` alerts on concerning SMART attributes
-- [ ] Cron runs daily via `enhanced_monitoring_wrapper`
-- [ ] Slack alert fires on test with simulated threshold breach
-- [ ] All related changes have been implemented in the infrastructure-automation codebase
+- [x] `smartmontools` installed on cwwk + cobra (cwwk already had it as a Proxmox dep)
+- [x] `check_smart_health.sh` alerts on concerning NVMe health fields — CRITICAL/WARNING/unreadable/no-args paths all unit-tested via fixtures
+- [x] Cron runs daily via `enhanced_monitoring_wrapper` on both hosts
+- [x] Slack alert fires on test with simulated threshold breach — forced CRITICAL through the real wrapper produced a `#home-alerts` ALERT; recovery run cleared it (state left OK)
+- [x] Idempotent — `smart_monitoring.yml` reports `changed=0` on a second run
+- [x] Verified via the real production path (script run as `choco` using `sudo -n smartctl`, both drives OK)
+
+### Follow-ups (minor, not blocking)
+- The daily cron embeds the Slack tokens in the command line — another instance of **Priority 3**, which will strip them fleet-wide. Consistent with every existing check until then.
+- Only the primary data drive per host is monitored. If a second non-redundant drive is ever added, append its `TYPE:DEVICE` spec to that host's `smart_devices`.
 
 ---
 

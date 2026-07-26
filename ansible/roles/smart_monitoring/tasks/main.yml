@@ -1,0 +1,97 @@
+---
+# smart_monitoring — daily NVMe SMART health check for the drives whose failure
+# means data loss with no redundancy. Gated entirely on enable_smart_monitoring;
+# a no-op on every host that does not set it.
+
+- name: Assert smart_devices is set when SMART monitoring is enabled
+  ansible.builtin.assert:
+    that:
+      - smart_devices | length > 0
+    fail_msg: "enable_smart_monitoring is true but smart_devices is empty — nothing would be monitored"
+  when: enable_smart_monitoring | default(false)
+
+- name: Install smartmontools
+  ansible.builtin.apt:
+    name: smartmontools
+    state: present
+  become: true
+  when: enable_smart_monitoring | default(false)
+
+# Installing the package auto-enables the smartd daemon. We poll on-demand via
+# cron with smartctl instead, so smartd is redundant — and on cobra it fails
+# outright (it can't poll the T7 through its USB bridge without -d sntasmedia,
+# which smartd's default DEVICESCAN doesn't apply). A failed unit would trip the
+# fleet failed-services check, so mask it: one SMART path, no dead daemon.
+- name: Mask the smartd daemon (on-demand smartctl via cron is the only SMART path)
+  ansible.builtin.systemd:
+    name: smartmontools.service
+    state: stopped
+    enabled: false
+    masked: true
+  become: true
+  when: enable_smart_monitoring | default(false)
+
+# Masking stops the daemon but leaves a prior failed state in place, which keeps
+# showing in `systemctl --failed` (and would trip the fleet failed-services
+# check). Clear it. Harmless no-op once the unit is clean, so reported unchanged.
+- name: Clear any lingering failed state on the masked smartd unit
+  ansible.builtin.command:
+    cmd: systemctl reset-failed smartmontools.service
+  become: true
+  when: enable_smart_monitoring | default(false)
+  changed_when: false
+  failed_when: false
+
+- name: Ensure monitoring scripts directory exists
+  ansible.builtin.file:
+    path: "{{ scripts_dir }}/monitoring"
+    state: directory
+    owner: "{{ infrastructure_user }}"
+    group: "{{ infrastructure_group }}"
+    mode: '0755'
+  become: true
+  when: enable_smart_monitoring | default(false)
+
+- name: Deploy SMART health check script
+  ansible.builtin.copy:
+    # inventory_dir (ansible/inventory) is a stable anchor to the repo root,
+    # unlike playbook_dir which varies with the calling playbook's depth.
+    src: "{{ inventory_dir }}/../../scripts/services/storage/check_smart_health.sh"
+    dest: "{{ scripts_dir }}/monitoring/check_smart_health.sh"
+    owner: "{{ infrastructure_user }}"
+    group: "{{ infrastructure_group }}"
+    mode: '0755'
+  become: true
+  when: enable_smart_monitoring | default(false)
+
+- name: Deploy monitoring wrapper
+  ansible.builtin.copy:
+    src: "{{ inventory_dir }}/../../scripts/common/enhanced_monitoring_wrapper"
+    dest: "{{ scripts_dir }}/enhanced_monitoring_wrapper"
+    owner: "{{ infrastructure_user }}"
+    group: "{{ infrastructure_group }}"
+    mode: '0755'
+  become: true
+  when: enable_smart_monitoring | default(false)
+
+# smartctl needs root. The cron runs as the infrastructure user, which already
+# holds NOPASSWD sudo on the monitored hosts (same as every other privileged
+# check here — zpool, qm, etc.), so the script's `sudo -n /usr/sbin/smartctl`
+# just works. No dedicated sudoers rule: it would be redundant with the blanket
+# grant and inconsistent with how the rest of the monitoring is privileged.
+- name: Configure SMART health cron job
+  ansible.builtin.cron:
+    name: "SMART disk health check"
+    minute: "{{ smart_check_minute }}"
+    hour: "{{ smart_check_hour }}"
+    user: "{{ infrastructure_user }}"
+    job: >-
+      {{ scripts_dir }}/enhanced_monitoring_wrapper
+      --heartbeat-interval=daily --monitoring-name=smart_health
+      {{ logging_token }} {{ alert_token }}
+      {{ scripts_dir }}/monitoring/check_smart_health.sh {{ smart_devices | join(' ') }}
+      >> {{ logs_dir }}/smart_health.log 2>&1
+    state: present
+  become: true
+  become_user: "{{ infrastructure_user }}"
+  when: enable_smart_monitoring | default(false)

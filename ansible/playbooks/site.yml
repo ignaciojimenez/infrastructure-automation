@@ -67,6 +67,12 @@
 # Deploys all services based on primary_function or install_* flags
 - name: Phase 6 - Service deployments
   ansible.builtin.import_playbook: services.yml
+
+# ========== PHASE 6b: SMART Disk Health ==========
+# NVMe SMART checks on the drives with no redundancy (cwwk rpool, cobra media)
+- name: Phase 6b - SMART disk-health monitoring
+  ansible.builtin.import_playbook: system/smart_monitoring.yml
+  tags: [smart_monitoring, monitoring]
   tags: [services]
 
 # ========== PHASE 7: Final Updates ==========
