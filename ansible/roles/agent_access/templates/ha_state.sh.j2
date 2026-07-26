@@ -1,0 +1,33 @@
+#!/bin/sh
+# ha_state — read-only Home Assistant entity state for the {{ agent_access_user }}
+# account. Managed by Ansible — do not edit manually.
+#
+# GET /api/states/<entity> ONLY. The HA monitor token stays on this host: the
+# caller never receives it, and because this only ever issues a GET against the
+# states endpoint, the account cannot call services (i.e. cannot control any
+# device). Contrast an unauthenticated probe, which HA rejects with a 401 and
+# logs as a failed login — this authenticated read does not trip that.
+#
+# Root-owned and not writable by {{ agent_access_user }}.
+set -u
+
+ENTITY="${1:-}"
+case "$ENTITY" in
+    '' | *[!a-z0-9._]*)
+        echo "usage: ha_state <entity_id>   e.g. climate.master_bedroom" >&2
+        exit 2
+        ;;
+esac
+
+SECRETS="/home/{{ infrastructure_user }}/homeassistant/secrets.yaml"
+# Matches: ha_monitor_token: "value"  or  ha_monitor_token: value
+TOKEN=$(sed -n 's/^ha_monitor_token:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}.*/\1/p' \
+        "$SECRETS" 2>/dev/null | head -1)
+if [ -z "$TOKEN" ]; then
+    echo "ha_state: monitor token not found in $SECRETS" >&2
+    exit 1
+fi
+
+curl -s --max-time 10 \
+    -H "Authorization: Bearer $TOKEN" \
+    "http://localhost:8123/api/states/$ENTITY"

@@ -1,0 +1,71 @@
+{#
+  Managed by Ansible — do not edit manually.
+
+  These are Jinja comments deliberately: OpenCode validates its config and
+  REJECTS unrecognized top-level keys ("Configuration is invalid ...
+  Unrecognized keys"), so JSON-style "_comment" fields break the whole file
+  and the agent refuses to run. Keys inside permission.bash are worse — that
+  map is free-form, so a comment key there is accepted as a glob pattern whose
+  permission value is a sentence rather than allow/ask/deny. Keep all prose
+  here, where it never reaches the rendered file.
+
+  TWO FOOTGUNS, verified against opencode.ai/docs/permissions:
+
+  1. bash defaults to ALLOW. If no pattern matches and no "*" catch-all is
+     defined, the command runs. Omitting the catch-all below leaves an open
+     shell on a box holding keys trusted by all 7 hosts.
+
+  2. Rules are LAST-MATCH-WINS, not first-match. "*": "deny" must therefore be
+     declared FIRST, with the specific allows after it. Reversed, everything is
+     denied and the sweep silently stops working.
+
+  "ask" is deliberately unused. Headless it is not a control: with no TTY there
+  is nobody to prompt, and `--auto` (which investigate.sh never passes) turns
+  every "ask" into "allow". Anything that must not happen is denied outright.
+  "ask" is reserved for the Phase C operator, where a human is present by
+  construction.
+
+  Glob matching on a command string is a coarse filter, not a security
+  boundary. The real constraint on "ssh *-agent *" is the key itself: pinned to
+  10.30.40.203, mapped to a read-only account, revocable fleet-wide in one run.
+#}
+{
+  "$schema": "https://opencode.ai/config.json",
+
+  "model": "{{ agent_monitor_model }}",
+  "small_model": "{{ agent_small_model }}",
+
+  "agent": {
+    "infra-monitor": {
+      "steps": {{ agent_max_steps }}
+    }
+  },
+
+  "permission": {
+    "edit": "deny",
+    "write": "deny",
+    "webfetch": "deny",
+
+    "bash": {
+      "*": "deny",
+      "ssh *-agent *": "allow",
+      "cat {{ agent_state_dir }}/*": "allow",
+      "ls {{ agent_state_dir }}*": "allow",
+      "date*": "allow"
+    }
+  },
+
+  "provider": {
+    "anthropic": {
+      "options": {
+        "timeout": {{ agent_provider_timeout_ms }}
+      }
+    }{% if vault_fireworks_api_key is defined %},
+    "fireworks": {
+      "options": {
+        "timeout": {{ agent_provider_timeout_ms }}
+      }
+    }{% endif %}
+
+  }
+}

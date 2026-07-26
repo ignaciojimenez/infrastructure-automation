@@ -47,15 +47,15 @@ All as code in the `platform/proxmox` role (toggle `enable_proxmox_power_tuning`
 ---
 
 
-## Priority 1 — Autonomous Agent LXC (Phase A delivered 2026-07-22)
+## Priority 1 — Autonomous Agent LXC (Phases A + B delivered; C remains)
 
-**Risk:** Medium. A production container with SSH reach to all 7 hosts. Compromise exposes read-only infrastructure visibility. Scoped by `from=` IP pinning on `authorized_keys`, read-only NOPASSWD sudo, UFW default-deny inbound, and revocation in one Ansible run.
+**Risk:** Medium. A production container with SSH reach to all 7 hosts. Compromise exposes read-only infrastructure visibility plus a spend-capped API key. Scoped by `from=` IP pinning on `authorized_keys`, read-only NOPASSWD sudo, OpenCode `deny` on all writes, UFW default-deny inbound, and revocation in one Ansible run.
 
 ### Status
 
-**Phase A is built and live.** CT 103 (`agent-lxc`, 10.30.40.203) exists, is managed end-to-end by this repo, and runs the free Tier 1 shell sweep. **No AI runtime, no API key, no spend** — that is Phase B and was deliberately not started.
+**Phases A and B are built and live** (A 2026-07-22, B 2026-07-25/26). CT 103 (`agent-lxc`) runs the free hourly Tier 1 sweep, plus Tier 2 investigation on OpenCode + Sonnet 5: anomaly-triggered, Slack-alert-triggered, and a weekly digest. It has produced real root-caused plans for real failures (hifipi audio-check bug, HA backup tar race, a failing smartmontools unit). **Full operator reference: [`docs/AGENT_LXC.md`](AGENT_LXC.md).** Decision log: `docs/ARCHITECTURE_DECISIONS.md` § Agent LXC.
 
-The original sketch here called for Claude Code; the runtime decision was revisited and settled on **OpenCode** for Phase B, for its per-tool permission system (bash glob allow/deny) and native per-agent permission profiles. See `docs/ARCHITECTURE_DECISIONS.md`.
+**Only Phase C (operator mode) remains** — see below. One Phase-B acceptance criterion is deliberately deferred with a documented decision: the destroy/rebuild reproducibility test (SSH-key management), covered under "What remains".
 
 ### What Phase A delivered
 
@@ -88,9 +88,20 @@ There is no CLI path today: the only OPNsense-adjacent vault key is `vault_ns_ap
 
 ### What remains
 
-**Phase B — OpenCode + Tier 2 investigation.** Separate branch. Pinned binary with checksum, `opencode.json` with `edit`/`write`/`webfetch` denied and bash deny-by-default, an `infra-monitor` agent definition, `ANTHROPIC_API_KEY` in a `0600` env file (never a cron argument), and `investigate.sh` consuming `last_anomaly.json`. Verify on the box before enabling cron: that `ask` fails closed in headless mode, how `opencode run` selects a named agent, and the exact `--format json` shape.
+**Phase B is done** (OpenCode + Tier 2, live 2026-07-25/26; see `docs/AGENT_LXC.md`). Two spend-capped credentials in the vault (`vault_anthropic_api_key`, `vault_slack_read_token`); everything verified live except the rebuild test below.
 
-**Phase C — operator mode.** Sketch only; needs its own decision round (passphrase key vs SSH-CA, sudo scope, audit logging).
+**Phase C — operator mode.** Sketch only; needs its own decision round (passphrase key vs SSH-CA, sudo scope, audit logging). The plan files Phase B now writes are its input, already in a stable format.
+
+**Follow-ups surfaced while building/closing Phase B** (small, not blocking):
+- **cobra `smartmontools.service` is failing** (no SMART-capable device on the Pi) — the agent's own digest proposes `sudo systemctl disable --now smartmontools.service`. Safe cleanup, silences a permanently-failing unit.
+- **`read_agent` can read Slack tokens via the cron journal** — the wrapper cron lines carry the webhook tokens, and `journalctl -u cron` is permitted. This is Priority 3 (tokens out of cron); Phase B's `0600` env-file pattern is the model to extend fleet-wide.
+- **Rotate the credentials exposed in chat** during setup — the Anthropic key and the (unused) HA long-lived token were pasted in a session transcript. The Anthropic key is spend-capped; the HA token was never needed (the `ha_state` helper uses the existing `vault_ha_monitor_token`) and should be deleted in HA → Profile → Long-Lived Tokens.
+- **Confirm the Anthropic Console spend cap is set** on the dedicated workspace — logged per-run cost is low, but the hard cap is the backstop and is user-side.
+
+**Rebuild reproducibility + agent SSH-key management — `V:High E:Med`, deferred 2026-07-25.** The "destroy and recreate CT 103 from Ansible with nothing but the vault password" criterion (below) is **unverified**, and there is a known reason to expect it currently *fails* as written: `roles/services/agent` generates `agent_lxc_ed25519` fresh on the container, and its public half is hard-committed in `group_vars/all/main.yml` as `agent_lxc_ssh_pubkey`. A rebuild therefore mints a **new** keypair whose pubkey must be copied back into `group_vars` and pushed fleet-wide via `agent_access.yml` — a manual step beyond the vault password. Two ways to close it, decide before testing:
+  1. **Accept + document** — a rebuild is rare; treat "capture the printed pubkey → commit → re-run agent_access" as a documented two-command step, and reword the criterion.
+  2. **Vault the keypair** — store `agent_lxc_ed25519` (private + public) in the vault and deploy it on rebuild, so identity is stable and rebuild really is vault-password-only. Trade-off: the private key now lives in the (encrypted, committed) vault instead of never leaving the box — a weaker but arguably acceptable posture for a read-only, IP-pinned, one-run-revocable key.
+  The actual destroy/recreate test is disruptive (~15-20 min, the box is now doing real work) so it is deferred; do it under option (1) or (2), not blind. This is the single highest-value unproven claim about the system.
 
 ### Acceptance Criteria
 - [x] CT 103 exists, runs, `onboot: 1`
@@ -100,7 +111,11 @@ There is no CLI path today: the only OPNsense-adjacent vault key is `vault_ns_ap
 - [x] Container SSH key accepted on all 7 hosts, IP-restricted — sweep reports `7/7 hosts reachable` in ~12s; `agent_access.yml` is `changed=0` fleet-wide on re-run
 - [x] A synthetic Tier 1 fault produces a real `#home-alerts` message, and recovery clears — verified in Slack (`ALERT: Script Failed on agent-lxc`, 09:06:02), plus a valid `last_anomaly.json`
 - [x] Opportunistic: the key is rejected from a source other than 10.30.40.203 — throwaway key pinned to `192.0.2.1` was denied from the container; file restored by re-running the role
-- [ ] Container can be destroyed and recreated by Ansible with no manual step beyond the vault password *(a Phase B criterion; the pieces exist but a full destroy/recreate has not been exercised)*
+- [x] **Phase B:** permission tests fail closed — a write auto-rejects headless (file absent); `ssh` to a non-`-agent` host is denied
+- [x] **Phase B:** a synthetic anomaly, and three *real* `#home-alerts` failures, each produced a coherent Slack summary + a plan file, zero human steps
+- [x] **Phase B:** the weekly digest runs end-to-end (swept all 7 hosts, clean summary to `#home-logging`, ~$0.51)
+- [x] **Phase B:** the agent uses the scoped-read helpers — a re-investigation read the actual check script and produced a materially better root cause
+- [ ] **Phase B (deferred):** container can be destroyed and recreated by Ansible with no manual step beyond the vault password — unverified, and expected to fail as written (SSH-key regeneration); see "Rebuild reproducibility" above for the two options and decide before testing
 
 **Amended from the original plan:** the criterion "each use fires the existing `ssh_alert` Slack ping" was deliberately dropped. At hourly × 7 hosts it meant ~168 pushes/day into the watched channel, and it would have kept the shared 30-minute cooldown permanently hot, *suppressing the laptop key's alerts* — the opposite of a control. Replaced with journal attribution, verified live: sshd records `Accepted publickey for read_agent from 10.30.40.203 ... SHA256:fpnOSa5…` persistently, and Slack shows the laptop's ping firing while the container produced none.
 

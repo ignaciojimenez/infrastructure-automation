@@ -1,0 +1,43 @@
+#!/bin/sh
+# agent_read — read-only access to the infrastructure user's monitoring logs
+# and check scripts, for the {{ agent_access_user }} account.
+# Managed by Ansible — do not edit manually.
+#
+# Runs as root (via sudo) to reach the infrastructure user's 0700 home, which
+# is where per-service monitoring output and the check scripts live and which
+# read_agent otherwise cannot see. Names are validated to reject slashes and
+# "..", so — unlike a `sudo cat /home/user/.logs/*` glob, whose `*` spans `/`
+# and would match `../../etc/...` — this cannot be coaxed into reading files
+# outside the two whitelisted directories.
+#
+# Read-only by construction: it only ever `cat`s or `ls`s. It is root-owned and
+# not writable by {{ agent_access_user }}, so the account cannot alter what it
+# reads.
+set -u
+
+LOG_DIR="/home/{{ infrastructure_user }}/.logs"
+SCRIPT_DIR="/home/{{ infrastructure_user }}/.scripts"
+
+usage() {
+    echo "usage: agent_read {list-logs | list-scripts | log <name> | script <name>}" >&2
+    exit 2
+}
+
+valid_name() {
+    case "$1" in
+        '' | */* | *..*) return 1 ;;              # no empty, no slash, no ..
+        *[!A-Za-z0-9._-]*) return 1 ;;            # only safe filename chars
+        *) return 0 ;;
+    esac
+}
+
+case "${1:-}" in
+    list-logs)    ls -1 "$LOG_DIR"    2>/dev/null; exit 0 ;;
+    list-scripts) ls -1 "$SCRIPT_DIR" 2>/dev/null; exit 0 ;;
+    log)          valid_name "${2:-}" || usage; f="$LOG_DIR/$2" ;;
+    script)       valid_name "${2:-}" || usage; f="$SCRIPT_DIR/$2" ;;
+    *)            usage ;;
+esac
+
+[ -f "$f" ] || { echo "not found: $f" >&2; exit 1; }
+cat "$f"

@@ -1,0 +1,402 @@
+#!/bin/sh
+# investigate.sh — Tier 2 investigation (managed by Ansible)
+#
+# Modes:
+#   (no args)   anomaly-triggered. Runs only when Tier 1 wrote a NEWER anomaly
+#               snapshot than the last one handled. Free on the vast majority
+#               of ticks.
+#   --slack     poll #home-alerts, investigate NEW failure alerts the hourly
+#               sweep can't see (per-service script failures, HA alerts), with
+#               content-dedup so a nightly-recurring failure is investigated
+#               once, not every night.
+#   --digest    weekly fleet summary, posted to #home-logging.
+#
+# Deliberately separate from fleet_health_check.sh: Tier 1 must keep working —
+# and stay free — even if this is broken, misconfigured, or out of credit.
+#
+# The Slack read is done HERE, by this trusted script — not by the agent. The
+# agent only ever investigates hosts over read-only SSH; its permission
+# allowlist never needs to reach slack.com.
+#
+# Never passes --auto to opencode: headless, --auto turns every "ask" into
+# "allow". The config denies rather than asks, so no such flag is needed.
+
+set -u
+
+ENV_FILE="{{ agent_env_file }}"
+AGENT_DIR="{{ agent_state_dir }}"
+PLANS_DIR="{{ agent_plans_dir }}"
+ANOMALY_FILE="$AGENT_DIR/last_anomaly.json"
+MARKER="$AGENT_DIR/.last_investigated"
+FAIL_MARKER="$AGENT_DIR/.last_failure_alert"
+FAIL_COOLDOWN_SECONDS={{ agent_failure_alert_cooldown_seconds }}
+OPENCODE="{{ opencode_bin }}"
+MONITOR_AGENT="infra-monitor"
+
+# Slack watch
+SLACK_CHANNEL="{{ agent_slack_channel }}"
+SLACK_DEDUP_DAYS={{ agent_slack_dedup_days }}
+SLACK_MAX_PER_RUN={{ agent_slack_max_per_run }}
+SLACK_TS_FILE="$AGENT_DIR/.last_slack_ts"
+SLACK_SEEN_DIR="$AGENT_DIR/slack_seen"
+
+# One opencode run fans SSH out to the whole fleet and leaves a short-lived
+# server; two or three at once saturate this 1-CPU / 2GB box (learned the hard
+# way). The lock makes any second caller a clean no-op — anomaly, slack, and
+# digest modes all share it, so they serialize rather than pile up.
+LOCK="$AGENT_DIR/.investigate.lock"
+mkdir -p "$AGENT_DIR" "$SLACK_SEEN_DIR"
+exec 9>"$LOCK"
+if ! flock -n 9; then
+    echo "another investigate.sh holds the lock; exiting" >&2
+    exit 0
+fi
+
+if [ ! -r "$ENV_FILE" ]; then
+    echo "FATAL: cannot read $ENV_FILE — Tier 2 not configured" >&2
+    exit 1
+fi
+# shellcheck disable=SC1090
+. "$ENV_FILE"
+
+if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+    echo "FATAL: ANTHROPIC_API_KEY unset in $ENV_FILE" >&2
+    exit 1
+fi
+export ANTHROPIC_API_KEY
+[ -n "${FIREWORKS_API_KEY:-}" ] && export FIREWORKS_API_KEY
+
+mkdir -p "$PLANS_DIR"
+
+# ============================================================
+# Helpers
+# ============================================================
+
+# Posts to Slack. JSON-escaped via python3 (summaries carry quotes/newlines).
+slack() {
+    _webhook="$1"; _text="$2"
+    [ -z "$_webhook" ] && return 0
+    _payload=$(printf '%s' "$_text" | python3 -c \
+        'import json,sys; print(json.dumps({"text": sys.stdin.read()}))' 2>/dev/null) || return 0
+    curl -s --max-time 15 -X POST \
+        "https://hooks.slack.com/services/${_webhook}" \
+        -H 'Content-Type: application/json' -d "$_payload" >/dev/null 2>&1
+}
+
+# Alerts about OUR OWN failure, at most once per cooldown window, so a
+# persistent problem retrying hourly doesn't re-alert every hour.
+alert_failure_throttled() {
+    _msg="$1"; _now=$(date +%s); _last=0
+    [ -f "$FAIL_MARKER" ] && _last=$(cat "$FAIL_MARKER" 2>/dev/null || echo 0)
+    case "$_last" in ''|*[!0-9]*) _last=0 ;; esac
+    if [ "$((_now - _last))" -ge "$FAIL_COOLDOWN_SECONDS" ]; then
+        printf '%s\n' "$_now" > "$FAIL_MARKER"
+        slack "${AGENT_SLACK_ALERT:-}" "$_msg"
+    else
+        echo "failure alert suppressed (cooldown active)" >&2
+    fi
+}
+
+# run_agent — prompt on stdin. Uses --format json (text mode dumps the whole
+# ANSI-wrapped session); keeps only the final assistant message and sums cost.
+# Sets AGENT_OUTPUT, AGENT_RC, AGENT_COST.
+run_agent() {
+    _prompt=$(cat)
+    # Hard timeout on the opencode call. Without it, a run that hangs (observed:
+    # opencode occasionally finishes its work but the process does not exit)
+    # would block investigate.sh forever — and since we hold the flock, that
+    # stalls ALL future Tier 2 work, not just this run. -k 15 SIGKILLs it if it
+    # ignores SIGTERM; the stray-process sweep below clears any detached child
+    # opencode leaves behind (safe: the flock guarantees we are the only run).
+    _raw=$(timeout -k 15 {{ agent_run_timeout_seconds }} \
+           "$OPENCODE" run --agent "$MONITOR_AGENT" --format json "$_prompt" 2>&1)
+    AGENT_RC=$?
+    pkill -u "$(id -un)" -f 'opencode run' 2>/dev/null || true
+    if [ "$AGENT_RC" -eq 124 ]; then
+        AGENT_OUTPUT="opencode timed out after {{ agent_run_timeout_seconds }}s and was killed"
+        AGENT_COST="0"; return
+    fi
+    if [ "$AGENT_RC" -ne 0 ]; then
+        AGENT_OUTPUT="$_raw"; AGENT_COST="0"; return
+    fi
+    AGENT_OUTPUT=$(printf '%s' "$_raw" | python3 -c '
+import json, sys
+msgs, order = {}, []
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        ev = json.loads(line)
+    except ValueError:
+        continue
+    if ev.get("type") == "text":
+        p = ev.get("part", {})
+        mid = p.get("messageID")
+        if mid not in msgs:
+            msgs[mid] = []; order.append(mid)
+        msgs[mid].append(p.get("text", ""))
+print("".join(msgs[order[-1]]) if order else "")
+' 2>/dev/null)
+    AGENT_COST=$(printf '%s' "$_raw" | python3 -c '
+import json, sys
+t = 0.0
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        ev = json.loads(line)
+    except ValueError:
+        continue
+    if ev.get("type") == "step_finish":
+        t += ev.get("part", {}).get("cost", 0) or 0
+print(f"{t:.4f}")
+' 2>/dev/null)
+    [ -z "$AGENT_COST" ] && AGENT_COST="0"
+    if [ -z "$(printf '%s' "$AGENT_OUTPUT" | tr -d '[:space:]')" ]; then
+        AGENT_RC=1
+        AGENT_OUTPUT="agent exited 0 but produced no text. Raw head:
+$(printf '%s' "$_raw" | head -c 500)"
+    fi
+}
+
+# run_and_report <slack_channel> <header> — prompt on stdin. Runs the agent and,
+# on success, extracts the marker-bounded plan, writes it to a dated file, and
+# posts the clean summary to <slack_channel>. On failure, throttled-alerts to
+# the watched channel (always #home-alerts, whatever the success channel is).
+# Returns the agent rc. Used by all three modes so the marker-split, plan-write
+# and cost-log logic lives in exactly one place — the digest previously posted
+# AGENT_OUTPUT raw, which leaked the ===PLAN===/===SUMMARY=== markers to Slack.
+run_and_report() {
+    _channel="$1"
+    _header="$2"
+    run_agent
+    echo "run cost: \$${AGENT_COST}"
+    if [ "$AGENT_RC" -ne 0 ]; then
+        echo "run failed (rc=$AGENT_RC): $AGENT_OUTPUT" >&2
+        alert_failure_throttled ":warning: ${_header} failed on agent-lxc (rc=$AGENT_RC). See ~/.logs/investigate.log"
+        return "$AGENT_RC"
+    fi
+
+    # The agent emits ===PLAN=== <plan> ===SUMMARY=== <summary>. Extract between
+    # the markers (discarding any narration/fences outside them).
+    _plan=$(printf '%s\n' "$AGENT_OUTPUT" \
+        | awk '/^===PLAN===[[:space:]]*$/{f=1;next} /^===SUMMARY===[[:space:]]*$/{f=0} f' \
+        | grep -v '^```')
+    _summary=$(printf '%s\n' "$AGENT_OUTPUT" | sed '1,/^===SUMMARY===[[:space:]]*$/d' | grep -v '^```')
+    if [ -z "$(printf '%s' "$_plan" | tr -d '[:space:]')" ]; then
+        echo "WARN: no ===PLAN=== marker; persisting raw output" >&2
+        _plan="$AGENT_OUTPUT"
+    fi
+    if [ -z "$(printf '%s' "$_summary" | tr -d '[:space:]')" ]; then
+        _summary=$(printf '%s\n' "$_plan" | grep -v '^[[:space:]]*$' | head -6)
+    fi
+
+    _slug=$(printf '%s\n' "$_plan" | sed -n 's/^#[[:space:]]*//p' | head -1 \
+        | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' \
+        | sed 's/^-*//;s/-*$//' | cut -c1-50)
+    [ -z "$_slug" ] && _slug="anomaly"
+    _file="$PLANS_DIR/$(date -u +%Y-%m-%d)-${_slug}.md"
+    if printf '%s\n' "$_plan" > "$_file"; then
+        _note="Plan: \`$_file\`"
+    else
+        _note="(Could not write the plan file — check the log.)"
+    fi
+
+    slack "$_channel" "${_header} (cost \$${AGENT_COST})
+
+$_summary
+
+$_note"
+    echo "--- wrote: $_file ---"
+    return 0
+}
+
+# ============================================================
+# Weekly digest
+# ============================================================
+
+if [ "${1:-}" = "--digest" ]; then
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] weekly digest starting"
+    run_and_report "${AGENT_SLACK_LOGGING:-}" ":bar_chart: *Weekly fleet digest*" <<'PROMPT'
+Produce a weekly fleet health digest, following your normal output contract
+(the ===PLAN=== / ===SUMMARY=== structure).
+
+Sweep every host for slow-moving trends rather than acute faults: disk growth,
+repeated service restarts, units that keep failing and self-healing, unusual
+journal volume, and any host whose own monitoring has gaps. Read the per-host
+monitoring logs with `sudo agent_read log <name>` — that is where trends show.
+
+The plan body is the detailed findings across the fleet; the summary is a
+short, severity-first "what to watch this week" for a human skimming it in
+#home-logging. If the fleet is simply healthy, say so in one line rather than
+padding it.
+PROMPT
+    exit "$AGENT_RC"
+fi
+
+# ============================================================
+# Slack watch — investigate failures the sweep can't see
+# ============================================================
+
+if [ "${1:-}" = "--slack" ]; then
+    if [ -z "${SLACK_READ_TOKEN:-}" ]; then
+        echo "SLACK_READ_TOKEN unset; slack watch not configured" >&2
+        exit 0
+    fi
+
+    _oldest=$(cat "$SLACK_TS_FILE" 2>/dev/null || echo 0)
+    case "$_oldest" in ''|*[!0-9.]*) _oldest=0 ;; esac
+
+    _resp=$(curl -s --max-time 20 \
+        -H "Authorization: Bearer ${SLACK_READ_TOKEN}" \
+        "https://slack.com/api/conversations.history?channel=${SLACK_CHANNEL}&oldest=${_oldest}&limit=50")
+
+    # Filter to genuine, un-seen failure alerts. Excludes our own posts and the
+    # channel's non-failure noise so we never investigate ourselves into a loop.
+    _parsed=$(printf '%s' "$_resp" | python3 -c '
+import json, sys, re
+try:
+    d = json.load(sys.stdin)
+except ValueError:
+    print("ERR json"); sys.exit(0)
+if not d.get("ok"):
+    print("ERR " + str(d.get("error", "unknown"))); sys.exit(0)
+
+rows, maxts = [], 0.0
+for m in d.get("messages", []):
+    try:
+        tsf = float(m.get("ts", "0"))
+    except ValueError:
+        tsf = 0.0
+    maxts = max(maxts, tsf)
+    text = m.get("text", "") or ""
+    for a in m.get("attachments", []) or []:
+        text += " " + (a.get("text", "") or a.get("fallback", "") or "")
+    low = text.lower()
+    t = text.strip()
+    # A genuine alert STARTS with an alert emoji (wrapper uses :x:, HA uses
+    # :warning:/:rotating_light:), or carries the "ALERT:" header the wrapper
+    # emits. Requiring the prefix (not just a keyword anywhere) excludes leaked
+    # plan text ("# ...", "The sweep reported..."), journal dumps (start with a
+    # digit), and other prose that merely mentions failed/error.
+    # NOTE: no apostrophes in this block — it is inside python3 -c '...' and a
+    # single quote would terminate the shell quoting.
+    looks_alert = t.startswith((":x:", ":warning:", ":rotating_light:",
+                                "❌", "🚨", "⚠️")) or ("ALERT:" in text)
+    if not looks_alert:
+        continue
+    # our own output / channel noise
+    if "agent-lxc" in low or "fleet investigation" in low:
+        continue
+    if t.startswith(":mag:") or t.startswith(":robot_face:"):
+        continue
+    if any(w in low for w in ("agent key in use", "trains to", "away mode",
+                              "back to normal", "heartbeat")):
+        continue
+    sig = re.sub(r"[^a-z0-9 ]", " ", low)
+    sig = re.sub(r"\b\d+\b", " ", sig)
+    sig = re.sub(r"\s+", " ", sig).strip()[:60]
+    slug = re.sub(r"[^a-z0-9]+", "-", sig).strip("-")[:50] or "alert"
+    rows.append((tsf, slug, " ".join(text.split())))
+
+print(f"OK {maxts:.6f}")
+for tsf, slug, text in sorted(rows):
+    print(f"{tsf}\t{slug}\t{text}")
+' 2>/dev/null)
+
+    _status=$(printf '%s\n' "$_parsed" | head -1)
+    case "$_status" in
+        "OK "*)
+            _maxts=$(printf '%s' "$_status" | cut -d' ' -f2)
+            ;;
+        *)
+            echo "slack fetch failed: $_status" >&2
+            alert_failure_throttled ":warning: Slack watch could not read #home-alerts on agent-lxc ($_status). Check the read token. See ~/.logs/investigate.log"
+            exit 1
+            ;;
+    esac
+
+    _tmp=$(mktemp)
+    printf '%s\n' "$_parsed" | tail -n +2 > "$_tmp"
+
+    _count=0
+    _tab=$(printf '\t')
+    while IFS="$_tab" read -r _tsf _slug _text; do
+        [ -z "$_slug" ] && continue
+        _seen="$SLACK_SEEN_DIR/$_slug"
+        # Content-dedup: a nightly-recurring failure is investigated once, not
+        # every night. Skip if this signature was investigated recently.
+        if [ -f "$_seen" ]; then
+            _age_d=$(( ( $(date +%s) - $(stat -c %Y "$_seen") ) / 86400 ))
+            if [ "$_age_d" -lt "$SLACK_DEDUP_DAYS" ]; then
+                echo "dedup: '$_slug' investigated ${_age_d}d ago (< ${SLACK_DEDUP_DAYS}d); skipping" >&2
+                continue
+            fi
+        fi
+        if [ "$_count" -ge "$SLACK_MAX_PER_RUN" ]; then
+            echo "reached SLACK_MAX_PER_RUN=$SLACK_MAX_PER_RUN; remaining alerts next run" >&2
+            break
+        fi
+        echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] investigating slack alert: $_text"
+        run_and_report "${AGENT_SLACK_ALERT:-}" ":mag: *Fleet investigation*" <<PROMPT
+A failure alert was posted to the Slack channel #home-alerts:
+
+"$_text"
+
+The hourly Tier 1 sweep did not surface this — it is likely a per-service
+monitoring-script failure or a Home Assistant alert. Investigate the underlying
+cause on the affected host and produce a plan following your output contract.
+Confirm the failure is still current before proposing a fix; these alerts often
+fire on a schedule and may have self-cleared.
+PROMPT
+        touch "$_seen"
+        _count=$((_count + 1))
+    done < "$_tmp"
+    rm -f "$_tmp"
+
+    # Advance the watermark only after a successful fetch, so a failed poll
+    # retries the same window rather than skipping alerts.
+    [ -n "$_maxts" ] && [ "$_maxts" != "0" ] && printf '%s' "$_maxts" > "$SLACK_TS_FILE"
+    echo "slack watch done; investigated $_count alert(s)"
+    exit 0
+fi
+
+# ============================================================
+# Anomaly-triggered investigation (default)
+# ============================================================
+
+[ -f "$ANOMALY_FILE" ] || { echo "no anomaly snapshot; nothing to do"; exit 0; }
+
+# Only investigate a snapshot newer than the last one handled, so a persistent
+# fault isn't re-investigated (and re-billed) every hour.
+if [ -f "$MARKER" ] && [ ! "$ANOMALY_FILE" -nt "$MARKER" ]; then
+    echo "anomaly snapshot unchanged since last investigation; skipping"
+    exit 0
+fi
+
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] investigating new anomaly"
+anomaly=$(cat "$ANOMALY_FILE")
+
+run_and_report "${AGENT_SLACK_ALERT:-}" ":mag: *Fleet investigation*" <<PROMPT
+The hourly Tier 1 fleet sweep reported the anomaly below. Investigate it and
+produce a plan following your output contract.
+
+Treat these findings as a starting point, not as ground truth: the sweep is
+deliberately shallow and ran up to an hour ago. Confirm the symptom still
+holds before reasoning about causes.
+
+\`\`\`json
+$anomaly
+\`\`\`
+PROMPT
+rc=$?
+
+# Mark handled only on success, so a transient failure retries next hour rather
+# than silently swallowing the anomaly.
+if [ "$rc" -eq 0 ]; then
+    date -u +%Y-%m-%dT%H:%M:%SZ > "$MARKER"
+    rm -f "$FAIL_MARKER"
+fi
+exit "$rc"

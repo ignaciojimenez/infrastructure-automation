@@ -68,7 +68,21 @@ agent_wrapper_max_age_hours: 26
 agent_ssh_timeout: 15
 
 # ============================================================
-# Phase B — declared now, off until the agent runtime lands
+# Phase B — OpenCode runtime and Tier 2 investigation
 # ============================================================
 
-enable_agent_investigate: false
+enable_agent_investigate: true
+
+# Per-agent, provider-qualified models. Switching provider is a change here
+# plus a redeploy — no code change — which is what makes an open-weight A/B
+# cheap to run. See docs/ARCHITECTURE_DECISIONS.md.
+#
+# Investigation drives real diagnosis a human acts on, so it runs on Sonnet 5.
+# The earlier Haiku choice optimized a tier where cost barely matters:
+# investigations are 1-3/day, so Sonnet costs ~$0.30-0.60/mo more — noise —
+# while being materially better at cross-host correlation and root cause.
+# Haiku confirmed non-issues fine but is shallow on real root cause.
+# small_model (session titles, incidental) stays cheap.
+agent_monitor_model: "anthropic/claude-sonnet-5"
+agent_digest_model: "anthropic/claude-sonnet-5"
+agent_small_model: "anthropic/claude-haiku-4-5"

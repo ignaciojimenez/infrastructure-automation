@@ -30,5 +30,86 @@ agent_wrapper_max_age_hours: 26
 agent_ssh_timeout: 15
 agent_fleet_hosts: []
 
-# Phase B — declared so the role reads as a whole; not consumed yet.
+# ============================================================
+# Phase B — OpenCode runtime and Tier 2 investigation
+# ============================================================
+
+# Master toggle. Everything below is inert until this is true AND
+# vault_anthropic_api_key exists — the role skips rather than half-installs.
 enable_agent_investigate: false
+
+# Pinned release. Upgrading is bumping these two together; the checksum comes
+# from the GitHub release API (`gh release view <tag> --json assets`), not from
+# hashing whatever we happened to download.
+opencode_version: "1.18.4"
+opencode_sha256: "bab463c3fb3224d388bb7cfad63f38703df9cf0be2cfd2ce8cb49d886b53a174"
+# glibc build — Debian 13. The -musl asset is for Alpine and will not run here.
+opencode_asset: "opencode-linux-x64.tar.gz"
+opencode_install_dir: "/opt/opencode"
+opencode_bin: "/usr/local/bin/opencode"
+
+# Models are per-agent and provider-qualified ("<provider>/<model>"), so
+# switching provider is a variable change and a redeploy — no code, no
+# re-architecture. See docs/ARCHITECTURE_DECISIONS.md for why cost is not the
+# driver here.
+#
+# Triage is high-volume and zero-blast-radius (it only reports), so it is the
+# right place to trade capability for cost — and the right place to A/B an
+# open-weight model against Haiku on real anomalies.
+agent_monitor_model: "anthropic/claude-haiku-4-5"
+# The weekly digest is one-shot and reads a week of context; worth a better model.
+agent_digest_model: "anthropic/claude-sonnet-5"
+# Used by OpenCode for incidental work (session titles). Keep it cheap.
+agent_small_model: "anthropic/claude-haiku-4-5"
+
+agent_provider_timeout_ms: 600000
+
+# Bounds a runaway loop. An investigation that cannot conclude in this many
+# steps is one a human should look at anyway.
+agent_max_steps: 40
+
+# Hard wall-clock cap on a single opencode invocation. Observed: a run can
+# finish its reasoning but the process fails to exit; without this cap that
+# hangs investigate.sh indefinitely while it holds the flock, stalling all
+# Tier 2 work. 10 min is well above a normal investigation (~2-5 min).
+agent_run_timeout_seconds: 600
+
+# Credentials live in a 0600 env file sourced by the scripts — never in a cron
+# argument, where `crontab -l`, `ps`, and cron mail would all leak them.
+agent_env_file: "/etc/agent/agent.env"
+agent_plans_dir: "{{ agent_state_dir }}/plans"
+
+# Runs 10 minutes after the Tier 1 sweep at :{{ agent_sweep_minute }}, giving
+# it time to finish writing the snapshot. Exits immediately (and free) unless
+# the snapshot is newer than the last one investigated.
+agent_investigate_minute: "47"
+
+# Cap on how often Tier 2 may alert about its OWN failure. A persistent
+# anomaly retries hourly by design; without this each retry re-alerts.
+agent_failure_alert_cooldown_seconds: 21600  # 6h
+
+# ------------------------------------------------------------
+# Slack watch — investigate failures the hourly sweep can't see
+# ------------------------------------------------------------
+# The Tier 1 sweep only sees what read_agent can see (failed systemd units,
+# disk, monitoring freshness). Per-service wrapper failures and Home Assistant
+# alerts (heating offline, Shelly) only ever appear in #home-alerts. This mode
+# reads that channel and investigates NEW failure alerts. The read is done by
+# the trusted script, not the agent — the agent's SSH-only allowlist is
+# untouched. Gated on vault_slack_read_token; inert until it exists.
+agent_slack_channel: "C01J36V2FPE"  # #home-alerts (channel IDs are not secret)
+agent_slack_watch_minute: "7"
+
+# Content-dedup window: a signature (e.g. "script failed on hifipi") is
+# investigated at most once per this many days, so a nightly-recurring failure
+# produces one plan a week, not one a night.
+agent_slack_dedup_days: 7
+
+# Safety cap: never launch more than this many investigations in a single poll,
+# so a burst of distinct alerts can't spiral cost or saturate the box.
+agent_slack_max_per_run: 3
+
+# Weekly digest — Sunday morning, offset from the hourly sweep.
+agent_digest_weekday: "0"
+agent_digest_hour: "9"
+agent_digest_minute: "17"
