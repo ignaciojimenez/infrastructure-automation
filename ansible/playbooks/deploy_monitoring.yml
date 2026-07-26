@@ -81,3 +81,7 @@
   roles:
     - role: platform/opnsense
   tags: [monitoring, opnsense]
+
+# SMART disk-health — self-gated on enable_smart_monitoring (cwwk + cobra only)
+- name: Deploy SMART disk-health monitoring
+  ansible.builtin.import_playbook: system/smart_monitoring.yml

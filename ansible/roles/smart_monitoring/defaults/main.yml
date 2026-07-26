@@ -1,0 +1,15 @@
+---
+# smart_monitoring role defaults
+#
+# Off by default — enabled per host with `enable_smart_monitoring: true` and a
+# `smart_devices` list of `TYPE:DEVICE` specs (see check_smart_health.sh header).
+# Only the two flash drives with no other early-warning signal are in scope:
+#   cwwk  → nvme:/dev/nvme0n1   (rpool, the storage layer under every VM/CT)
+#   cobra → sntasmedia:/dev/sda (Samsung T7 media drive, NVMe behind a USB bridge)
+enable_smart_monitoring: false
+smart_devices: []
+
+# Daily is sufficient — NVMe endurance and spare degrade gradually, not in
+# minutes. Matches the cadence of the other slow-signal checks.
+smart_check_minute: "17"
+smart_check_hour: "6"
