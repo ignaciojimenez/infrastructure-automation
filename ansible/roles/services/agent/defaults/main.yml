@@ -68,6 +68,12 @@ agent_provider_timeout_ms: 600000
 # steps is one a human should look at anyway.
 agent_max_steps: 40
 
+# Hard wall-clock cap on a single opencode invocation. Observed: a run can
+# finish its reasoning but the process fails to exit; without this cap that
+# hangs investigate.sh indefinitely while it holds the flock, stalling all
+# Tier 2 work. 10 min is well above a normal investigation (~2-5 min).
+agent_run_timeout_seconds: 600
+
 # Credentials live in a 0600 env file sourced by the scripts — never in a cron
 # argument, where `crontab -l`, `ps`, and cron mail would all leak them.
 agent_env_file: "/etc/agent/agent.env"

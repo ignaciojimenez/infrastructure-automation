@@ -102,8 +102,20 @@ alert_failure_throttled() {
 # Sets AGENT_OUTPUT, AGENT_RC, AGENT_COST.
 run_agent() {
     _prompt=$(cat)
-    _raw=$("$OPENCODE" run --agent "$MONITOR_AGENT" --format json "$_prompt" 2>&1)
+    # Hard timeout on the opencode call. Without it, a run that hangs (observed:
+    # opencode occasionally finishes its work but the process does not exit)
+    # would block investigate.sh forever — and since we hold the flock, that
+    # stalls ALL future Tier 2 work, not just this run. -k 15 SIGKILLs it if it
+    # ignores SIGTERM; the stray-process sweep below clears any detached child
+    # opencode leaves behind (safe: the flock guarantees we are the only run).
+    _raw=$(timeout -k 15 {{ agent_run_timeout_seconds }} \
+           "$OPENCODE" run --agent "$MONITOR_AGENT" --format json "$_prompt" 2>&1)
     AGENT_RC=$?
+    pkill -u "$(id -un)" -f 'opencode run' 2>/dev/null || true
+    if [ "$AGENT_RC" -eq 124 ]; then
+        AGENT_OUTPUT="opencode timed out after {{ agent_run_timeout_seconds }}s and was killed"
+        AGENT_COST="0"; return
+    fi
     if [ "$AGENT_RC" -ne 0 ]; then
         AGENT_OUTPUT="$_raw"; AGENT_COST="0"; return
     fi
@@ -149,15 +161,21 @@ $(printf '%s' "$_raw" | head -c 500)"
     fi
 }
 
-# run_and_report — prompt on stdin. Runs the agent, and on success extracts the
-# marker-bounded plan, writes it to a dated file, and posts the summary. On
-# failure, throttled-alerts. Returns the agent rc.
+# run_and_report <slack_channel> <header> — prompt on stdin. Runs the agent and,
+# on success, extracts the marker-bounded plan, writes it to a dated file, and
+# posts the clean summary to <slack_channel>. On failure, throttled-alerts to
+# the watched channel (always #home-alerts, whatever the success channel is).
+# Returns the agent rc. Used by all three modes so the marker-split, plan-write
+# and cost-log logic lives in exactly one place — the digest previously posted
+# AGENT_OUTPUT raw, which leaked the ===PLAN===/===SUMMARY=== markers to Slack.
 run_and_report() {
+    _channel="$1"
+    _header="$2"
     run_agent
-    echo "investigation cost: \$${AGENT_COST}"
+    echo "run cost: \$${AGENT_COST}"
     if [ "$AGENT_RC" -ne 0 ]; then
-        echo "investigation failed (rc=$AGENT_RC): $AGENT_OUTPUT" >&2
-        alert_failure_throttled ":warning: Fleet investigation failed on agent-lxc (rc=$AGENT_RC). The alert still stands and needs a human. See ~/.logs/investigate.log"
+        echo "run failed (rc=$AGENT_RC): $AGENT_OUTPUT" >&2
+        alert_failure_throttled ":warning: ${_header} failed on agent-lxc (rc=$AGENT_RC). See ~/.logs/investigate.log"
         return "$AGENT_RC"
     fi
 
@@ -186,7 +204,7 @@ run_and_report() {
         _note="(Could not write the plan file — check the log.)"
     fi
 
-    slack "${AGENT_SLACK_ALERT:-}" ":mag: *Fleet investigation* (cost \$${AGENT_COST})
+    slack "$_channel" "${_header} (cost \$${AGENT_COST})
 
 $_summary
 
@@ -201,26 +219,21 @@ $_note"
 
 if [ "${1:-}" = "--digest" ]; then
     echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] weekly digest starting"
-    run_agent <<'PROMPT'
-Produce a weekly fleet health digest.
+    run_and_report "${AGENT_SLACK_LOGGING:-}" ":bar_chart: *Weekly fleet digest*" <<'PROMPT'
+Produce a weekly fleet health digest, following your normal output contract
+(the ===PLAN=== / ===SUMMARY=== structure).
 
 Sweep every host for slow-moving trends rather than acute faults: disk growth,
 repeated service restarts, units that keep failing and self-healing, unusual
-journal volume, and any host whose own monitoring has gaps.
+journal volume, and any host whose own monitoring has gaps. Read the per-host
+monitoring logs with `sudo agent_read log <name>` — that is where trends show.
 
-Do not write any files. Output 5-10 bullet points to stdout, ordered by what
-most deserves attention. If the fleet is simply healthy, say so in one line.
+The plan body is the detailed findings across the fleet; the summary is a
+short, severity-first "what to watch this week" for a human skimming it in
+#home-logging. If the fleet is simply healthy, say so in one line rather than
+padding it.
 PROMPT
-    echo "digest cost: \$${AGENT_COST}"
-    if [ "$AGENT_RC" -ne 0 ]; then
-        echo "digest failed (rc=$AGENT_RC): $AGENT_OUTPUT" >&2
-        alert_failure_throttled ":warning: Weekly fleet digest failed on agent-lxc (rc=$AGENT_RC). See ~/.logs/investigate.log"
-        exit "$AGENT_RC"
-    fi
-    slack "${AGENT_SLACK_LOGGING:-}" ":bar_chart: *Weekly fleet digest* (cost \$${AGENT_COST})
-
-$AGENT_OUTPUT"
-    exit 0
+    exit "$AGENT_RC"
 fi
 
 # ============================================================
@@ -327,7 +340,7 @@ for tsf, slug, text in sorted(rows):
             break
         fi
         echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] investigating slack alert: $_text"
-        run_and_report <<PROMPT
+        run_and_report "${AGENT_SLACK_ALERT:-}" ":mag: *Fleet investigation*" <<PROMPT
 A failure alert was posted to the Slack channel #home-alerts:
 
 "$_text"
@@ -366,7 +379,7 @@ fi
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] investigating new anomaly"
 anomaly=$(cat "$ANOMALY_FILE")
 
-run_and_report <<PROMPT
+run_and_report "${AGENT_SLACK_ALERT:-}" ":mag: *Fleet investigation*" <<PROMPT
 The hourly Tier 1 fleet sweep reported the anomaly below. Investigate it and
 produce a plan following your output contract.
 

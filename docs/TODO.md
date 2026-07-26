@@ -92,6 +92,11 @@ There is no CLI path today: the only OPNsense-adjacent vault key is `vault_ns_ap
 
 **Phase C — operator mode.** Sketch only; needs its own decision round (passphrase key vs SSH-CA, sudo scope, audit logging).
 
+**Rebuild reproducibility + agent SSH-key management — `V:High E:Med`, deferred 2026-07-25.** The "destroy and recreate CT 103 from Ansible with nothing but the vault password" criterion (below) is **unverified**, and there is a known reason to expect it currently *fails* as written: `roles/services/agent` generates `agent_lxc_ed25519` fresh on the container, and its public half is hard-committed in `group_vars/all/main.yml` as `agent_lxc_ssh_pubkey`. A rebuild therefore mints a **new** keypair whose pubkey must be copied back into `group_vars` and pushed fleet-wide via `agent_access.yml` — a manual step beyond the vault password. Two ways to close it, decide before testing:
+  1. **Accept + document** — a rebuild is rare; treat "capture the printed pubkey → commit → re-run agent_access" as a documented two-command step, and reword the criterion.
+  2. **Vault the keypair** — store `agent_lxc_ed25519` (private + public) in the vault and deploy it on rebuild, so identity is stable and rebuild really is vault-password-only. Trade-off: the private key now lives in the (encrypted, committed) vault instead of never leaving the box — a weaker but arguably acceptable posture for a read-only, IP-pinned, one-run-revocable key.
+  The actual destroy/recreate test is disruptive (~15-20 min, the box is now doing real work) so it is deferred; do it under option (1) or (2), not blind. This is the single highest-value unproven claim about the system.
+
 ### Acceptance Criteria
 - [x] CT 103 exists, runs, `onboot: 1`
 - [x] Provisioning playbook is idempotent — second run changes nothing

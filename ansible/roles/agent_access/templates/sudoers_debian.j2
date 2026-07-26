@@ -28,10 +28,19 @@
 {{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/local/bin/ha_state *
 
 # Docker read-only (homeassistant host)
+# Each command needs BOTH a no-args and an args form: a trailing `*` in a
+# sudoers rule requires at least one argument to match, so `docker ps *` alone
+# rejects a bare `docker ps` and prompts for a password. The agent's weekly
+# digest hit exactly this — `sudo docker ps` failed non-interactively — which
+# is why it could not diagnose an HA container restart. Same trailing-* gotcha
+# fixed earlier for `systemctl --failed` / `zpool list`.
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/bin/docker ps
 {{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/bin/docker ps *
 {{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/bin/docker logs *
 {{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/bin/docker inspect *
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/bin/docker stats --no-stream
 {{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/bin/docker stats --no-stream *
+{{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/bin/docker system df
 {{ agent_access_user }} ALL=(ALL) NOPASSWD: /usr/bin/docker system df *
 {% endif %}
 {% if platform_type | default('') == 'proxmox' %}
