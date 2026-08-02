@@ -116,6 +116,18 @@ The 2026-07-25 Tier 2 agent investigation ($0.44) diagnosed alert 1 correctly �
 
 The last row is the one residual risk: if the `NOPASSWD` assumption is wrong, Aug 9 produces one alert with a `sudo:` error instead of an `amixer:` one. Harmless, self-evident, and fixed by adding the rule — but don't declare victory on Aug 3.
 
+#### Expected Slack behaviour on the first clean run — do not misread it
+
+The wrapper sends a **recovery notification** when the previous run failed (`enhanced_monitoring_wrapper:402`), and that goes to `$monitor_hook` → **`#home-logging`**, not `#home-alerts` (`:420`). So the first clean run of each script produces **one message in `#home-logging`** (recovery, coinciding with the daily heartbeat) and **zero in `#home-alerts`**.
+
+That is success, not a residual failure. The acceptance test is therefore precise: **any `Script Failed on hifipi` in `#home-alerts` after 2026-08-02 means the fix did not work.** A `#home-logging` message is expected and correct.
+
+### Incidental findings on hifipi (not investigated)
+
+- Slack webhook tokens are literal in every crontab line — the same instance as Priority 3 below, observed again here.
+- Stale artefact deployed alongside real scripts: `~/.scripts/do_backup.127013.2026-03-14@17:07:39~`. Harmless; folds into the clutter cleanup item below.
+- `system_health_check` reports **194 pending updates** (informational, not alerting). `unattended-upgrades` is running and last upgraded 2026-08-02, so this is the usual non-security backlog rather than a stalled updater — worth a glance at the laptop, not an action item.
+
 ### Interim manual mitigation (hand-applied from a phone)
 
 Constraints at the time: owner remote with phone-only SSH to hifipi — no laptop, so no Ansible deploy, and no `git push` (Touch ID). `read_agent` is read-only, so the agent could not apply it either. The fix was therefore written to the repo *first* and then hand-transcribed, so the two are byte-identical by construction and the eventual Ansible run is a true no-op, **not drift**.
