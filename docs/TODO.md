@@ -99,10 +99,22 @@ The 2026-07-25 Tier 2 agent investigation ($0.44) diagnosed alert 1 correctly �
 ### Status
 
 - [x] Repo fix written and committed on branch `fix/hifipi-amixer-alerts-2026-08` (both latent bugs above). **Local only — not pushed**; pushing needs Touch ID and the owner was on a phone.
-- [ ] Interim manual mitigation — see below. **Not applied as of this writing.**
-- [ ] Deploy: `ansible-playbook ansible/playbooks/services.yml --limit hifipi --tags audio_playback`
-- [ ] Confirm deployed checksums match the repo for both files
+- [x] **Interim manual mitigation applied 2026-08-02 (~20:55 CEST) and independently verified** — see below.
+- [x] Deployed checksums confirmed byte-identical to the repo (agent-side `shasum` via `agent_read`, not self-reported). Full re-audit of hifipi afterwards: **0 drift** across all repo-matched scripts.
+- [ ] Deploy: `ansible-playbook ansible/playbooks/services.yml --limit hifipi --tags audio_playback` — **expect changed=0 on both scripts.** Anything else means something drifted after 2026-08-02; stop and diff.
 - [ ] Verify a clean 00:00 run, **and a clean Sunday 00:00 run** — alert 2 needs a full week. Do not close this on a Monday.
+
+#### What is and isn't proven as of 2026-08-02 21:00 CEST
+
+| | Status |
+|---|---|
+| Files on host == repo | ✅ verified by checksum from the agent side |
+| `check_audio_output.sh` runs clean interactively | ✅ smoke-tested, exit 0 |
+| `check_audio_output.sh` runs clean **under cron** | ⏳ first proof at **00:00 Mon 2026-08-03** |
+| `restart_audio_services.sh` runs clean under cron | ⏳ first proof at **00:00 Sun 2026-08-09** (`@weekly`) |
+| `sudo /usr/sbin/alsactl store` actually works | ⏳ **not yet exercised by anything.** In the check script it only runs when DAC < 90% (DAC is pinned at 100%); the weekly script is the only path that reaches it. Aug 9 is the real test of that line. |
+
+The last row is the one residual risk: if the `NOPASSWD` assumption is wrong, Aug 9 produces one alert with a `sudo:` error instead of an `amixer:` one. Harmless, self-evident, and fixed by adding the rule — but don't declare victory on Aug 3.
 
 ### Interim manual mitigation (hand-applied from a phone)
 
