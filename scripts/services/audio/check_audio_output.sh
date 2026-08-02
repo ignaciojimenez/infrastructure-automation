@@ -15,7 +15,7 @@ if aplay -l | grep -q 'card'; then
   if [[ "$VOLUME" =~ ^[0-9]+$ ]] && [ "$VOLUME" -lt "90" ]; then
     echo "❌ Hardware DAC volume is too low ($VOLUME%) - setting to 100%"
     amixer -c 0 sset 'DAC' 100%
-    alsactl store
+    sudo /usr/sbin/alsactl store
     echo "✅ Hardware DAC volume has been reset to 100%"
     exit 0
   else
