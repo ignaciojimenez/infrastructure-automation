@@ -70,7 +70,7 @@ Slack corroborates exactly: one alert on 07-22/23/24/25/27/28/29/30 and 08-01, *
 
 Card 0 `sndrpihifiberry` (HiFiBerry DAC+ HD) exposes only `DAC Playback Volume` and `PCM Playback Volume` (`/var/lib/alsa/asound.state`). There is **no `Master`, `Digital` or `Analogue` control on this card at all** — the old names were never valid for this DAC. `DAC` sits at `240/240` = 0 dB = 100%; `PCM` at unity. `systemctl --failed` empty, MPD/Shairport/Raspotify healthy. **Zero audio impact — always pure monitoring noise.**
 
-### Two latent bugs found in the *fixed* repo version (both now corrected)
+### Three bugs, not one — the control names were only the visible layer
 
 Redeploying `9972e65` as-is would **not** have silenced alert 2:
 
@@ -81,12 +81,34 @@ Redeploying `9972e65` as-is would **not** have silenced alert 2:
 
 ### Coverage check — does the fix still catch what the monitoring is for?
 
-Yes, and it is now *more* correct than before. The intent is "audio device present, at max volume":
+The intent is "audio device present, at max volume". Checking this surfaced **a third bug**, unrelated to the control names and older than them:
 
-- **Device present:** `aplay -l | grep -q 'card'` → unchanged; still exits 1 + alerts if the card disappears.
-- **Max volume:** now reads `DAC` (the real hardware volume, 0–240) instead of `Master`, which **never existed** — so the old check was reporting nothing at all, silently. Coverage went from zero to real.
+- **Device present:** `aplay -l | grep -q 'card'` → unchanged; still exits 1 + alerts if the card disappears. Always worked.
+- **Max volume:** now reads `DAC` (the real hardware volume, 0–240) instead of `Master`, which never existed. **But pointing at the right control was not sufficient — the value was never usable.** See below.
 - **Dropped `Master` write:** loses nothing. No such control exists on this card in any context.
 - **Known gap (accepted):** `PCM Playback Volume` is not checked. It sits at unity (0 dB of −102.39…+4.00 dB) and nothing in the repo ever writes it. Worth adding only if a "quiet audio" incident ever occurs with `DAC` at 100%.
+
+#### Bug 3 — the volume threshold never evaluated (fixed 2026-08-02)
+
+`grep -E 'Left:|Mono:'` matches **two** lines on a stereo control, because `amixer` prints an empty `Mono:` header above the channels:
+
+```
+  Mono:
+  Front Left: Playback 240 [100%] [0.00dB]
+  Front Right: Playback 240 [100%] [0.00dB]
+```
+
+`awk -F'[][]' '{print $2}'` emits a blank field for `Mono:` and `100%` for `Front Left:`, so `VOLUME` is `"\n100"` — multi-line. That fails the `^[0-9]+$` guard, so `[ "$VOLUME" -lt 90 ]` **never runs**, the script always falls through to the success branch, and the self-heal path is unreachable. A DAC at 10% would have been reported as "configured correctly".
+
+Pre-existing, not introduced by the `Master`→`DAC` migration: the old version had the identical `grep` and simply never reached it. Fixed by taking the first percentage and not filtering by channel label:
+
+```sh
+VOLUME=$(amixer -c 0 sget 'DAC',0 | grep -oE '[0-9]+%' | head -1 | tr -d '%')
+```
+
+Verified against hifipi's real `amixer` output (clean `100`, threshold runs) and a mono-card variant (`50` → correctly flagged low). The replacement carries a comment recording the trap so the channel-label filter is not reintroduced.
+
+**Lesson — this is the one worth keeping.** The bug survived two passes because verifying that a parse *matches* is not the same as verifying what it *yields*. The reasoning "`'Front Left:'` contains `'Left:'`, so the grep is fine" was correct and useless: the failure was in the second matching line, not the first. Check the produced value, not the pattern. It only became visible when real `amixer` output was pasted into the session — no amount of reading the script would have shown it.
 
 ### Why the earlier investigation didn't close it
 
@@ -101,6 +123,7 @@ The 2026-07-25 Tier 2 agent investigation ($0.44) diagnosed alert 1 correctly �
 - [x] Repo fix written and committed on branch `fix/hifipi-amixer-alerts-2026-08` (both latent bugs above). **Local only — not pushed**; pushing needs Touch ID and the owner was on a phone.
 - [x] **Interim manual mitigation applied 2026-08-02 (~20:55 CEST) and independently verified** — see below.
 - [x] Deployed checksums confirmed byte-identical to the repo (agent-side `shasum` via `agent_read`, not self-reported). Full re-audit of hifipi afterwards: **0 drift** across all repo-matched scripts.
+- [x] **Second paste 2026-08-02 (~21:40 CEST)** — `check_audio_output.sh` volume-parse fix (bug 3). Host hash `9c0c2f5d8df31147d810087b426b13fff310a794`, confirmed by the owner. `restart_audio_services.sh` unchanged (`aafb6939…`).
 - [ ] Deploy: `ansible-playbook ansible/playbooks/services.yml --limit hifipi --tags audio_playback` — **expect changed=0 on both scripts.** Anything else means something drifted after 2026-08-02; stop and diff.
 - [ ] Verify a clean 00:00 run, **and a clean Sunday 00:00 run** — alert 2 needs a full week. Do not close this on a Monday.
 
@@ -108,13 +131,17 @@ The 2026-07-25 Tier 2 agent investigation ($0.44) diagnosed alert 1 correctly �
 
 | | Status |
 |---|---|
-| Files on host == repo | ✅ verified by checksum from the agent side |
-| `check_audio_output.sh` runs clean interactively | ✅ smoke-tested, exit 0 |
+| Files on host == repo | ✅ verified by checksum from the agent side (2nd paste hash `9c0c2f5d…` confirmed by owner) |
+| `check_audio_output.sh` runs clean interactively | ✅ smoke-tested, exit 0, prints a single-line `DAC volume: 100%` |
+| Volume threshold + self-heal branch actually fire | ✅ proven by forcing `DAC` to 50%: detected, reset to 100%, exit 0 |
+| `sudo /usr/sbin/alsactl store` works from `choco` | ✅ **proven.** `sudo -n -l` shows `(ALL) NOPASSWD: ALL`; `sudo -n /usr/sbin/alsactl store` → exit 0 |
+| `restart_audio_services.sh` runs clean end-to-end | ✅ run manually in full: all three services restarted, DAC set, `alsactl store` succeeded, exit 0 |
 | `check_audio_output.sh` runs clean **under cron** | ⏳ first proof at **00:00 Mon 2026-08-03** |
 | `restart_audio_services.sh` runs clean under cron | ⏳ first proof at **00:00 Sun 2026-08-09** (`@weekly`) |
-| `sudo /usr/sbin/alsactl store` actually works | ⏳ **not yet exercised by anything.** In the check script it only runs when DAC < 90% (DAC is pinned at 100%); the weekly script is the only path that reaches it. Aug 9 is the real test of that line. |
 
-The last row is the one residual risk: if the `NOPASSWD` assumption is wrong, Aug 9 produces one alert with a `sudo:` error instead of an `amixer:` one. Harmless, self-evident, and fixed by adding the rule — but don't declare victory on Aug 3.
+**The `NOPASSWD` risk flagged earlier is closed** — proven by hand rather than left to Aug 9. `sudo -n` was used deliberately: plain `sudo` from an interactive session would have prompted and succeeded, proving nothing about cron, which cannot answer a prompt.
+
+Only the cron-context runs remain, and both scripts have now executed successfully end-to-end by hand. Residual risk is low and confined to environment differences between an interactive session and cron (`PATH`, no TTY) — real but unlikely, since every other job on this host runs fine under the same wrapper.
 
 #### Expected Slack behaviour on the first clean run — do not misread it
 
