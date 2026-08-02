@@ -172,8 +172,12 @@ crontab -l | sed -E \
 rm -f ~/.log/check_container.sh.json*
 ```
 
-- [ ] Applied on dockassist: _date_
-- [ ] Backup at `~/crontab.bak.YYYYMMDD` — delete once the repo fix is deployed and verified
+- [x] **Applied on dockassist 2026-08-02, between 19:20 and 19:30 CEST — verified working.**
+- [ ] Backup at `~/crontab.bak.20260802` — delete once the repo fix is deployed and verified
+
+**Verification (2026-08-02 19:30 CEST, first cron run after the change):** all three jobs report `Notification sent: No`, the `Sending daily heartbeat notification` line is gone, and no `mv: cannot stat` errors appear in any of the three logs. Confirms the root cause and the fix. Channel volume should now settle at ~38 msgs/day.
+
+Note for whoever verifies next: the `*/10` runs immediately *before* the crontab edit still show the old behaviour. Read the first run after the edit, not the last few lines, or you will conclude the fix failed.
 
 **Still outstanding after the manual step** (i.e. what the laptop session is actually for): the wrapper hardening, the interval validation, the `never`/default decision, and the `docker_system_prune` `weekly` → `always` fix. None of those are applied by hand.
 
