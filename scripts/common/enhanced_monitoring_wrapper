@@ -6,10 +6,13 @@
 # Usage: enhanced_monitoring_wrapper [options] monitor_token alert_token script_path [script_args]
 #
 # Options:
-#   --heartbeat-interval=daily|hourly|always  How often to send success heartbeats (default: daily)
+#   --heartbeat-interval=daily|hourly|always|never  How often to send success heartbeats (default: daily; unknown values are fatal)
 #   --state-file=/path/to/state.json          Custom state file location (default: in logs_dir)
 #   --notify-fixed=true|false                 Whether to notify on self-healing (default: true)
-#   --monitoring-name=name                    Name of the monitoring task (used for state file if provided)
+#   --monitoring-name=name                    Name of the monitoring task. REQUIRED whenever two jobs
+#                                             on the same host wrap the same script: without it the
+#                                             state file is derived from the script's basename and
+#                                             the jobs share — and corrupt — one state file.
 
 # Don't use set -e here as we want to capture script failures
 set -u          # stop on unset variables
@@ -45,10 +48,14 @@ usage() {
   echo "Usage: $(basename "$0") [options] monitor_webhook_id [alert_webhook_id] path_to_script [all_arguments]"
   echo ""
   echo "Options:"
-  echo "  --heartbeat-interval=daily|hourly|always  How often to send success heartbeats (default: daily)"
+  echo "  --heartbeat-interval=daily|hourly|always|never  How often to send success heartbeats (default: daily; unknown values are fatal)"
   echo "  --state-file=/path/to/state.json          Custom state file location (default: in logs_dir)"
   echo "  --notify-fixed=true|false                 Whether to notify on self-healing (default: true)"
-  echo "  --monitoring-name=name                    Name of the monitoring task (used for state file if provided)"
+  echo "  --monitoring-name=name                    Name of the monitoring task. REQUIRED whenever two"
+  echo "                                            jobs on the same host wrap the same script: without"
+  echo "                                            it the state file is derived from the script's"
+  echo "                                            basename and the jobs share - and corrupt - one"
+  echo "                                            state file."
   echo ""
   echo "  monitor_webhook_id: Slack webhook ID for regular monitoring notifications"
   echo "  alert_webhook_id: Optional Slack webhook ID for error alerts (failures only)"
@@ -235,6 +242,28 @@ while [[ "$1" == --* ]]; do
   esac
 done
 
+# Validate the heartbeat interval up front.
+#
+# The dispatch below is an if/elif chain over daily|hourly|always, so any other
+# value simply matched no branch and silently disabled heartbeats altogether.
+# Two live jobs were relying on that by accident: `weekly` on dockassist's
+# docker_system_prune (unintended — it had never heartbeated) and `never` on
+# the OPNsense VPN gateway job (intended, but working only because the value
+# was unrecognised). A monitoring job that goes quiet by typo is exactly the
+# failure this wrapper exists to prevent, so an unknown value is now fatal.
+#
+# `never` is a supported value rather than another frequency: the cadence is
+# already carried by the job's own cron schedule, and this setting only says
+# how often to speak about it.
+case "$HEARTBEAT_INTERVAL" in
+  daily|hourly|always|never) ;;
+  *)
+    log_msg "${RED}Error: unrecognised --heartbeat-interval='${HEARTBEAT_INTERVAL}'${NC}"
+    log_msg "${RED}Valid values: daily, hourly, always, never${NC}"
+    exit 1
+    ;;
+esac
+
 # Validate arguments
 E_NOARGS=85
 wh_regex="T[A-Z0-9]*\/B[A-Z0-9]*\/[a-zA-Z0-9]*"
@@ -396,6 +425,10 @@ elif [ "$CURRENT_STATUS" = "success" ]; then
   elif [ "$HEARTBEAT_INTERVAL" = "always" ]; then
     SEND_TO_MONITOR=true
     log_msg "Sending notification (always mode)"
+  elif [ "$HEARTBEAT_INTERVAL" = "never" ]; then
+    # Explicit, not incidental. Recovery notifications below still apply — a
+    # job that never heartbeats must still say when it comes back from failure.
+    log_msg "Heartbeat suppressed (never mode)"
   fi
   
   # Recovery notifications (previous status was failure)
@@ -424,12 +457,33 @@ if [ "$SEND_TO_MONITOR" = true ]; then
 fi
 
 # Update state file
+#
+# The temp file is unique per invocation. It used to be a fixed
+# "${STATE_FILE}.tmp", which two jobs writing the same state file in the same
+# second would trample: the first mv wins and the second fails with
+# "mv: cannot stat ...tmp". On dockassist three container checks shared one
+# state file that way, so state never persisted, the daily heartbeat fired on
+# every 10-minute run, and those three jobs alone produced ~92% of
+# #home-logging. Their collision was caused by a missing --monitoring-name,
+# but the fixed tmp path is what turned it into corruption instead of a
+# harmless overwrite — and it is armed on every host for every future job.
+#
+# A failed update is also logged now. Previously `... && mv` simply carried on
+# as though the state had persisted.
 if command -v jq >/dev/null 2>&1; then
-  jq --arg status "$CURRENT_STATUS" \
+  state_tmp=$(mktemp "${STATE_FILE}.XXXXXX" 2>/dev/null)
+  if [ -z "$state_tmp" ]; then
+    log_msg "${YELLOW}Warning: could not create temp file for state update; state not persisted${NC}"
+  elif jq --arg status "$CURRENT_STATUS" \
      --arg notification "$(date +"%Y-%m-%d %H:%M:%S")" \
      --arg success_notification "$LAST_SUCCESS_NOTIFICATION" \
      '.last_status = $status | .last_notification = $notification | .last_success_notification = $success_notification' \
-     "$STATE_FILE" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "$STATE_FILE"
+     "$STATE_FILE" > "$state_tmp" && mv "$state_tmp" "$STATE_FILE"; then
+    :
+  else
+    rm -f "$state_tmp"
+    log_msg "${YELLOW}Warning: state update failed; $STATE_FILE left unchanged${NC}"
+  fi
 else
   # Fallback if jq is not available
   echo "{\"last_status\": \"$CURRENT_STATUS\", \"last_notification\": \"$(date +"%Y-%m-%d %H:%M:%S")\", \"last_success_notification\": \"$LAST_SUCCESS_NOTIFICATION\"}" > "$STATE_FILE"
