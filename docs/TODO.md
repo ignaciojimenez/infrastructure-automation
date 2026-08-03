@@ -104,6 +104,21 @@ After the manual fix, the sweep was declared "still broken" on the basis of zero
 
 Asked after the fact: which check, if it existed, would have caught each failure? The answer for several of them is "one that already exists and does nothing."
 
+### 🔴 The Slack watch self-destructs on its first quiet hour (root cause confirmed 2026-08-03)
+`investigate.sh --slack` has been failing every hour with `ERR invalid_ts_oldest`. Confirmed cause — `/home/choco/.agent/.last_slack_ts` contains **`0.000000`**.
+
+The embedded Python initialises `maxts = 0.0` and always emits `print(f"OK {maxts:.6f}")`. A poll that returns **zero new messages** therefore reports `OK 0.000000`. The shell then persists it:
+```sh
+[ -n "$_maxts" ] && [ "$_maxts" != "0" ] && printf '%s' "$_maxts" > "$SLACK_TS_FILE"
+```
+That guard exists to prevent exactly this, but it is a **string** comparison against `"0"` while Python emits `"0.000000"` — so it passes, and the watermark is clobbered. Every later poll sends `oldest=0.000000`, which Slack rejects.
+
+**It cannot self-recover:** the watermark is only rewritten after a *successful* fetch, and the fetch now always fails. So the watch dies permanently the first hour nothing new arrives — i.e. almost immediately on a healthy fleet. Evidence in `investigate.log`: three `slack watch done; investigated 0 alert(s)` (the quiet polls), then unbroken `ERR invalid_ts_oldest`.
+
+Corollary: **the Slack watch has almost certainly never worked in production.** The earlier worry that a fresh deploy would backfill 50 messages of #home-alerts was misplaced — it would have poisoned its own watermark and stopped instead.
+
+**Fix (repo, not live):** initialise `maxts` to the `oldest` value the poll was made with, so an empty window *preserves* the watermark instead of resetting it; and make the guard numeric rather than a string compare against `"0"`. Reseeding the file by hand only buys one hour — the next quiet poll re-poisons it.
+
 ### 🔴 `system_health_check.sh` can never fail — every host, every 15 minutes, since forever
 Each check function increments `issues_found`, and `check_auto_upgrades` even ends `return $issues_found`. But the main body just calls the functions in sequence:
 ```sh
