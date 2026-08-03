@@ -40,6 +40,14 @@ SLACK_MAX_PER_RUN={{ agent_slack_max_per_run }}
 SLACK_TS_FILE="$AGENT_DIR/.last_slack_ts"
 SLACK_SEEN_DIR="$AGENT_DIR/slack_seen"
 
+# Slack timestamps are decimal strings ("1754230021.123456"), which POSIX test
+# cannot compare numerically — `[ "$ts" -gt 0 ]` errors on the decimal point,
+# and `[ "$ts" != "0" ]` is true for "0.000000". Both mistakes were made here.
+# awk coerces properly.
+ts_is_positive() {
+    awk -v v="${1:-}" 'BEGIN { exit !(v + 0 > 0) }'
+}
+
 # One opencode run fans SSH out to the whole fleet and leaves a short-lived
 # server; two or three at once saturate this 1-CPU / 2GB box (learned the hard
 # way). The lock makes any second caller a clean no-op — anomaly, slack, and
@@ -246,12 +254,28 @@ if [ "${1:-}" = "--slack" ]; then
         exit 0
     fi
 
-    _oldest=$(cat "$SLACK_TS_FILE" 2>/dev/null || echo 0)
-    case "$_oldest" in ''|*[!0-9.]*) _oldest=0 ;; esac
+    # A watermark is only usable if it is a positive number. Anything else —
+    # missing file, junk, or the degenerate "0.000000" this script used to
+    # write to itself — means "no watermark", and the poll asks for the
+    # channel default instead. Treating a zero watermark as absent is also what
+    # makes this self-healing: a host whose file was already poisoned recovers
+    # on its next run without anyone reseeding it by hand.
+    _oldest=$(cat "$SLACK_TS_FILE" 2>/dev/null || echo "")
+    case "$_oldest" in ''|*[!0-9.]*) _oldest="" ;; esac
+    if [ -n "$_oldest" ] && ! ts_is_positive "$_oldest"; then
+        echo "ignoring non-positive slack watermark '$_oldest'; polling channel default" >&2
+        _oldest=""
+    fi
+
+    # `oldest` is omitted rather than sent as 0 when there is no watermark. The
+    # API's treatment of oldest=0 is not something this script should be
+    # betting on, and omitting the parameter asks for the documented default.
+    _url="https://slack.com/api/conversations.history?channel=${SLACK_CHANNEL}&limit=50"
+    [ -n "$_oldest" ] && _url="${_url}&oldest=${_oldest}"
 
     _resp=$(curl -s --max-time 20 \
         -H "Authorization: Bearer ${SLACK_READ_TOKEN}" \
-        "https://slack.com/api/conversations.history?channel=${SLACK_CHANNEL}&oldest=${_oldest}&limit=50")
+        "$_url")
 
     # Filter to genuine, un-seen failure alerts. Excludes our own posts and the
     # channel's non-failure noise so we never investigate ourselves into a loop.
@@ -264,7 +288,16 @@ except ValueError:
 if not d.get("ok"):
     print("ERR " + str(d.get("error", "unknown"))); sys.exit(0)
 
-rows, maxts = [], 0.0
+# Seed the high-water mark with the value the poll was made with, NOT with
+# zero. A window containing no new messages must report back the watermark it
+# started from; seeding at 0.0 made an empty poll say "the newest message I saw
+# was at time zero", which the caller then persisted, destroying the watermark
+# on the first quiet hour and permanently breaking the watch.
+try:
+    maxts = float(sys.argv[1]) if len(sys.argv) > 1 else 0.0
+except ValueError:
+    maxts = 0.0
+rows = []
 for m in d.get("messages", []):
     try:
         tsf = float(m.get("ts", "0"))
@@ -304,7 +337,7 @@ for m in d.get("messages", []):
 print(f"OK {maxts:.6f}")
 for tsf, slug, text in sorted(rows):
     print(f"{tsf}\t{slug}\t{text}")
-' 2>/dev/null)
+' "${_oldest:-0}" 2>/dev/null)
 
     _status=$(printf '%s\n' "$_parsed" | head -1)
     case "$_status" in
@@ -358,7 +391,16 @@ PROMPT
 
     # Advance the watermark only after a successful fetch, so a failed poll
     # retries the same window rather than skipping alerts.
-    [ -n "$_maxts" ] && [ "$_maxts" != "0" ] && printf '%s' "$_maxts" > "$SLACK_TS_FILE"
+    #
+    # The comparison is numeric. It used to be `[ "$_maxts" != "0" ]`, a string
+    # compare — and the value it was guarding against was "0.000000", which is
+    # not the string "0". The guard was written for exactly this case and let
+    # it through anyway, which is the whole reason the watch died.
+    if [ -n "$_maxts" ] && ts_is_positive "$_maxts"; then
+        printf '%s' "$_maxts" > "$SLACK_TS_FILE"
+    else
+        echo "poll returned no usable watermark ('$_maxts'); preserving $SLACK_TS_FILE" >&2
+    fi
     echo "slack watch done; investigated $_count alert(s)"
     exit 0
 fi
