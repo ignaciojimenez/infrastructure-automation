@@ -51,29 +51,56 @@ check_uptime() {
     uptime_output=$(uptime)
     print_status "success" "Uptime: $uptime_output"
     echo ""
+    return 0
 }
 
 check_disk_usage() {
     echo "=== Disk Usage ==="
-    
-    df -h | grep -E '^(/dev/|tank/|zroot/|rpool/)' | while read -r line; do
+    issues=0
+
+    # The loop is fed by a here-document rather than a pipeline. `df | grep |
+    # while` runs the loop body in a subshell, so every increment to `issues`
+    # would be discarded when it exits — the check would report a full disk on
+    # screen and still return 0, which is the exact class of bug this script
+    # had for its whole life. Here-doc redirection keeps the loop in the
+    # current shell, so the count survives.
+    disk_lines=$(df -h 2>/dev/null | grep -E '^(/dev/|tank/|zroot/|rpool/)')
+
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+
         usage=$(echo "$line" | awk '{print $5}' | sed 's/%//')
         mount=$(echo "$line" | awk '{print $6}')
-        
+
+        # A non-numeric usage would make `[ -gt ]` fail and, under `set -u`
+        # with no `set -e`, silently skip the comparison.
+        case "$usage" in
+            ''|*[!0-9]*)
+                print_status "warning" "Disk ${mount:-?}: could not parse usage from: $line"
+                continue
+                ;;
+        esac
+
         if [ "$usage" -gt "$THRESHOLD_DISK" ]; then
             print_status "error" "Disk $mount: ${usage}% (above ${THRESHOLD_DISK}%)"
+            issues=$((issues + 1))
         elif [ "$usage" -gt $((THRESHOLD_DISK - 10)) ]; then
             print_status "warning" "Disk $mount: ${usage}%"
         else
             print_status "success" "Disk $mount: ${usage}%"
         fi
-    done
+    done <<EOF
+$disk_lines
+EOF
+
     echo ""
+    return $issues
 }
 
 check_memory() {
     echo "=== Memory Usage ==="
-    
+    issues=0
+
     if [ "$OS_TYPE" = "debian" ]; then
         # Linux memory check
         mem_total=$(grep MemTotal /proc/meminfo | awk '{print $2}')
@@ -85,6 +112,7 @@ check_memory() {
             
             if [ "$mem_percent" -gt "$THRESHOLD_MEM" ]; then
                 print_status "error" "Memory: ${mem_percent}% used (above ${THRESHOLD_MEM}%)"
+                issues=$((issues + 1))
             elif [ "$mem_percent" -gt $((THRESHOLD_MEM - 10)) ]; then
                 print_status "warning" "Memory: ${mem_percent}% used"
             else
@@ -101,11 +129,13 @@ check_memory() {
         print_status "warning" "Memory check not available for $OS_TYPE"
     fi
     echo ""
+    return $issues
 }
 
 check_load() {
     echo "=== System Load ==="
-    
+    issues=0
+
     # Get number of CPUs
     if [ "$OS_TYPE" = "freebsd" ]; then
         cpu_count=$(sysctl -n hw.ncpu)
@@ -118,60 +148,106 @@ check_load() {
     
     # Convert to percentage (rough estimate)
     load_percent=$(echo "$load_avg $cpu_count" | awk '{printf "%.0f", ($1/$2)*100}')
-    
+
+    case "$load_percent" in
+        ''|*[!0-9]*)
+            print_status "warning" "Load: could not parse load average (got '${load_avg}')"
+            echo ""
+            return 0
+            ;;
+    esac
+
     if [ "$load_percent" -gt "$THRESHOLD_CPU" ]; then
         print_status "error" "Load: ${load_avg} on ${cpu_count} CPUs (${load_percent}%)"
+        issues=$((issues + 1))
     elif [ "$load_percent" -gt $((THRESHOLD_CPU - 20)) ]; then
         print_status "warning" "Load: ${load_avg} on ${cpu_count} CPUs (${load_percent}%)"
     else
         print_status "success" "Load: ${load_avg} on ${cpu_count} CPUs"
     fi
     echo ""
+    return $issues
 }
 
 check_services() {
     echo "=== Critical Services ==="
-    
+    issues=0
+
     # Define critical services based on OS
     if [ "$OS_TYPE" = "debian" ]; then
         SERVICES="ssh cron fail2ban"
-        
+
         for service in $SERVICES; do
             if systemctl is-active "$service" >/dev/null 2>&1; then
                 print_status "success" "Service $service: running"
             else
                 print_status "error" "Service $service: not running"
+                issues=$((issues + 1))
             fi
         done
     elif [ "$OS_TYPE" = "freebsd" ]; then
         SERVICES="sshd cron"
-        
+
         for service in $SERVICES; do
             if service "$service" status >/dev/null 2>&1; then
                 print_status "success" "Service $service: running"
             else
                 print_status "error" "Service $service: not running"
+                issues=$((issues + 1))
             fi
         done
     else
         print_status "warning" "Service check not configured for $OS_TYPE"
     fi
     echo ""
+    return $issues
+}
+
+# Named services are not enough on their own: CT 103 sat with 19 failed units,
+# systemd-journald among them, and passed every check it had. A dead journald
+# is what turned a 12-day monitoring outage into an unrecorded one — and it
+# also makes fail2ban decorative, since its sshd filter reads the journal.
+check_failed_units() {
+    echo "=== Failed systemd Units ==="
+    issues=0
+
+    if [ "$OS_TYPE" != "debian" ] || ! command -v systemctl >/dev/null 2>&1; then
+        print_status "warning" "Failed-unit check only available on systemd hosts"
+        echo ""
+        return 0
+    fi
+
+    failed_units=$(systemctl list-units --failed --no-legend --plain 2>/dev/null | awk '{print $1}')
+    failed_count=$(printf '%s\n' "$failed_units" | grep -c '[^[:space:]]')
+
+    if [ "$failed_count" -gt 0 ]; then
+        print_status "error" "${failed_count} failed unit(s)"
+        printf '%s\n' "$failed_units" | sed 's/^/     - /'
+        issues=$((issues + 1))
+    else
+        print_status "success" "No failed units"
+    fi
+
+    echo ""
+    return $issues
 }
 
 check_network() {
     echo "=== Network Connectivity ==="
-    
+    issues=0
+
     # Skip gateway check - many routers don't respond to ICMP
     # Just check internet connectivity directly
-    
+
     # Check internet connectivity
     if ping -c 1 -W 2 google.com >/dev/null 2>&1; then
         print_status "success" "Internet: reachable"
     else
         print_status "error" "Internet: unreachable (check network)"
+        issues=$((issues + 1))
     fi
     echo ""
+    return $issues
 }
 
 check_auto_upgrades() {
@@ -300,14 +376,35 @@ echo "Date: $(date)"
 echo "=============================="
 echo ""
 
-check_uptime
-check_disk_usage
-check_memory
-check_load
-check_services
-check_network
-check_auto_upgrades
+# Each check returns the number of failures it found. They are summed rather
+# than short-circuited so that one fault does not hide the rest — the report is
+# as complete as it was before, it just now also *reports*.
+#
+# Until 2026-08 this was a bare list of calls with no aggregation and no final
+# `exit`. A script's status is that of its last command, which was an `echo`,
+# so it exited 0 no matter what it found. Every ❌ printed correctly, and
+# enhanced_monitoring_wrapper — which alerts only on a non-zero status — never
+# raised one, on any host, ever.
+total_issues=0
+
+check_uptime;         total_issues=$((total_issues + $?))
+check_disk_usage;     total_issues=$((total_issues + $?))
+check_memory;         total_issues=$((total_issues + $?))
+check_load;           total_issues=$((total_issues + $?))
+check_services;       total_issues=$((total_issues + $?))
+check_failed_units;   total_issues=$((total_issues + $?))
+check_network;        total_issues=$((total_issues + $?))
+check_auto_upgrades;  total_issues=$((total_issues + $?))
 
 echo "=============================="
-echo "Health check completed"
+if [ "$total_issues" -gt 0 ]; then
+    print_status "error" "Health check completed - ${total_issues} issue(s) found"
+    echo "=============================="
+    # Deliberately `exit 1`, not `exit $total_issues`: an exit status is taken
+    # modulo 256, so a host with exactly 256 issues would report success.
+    exit 1
+fi
+
+print_status "success" "Health check completed - no issues"
 echo "=============================="
+exit 0
