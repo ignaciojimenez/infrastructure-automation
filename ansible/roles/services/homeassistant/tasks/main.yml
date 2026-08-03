@@ -356,7 +356,7 @@
     special_time: "weekly"
     job: >
       {{ scripts_dir }}/enhanced_monitoring_wrapper
-      --heartbeat-interval=weekly
+      --heartbeat-interval=always
       --notify-fixed=true
       --monitoring-name=docker_system_prune
       {{ logging_token }}
