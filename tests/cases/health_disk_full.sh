@@ -15,7 +15,11 @@
 . "$(dirname "$0")/../lib/harness.sh"
 
 BALLAST=/var/tmp/.test_ballast
-MAX_FILL_MB=3072
+# The documented container is a 4 GB rootfs that starts around 11% used, so a
+# genuine fill costs a little over 3 GB. The cap is a guard against being
+# pointed at a large disk by accident, not a budget — it must sit above the
+# real requirement or the case aborts on its own safety check.
+MAX_FILL_MB=4096
 
 describe "disk above threshold fails the check"
 
