@@ -108,13 +108,33 @@ After the manual fix, the sweep was declared "still broken" on the basis of zero
 
 `agent_access` runs `hosts: all` and has a FreeBSD sudoers template, so opnsense is in scope by design; it has simply drifted (same class as agent-lxc missing `agent_read`).
 
+### Root cause: OPNsense deletes accounts it does not own — and will not give a non-admin a shell
+The account was **gone entirely**, not merely missing a key. `sshd_config.d/10-read_agent.conf` survived from the 2026-07-22 Ansible run while the user did not: OPNsense regenerates system accounts from `config.xml`, so anything created by `pw` (which is what `ansible.builtin.user` uses) has a limited lifespan. The `agent_access` role's FreeBSD user task therefore reports `changed` and achieves nothing durable.
+
+Worse, **OPNsense will not give a non-admin user a login shell at all.** From `src/etc/inc/auth.inc`:
+```php
+$is_admin   = userIsAdmin($user['name']);
+$user_shell = $is_admin && !empty($user['shell']) ? $user['shell'] : '/usr/sbin/nologin';
+// userIsAdmin() → userHasPrivilege(getUserEntry($username), 'page-all')
+```
+The only privilege that unlocks the shell is **`page-all` ("GUI: All pages") — full administrator**. There is no granular shell-access privilege. Granting it to a read-only monitoring account on the firewall is not an acceptable trade, so **do not**.
+
+### Current state (2026-08-03, working but fragile)
+- User + both authorized keys (with `from=` pinning) created via the OPNsense UI → stored in `config.xml` → **durable**, survives upgrades.
+- Group `read_agent` (gid 2000, no privileges) created to satisfy `AllowGroups wheel read_agent`.
+- Login shell set with `pw usermod read_agent -s /bin/sh` → **NOT durable**, lives only in `/etc/passwd` and reverts whenever OPNsense regenerates accounts.
+
+Verified: `ssh opnsense-agent` works, and the 19:37 sweep returned SUCCESS across all 7 hosts — the first fully clean sweep since the container was built.
+
 ### Next Steps
-- Re-run `agent_access` against opnsense and confirm `ssh opnsense-agent` works.
-- Until then every hourly Tier 1 sweep will alert on this — expect a recurring `:x:` in #home-alerts, and note the wrapper has no failure dedup for it.
+- **Preferred: stop SSH-probing opnsense.** It is not a general-purpose host and it has a proper API. Monitoring it via a read-only API key removes the shell-durability problem *and* permanently eliminates the failed-auth → CrowdSec trigger. This is the architectural fix.
+- Failing that: accept the `pw` shell as drift and rely on the sweep to detect the revert — it alerts within the hour, which is exactly how this was found. Note the alert repeats hourly with no dedup.
+- Change `agent_access` on FreeBSD to **assert** the user exists and fail with a pointer to OPNsense user management, instead of creating one with `pw` and reporting success.
 
 ### Acceptance Criteria
-- [ ] `ssh opnsense-agent "uname -a"` succeeds from the Mac and from CT 103
-- [ ] Tier 1 sweep reports 0 issues across 7 hosts
+- [x] `ssh opnsense-agent "uname -a"` succeeds from the Mac — 2026-08-03 19:38
+- [x] Tier 1 sweep reports 0 issues across 7 hosts — 19:37:15 SUCCESS
+- [ ] opnsense monitoring no longer depends on a shell that OPNsense will revert
 
 ---
 
