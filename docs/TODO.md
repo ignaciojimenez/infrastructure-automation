@@ -100,6 +100,63 @@ After the manual fix, the sweep was declared "still broken" on the basis of zero
 
 ---
 
+## Monitoring gaps — what would actually have caught 2026-08-03
+
+Asked after the fact: which check, if it existed, would have caught each failure? The answer for several of them is "one that already exists and does nothing."
+
+### 🔴 `system_health_check.sh` can never fail — every host, every 15 minutes, since forever
+Each check function increments `issues_found`, and `check_auto_upgrades` even ends `return $issues_found`. But the main body just calls the functions in sequence:
+```sh
+check_uptime
+check_disk_usage
+check_memory
+check_load
+check_services
+check_network
+check_auto_upgrades
+
+echo "=============================="
+echo "Health check completed"
+echo "=============================="
+```
+No aggregation, and **no final `exit`**. A script's status is that of its last command — here, `echo`. So it exits **0 unconditionally**, and `enhanced_monitoring_wrapper` only alerts on non-zero. This check has therefore **never alerted on any host, ever.**
+
+Verified against the *deployed* copy on cwwk (via `agent_read`), not just the repo. Empirical proof from today: agent-lxc's 14:15 run printed `❌ Upgrade log not found - unattended-upgrades may not be configured` and the wrapper recorded `Status: SUCCESS / Exit Code: 0`.
+
+What is silently uncovered on all 7 hosts: **disk usage, memory, load, ssh/cron/fail2ban being down, internet reachability, and auto-upgrade staleness.** The internet-reachability check is the one that would have caught today's CrowdSec cutoff within 15 minutes.
+
+**Fix:** aggregate the function return codes and exit non-zero when any check fails. Then force each failure condition and watch it fire — the red ❌ output proves the *printing* works, which is exactly what made this invisible.
+
+### No dead-man's switch on agent-lxc — nothing watches the watcher
+Tier 1 checks that every host's monitoring ran recently (`agent_wrapper_max_age_hours: 26`) — but it runs *from* agent-lxc, so it cannot detect its own death. That is precisely the 12-day outage.
+
+The mechanism already exists and is already in use: **healthchecks.io pings on proxmox, opnsense (WAN + DNS), homeassistant and pihole**. agent-lxc is the one host without one — the host whose silence was the entire failure. A ping from the Tier 1 sweep would have paged on day one.
+
+**Fix:** healthchecks.io ping at the end of `fleet_health_check.sh`. Small, reuses existing infrastructure, and is the single highest-value item on this page.
+
+### No check for failed systemd units
+`check_services` tests three named services (ssh, cron, fail2ban). Nothing anywhere checks `systemctl --failed`. A container with 19 failed units — journald among them — passed every check it had.
+
+**Fix:** add a failed-unit count to `system_health_check.sh` (after the exit-code fix, or it will be as inert as the rest).
+
+### Design note — do NOT move local checks to agent-lxc
+Tempting after today, but backwards. agent-lxc was itself the single point of failure, and centralising would have made the blast radius larger, not smaller. Local checks also see things a remote prober cannot (0700 homes, ALSA on hifipi, per-host service state).
+
+The correct split is the one already in place, plus one missing piece:
+- **local checks** stay local — they have the access
+- **agent-lxc** does cross-host correlation — which it does well
+- **an external watchdog** detects *absence* — the one thing neither a host nor agent-lxc can do for itself
+
+Absence-detection is the actual gap, not check placement.
+
+### Priority
+1. Fix `system_health_check.sh` exit status — restores ~7 checks across 7 hosts, one-line class of fix, largest coverage gain available
+2. healthchecks.io ping from the Tier 1 sweep — closes the watch-the-watcher hole
+3. `systemctl --failed` check
+4. Then the Tier 2 bugs (re-billing, retry guard)
+
+---
+
 ## opnsense — `read_agent` access is broken (found by the agent's first real sweep)
 
 **Risk:** Medium-high — the firewall is the one host neither the fleet observer nor autonomous diagnostics can see. Silent until now because the observer that would have reported it was itself dead.
