@@ -62,6 +62,8 @@ The 19 failed units (`journald`, `tmpfiles-setup`, every mount unit, all `243/CR
 
 Consequence worth noting: while journald was dead, **fail2ban was blind**, because its sshd filter reads `_SYSTEMD_UNIT=ssh.service` from the journal. `Currently banned: 0 / Total failed: 0` meant "no visibility", not "no attacks". Any host with a dead journald has decorative fail2ban.
 
+**Now codified** (`provision_agent_lxc.yml`): `--features nesting=1` on create, an idempotent `pct set` for existing containers, and — the more important half — the playbook now **fails the build on any failed unit after boot**. It previously accepted `degraded` by design (`failed_when: ... 'degraded' not in stdout`), which is precisely how a container with 19 failed units passed provisioning and stayed broken for weeks. "Finished booting" and "booted healthy" are different questions; it now asks both.
+
 ### ⚠️ Cost bug — a persistent fault IS re-investigated (and re-billed) every hour
 `investigate.sh` gates on `[ ! "$ANOMALY_FILE" -nt "$MARKER" ]`, with the stated intent that "a persistent fault isn't re-investigated (and re-billed) every hour". But `fleet_health_check.sh:225` rewrites `last_anomaly.json` **unconditionally on every sweep that finds anything** — so its mtime advances hourly, the guard never engages, and Tier 2 re-investigates the identical finding every hour. The `--slack` path has proper content-dedup (7-day, signature-based); this path has none.
 
