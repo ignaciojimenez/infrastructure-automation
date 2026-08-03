@@ -8,6 +8,114 @@ Items are ordered by risk × effort — highest-impact, most-actionable items fi
 
 ---
 
+## agent-lxc — Tier 1/2 monitoring never ran for 12 days (ROOT CAUSE FIXED; codify + cleanup pending)
+
+**Risk:** High — silent blind spot. The fleet observer has produced **zero** output since it was built (2026-07-22). Nothing alerted, because the thing that would alert is the thing that is broken. Discovered 2026-08-03 only because the absence of reports was noticed by hand.
+
+### Confirmed (2026-08-03)
+- CT 103 is running, `cron.service` active, crontab installed and byte-for-byte what the role intends (all 5 jobs).
+- **Exactly one Slack message ever** from `agent-lxc`: 2026-07-22 09:06, and that was the `/tmp/fleet_synth.sh` synthetic test (threshold forced to 1%). The real crons have never posted anything.
+- **Zero SSH connections** from `10.30.40.203` to `dockassist`/`hifipi`/`cobra` — grep proven capable against the same journals (51 `Accepted` lines). Tier 1 has never reached a single host.
+- `~/.logs/` **did not exist**. Every cron redirects `>> {{ logs_dir }}/*.log`; a shell that cannot open a redirect target fails *before* executing the command. Silent, permanent, unlogged.
+- Egress/DNS/`choco` account/`/tmp` perms/`cron.allow`/spool perms all verified healthy — none of them are the cause.
+
+### Fixed on branch `fix/agent-lxc-logs-dir-2026-08`
+- `roles/services/agent` now creates `logs_dir` itself instead of assuming `deploy_monitoring.yml` ran. Only that playbook and two platform roles created it; agent-lxc is the first host with entirely role-owned monitoring, so it was the first deployed without one.
+- Seeds `.last_slack_ts` on first deploy. Without it the Slack watch falls back to `oldest=0`, pulls the last 50 messages of #home-alerts, and burns Tier 2 budget investigating resolved alerts — worse, the agent's first-ever report would describe a fault that no longer exists.
+
+### Verified fixed (2026-08-03) — end to end, on a real failure
+`mkdir -p ~/.logs` applied by hand at ~14:12. Cron had been executing on schedule all along; the redirect was killing every job before it started. **The missing directory was the entire root cause.**
+
+Proven, not inferred:
+- **14:15:03** — first-ever real monitoring message in #home-logging (`System Health Check`, SUCCESS, `Host: agent-lxc`), on the next `*/15` tick.
+- **14:37:01** — Tier 1 sweep ran, SSH fan-out confirmed on all six checkable hosts by counting `10.30.40.203` in each host's own sshd journal (independent of anything the agent reports about itself).
+- **14:37:16** — sweep found a genuine issue, exited 1, and the wrapper posted `:x: ALERT` to **#home-alerts** (the watched channel). The alert path is verified against a real fault, not a synthetic one.
+
+⚠️ **This fix is manual and lives only on the box.** The branch codifies it, but until that is deployed a rebuild recreates the outage.
+
+### Not the cause — but real, and worth its own work
+The container's systemd is badly broken: **19 failed units**, including *every* mount unit (`tmp.mount`, `run-lock.mount`, `dev-mqueue.mount`) and all four `systemd-tmpfiles-*` services. `systemd-journald` and `systemd-tmpfiles-setup` both exit `243/CREDENTIALS` — systemd cannot set up its credentials tmpfs, i.e. the container cannot mount filesystems. Likely an LXC capability/config issue (unprivileged + newer systemd).
+
+This did **not** cause the outage — cron works fine. But dead `journald` is *why the outage hid for 12 days*: cron's record of what it ran and why it failed goes nowhere, and `/var/log/syslog` has been 0 bytes since 2026-07-14. A monitoring host that cannot log will keep failing invisibly.
+
+### The agent got itself banned by CrowdSec within 10 minutes of working (2026-08-03)
+The moment Tier 1 started working it found `opnsense: UNREACHABLE (no response as read_agent)` — a real, pre-existing key failure. Tier 2 then fired at 14:47 to investigate **that finding**, which meant OpenCode repeatedly SSH'd at opnsense and failed publickey auth every time. OPNsense runs CrowdSec; a burst of failed SSH auth from `10.30.40.203` is textbook ssh-bruteforce, so **CrowdSec banned the agent container**. Since OPNsense *is* the gateway, the container lost everything beyond its own L2 segment.
+
+Symptom shape, for next time: same-segment hosts reachable (cobra pings in 0.3 ms), everything routed dead; gateway ARP entry `REACHABLE` but ping to it 100% loss (L2 fine, L3 filtered); **survives a full container reboot** — which is the tell that the block is not in the container. Diagnosed by comparing a same-segment host against an off-segment one; the container itself looked perfectly healthy throughout (0.065% CPU, 187 MB/2 GB, 15 processes).
+
+Cleared with `cscli decisions delete --ip 10.30.40.203` on opnsense.
+
+**This is a feedback loop, not a one-off.** While `read_agent` is broken on opnsense, every sweep finds it, every Tier 2 run attacks it, and CrowdSec re-bans. Broken for now by removing the Tier 2 anomaly cron (manual — see ⚠️ below). Permanent fixes, in order of value: (1) restore `read_agent` on opnsense, (2) whitelist fleet IPs in CrowdSec so the infrastructure cannot ban itself, (3) have `fleet_health_check` back off a host that fails auth rather than retrying it hourly.
+
+### Tier 2 has never completed a run — and the earlier cost warning was wrong
+`investigate.log` shows every Tier 2 run ending `rc=124 — opencode timed out after 600s and was killed`, `run cost: $0`, at 14:47 / 15:47 / 16:47. It never reached the Anthropic API because the CrowdSec ban had cut its network. **Actual spend to date: $0**, not the $7–13/day estimated from the re-billing bug below. That estimate was wrong in the reassuring direction — but the bug is real and simply never got the chance to fire. Tier 2's true cost and correctness remain **unmeasured**: it has not once produced a successful investigation.
+
+Each failed run still burns 10 minutes of the container's single CPU on a hung `opencode`, hourly.
+
+### ⚠️ Manual state on the box, not yet codified (2026-08-03)
+- `mkdir -p ~/.logs` — the actual outage fix. Codified on this branch; **deploy it or a rebuild reproduces the outage.**
+- Tier 2 anomaly cron **removed by hand** to break the CrowdSec ban loop (backup at `/root/crontab.choco.bak.20260803` inside CT 103). Any `services.yml --tags agent` run restores it — do not deploy until opnsense access is fixed.
+- `pct set 103 --features nesting=1` — see below. Persisted in the CT config, not in this repo; nothing in Ansible manages container features.
+
+### systemd breakage fixed — enable nesting
+The 19 failed units (`journald`, `tmpfiles-setup`, every mount unit, all `243/CREDENTIALS`) were a missing `nesting=1` feature flag. Proxmox says so itself on reboot: `WARN: Systemd 257 detected. You may need to enable nesting.` After `pct set 103 --features nesting=1` + reboot, `systemctl --failed` returns **0 units** and `journald` is active — cron execution is finally visible in the journal.
+
+Consequence worth noting: while journald was dead, **fail2ban was blind**, because its sshd filter reads `_SYSTEMD_UNIT=ssh.service` from the journal. `Currently banned: 0 / Total failed: 0` meant "no visibility", not "no attacks". Any host with a dead journald has decorative fail2ban.
+
+### ⚠️ Cost bug — a persistent fault IS re-investigated (and re-billed) every hour
+`investigate.sh` gates on `[ ! "$ANOMALY_FILE" -nt "$MARKER" ]`, with the stated intent that "a persistent fault isn't re-investigated (and re-billed) every hour". But `fleet_health_check.sh:225` rewrites `last_anomaly.json` **unconditionally on every sweep that finds anything** — so its mtime advances hourly, the guard never engages, and Tier 2 re-investigates the identical finding every hour. The `--slack` path has proper content-dedup (7-day, signature-based); this path has none.
+
+Live exposure right now: opnsense is unreachable (below), so the sweep finds it every hour. At the repo's own figure of ~$0.30–0.55 per investigation that is roughly **$7–13/day** until opnsense is fixed. Also `SEND_TO_ALERT=true` on every failure with no dedup or cooldown (`enhanced_monitoring_wrapper:384`), so it is 24 push notifications/day to #home-alerts alongside the spend.
+
+**Fix:** write `last_anomaly.json` only when its *content* changes (compare against the previous file and skip the write if identical), so mtime tracks "new information" rather than "sweep ran". Content-hash dedup like the `--slack` path is the better long-term shape.
+
+**Until fixed:** either resolve opnsense access (removes the finding), or temporarily remove the Tier 2 anomaly cron.
+
+### Next Steps
+1. **Deploy the branch** so `logs_dir` is codified and the hand-made directory stops being load-bearing.
+2. Fix the container's systemd/mount breakage (needs root on CT 103; `pct exec` is deliberately not in read_agent's sudo allowlist).
+3. Restore `journald` — the observability gap that made this a 12-day outage instead of a 1-hour one.
+4. Re-run `agent_access` against agent-lxc: it is missing `/usr/local/bin/agent_read` (commit `067bba5`) that every other host has. That helper reads exactly the logs that were needed here, and its absence is why this could not be diagnosed remotely.
+
+### Process note — how this was nearly misdiagnosed
+After the manual fix, the sweep was declared "still broken" on the basis of zero SSH connections. That check ran ~1 minute after the directory was created, against a Tier 1 job that runs at `:37` — no cycle had occurred yet. The negative result was structurally guaranteed and proved nothing. **Before concluding a fix failed, confirm at least one scheduled cycle has actually elapsed.** A check that cannot yet have fired is not evidence of anything.
+
+### Acceptance Criteria
+- [x] A monitoring message appears in #home-logging tagged `Host: agent-lxc` — 2026-08-03 14:15:03
+- [x] `fleet_health_check.sh` (Tier 1, `:37`) produces SSH connections from `10.30.40.203` on all fleet hosts — verified 14:37 from each host's own sshd journal
+- [x] Alert path proven on a real fault — `:x: ALERT` in #home-alerts at 14:37:16 (opnsense unreachable), not a synthetic test
+- [x] `systemctl --failed` on CT 103 is empty, `journald` active, cron execution visible in the journal — after `nesting=1`, 2026-08-03 17:02
+- [ ] `logs_dir` codified in the role and deployed, so the manual `mkdir` is no longer load-bearing
+- [ ] Tier 2 completes one successful investigation (never yet achieved — all runs timed out at 600s)
+- [ ] Tier 2 anomaly cron restored, after opnsense access is fixed and the re-billing bug is closed
+
+### Incidental findings (this session)
+- **`roles/services/unifi` has the identical latent bug** — three crons redirect into `logs_dir` (lines 168/183/199) and the role never creates it. `unifi-lxc` is unaffected today because its `.logs` predates the role, but a rebuild reproduces the agent-lxc outage exactly. Same one-task fix; not applied here (out of scope for this branch).
+- `deploy_monitoring.yml` tags its logs-dir task `[monitoring, logs]` but its scripts task `[monitoring, scripts]`. A run with `--tags scripts` deploys scripts into a directory it silently skips creating. Plausible (unverified) explanation for how agent-lxc ended up with all six `scripts/common/` files and no `.logs`.
+- `system_health_check.sh` on agent-lxc reports `❌ Upgrade log not found - unattended-upgrades may not be configured`, but `/var/log/unattended-upgrades/` exists and is populated. The probe increments `issues_found` without failing the run, so it will show a red ❌ in every daily heartbeat without ever alerting. Cosmetic, but it trains the eye to ignore red.
+- Whole fleet rebooted 2026-07-31 ~13:45 (every host "up 2 days" on 08-03). Unexplained; predates nothing here (agent silence started 07-22) but worth knowing.
+- `touchid-agent` refuses non-interactive signing from an agent shell (`agent refused operation`), so Ansible runs against hosts without an `-agent` alias must be driven by hand.
+
+---
+
+## opnsense — `read_agent` access is broken (found by the agent's first real sweep)
+
+**Risk:** Medium-high — the firewall is the one host neither the fleet observer nor autonomous diagnostics can see. Silent until now because the observer that would have reported it was itself dead.
+
+**Confirmed 2026-08-03:** Tier 1's first real run reported `opnsense: UNREACHABLE (no response as read_agent)`. Verified independently from the Mac — `ssh opnsense-agent` returns `Permission denied (publickey)`. The host answers on 22, so it is the key/account that is broken, not the box. Note this fails from *both* the container and the laptop, so it is not specific to the agent-lxc identity — `read_agent`'s key is missing or wrong on opnsense generally.
+
+`agent_access` runs `hosts: all` and has a FreeBSD sudoers template, so opnsense is in scope by design; it has simply drifted (same class as agent-lxc missing `agent_read`).
+
+### Next Steps
+- Re-run `agent_access` against opnsense and confirm `ssh opnsense-agent` works.
+- Until then every hourly Tier 1 sweep will alert on this — expect a recurring `:x:` in #home-alerts, and note the wrapper has no failure dedup for it.
+
+### Acceptance Criteria
+- [ ] `ssh opnsense-agent "uname -a"` succeeds from the Mac and from CT 103
+- [ ] Tier 1 sweep reports 0 issues across 7 hosts
+
+---
+
 ## cwwk Thermal Stability — Root Cause + Headroom (mitigations deployed)
 
 **Risk:** High operational impact — cwwk hosts the OPNsense firewall (VM 100, onboot), so a cwwk crash takes down all internet. Recurring silent resets.
