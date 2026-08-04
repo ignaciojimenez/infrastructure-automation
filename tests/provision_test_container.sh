@@ -157,6 +157,18 @@ pct exec "$VMID" -- apt-get update -qq
 # shellcheck disable=SC2086  # word splitting is intended for the package list
 pct exec "$VMID" -- apt-get install -y -qq $PACKAGES
 
+# Mirror the fail2ban jail config the fleet gets from bootstrap
+# (install_base_software.yml). Debian 13 defaults to the systemd backend, but
+# Debian 12 does not: its stock sshd jail reads /var/log/auth.log, which a
+# container with no rsyslog never creates, so fail2ban dies at startup with
+# "Have not found any log file for sshd jail". Without this the container has a
+# failed unit and a dead fail2ban that no real fleet host has, and
+# system_health_check reports a fault that exists only in the test rig.
+say "Applying the fleet's fail2ban sshd jail config"
+pct exec "$VMID" -- sh -c 'printf "[sshd]\nenabled = true\nbackend = systemd\n" > /etc/fail2ban/jail.d/sshd.conf'
+pct exec "$VMID" -- chmod 644 /etc/fail2ban/jail.d/sshd.conf
+pct exec "$VMID" -- systemctl restart fail2ban
+
 say "Authorising the agent key for root"
 pct exec "$VMID" -- mkdir -p /root/.ssh
 pct exec "$VMID" -- sh -c "printf '%s\n' '$AGENT_PUBKEY' > /root/.ssh/authorized_keys"

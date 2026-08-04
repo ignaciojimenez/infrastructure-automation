@@ -208,6 +208,25 @@ tests/run_tests.sh --target 10.30.40.206
 `debian-12-standard_12.12-1_amd64.tar.zst` is available from `pveam` but not
 cached on cwwk; the script downloads it.
 
+### Debian 12 gotcha, found on the first run (2026-08-04)
+
+A bare Debian 12 container ends up with **fail2ban dead and one failed unit**:
+its stock sshd jail reads `/var/log/auth.log`, and a container with no rsyslog
+never creates that file, so the service exits with *"Have not found any log
+file for sshd jail"*. Debian 13 does not have this problem — it defaults to the
+systemd backend.
+
+The fleet does not have it either, because `bootstrap` writes
+`/etc/fail2ban/jail.d/sshd.conf` with `backend = systemd`
+(`ansible/playbooks/tasks/install_base_software.yml:52`). Verified on
+dockassist: no rsyslog, no `auth.log`, fail2ban **active**.
+
+`provision_test_container.sh` now applies the same config, so the container
+matches the fleet. Worth noting as a category: **anything bootstrap does to a
+real host has to be mirrored here, or the test rig reports faults that only
+exist in the test rig.** This one surfaced immediately because
+`system_health_check.sh` treats fail2ban as a critical service.
+
 **Permanently uncovered:** aarch64 itself, and anything touching Pi hardware —
 ALSA on hifipi, `vcgencmd`, the thermal sysfs paths. LXC shares the host
 kernel, so an aarch64 container cannot run on the x86_64 cwwk at all. Full
