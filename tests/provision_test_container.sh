@@ -67,6 +67,13 @@ CORES="${TEST_CT_CORES:-1}"
 # than something rig-specific — the container is meant to be a twin.
 INFRA_USER="${TEST_CT_USER:-choco}"
 
+# TEST_CT_BARE=1 leaves the container with root and nothing else — a genuinely
+# fresh host. That is the only state in which bootstrap.yml's "connected as
+# root, create the infrastructure user" branch runs, so it is the only way to
+# test the user-gardening path. The default (0) produces a host that already
+# looks bootstrapped, which is what everything downstream of bootstrap expects.
+BARE="${TEST_CT_BARE:-0}"
+
 # Same pinned image as agent-lxc, so the target is a twin of a real fleet host
 # rather than an approximation. Bump both together when Debian moves.
 TEMPLATE_STORAGE="${TEST_CT_TEMPLATE_STORAGE:-local}"
@@ -206,14 +213,38 @@ pct exec "$VMID" -- setcap cap_net_raw+ep /bin/ping
 # prohibit-password with no key for the fleet's real users, and gives root
 # /sbin/nologin. The read_agent key authorised for root below is the only way
 # into this container, so hardening it would lock the rig out of itself.
-say "Creating the infrastructure user ($INFRA_USER)"
-pct exec "$VMID" -- sh -c "id '$INFRA_USER' >/dev/null 2>&1 || \
-    useradd --create-home --shell /bin/bash --groups sudo '$INFRA_USER'"
-pct exec "$VMID" -- sh -c "printf '%s ALL=(ALL) NOPASSWD: ALL\n' '$INFRA_USER' \
-    > '/etc/sudoers.d/$INFRA_USER'"
-pct exec "$VMID" -- chmod 440 "/etc/sudoers.d/$INFRA_USER"
-pct exec "$VMID" -- visudo -c -f "/etc/sudoers.d/$INFRA_USER"
+if [ "$BARE" = "1" ]; then
+    say "TEST_CT_BARE=1 — skipping the infrastructure user"
+    printf '    The container is left as a fresh host with root only, which is what\n'
+    printf '    bootstrap.yml expects the first time it meets a machine. Point the\n'
+    printf '    inventory at it with ansible_user=root to exercise that path.\n'
+else
+    say "Creating the infrastructure user ($INFRA_USER)"
+    pct exec "$VMID" -- sh -c "id '$INFRA_USER' >/dev/null 2>&1 || \
+        useradd --create-home --shell /bin/bash --groups sudo '$INFRA_USER'"
+    pct exec "$VMID" -- sh -c "printf '%s ALL=(ALL) NOPASSWD: ALL\n' '$INFRA_USER' \
+        > '/etc/sudoers.d/$INFRA_USER'"
+    pct exec "$VMID" -- chmod 440 "/etc/sudoers.d/$INFRA_USER"
+    pct exec "$VMID" -- visudo -c -f "/etc/sudoers.d/$INFRA_USER"
 
+    # Authorising the key for the infrastructure user, not just root, is what
+    # lets the inventory connect the way the fleet actually does — as
+    # $INFRA_USER over sudo. Connecting as root instead makes `become` a no-op,
+    # so every privilege-escalation path in every playbook goes untested, and it
+    # drags scripts_dir and logs_dir to /home/root because they derive from
+    # ansible_user.
+    say "Authorising the agent key for $INFRA_USER"
+    pct exec "$VMID" -- install -d -m 700 -o "$INFRA_USER" -g "$INFRA_USER" \
+        "/home/$INFRA_USER/.ssh"
+    pct exec "$VMID" -- sh -c "printf '%s\n' '$AGENT_PUBKEY' \
+        > '/home/$INFRA_USER/.ssh/authorized_keys'"
+    pct exec "$VMID" -- chown "$INFRA_USER:$INFRA_USER" "/home/$INFRA_USER/.ssh/authorized_keys"
+    pct exec "$VMID" -- chmod 600 "/home/$INFRA_USER/.ssh/authorized_keys"
+fi
+
+# Root keeps the key too, as the second way in. ssh_hardening would normally
+# close this off; on a host flagged is_test_environment it leaves it open,
+# because `pct` on the hypervisor is otherwise the only recovery path.
 say "Authorising the agent key for root"
 pct exec "$VMID" -- mkdir -p /root/.ssh
 pct exec "$VMID" -- sh -c "printf '%s\n' '$AGENT_PUBKEY' > /root/.ssh/authorized_keys"

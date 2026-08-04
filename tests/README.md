@@ -18,17 +18,45 @@ and destroy it with the same script and `-- --destroy`. See
 [docs/TEST_CONTAINER.md](../docs/TEST_CONTAINER.md) for what each setting is
 for. The runner refuses to run against a host that is not named `testlxc`.
 
-The same containers are described by `ansible/inventory/test_hosts.yml`, so
-playbooks can be run against them instead of a fleet host:
+## Trying something by hand
+
+The suite above is batch. When you are part-way through a change and just want
+to poke at it on something that behaves like a fleet host, use the sandbox:
+
+```sh
+tests/sandbox.sh                       # shell in, as the infrastructure user
+tests/sandbox.sh --push                # copy the working tree's scripts over
+tests/sandbox.sh --run system_health_check.sh
+tests/sandbox.sh --status
+tests/sandbox.sh --reset               # back to baseline when you've made a mess
+tests/sandbox.sh --deb12               # any of the above against CT 198
+tests/sandbox.sh --root                # as root, for the bootstrap path
+```
+
+`--push` copies what is in your working tree *right now*, uncommitted included,
+without going through Ansible. That is deliberate: no playbook, no vault, no
+commit — the file is on the box in a second so you can run it. Use the playbooks
+when you want to test the deploy; use this when you want to test the script.
+
+`--reset` is a soft reset — scripts, logs, crontab, `/etc/monitoring`, the
+package set. A true rebuild needs `pct` on the Proxmox host, so it stays a
+`provision_test_container.sh` job.
+
+## Running playbooks against them
+
+`ansible/inventory/test_hosts.yml` describes both containers, connecting as the
+infrastructure user over sudo exactly as the fleet is reached:
 
 ```sh
 ansible-playbook -i ansible/inventory/test_hosts.yml \
     ansible/playbooks/deploy_monitoring.yml
 ```
 
-⚠️ Not every playbook is safe there — `ssh_hardening.yml` would lock the rig out
-of itself. See "Running playbooks against it" in
-[docs/TEST_CONTAINER.md](../docs/TEST_CONTAINER.md).
+`deploy_monitoring.yml`, `services.yml --tags monitoring` and
+`services.yml --tags ssh` all converge. `bootstrap.yml` and a full `site.yml`
+have not been run against a container yet. See "Running playbooks against it" in
+[docs/TEST_CONTAINER.md](../docs/TEST_CONTAINER.md) for how hardening is
+prevented from locking the rig out of itself.
 
 Host-independent checks live in `tests/unit/` and need no container at all:
 

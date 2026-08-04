@@ -124,7 +124,20 @@ pct exec 199 -- setcap cap_net_raw+ep /bin/ping
 pct exec 199 -- useradd --create-home --shell /bin/bash --groups sudo choco
 pct exec 199 -- sh -c 'echo "choco ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/choco'
 pct exec 199 -- chmod 440 /etc/sudoers.d/choco
+
+# ... and the key authorised for it, so Ansible connects the way it connects to
+# the fleet: as the infrastructure user, escalating with sudo. Connecting as
+# root instead makes `become` a no-op, so every privilege-escalation path in
+# every playbook goes untested.
+pct exec 199 -- install -d -m 700 -o choco -g choco /home/choco/.ssh
+pct exec 199 -- sh -c 'cp /root/.ssh/authorized_keys /home/choco/.ssh/authorized_keys'
+pct exec 199 -- chown choco:choco /home/choco/.ssh/authorized_keys
+pct exec 199 -- chmod 600 /home/choco/.ssh/authorized_keys
 ```
+
+For the **bootstrap user-creation path**, you want the opposite — a container
+with root and nothing else, which is the only state where that branch runs.
+`TEST_CT_BARE=1 sh provision_test_container.sh` skips this whole step.
 
 Verified against production (`unifi-lxc`, 2026-08-04): its `/bin/ping` carries
 `cap_net_raw+ep` while `net.ipv4.ping_group_range` is `65534 65534` on both, so
@@ -183,6 +196,10 @@ ansible-playbook -i ansible/inventory/test_hosts.yml \
 
 Measured 2026-08-04, against both CT 199 and CT 198:
 
+Connection is as the **infrastructure user over sudo**, exactly as the fleet is
+reached — not as root. Connecting as root would make `become` a no-op and drag
+`scripts_dir`/`logs_dir` to `/home/root`, since they derive from `ansible_user`.
+
 | Play | Result |
 |---|---|
 | Deploy common monitoring scripts | converges; all 6 scripts, `changed=0` on re-run |
@@ -190,18 +207,41 @@ Measured 2026-08-04, against both CT 199 and CT 198:
 | Deploy OPNsense monitoring | no hosts matched — needs FreeBSD |
 | SMART disk-health | skipped; gated on `enable_smart_monitoring` |
 
-`services.yml --tags monitoring` also converges and installs the cron. Anything
-broader does not, and one part of it is actively dangerous:
+`services.yml --tags monitoring` converges and installs the cron.
+`services.yml --tags ssh` — the full hardening pass — converges too, verified on
+CT 198 on 2026-08-04.
 
-⚠️ **Do not run `site.yml`, `bootstrap.yml`, or an untagged `services.yml`
-against a test container.** `tasks/ssh_hardening.yml` sets authorized_keys for
-`ansible_user` with `exclusive: true` — and `ansible_user` here is `root`, whose
-key is the only way in. It would erase the read_agent key, replace it with the
-GitHub key set, and lock the rig out of itself; `pct` on cwwk would be the only
-way back. The file has an escape hatch for exactly this (`when:
-inventory_hostname not in ['devpi']`) but it is keyed to a host that no longer
-exists. Phase 2 of TODO 306 needs that generalised to `is_test_environment`
-before site.yml can be pointed here.
+### How hardening is kept from locking the rig out
+
+`tasks/ssh_hardening.yml` sets authorized_keys for `ansible_user` with
+`exclusive: true`. That is the whole point of the task on a fleet host — the
+GitHub key set is the only truth, so a revoked key disappears everywhere. On a
+disposable container the key Ansible connected with *is* the only way in, so the
+same task would lock the rig out of itself with `pct` as the sole way back.
+
+Rather than skipping hardening on test hosts, which would leave it untested,
+three things are gated on `is_test_environment` — set only in `test_hosts.yml`,
+never in the fleet inventory:
+
+| Task | Fleet host | Test container |
+|---|---|---|
+| authorized_keys, `exclusive: true` | GitHub key set only | GitHub key set **+ `test_environment_ssh_key`** |
+| Disable root login | root shell → nologin | skipped, so root SSH stays as a second way in |
+| Lock the user password | locked | skipped |
+| `sshd_config` | `PermitRootLogin no` | `PermitRootLogin prohibit-password` |
+
+An `assert` runs **before** the authorized_keys write and fails the play if the
+connecting key is missing or empty — after `exclusive: true` has run there is no
+way back in to fix it.
+
+Verified in both directions on CT 198: with the flag set, a fresh SSH as both
+`choco` and `root` still works after hardening; with `is_test_environment: false`
+the same run plans to *remove* the rescue key and renders `PermitRootLogin no`.
+So the fleet's behaviour is unchanged.
+
+⚠️ Still true: `bootstrap.yml` and a full `site.yml` have not been run against a
+container. Hardening is the piece that made them dangerous, and it is now
+handled, but the rest of those playbooks remains unexercised here.
 
 ## 7. Destroy when done
 
