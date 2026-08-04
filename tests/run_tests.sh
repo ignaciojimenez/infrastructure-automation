@@ -63,7 +63,7 @@ remote_hostname=$($SSH 'hostname' 2>/dev/null) || {
 }
 
 case "$remote_hostname" in
-    testlxc|test-*|*-test) : ;;
+    testlxc*|test-*|*-test) : ;;
     *)
         printf 'error: target hostname is "%s", which is not a recognised test container.\n' "$remote_hostname" >&2
         printf '       These tests deliberately break the host they run on. Refusing.\n' >&2

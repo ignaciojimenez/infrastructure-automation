@@ -14,6 +14,30 @@
 #
 # Idempotent: an existing CT 199 is reconfigured, not recreated.
 #
+# TARGETS
+#
+#   CT 199 (default) — Debian 13. Exact match for agent-lxc and unifi-lxc,
+#   close match for cwwk (same OS/arch/systemd/python; bare metal rather than
+#   LXC).
+#
+#   CT 198 — Debian 12, for the four Raspberry Pis. They report as Debian 12
+#   bookworm with systemd 252 and Python 3.11, two major versions behind
+#   CT 199. That gap — not the CPU architecture — is where the behaviour a
+#   POSIX shell script can trip over actually lives: coreutils and util-linux
+#   flags, systemctl output, python. Create it with:
+#
+#     TEST_CT_VMID=198 TEST_CT_HOSTNAME=test-deb12 \
+#     TEST_CT_IP=10.30.40.206 \
+#     TEST_CT_TEMPLATE=debian-12-standard_12.12-1_amd64.tar.zst \
+#     sh provision_test_container.sh
+#
+#   (the template is not cached on cwwk by default; the script downloads it)
+#
+# STILL NOT COVERED by either container, and unfixable here: aarch64, and
+# anything touching Pi hardware — ALSA on hifipi, vcgencmd, the thermal sysfs
+# paths. LXC shares the host kernel, so no aarch64 container can run on the
+# x86_64 cwwk. FreeBSD needs a VM, not a container — see docs/TEST_CONTAINER.md.
+#
 # This is deliberately a shell script and not an Ansible playbook. The
 # container is disposable scaffolding that must be creatable when the
 # inventory, the vault, or the playbooks themselves are what is being tested —
@@ -69,7 +93,7 @@ if [ "${1:-}" = "--destroy" ]; then
     # Guard against ever pointing this at a real container.
     _name=$(pct config "$VMID" | awk -F': ' '/^hostname:/ {print $2}')
     case "$_name" in
-        testlxc|test-*|*-test) : ;;
+        testlxc*|test-*|*-test) : ;;
         *) die "CT $VMID is '$_name', not a test container. Refusing to destroy." ;;
     esac
     say "Stopping and destroying CT $VMID ($_name)"

@@ -156,3 +156,115 @@ pinned template has been garbage-collected from `local`:
 pveam update
 pveam download local debian-13-standard_13.6-1_amd64.tar.zst
 ```
+
+---
+
+# Covering the rest of the fleet
+
+CT 199 is an exact match for `agent-lxc` and `unifi-lxc`, and close to `cwwk`.
+It represents **three of seven hosts**. What follows closes most of the rest.
+
+Measured 2026-08-04:
+
+| Host | OS | Arch | systemd | Python |
+|---|---|---|---|---|
+| CT 199 `testlxc` | Debian 13 | x86_64 | 257 | 3.13.5 |
+| `agent-lxc`, `unifi-lxc` | Debian 13 | x86_64 | 257 | 3.13.5 |
+| `cwwk` | Debian 13 | x86_64 | 257 | 3.13.5 |
+| 4× RPis | Debian 12 | aarch64 | 252 | 3.11.2 |
+| `opnsense` | FreeBSD 14.3 | x86_64 | — | — |
+
+## ⚠️ Read this before creating anything on cwwk
+
+`free -h` on cwwk reports **31 GiB total, 25 GiB used, 5.9 GiB available** — the
+OPNsense VM alone holds 12 GiB. cwwk is also the internet single point of
+failure and has overheated twice (2026-06-30, 2026-07-31).
+
+- **Containers are nearly free.** An idle Debian LXC costs ~100–200 MB. Adding
+  CT 198 is not a meaningful risk.
+- **VMs are not.** A FreeBSD test VM takes real memory from a box whose own
+  TODO carries "cwwk Memory Optimization" as a standing item.
+
+So: **start a test VM only when you need it and stop it afterwards. Never set
+`onboot 1` on one.** Cheap to obey, and the failure mode is losing the internet.
+
+## Raspberry Pi coverage — a Debian 12 container
+
+The Pis differ from CT 199 in OS version *and* architecture. Only the first is
+worth chasing, and it is the one that matters: POSIX shell does not care about
+the CPU, but it very much cares about coreutils/util-linux flag support,
+`systemctl` output format, and Python version — all of which track the Debian
+release.
+
+```sh
+TEST_CT_VMID=198 TEST_CT_HOSTNAME=test-deb12 \
+TEST_CT_IP=10.30.40.206 \
+TEST_CT_TEMPLATE=debian-12-standard_12.12-1_amd64.tar.zst \
+sh tests/provision_test_container.sh
+
+tests/run_tests.sh --target 10.30.40.206
+```
+
+`debian-12-standard_12.12-1_amd64.tar.zst` is available from `pveam` but not
+cached on cwwk; the script downloads it.
+
+**Permanently uncovered:** aarch64 itself, and anything touching Pi hardware —
+ALSA on hifipi, `vcgencmd`, the thermal sysfs paths. LXC shares the host
+kernel, so an aarch64 container cannot run on the x86_64 cwwk at all. Full
+aarch64 emulation under QEMU/TCG would work but is far too slow to be worth it
+for shell scripts. Treat arch-specific and hardware-specific behaviour as
+reasoned, never verified.
+
+## FreeBSD coverage — a plain FreeBSD VM, not OPNsense
+
+**Use FreeBSD, not OPNsense.** What the fleet scripts actually hit on the
+firewall is BSD *userland*: `service X status` instead of `systemctl`, BSD
+`awk`/`df`/`sed` output, FreeBSD `/bin/sh` instead of dash, no `/proc/meminfo`.
+A stock FreeBSD VM covers all of it. OPNsense adds only OPNsense-specific
+behaviour — `config.xml` account regeneration, the `auth.inc` shell gating —
+and the repo's own direction is to stop SSH-probing OPNsense in favour of its
+API, so investing in an OPNsense test VM builds for a path being retired.
+
+FreeBSD publishes **pre-installed qcow2 images, no installer required**, and
+14.3-RELEASE matches opnsense's `14.3-RELEASE-p14` base:
+
+```sh
+# On cwwk, as root
+cd /var/lib/vz/template/iso
+curl -fLO https://download.freebsd.org/releases/VM-IMAGES/14.3-RELEASE/amd64/Latest/FreeBSD-14.3-RELEASE-amd64.qcow2.xz
+unxz FreeBSD-14.3-RELEASE-amd64.qcow2.xz
+
+qm create 198 --name test-freebsd --memory 1024 --cores 1 \
+  --net0 virtio,bridge=vmbr0 --ostype other \
+  --serial0 socket --vga serial0 --onboot 0
+
+qm importdisk 198 FreeBSD-14.3-RELEASE-amd64.qcow2 local-zfs
+qm set 198 --scsihw virtio-scsi-pci --scsi0 local-zfs:vm-198-disk-0 --boot order=scsi0
+qm start 198
+qm terminal 198        # serial console over your SSH session; Ctrl-O to exit
+```
+
+Pick a VMID that is free — 198 is used above for the Debian 12 *container*, and
+CT and VM IDs share one namespace on Proxmox, so choose different numbers for
+the two.
+
+The `--serial0 socket` + `qm terminal` combination is what makes this workable
+over SSH alone, with no Proxmox web UI. First boot needs a console to set a
+root password and enable sshd, after which the read_agent key can be installed
+the same way as on the containers.
+
+**Unverified:** these `qm` invocations are written from the documented Proxmox
+pattern and have not been executed. Expect to adjust the disk name that
+`importdisk` reports.
+
+## If you specifically need OPNsense, not just FreeBSD
+
+Verified against the OPNsense install documentation: **there is no official
+qcow2, OVA, or cloud image.** The DVD, VGA and serial images all boot a live
+environment and require running the installer; only the Nano image is
+pre-installed, and it targets embedded devices on ≥4 GB media.
+
+The workable SSH-only path is the **serial** image plus `qm terminal`, giving a
+text-mode installer without the web UI — roughly ten interactive minutes. Worth
+it only for testing OPNsense-specific behaviour, which is a small and shrinking
+surface.
