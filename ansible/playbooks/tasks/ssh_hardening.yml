@@ -129,7 +129,9 @@
     name: "{{ ansible_user }}"
     password_lock: true
   # Was `inventory_hostname not in ['devpi']` — the right intent keyed to a host
-  # that no longer exists. Generalised to the flag the test inventory sets.
+  # that was never in the fleet inventory and has not been used in a long time.
+  # Generalised to the flag the test inventory sets. See docs/TODO.md for the
+  # devpi decision.
   when: not (is_test_environment | default(false))
   tags: [ssh, security]
 
