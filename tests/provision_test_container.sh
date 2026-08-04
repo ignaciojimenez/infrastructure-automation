@@ -61,6 +61,12 @@ MEMORY="${TEST_CT_MEMORY:-1024}"
 SWAP="${TEST_CT_SWAP:-512}"
 CORES="${TEST_CT_CORES:-1}"
 
+# Must match `infrastructure_user` as the inventory resolves it, since that is
+# what every playbook chowns to. It defaults to $USER on the control machine
+# (see group_vars/all/main.yml), so the default here is that same name rather
+# than something rig-specific — the container is meant to be a twin.
+INFRA_USER="${TEST_CT_USER:-choco}"
+
 # Same pinned image as agent-lxc, so the target is a twin of a real fleet host
 # rather than an approximation. Bump both together when Debian moves.
 TEMPLATE_STORAGE="${TEST_CT_TEMPLATE_STORAGE:-local}"
@@ -168,6 +174,45 @@ say "Applying the fleet's fail2ban sshd jail config"
 pct exec "$VMID" -- sh -c 'printf "[sshd]\nenabled = true\nbackend = systemd\n" > /etc/fail2ban/jail.d/sshd.conf'
 pct exec "$VMID" -- chmod 644 /etc/fail2ban/jail.d/sshd.conf
 pct exec "$VMID" -- systemctl restart fail2ban
+
+# A container built from a pveam template has no capability xattr on /bin/ping,
+# so ICMP works for root and fails for everyone else with "socket: Operation not
+# permitted" — and system_health_check.sh reports "Internet: unreachable" for a
+# host whose network is fine. A long-lived fleet container (verified on
+# unifi-lxc) does carry cap_net_raw+ep, and the fleet's ping_group_range is
+# 65534 65534, so the capability is what production actually relies on.
+# `apt-get install --reinstall iputils-ping` does NOT restore it; setcap does,
+# and it works inside an unprivileged container.
+say "Restoring cap_net_raw on ping (absent in a fresh template)"
+pct exec "$VMID" -- setcap cap_net_raw+ep /bin/ping
+
+# Deliberately NOT mirrored: adding the user to the `adm` group. bootstrap.yml
+# creates it with `groups: sudo` only, so on every host whose user came from
+# bootstrap — cwwk, unifi-lxc, agent-lxc — /var/log/unattended-upgrades
+# (root:adm 0750) is unreadable and check_auto_upgrades reports "Upgrade log not
+# found". The four Pis escape it because their user predates bootstrap and
+# inherited the Pi image's group list. The rig reproducing that is correct: it
+# is a real fleet fault, not a rig artifact. See docs/TODO.md.
+
+# Mirror the infrastructure user bootstrap.yml creates the first time it meets a
+# host as root. Every playbook writes under /home/<infrastructure_user> —
+# scripts_dir, logs_dir, the crontabs — so without this user
+# deploy_monitoring.yml dies on its very first task with "chown failed: failed
+# to look up user", and site.yml never gets far enough to test anything.
+# Same lesson as the fail2ban jail above: what bootstrap does to a real host has
+# to be mirrored here, or the rig only reports faults of its own making.
+#
+# Deliberately NOT mirrored: ssh_hardening.yml. It sets PermitRootLogin to
+# prohibit-password with no key for the fleet's real users, and gives root
+# /sbin/nologin. The read_agent key authorised for root below is the only way
+# into this container, so hardening it would lock the rig out of itself.
+say "Creating the infrastructure user ($INFRA_USER)"
+pct exec "$VMID" -- sh -c "id '$INFRA_USER' >/dev/null 2>&1 || \
+    useradd --create-home --shell /bin/bash --groups sudo '$INFRA_USER'"
+pct exec "$VMID" -- sh -c "printf '%s ALL=(ALL) NOPASSWD: ALL\n' '$INFRA_USER' \
+    > '/etc/sudoers.d/$INFRA_USER'"
+pct exec "$VMID" -- chmod 440 "/etc/sudoers.d/$INFRA_USER"
+pct exec "$VMID" -- visudo -c -f "/etc/sudoers.d/$INFRA_USER"
 
 say "Authorising the agent key for root"
 pct exec "$VMID" -- mkdir -p /root/.ssh

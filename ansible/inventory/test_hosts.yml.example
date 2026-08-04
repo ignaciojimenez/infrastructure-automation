@@ -1,7 +1,21 @@
 ---
 # Test inventory for development and integration testing.
-# Copy to test_hosts.yml and replace the IP with your test host.
-# Usage: ansible-playbook -i ansible/inventory/test_hosts.yml ansible/playbooks/site.yml
+# Copy to test_hosts.yml and adjust to your own disposable host.
+#
+#   ansible-playbook -i ansible/inventory/test_hosts.yml \
+#       ansible/playbooks/deploy_monitoring.yml
+#
+# The defaults below mirror tests/provision_test_container.sh, which creates the
+# container these values describe. See docs/TEST_CONTAINER.md.
+#
+# ⚠️ Never point this at a host you care about. Playbooks run from here deploy
+# with dead Slack tokens, and tests/run_tests.sh fills disks and stops services.
+#
+# Every override sits at host level on purpose. group_vars/all/main.yml is
+# inventory group_vars (precedence 4) and silently overrides anything set on a
+# group defined inside this file (precedence 3). Host vars are precedence 8 and
+# win. Check what you actually got with:
+#   ansible -i ansible/inventory/test_hosts.yml all -m debug -a 'msg={{ scripts_dir }}'
 
 all:
   children:
@@ -11,12 +25,45 @@ all:
         package_manager: apt
         service_manager: systemd
         ansible_python_interpreter: /usr/bin/python3
+        infrastructure_group: "{{ infrastructure_user }}"
+
       children:
-        raspberrypi:
+        lxc_containers:
           vars:
-            platform_type: raspberrypi
+            platform_type: lxc
           hosts:
-            devpi:
-              ansible_host: 192.168.1.100  # Replace with your test host IP
-              primary_function: media       # Replace with the function you want to test
-              is_test_environment: true     # Skips hardware-dependent tasks
+            testlxc:
+              ansible_host: 10.30.40.205   # Replace with your test host IP
+              container_id: 199
+
+              # root over a passphrase-free key: the container has no other
+              # credential, and IdentityAgent=none keeps any biometric SSH agent
+              # out of the path so runs stay unattended.
+              ansible_user: root
+              ansible_ssh_private_key_file: ~/.ssh/read_agent_ed25519
+              ansible_ssh_common_args: >-
+                -o ConnectTimeout=5
+                -o IdentitiesOnly=yes
+                -o IdentityAgent=none
+                -o StrictHostKeyChecking=accept-new
+
+              # scripts_dir / logs_dir / home_dir derive from primary_user, which
+              # group_vars/all takes from ansible_user. That is root here, so
+              # without this the playbooks deploy to /home/root/.scripts —
+              # paths production does not have. The provisioning script creates
+              # this user on the container.
+              primary_user: "{{ infrastructure_user }}"
+
+              # An unmatched function deploys monitoring and nothing else.
+              # Set a real one (media, homeassistant, …) to exercise that role.
+              # It must be set to something: services.yml compares
+              # primary_function without an `is defined` guard.
+              primary_function: test
+
+              # Dead webhook paths, so nothing the rig deploys can post into the
+              # real alert channels. The cron tasks are gated on these being
+              # defined, so they still get exercised.
+              logging_token: "TEST/TEST/testcontainernotarealwebhook"
+              alert_token: "TEST/TEST/testcontainernotarealwebhook"
+
+              is_test_environment: true    # Skips hardware-dependent tasks

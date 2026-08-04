@@ -105,6 +105,38 @@ pct exec 199 -- apt-get install -y openssh-server python3 sudo procps iproute2 \
 `system_health_check.sh` checks for them; without them the "healthy baseline"
 test would fail for the wrong reason.
 
+## 3b. Make it look like a host bootstrap has met
+
+Two things a fleet host has and a fresh template does not. Skipping either makes
+the rig report faults that exist only in the rig — the same trap as the fail2ban
+jail below.
+
+```sh
+# ping: a template has no capability xattr on /bin/ping, so ICMP works for root
+# and fails for everyone else. system_health_check.sh then reports "Internet:
+# unreachable" on a container whose network is fine. `apt-get install
+# --reinstall iputils-ping` does NOT fix it; setcap does, even unprivileged.
+pct exec 199 -- setcap cap_net_raw+ep /bin/ping
+
+# The infrastructure user. Every playbook writes under its home — scripts_dir,
+# logs_dir, the crontabs — so without it deploy_monitoring.yml fails on its
+# first task with "chown failed: failed to look up user".
+pct exec 199 -- useradd --create-home --shell /bin/bash --groups sudo choco
+pct exec 199 -- sh -c 'echo "choco ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/choco'
+pct exec 199 -- chmod 440 /etc/sudoers.d/choco
+```
+
+Verified against production (`unifi-lxc`, 2026-08-04): its `/bin/ping` carries
+`cap_net_raw+ep` while `net.ipv4.ping_group_range` is `65534 65534` on both, so
+the capability is what the fleet actually relies on.
+
+`--groups sudo` and nothing else is deliberate — it is exactly what
+`bootstrap.yml` does. In particular **do not add `adm`**: its absence is a real
+fleet fault the rig should reproduce, not paper over. See `docs/TODO.md`.
+
+What is deliberately *not* mirrored is `ssh_hardening.yml`. See "Running
+playbooks against it" below.
+
 ## 4. Authorise the agent key
 
 ```sh
@@ -138,14 +170,47 @@ tests/run_tests.sh --target 10.30.40.205
 See [tests/README.md](../../tests/README.md) for what the suite covers and how
 to add cases.
 
+## 6b. Running playbooks against it
+
+`ansible/inventory/test_hosts.yml` describes both containers. It is a separate
+inventory file, never included from `hosts.yml`, so nothing here can reach a
+fleet host by accident.
+
+```sh
+ansible-playbook -i ansible/inventory/test_hosts.yml \
+    ansible/playbooks/deploy_monitoring.yml
+```
+
+Measured 2026-08-04, against both CT 199 and CT 198:
+
+| Play | Result |
+|---|---|
+| Deploy common monitoring scripts | converges; all 6 scripts, `changed=0` on re-run |
+| Deploy Proxmox monitoring | no hosts matched — needs a host in `proxmox_hosts` |
+| Deploy OPNsense monitoring | no hosts matched — needs FreeBSD |
+| SMART disk-health | skipped; gated on `enable_smart_monitoring` |
+
+`services.yml --tags monitoring` also converges and installs the cron. Anything
+broader does not, and one part of it is actively dangerous:
+
+⚠️ **Do not run `site.yml`, `bootstrap.yml`, or an untagged `services.yml`
+against a test container.** `tasks/ssh_hardening.yml` sets authorized_keys for
+`ansible_user` with `exclusive: true` — and `ansible_user` here is `root`, whose
+key is the only way in. It would erase the read_agent key, replace it with the
+GitHub key set, and lock the rig out of itself; `pct` on cwwk would be the only
+way back. The file has an escape hatch for exactly this (`when:
+inventory_hostname not in ['devpi']`) but it is keyed to a host that no longer
+exists. Phase 2 of TODO 306 needs that generalised to `is_test_environment`
+before site.yml can be pointed here.
+
 ## 7. Destroy when done
 
 ```sh
 pct stop 199 && pct destroy 199
 ```
 
-Nothing else needs cleaning up — the container held no state and was never in
-the inventory.
+Nothing else needs cleaning up — the container held no state, and it appears
+only in `test_hosts.yml`, never in the fleet inventory.
 
 ## Rebuilding later
 
