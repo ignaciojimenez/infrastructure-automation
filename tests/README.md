@@ -8,8 +8,21 @@ tests/run_tests.sh --target 10.30.40.205            # all cases
 tests/run_tests.sh --target 10.30.40.205 --case disk --verbose
 ```
 
-See [docs/TEST_CONTAINER.md](../docs/TEST_CONTAINER.md) to create the target.
-The runner refuses to run against a host that is not named `testlxc`.
+Create the target with:
+
+```sh
+ssh cwwk 'sh -s' < tests/provision_test_container.sh
+```
+
+and destroy it with the same script and `-- --destroy`. See
+[docs/TEST_CONTAINER.md](../docs/TEST_CONTAINER.md) for what each setting is
+for. The runner refuses to run against a host that is not named `testlxc`.
+
+Host-independent checks live in `tests/unit/` and need no container at all:
+
+```sh
+tests/unit/slack_watermark_test.sh
+```
 
 ## What this suite is for
 
