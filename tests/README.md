@@ -18,6 +18,27 @@ and destroy it with the same script and `-- --destroy`. See
 [docs/TEST_CONTAINER.md](../docs/TEST_CONTAINER.md) for what each setting is
 for. The runner refuses to run against a host that is not named `testlxc`.
 
+## ⚠️ What this suite cannot see
+
+It connects as **root**, because the cases fill disks and stop services. The
+fleet's checks run as the infrastructure user under cron. So any fault that only
+appears to an unprivileged user is invisible to every case here.
+
+That is not hypothetical. On 2026-08-04, on CT 199, the same script in the same
+minute:
+
+```
+as choco : ❌ Upgrade log not found - unattended-upgrades may not be configured
+as root  : ✅ Last upgrade: 2026-08-04
+```
+
+`/var/log/unattended-upgrades/` is `root:adm 0750` and the infrastructure user is
+not in `adm` on three of seven fleet hosts. A real bug, and this suite reports
+green on it.
+
+When a check reads a file it does not own, verify with
+`tests/sandbox.sh --run <script>`, which connects as the infrastructure user.
+
 ## Trying something by hand
 
 The suite above is batch. When you are part-way through a change and just want
