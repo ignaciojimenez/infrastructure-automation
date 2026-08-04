@@ -181,6 +181,43 @@ Note for whoever verifies next: the `*/10` runs immediately *before* the crontab
 
 **Still outstanding after the manual step** (i.e. what the laptop session is actually for): the wrapper hardening, the interval validation, the `never`/default decision, and the `docker_system_prune` `weekly` → `always` fix. None of those are applied by hand.
 
+### ✅ Status 2026-08-04 — prevention items DONE, required item NOT done
+
+Written and verified against a disposable Debian 13 LXC (CT 199) by
+`tests/cases/wrapper_state_collision.sh`, run in both directions. **Nothing is
+deployed.**
+
+Done on this branch:
+- **`mktemp` for the state temp file.** Against `main` the test reproduces the
+  dockassist fault on demand: **6 × `mv: cannot stat`** across 15 concurrent
+  runs, leaving an empty, corrupt state file. Zero on this branch.
+- **`--heartbeat-interval` is validated.** `never` is now first-class;
+  unrecognised values are fatal instead of silently disabling heartbeats.
+- **`docker_system_prune` `weekly` → `always`.**
+- **`--monitoring-name` documented as REQUIRED** when two jobs on a host wrap
+  the same script. It read as cosmetic, which is an API footgun rather than
+  operator error.
+
+Sub-decision resolved as recommended: an **absent** `--heartbeat-interval` still
+defaults to `daily`. Silence is the one signal monitoring must never default to
+— a job that quietly never heartbeats is indistinguishable from one that is
+broken. All 40+ live invocations pass the flag explicitly, so the default is not
+exercised today.
+
+⚠️ **STILL NOT DONE: the three `--monitoring-name` cron values** — the
+"Required" item, and the only one that actually clears the channel flood. The
+interim hand-applied crontab fix on dockassist is still what is holding the
+channel quiet, and an unmodified `services.yml` run STILL REVERTS IT. Nothing
+about this branch has changed that.
+
+⚠️ **Deploy ordering.** Making unknown intervals fatal means
+`docker_system_prune` would hard-fail weekly if the wrapper reached a host
+before the cron fix. Audited: the repo now contains 35 `daily`, 4 `always`, 1
+`always` (was `weekly`), and `never` on the OPNsense VPN job. The cron fix
+reaches dockassist via `services.yml` while the wrapper reaches all hosts via
+`deploy_monitoring.yml`, so they are committed on this one branch deliberately
+— do not split them.
+
 ### Session decisions (2026-08-02)
 
 - Prevention items: **accepted** — do them in the same pass as the required fix.
