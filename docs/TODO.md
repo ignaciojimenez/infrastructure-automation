@@ -104,6 +104,18 @@ After the manual fix, the sweep was declared "still broken" on the basis of zero
 
 Asked after the fact: which check, if it existed, would have caught each failure? The answer for several of them is "one that already exists and does nothing."
 
+### ✅ Status 2026-08-04 — items 1, 2 and 3 are FIXED IN CODE (not deployed)
+
+Written and verified against a disposable Debian 13 LXC (CT 199), both directions: each fix's tests were also run against `main`, because a test that does not fail there proves nothing. **Nothing is deployed; no fleet host has been modified.**
+
+- **`system_health_check.sh` exit status** — fixed, `tests/cases/health_*.sh`. Against `main` the suite reproduces the bug exactly: output reads `❌ Service cron: not running` immediately above `Health check completed`, exit status **0**. 4 of 5 cases fail on `main`, all 5 pass on this branch.
+- **`systemctl --failed` check** — added in the same pass, covered by `health_failed_unit.sh`.
+- **Slack watch watermark** — fixed, `tests/unit/slack_watermark_test.sh` (runs on the laptop, no container or network). Quiet poll returns `OK 0.000000` on `main` vs the preserved watermark here. **The fix is self-healing**: a non-positive watermark on disk is now treated as absent, so CT 103's poisoned `0.000000` recovers on its next run with no manual reseed.
+
+⚠️ **The TODO's "one-line class of fix" framing for `system_health_check.sh` was wrong, in a way that mattered.** Six of the seven check functions had no `return` at all — only `check_auto_upgrades` did. Worse, `check_disk_usage` evaluated its loop inside a `df | grep | while` **pipeline, which POSIX runs in a subshell**, so counters incremented there are discarded when it exits. The obvious fix — add increments, sum at the end — would have left the disk check, the one most likely to fire, still returning 0 while printing a red ❌. Demonstrated rather than reasoned: identical input yields `issues=0` through a pipeline and `issues=2` through a here-doc. It now uses a here-doc. **Generalise this:** any `cmd | while` loop in this repo that accumulates state is silently discarding it.
+
+Still open from this section: **item 4, the healthchecks.io ping from the Tier 1 sweep** — untouched, and still the single highest-value item on this page. It needs a new check UUID and a vault write, so it was left for laptop time.
+
 ### 🔴 The Slack watch self-destructs on its first quiet hour (root cause confirmed 2026-08-03)
 `investigate.sh --slack` has been failing every hour with `ERR invalid_ts_oldest`. Confirmed cause — `/home/choco/.agent/.last_slack_ts` contains **`0.000000`**.
 
