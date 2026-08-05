@@ -90,7 +90,13 @@ There is no CLI path today: the only OPNsense-adjacent vault key is `vault_ns_ap
 
 **Phase B is done** (OpenCode + Tier 2, live 2026-07-25/26; see `docs/AGENT_LXC.md`). Two spend-capped credentials in the vault (`vault_anthropic_api_key`, `vault_slack_read_token`); everything verified live except the rebuild test below.
 
-**Phase C — operator mode.** Sketch only; needs its own decision round (passphrase key vs SSH-CA, sudo scope, audit logging). The plan files Phase B now writes are its input, already in a stable format.
+**Phase C — operator mode. Designed, not built. This is the sprint *after* the current one.** The decision round this line used to call for happened on 2026-07-26 and is settled in `~/.claude/plans/phase-c-operator-plan.md` §0: **no dedicated operator key, no operator user, no scoped sudo, no `operator_access` role.** Access is `choco` via the existing per-device Secure-Enclave biometric keys, forwarded — nothing new is created. Every command is gated twice, by an OpenCode `ask` and a biometric tap, and there is no headless path. The plan files Phase B writes are its input, already in a stable format.
+
+Two additions from 2026-08-05, both in the plan as §0b/§0c:
+- **The test rig changes what approval means.** As designed you approve a command that has never run anywhere. With CT 199/198 the flow becomes propose → dry-run on a container → present the diff **and the test result** → approve → apply. A plan whose dry-run failed is never offered; a plan that *cannot* be dry-run must say so, so a missing test result is never mistaken for a passing one.
+- **Do not cut a Phase C branch yet.** `fix/agent-lxc-logs-dir-2026-08` already modifies `ansible/roles/services/agent/tasks/main.yml`, the same file Phase C changes, and deploying the agent role before the Tier 2 fixes restarts the CrowdSec ban loop. Cut `feat/agent-lxc-phase-c` off main *after* that branch merges.
+
+Independent of all of it, and needing no branch: add the phone's SSH key to GitHub (the exclusive GitHub-keys mechanism then authorises it for `choco` fleet-wide) and add a `ForwardAgent` stanza for agent-lxc to the laptop's `~/.ssh/config`. Agent forwarding on the phone needs a client that supports it — Termius does, on its paid tier; other clients are under consideration. The design does not depend on which one wins, so this is not a blocker.
 
 **Follow-up surfaced while building Phase B** (small, not blocking):
 - **`read_agent` can read Slack tokens via the cron journal** — the wrapper cron lines carry the webhook tokens, and `journalctl -u cron` is permitted. This is Priority 3 (tokens out of cron); Phase B's `0600` env-file pattern is the model to extend fleet-wide.
