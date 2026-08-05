@@ -85,6 +85,42 @@ run_uut() {
     return 0
 }
 
+# Run the script under test as another user. The suite connects as root, which
+# makes it structurally blind to every permission-dependent fault — and two of
+# the four false failures found on 2026-08-05 were exactly that: a check that
+# is green as root and red as the user whose cron actually runs it. A case that
+# only ever runs as root cannot fail on those, however carefully it is written.
+run_uut_as() {
+    _as_user="$1"
+    shift
+    _uut_rel="$1"
+    shift
+    _uut_path="$UUT_ROOT/$_uut_rel"
+
+    if [ ! -f "$_uut_path" ]; then
+        _fail "script under test not found: $_uut_path"
+        return 1
+    fi
+
+    if ! id "$_as_user" >/dev/null 2>&1; then
+        _fail "cannot run as '$_as_user': no such user on this target"
+        return 1
+    fi
+
+    # The staged tree is root-owned; without this the unprivileged user cannot
+    # traverse to the script and the case fails for the wrong reason.
+    chmod -R a+rX "$UUT_ROOT"
+
+    _uut_output=$(su -s /bin/sh "$_as_user" -c "sh $_uut_path $*" 2>&1)
+    _uut_status=$?
+
+    note "ran as $_as_user, exit status: $_uut_status"
+    if [ "${VERBOSE:-0}" = "1" ]; then
+        printf '%s\n' "$_uut_output" | sed 's/^/     | /'
+    fi
+    return 0
+}
+
 assert_exit_zero() {
     if [ "$_uut_status" = "0" ]; then
         _pass "exited 0"
