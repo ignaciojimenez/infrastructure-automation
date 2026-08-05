@@ -9,6 +9,16 @@
 #   tests/run_tests.sh --target 10.30.40.205 --case disk_full --verbose
 #
 # See docs/TEST_CONTAINER.md for how to create the target.
+#
+# ⚠️ KNOWN BLIND SPOT: this connects as root, because the cases fill disks and
+# stop services. The fleet's checks run as the infrastructure user under cron,
+# so anything that fails only for an unprivileged user is invisible here.
+# Demonstrated 2026-08-04 on CT 199: check_auto_upgrades prints "Upgrade log not
+# found" as `choco` and "Last upgrade: <date>" as root, same script, same host,
+# same minute — /var/log/unattended-upgrades is root:adm 0750 and the user is
+# not in adm. That is a real fleet bug on 3 of 7 hosts and this suite cannot see
+# it. Use `tests/sandbox.sh --run <script>` (which connects as the
+# infrastructure user) whenever a check touches a file it does not own.
 
 set -u
 
@@ -63,7 +73,7 @@ remote_hostname=$($SSH 'hostname' 2>/dev/null) || {
 }
 
 case "$remote_hostname" in
-    testlxc|test-*|*-test) : ;;
+    testlxc*|test-*|*-test) : ;;
     *)
         printf 'error: target hostname is "%s", which is not a recognised test container.\n' "$remote_hostname" >&2
         printf '       These tests deliberately break the host they run on. Refusing.\n' >&2

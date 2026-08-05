@@ -7,12 +7,22 @@ on:
     paths:
       - "ansible/**"
       - "scripts/**"
+      # templates/ holds sshd_config.j2 and friends. The Jinja syntax check
+      # below already globs them, but without this a templates-only change
+      # never triggered the workflow that checks it.
+      - "templates/**"
+      - "tests/**"
       - ".ansible-lint"
       - ".github/workflows/ansible-lint.yml"
   pull_request:
     paths:
       - "ansible/**"
       - "scripts/**"
+      # templates/ holds sshd_config.j2 and friends. The Jinja syntax check
+      # below already globs them, but without this a templates-only change
+      # never triggered the workflow that checks it.
+      - "templates/**"
+      - "tests/**"
       - ".ansible-lint"
       - ".github/workflows/ansible-lint.yml"
 
@@ -60,6 +70,17 @@ jobs:
             echo "Checking: $pb"
             ansible-playbook "$pb" --syntax-check
           done
+
+      - name: ShellCheck the test harness
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          # Scoped to tests/ deliberately. scripts/ is not clean yet — it has
+          # SC2155s in enhanced_monitoring_wrapper and a Jinja-templated .sh
+          # that shellcheck reads as literal braces — so widening this needs a
+          # cleanup pass first, not a broken pipeline.
+          # SC1091 is excluded: the cases source ../lib/harness.sh at runtime on
+          # the container, a path shellcheck cannot follow from the repo.
+          shellcheck -e SC1091 tests/*.sh tests/lib/*.sh tests/cases/*.sh tests/unit/*.sh
 
       - name: Validate role structure
         run: |

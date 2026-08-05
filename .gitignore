@@ -15,9 +15,14 @@ vault_pass
 **/conf_auth.ini
 **/conf_move.ini
 
-# IDE
+# IDE / agent tooling
 .vscode/
 .windsurf/
+# Claude Code writes a local settings file (permission allowlists, machine
+# state) wherever it is run from. Untracked but unignored, it sat one
+# `git add -A` away from a public repo — and nested copies appear under any
+# subdirectory a session was started in.
+**/.claude/
 
 # System
 .DS_Store

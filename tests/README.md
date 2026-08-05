@@ -8,8 +8,82 @@ tests/run_tests.sh --target 10.30.40.205            # all cases
 tests/run_tests.sh --target 10.30.40.205 --case disk --verbose
 ```
 
-See [docs/TEST_CONTAINER.md](../docs/TEST_CONTAINER.md) to create the target.
-The runner refuses to run against a host that is not named `testlxc`.
+Create the target with:
+
+```sh
+ssh cwwk 'sh -s' < tests/provision_test_container.sh
+```
+
+and destroy it with the same script and `-- --destroy`. See
+[docs/TEST_CONTAINER.md](../docs/TEST_CONTAINER.md) for what each setting is
+for. The runner refuses to run against a host that is not named `testlxc`.
+
+## ⚠️ What this suite cannot see
+
+It connects as **root**, because the cases fill disks and stop services. The
+fleet's checks run as the infrastructure user under cron. So any fault that only
+appears to an unprivileged user is invisible to every case here.
+
+That is not hypothetical. On 2026-08-04, on CT 199, the same script in the same
+minute:
+
+```
+as choco : ❌ Upgrade log not found - unattended-upgrades may not be configured
+as root  : ✅ Last upgrade: 2026-08-04
+```
+
+`/var/log/unattended-upgrades/` is `root:adm 0750` and the infrastructure user is
+not in `adm` on three of seven fleet hosts. A real bug, and this suite reports
+green on it.
+
+When a check reads a file it does not own, verify with
+`tests/sandbox.sh --run <script>`, which connects as the infrastructure user.
+
+## Trying something by hand
+
+The suite above is batch. When you are part-way through a change and just want
+to poke at it on something that behaves like a fleet host, use the sandbox:
+
+```sh
+tests/sandbox.sh                       # shell in, as the infrastructure user
+tests/sandbox.sh --push                # copy the working tree's scripts over
+tests/sandbox.sh --run system_health_check.sh
+tests/sandbox.sh --status
+tests/sandbox.sh --reset               # back to baseline when you've made a mess
+tests/sandbox.sh --deb12               # any of the above against CT 198
+tests/sandbox.sh --root                # as root, for the bootstrap path
+```
+
+`--push` copies what is in your working tree *right now*, uncommitted included,
+without going through Ansible. That is deliberate: no playbook, no vault, no
+commit — the file is on the box in a second so you can run it. Use the playbooks
+when you want to test the deploy; use this when you want to test the script.
+
+`--reset` is a soft reset — scripts, logs, crontab, `/etc/monitoring`, the
+package set. A true rebuild needs `pct` on the Proxmox host, so it stays a
+`provision_test_container.sh` job.
+
+## Running playbooks against them
+
+`ansible/inventory/test_hosts.yml` describes both containers, connecting as the
+infrastructure user over sudo exactly as the fleet is reached:
+
+```sh
+ansible-playbook -i ansible/inventory/test_hosts.yml \
+    ansible/playbooks/deploy_monitoring.yml
+```
+
+`deploy_monitoring.yml`, `services.yml --tags monitoring` and
+`services.yml --tags ssh` all converge. `bootstrap.yml` and a full `site.yml`
+have not been run against a container yet. See "Running playbooks against it" in
+[docs/TEST_CONTAINER.md](../docs/TEST_CONTAINER.md) for how hardening is
+prevented from locking the rig out of itself.
+
+Host-independent checks live in `tests/unit/` and need no container at all:
+
+```sh
+tests/unit/slack_watermark_test.sh
+```
 
 ## What this suite is for
 

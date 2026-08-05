@@ -1,5 +1,39 @@
 ---
-# Test inventory for development
+# Test inventory — the disposable containers on cwwk, and nothing else.
+#
+#   ansible-playbook -i ansible/inventory/test_hosts.yml \
+#       ansible/playbooks/deploy_monitoring.yml
+#   tests/sandbox.sh --shell            # poke at one by hand
+#
+# These hosts are created and destroyed by tests/provision_test_container.sh;
+# every value here mirrors that script's defaults. Keep the two in step.
+# See docs/TEST_CONTAINER.md for what each container is a proxy for, and what
+# it is NOT a proxy for.
+#
+# ⚠️ Do not add a fleet host to this file. `is_test_environment` unlocks
+# behaviour that must never reach production — hardening keeps a spare key,
+# leaves root reachable, and the Slack tokens are dead.
+#
+# ------------------------------------------------------------------
+# Connection: as the infrastructure user over sudo, exactly as the fleet is
+# reached, using the passphrase-free read_agent key. Connecting as root instead
+# would make `become` a no-op — every privilege-escalation path in every
+# playbook would go untested — and would drag scripts_dir and logs_dir to
+# /home/root, because they derive from ansible_user. IdentityAgent=none keeps
+# Secretive and its Touch ID prompt out, so runs stay unattended.
+#
+# For the bootstrap user-creation path you want the opposite: a container built
+# with TEST_CT_BARE=1 and `-e ansible_user=root`, which is the only state where
+# that branch of bootstrap.yml runs.
+#
+# Why every override sits at host level: group_vars/all/main.yml is inventory
+# group_vars, precedence 4, and overrides anything a group defined *inside* an
+# inventory file sets (precedence 3). Host vars are precedence 8 and win.
+# Moving any of these up to `debian_hosts.vars` silently reverts it to the
+# fleet value — verify with
+#   ansible -i ansible/inventory/test_hosts.yml all -m debug -a 'msg={{ scripts_dir }}'
+# ------------------------------------------------------------------
+
 all:
   children:
     debian_hosts:
@@ -8,12 +42,73 @@ all:
         package_manager: apt
         service_manager: systemd
         ansible_python_interpreter: /usr/bin/python3
+        infrastructure_group: "{{ infrastructure_user }}"
+
       children:
-        raspberrypi:
+        lxc_containers:
           vars:
-            platform_type: raspberrypi
+            platform_type: lxc
           hosts:
-            devpi:
-              ansible_host: 10.30.100.247  # Different from key
-              primary_function: media
-              is_test_environment: true  # Skips hardware-dependent checks
+            # CT 199 — Debian 13. Twin of agent-lxc and unifi-lxc; close to cwwk.
+            testlxc:
+              ansible_host: 10.30.40.205
+              container_id: 199
+
+              ansible_user: "{{ infrastructure_user }}"
+              ansible_ssh_private_key_file: ~/.ssh/read_agent_ed25519
+              ansible_ssh_common_args: >-
+                -o ConnectTimeout=5
+                -o IdentitiesOnly=yes
+                -o IdentityAgent=none
+                -o StrictHostKeyChecking=accept-new
+
+              # Skips hardware-dependent tasks, and tells ssh_hardening it is
+              # allowed to keep a spare key rather than locking the rig out.
+              is_test_environment: true
+
+              # The key Ansible connects with. ssh_hardening asserts this is
+              # present before it applies `exclusive: true`, so a typo here
+              # fails the run instead of bricking the container.
+              test_environment_ssh_key: >-
+                ssh-ed25519
+                AAAAC3NzaC1lZDI1NTE5AAAAIAzwUkF8g+nliH4mXRm3Qlslb7TioAHQlvl1w9i5XkN3
+                claude_agent@infrastructure
+
+              # Deliberately unmatched: no roles/services/test/ and no
+              # group_vars/test.yml exist, so services.yml deploys the
+              # monitoring play and nothing else. Point it at a real function to
+              # exercise that role. It has to be set to *something* —
+              # services.yml:46 evaluates `primary_function == "media"` with no
+              # `is defined` guard and errors out on a host that omits it.
+              primary_function: test
+
+              # Dead webhook paths. The monitoring cron tasks are gated on these
+              # being defined, so the rig still exercises them, but nothing it
+              # deploys can post into #home-logging or #home-alerts. A container
+              # heartbeating into the fleet's channels is indistinguishable from
+              # a fleet host doing it, and these tests deliberately break things.
+              logging_token: "TEST/TEST/testcontainernotarealwebhook"
+              alert_token: "TEST/TEST/testcontainernotarealwebhook"
+
+            # CT 198 — Debian 12. Proxy for the four Raspberry Pis on the axis
+            # that matters to a POSIX shell script: OS release, not CPU.
+            test-deb12:
+              ansible_host: 10.30.40.206
+              container_id: 198
+
+              ansible_user: "{{ infrastructure_user }}"
+              ansible_ssh_private_key_file: ~/.ssh/read_agent_ed25519
+              ansible_ssh_common_args: >-
+                -o ConnectTimeout=5
+                -o IdentitiesOnly=yes
+                -o IdentityAgent=none
+                -o StrictHostKeyChecking=accept-new
+
+              is_test_environment: true
+              test_environment_ssh_key: >-
+                ssh-ed25519
+                AAAAC3NzaC1lZDI1NTE5AAAAIAzwUkF8g+nliH4mXRm3Qlslb7TioAHQlvl1w9i5XkN3
+                claude_agent@infrastructure
+              primary_function: test
+              logging_token: "TEST/TEST/testcontainernotarealwebhook"
+              alert_token: "TEST/TEST/testcontainernotarealwebhook"
