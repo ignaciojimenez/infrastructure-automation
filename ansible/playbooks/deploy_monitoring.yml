@@ -6,6 +6,10 @@
 - name: Deploy common monitoring scripts
   hosts: all
   become: true
+  vars:
+    # opnsense keeps local configuration under /usr/local/etc; anything the
+    # firewall does not own under /etc there is liable to be regenerated.
+    monitoring_config_dir: "{{ '/usr/local/etc/monitoring' if os_family == 'freebsd' else '/etc/monitoring' }}"
   tasks:
     - name: Ensure base scripts directory exists
       ansible.builtin.file:
@@ -45,6 +49,40 @@
       loop: "{{ common_scripts.files }}"
       register: common_scripts_deployed
       tags: [monitoring, scripts]
+
+    # The critical-service list is inventory-driven, because a host that calls
+    # a service something else should say so in inventory rather than in a
+    # script shipped to all seven — opnsense's ssh rc script is `openssh`, and
+    # renaming `sshd` in the script would fix this fleet while breaking stock
+    # FreeBSD. system_health_check.sh keeps a working built-in default, so a
+    # host with no config file behaves exactly as it does today.
+    - name: Ensure monitoring config directory exists
+      ansible.builtin.file:
+        path: "{{ monitoring_config_dir }}"
+        state: directory
+        mode: '0755'
+      tags: [monitoring, scripts, config]
+
+    - name: Deploy the critical-service list where inventory defines one
+      ansible.builtin.copy:
+        dest: "{{ monitoring_config_dir }}/health_check.conf"
+        content: |
+          # Managed by ansible/playbooks/deploy_monitoring.yml — do not edit here.
+          # Sourced by system_health_check.sh. Entries are `service[:process]`;
+          # the process name is the permission-independent fallback on FreeBSD.
+          CRITICAL_SERVICES="{{ critical_services | join(' ') }}"
+        mode: '0644'
+      when: critical_services is defined
+      tags: [monitoring, scripts, config]
+
+    # A host dropped from the inventory var must fall back to the built-in
+    # default rather than keeping whatever it was last told.
+    - name: Remove the critical-service list where inventory defines none
+      ansible.builtin.file:
+        path: "{{ monitoring_config_dir }}/health_check.conf"
+        state: absent
+      when: critical_services is not defined
+      tags: [monitoring, scripts, config]
 
     # Only restart when something was actually deployed. This previously ran
     # unconditionally, which made the whole playbook permanently report
