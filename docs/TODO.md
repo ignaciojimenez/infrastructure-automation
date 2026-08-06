@@ -155,6 +155,34 @@ Until the LXC lands, the gap is open and the only detection is someone trying to
 
 ---
 
+## 🔴 Nothing tells you a host needs attention — raised 2026-08-07, and it is a gap not a trade-off
+
+Raised while reviewing the cwwk auto-reboot decision: *"I don't know if I'll know I need to do anything on those hosts until I access them."* That is correct, and the honest accounting is worse than it first looks, because the decision above **creates** the exposure it does not cover.
+
+**What IS covered once this sprint deploys:**
+
+- A pending kernel/libc reboot on any Debian host → `check_pending_reboot` → **error after 7 days** → `#home-alerts`. ⚠️ For the **first 7 days it is a warning**, and warnings exit 0, so they land in `#home-logging`, which is an unwatched firehose. The window is deliberate — it is what makes rebooting the hypervisor a choice rather than a page — but it is a *silent* window, not a quiet one.
+
+**What is covered by nothing at all:**
+
+1. **🔴 Proxmox VE package updates on cwwk.** `unattended-upgrades` origins are **Debian-Security only**, so PVE packages — *including PVE kernel updates* — are neither installed automatically nor reported anywhere. Proxmox's own mechanism is an email to `root@pam`, and nothing in this repo configures where that goes. **This is precisely the case the `auto_reboot: false` decision was about**: the reboot was made a human decision, and the update most likely to require one is invisible.
+2. **🔴 OPNsense firmware updates.** No script, no check, nothing. The 26.1.9 upgrade of 2026-06-13 — the one that deleted `read_agent` and went unnoticed for three months — would have been visible only in the GUI. There is no repo-side awareness that the firewall has an update pending, or that one was applied.
+3. **🟠 Non-security apt updates on every Debian host.** `check_auto_upgrades` counts them and prints `Pending updates: N (informational)` with an explicit comment saying it deliberately never alerts. Defensible for security updates, which install themselves — but it means an arbitrarily large backlog of everything else is invisible by design.
+
+**Why this is a gap and not a considered trade-off:** in each case the *absence* of notification was inherited, not chosen. Nobody weighed "we will find out about firewall firmware when we happen to open the GUI" and accepted it. `read_agent` disappearing for three months is what that costs in practice.
+
+### 📌 The broader question, and it is the right one
+
+Raised in the same breath: *"what other similar risks are we just accepting blindly?"*
+
+**This sprint has been entirely about a different class.** Every fix here — the exit status that was always 0, the state-file collision, the tag mismatch, the re-billing snapshot — is a check that *existed and did not work*. The class above is **things nothing watches at all**, which no amount of fixing existing checks will surface, because there is nothing to fix.
+
+Those need a different method: enumerate what would have to go wrong for each host to matter, then ask which of those has an alerting path — rather than starting from the checks that exist and asking whether they work. **Proposed as its own piece of work, after Phase C**: a coverage audit per host, output being a table of *failure mode → what tells you → how fast*, with the blanks made explicit. The blanks are the deliverable.
+
+⚠️ Do not fold this into any `L` session. It is not a fix; it is a review, and its value is entirely in being systematic.
+
+---
+
 ## ✅ cwwk auto-reboot — DECIDED AND WRITTEN 2026-08-06 (not deployed)
 
 Branch `chore/cwwk-no-auto-reboot-2026-08`. `auto_reboot: false` at host level on cwwk; every other Debian host keeps `true`.
