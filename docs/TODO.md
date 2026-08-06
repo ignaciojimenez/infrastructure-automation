@@ -154,6 +154,50 @@ After the manual fix, the sweep was declared "still broken" on the basis of zero
   exercise the same thing. Neither is under test; if either ever is, it needs a
   container.
 
+#### The back-off's trigger, checked against real ssh output rather than a fixture
+
+The back-off fires on a string match against ssh's stderr, which is exactly the
+"verify what the parse *yields*, against real captured output" trap. So it was
+checked against real output, not against the strings the test stubs emit:
+
+| Condition | Real stderr | Matches? | Wanted |
+|---|---|---|---|
+| Rejected key (bogus key → CT 199) | `Permission denied (publickey,password).` | ✅ | back off |
+| Host absent (unused address) | `ssh: connect to host … port 22: Operation timed out` | ✅ no match | keep probing |
+
+The matched substring — `Permission denied` — is emitted by the **ssh client**,
+not by the server, so it does not depend on opnsense's sshd config or on which
+auth methods it advertises. That is what makes this portable across the fleet.
+
+⚠️ **It has still never fired against opnsense's actual failure mode** (the
+`read_agent` account deleted by config regeneration). If that produces some
+other text — `kex_exchange_identification`, a banner, a timeout — the match
+fails and the host is reported `UNREACHABLE` instead, which is **today's
+behaviour**. The failure direction is fail-open: a missed match costs the
+back-off, never a false one. Worth confirming when opnsense next drifts, which
+`docs/TODO.md` says it will.
+
+📌 **Corroboration, found while checking this.** `cscli alerts list` on opnsense
+still holds the incident: `crowdsecurity/ssh-bf` against `10.30.40.203` at
+`2026-08-03T12:47:12Z` — 14:47 local, exactly the Tier 2 cron minute. The
+account of what happened is now confirmed from the firewall's own record, not
+only from the agent's logs. No active decisions.
+
+#### What an offline Jinja render can and cannot prove
+
+Both templates were rendered through **real jinja2 with the real variable set**
+(role defaults + `group_vars/agent.yml` + inventory + vault) and the output
+parsed under `dash` on CT 199. The new knobs resolve to `3600` / `21600`.
+
+But the render leaves `{{ vault_infrastructure_user | default(lookup('env',
+'USER')) }}` unresolved in three places, and **that is a limit of rendering
+outside Ansible, not a template bug**: Jinja evaluates `default()`'s argument
+eagerly, and `lookup` is an Ansible plugin that does not exist in a bare
+Environment. It is a pre-existing line (`group_vars/all/main.yml:14`, from the
+initial migration), and agent-lxc's live crontab shows Ansible resolves it —
+`/home/choco/.scripts/fleet_health_check.sh`. **Anything needing `lookup`,
+`vault`, or a connection can only be proven by a real playbook run.**
+
 ---
 
 ## Monitoring gaps — what would actually have caught 2026-08-03
