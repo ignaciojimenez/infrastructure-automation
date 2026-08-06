@@ -5,6 +5,15 @@
 # that matches a host's primary_function.
 #
 # For additional roles on a host, use install_* flags (e.g. install_docker: true).
+#
+# ⚠️ Every `primary_function` comparison below is guarded with `| default("")`.
+# Without it, a host that declares no primary_function does not skip these
+# tasks — the play ERRORS on the conditional itself, and `import_tasks` applies
+# that `when` to every task it imported, so one undefined variable aborts the
+# run. Latent on the current fleet (all seven declare one) and fatal on the
+# next host added without one, which is the worst possible moment for it. The
+# `is defined` guards on the auto-discovery stat tasks are not enough on their
+# own: they only protect the two tasks that carry them.
 
 - name: Configure SSH hardening
   hosts: all
@@ -43,7 +52,7 @@
     - name: Configure external storage for media hosts
       ansible.builtin.import_tasks: tasks/media_storage.yml
       when:
-        - primary_function == "media"
+        - primary_function | default("") == "media"
         - external_drive_uuid is defined
       tags: [media, storage]
 
@@ -51,7 +60,7 @@
       ansible.builtin.import_tasks: tasks/cobra_scripts.yml
       become: false
       when:
-        - primary_function == "media"
+        - primary_function | default("") == "media"
         - enable_cobra_scripts | default(false)
       tags: [media, cobra]
 
@@ -94,31 +103,31 @@
     - name: Deploy Pi-hole
       ansible.builtin.include_role:
         name: services/pihole
-      when: primary_function == "dns" or install_pihole | default(false)
+      when: primary_function | default("") == "dns" or install_pihole | default(false)
       tags: [pihole, dns, services]
 
     - name: Deploy UniFi Network Controller
       ansible.builtin.include_role:
         name: services/unifi
-      when: primary_function == "network_controller" or install_unifi | default(false)
+      when: primary_function | default("") == "network_controller" or install_unifi | default(false)
       tags: [unifi, network, services]
 
     - name: Deploy Plex Media Server
       ansible.builtin.include_role:
         name: services/plex
-      when: primary_function == "media" or install_plex | default(false)
+      when: primary_function | default("") == "media" or install_plex | default(false)
       tags: [plex, media, services]
 
     - name: Deploy Transmission
       ansible.builtin.include_role:
         name: services/transmission
-      when: primary_function == "media" or install_transmission | default(false)
+      when: primary_function | default("") == "media" or install_transmission | default(false)
       tags: [transmission, media, services]
 
     - name: Deploy Samba
       ansible.builtin.include_role:
         name: services/samba
-      when: primary_function == "media" or install_samba | default(false)
+      when: primary_function | default("") == "media" or install_samba | default(false)
       tags: [samba, media, services]
 
     - name: Deploy Home Assistant (explicit install)

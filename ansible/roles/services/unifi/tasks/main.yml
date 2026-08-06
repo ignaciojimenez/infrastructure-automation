@@ -129,6 +129,29 @@
   when: enable_ufw | default(false) | bool
   tags: [unifi, firewall]
 
+# Three of this role's crons redirect into logs_dir and nothing here creates
+# it — the same gap that left agent-lxc running zero jobs for twelve days, in
+# the role next door. Latent rather than live, because unifi-lxc's directories
+# were made by an earlier deploy_monitoring.yml run; it would bite a rebuild.
+# Tagged with `cron` and `scripts` as well as `logs`, so no tag-filtered run
+# can install a cron pointing into a directory it declined to create.
+#
+# Kept in the role rather than importing playbooks/tasks/monitoring_dirs.yml:
+# roles are self-contained by convention here, and this mirrors what
+# roles/services/agent already does.
+- name: Ensure the UniFi script and log directories exist
+  become: true
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ primary_user }}"
+    group: "{{ infrastructure_group }}"
+    mode: '0755'
+  loop:
+    - "{{ scripts_dir }}"
+    - "{{ logs_dir }}"
+  tags: [unifi, monitoring, scripts, logs, cron, backup]
+
 - name: Deploy UniFi-specific monitoring scripts
   ansible.builtin.copy:
     src: "{{ inventory_dir }}/../../scripts/services/network/{{ item.src }}"
