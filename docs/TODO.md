@@ -132,6 +132,17 @@ Branch `refactor/opnsense-scripts-dir-2026-08`. `/usr/local/bin` → the fleet d
 
 **Checked before writing, not after:** every script reference in the role is `{{ scripts_dir }}`-relative, so nothing is hardcoded; the crons' `/usr/local/bin/bash` is the interpreter and is unaffected; and no script depends on `PATH` to find a sibling. `backup_last_mod` uses `$(dirname "$0")/do_backup`, which follows the move; `backup_opnsense.sh` searches `/usr/local/bin/do_backup` **then** `$HOME/.scripts/do_backup`, so it works before, during and after the transition.
 
+🔴 **Post-deploy verification, corrected 2026-08-06 — the obvious check reads as a failure.** `crontab -l | grep -c /usr/local/bin` returns **13** today, and the instinct is to expect **0** afterwards. It will be **9**, and that is correct: **9 of the 13 crons invoke `/usr/local/bin/bash` as the interpreter** (8 from the monitoring loop plus the backup cron), which has nothing to do with `scripts_dir` and must not move. Counted from the role, and consistent with the independent 2026-08-06 crontab reading.
+
+  So the check is two numbers, not one:
+
+  ```sh
+  crontab -l | grep -c /home/choco/.scripts   # expect 13  (was 0)
+  crontab -l | grep -c /usr/local/bin         # expect 9   (was 13) — the bash interpreter
+  ```
+
+  ⚠️ **Verified against the live host before deploying, not after:** `ls -l /usr/local/bin | awk '$3=="choco"'` returns exactly the eight entries the removal task names — `backup_last_mod`, `backup_opnsense.sh`, `clean_old_backups.sh`, `do_backup`, `enhanced_monitoring_wrapper`, `heartbeat_backup.sh`, `system_health_check.sh`, `monitoring/` — plus `import_gpg_github.sh`, which is deliberately left alone. The list is complete and touches nothing unmanaged.
+
 📌 Minor leftover, deliberately untouched: that `/usr/local/bin/do_backup` first entry becomes a dead path once the cleanup runs. Harmless — it is a fallback list and the file will not exist — but worth removing next time that script is edited.
 
 ---
