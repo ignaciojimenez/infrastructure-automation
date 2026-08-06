@@ -68,8 +68,8 @@
         dest: "{{ monitoring_config_dir }}/health_check.conf"
         content: |
           # Managed by ansible/playbooks/deploy_monitoring.yml — do not edit here.
-          # Sourced by system_health_check.sh. Entries are `service[:process]`;
-          # the process name is the permission-independent fallback on FreeBSD.
+          # Sourced by system_health_check.sh: the services whose absence is a
+          # fault on this host, named as this host's init system names them.
           CRITICAL_SERVICES="{{ critical_services | join(' ') }}"
         mode: '0644'
       when: critical_services is defined

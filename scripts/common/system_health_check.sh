@@ -155,6 +155,27 @@ check_memory() {
 # whole uptime line, which is the clock. Measured on opnsense 2026-08-05:
 # `❌ Load: 12:27AM on 6 CPUs (200%)` against real averages of 0.24, the 200%
 # being awk coercing `12:27AM` to 12 and dividing by 6 CPUs.
+# An LXC reads the HOST's load average while reporting its own core count.
+# Measured 2026-08-06: /proc/loadavg inside CT 199, unifi-lxc and agent-lxc
+# returns cwwk's file byte for byte, sampled in the same second, against nproc
+# values of 1, 1 and 2 versus cwwk's 8. lxcfs is mounted over /proc/loadavg,
+# but Proxmox runs it without --enable-loadavg, in which mode it passes the
+# host's file straight through — while still virtualising /proc/cpuinfo. So
+# the numerator and the denominator describe different machines and the ratio
+# over-reports by up to 8×, which on a 1-core container means a failure
+# whenever the host exceeds 10% utilisation.
+#
+# Nothing here can fix that: the number simply is not about this host. Restoring
+# real coverage means a different metric — cgroup cpu.pressure is genuinely
+# container-scoped — with its own threshold. Tracked in docs/TODO.md.
+in_container() {
+    if command -v systemd-detect-virt >/dev/null 2>&1; then
+        systemd-detect-virt --container --quiet && return 0
+    fi
+    [ "$(sysctl -n security.jail.jailed 2>/dev/null || echo 0)" = "1" ] && return 0
+    return 1
+}
+
 read_load_1min() {
     if [ -r /proc/loadavg ]; then
         awk '{print $1}' /proc/loadavg
@@ -198,6 +219,15 @@ check_load() {
             ;;
     esac
 
+    # Inside an LXC the numerator and the denominator describe different
+    # machines, so the ratio is meaningless — see in_container. Report the
+    # figures, never fail on them.
+    if in_container; then
+        print_status "warning" "Load: ${load_avg} (host-wide) on ${cpu_count} container CPUs - not comparable, see docs/TODO.md"
+        echo ""
+        return 0
+    fi
+
     # Convert to percentage (rough estimate)
     load_percent=$(echo "$load_avg $cpu_count" | awk '{printf "%.0f", ($1/$2)*100}')
 
@@ -230,28 +260,56 @@ check_load() {
 freebsd_default_services() {
     for _dir in /etc/rc.d /usr/local/etc/rc.d; do
         if [ -f "$_dir/openssh" ]; then
-            echo "openssh:sshd cron"
+            echo "openssh cron"
             return
         fi
     done
     echo "sshd cron"
 }
 
+# Can this user see other users' processes at all? OPNsense answers no: as
+# `choco`, `pgrep -x cron` finds nothing on a host where root finds it seconds
+# later, and `ls -l /var/run/cron.pid` is `0600 root:wheel`. So for an
+# unprivileged caller there the process table is not an independent oracle —
+# it is a second way of being told "no".
+#
+# Probe the capability rather than the `security.bsd.see_other_uids` sysctl
+# behind it: PID 1 exists on every system and belongs to root, so failing to
+# see it means we cannot see root's daemons either, whatever the reason.
+can_inspect_processes() {
+    [ -n "$(ps -p 1 -o comm= 2>/dev/null)" ]
+}
+
+# Returns running | stopped | unknown.
+#
 # `service <name> status` answers from the rc script, and several of those read
 # a root-owned pidfile — so an unprivileged caller is told a running daemon is
-# not running. The health-check cron runs as the infrastructure user, so that
-# is the answer the fleet has been getting. Measured on opnsense 2026-08-05:
-# `❌ cron: not running` as choco and `✅` as root, seconds apart.
+# not running. Measured on opnsense: `cron` ❌ as choco and ✅ as root, seconds
+# apart, on the same host.
 #
-# The process table is not permission-dependent, so consult it when the rc
-# script declines to answer. A genuinely dead daemon still fails both.
-freebsd_service_running() {
+# `unknown` is the honest answer when neither probe can see the truth, and it
+# is deliberately not a failure. Reporting "not running" for "not visible" is
+# how this check declared sshd dead over the SSH session running it.
+freebsd_service_state() {
     _svc="$1"
-    _proc="$2"
 
-    service "$_svc" status >/dev/null 2>&1 && return 0
-    pgrep -x "$_proc" >/dev/null 2>&1 && return 0
-    return 1
+    if service "$_svc" status >/dev/null 2>&1; then
+        echo running
+        return
+    fi
+
+    if ! can_inspect_processes; then
+        echo unknown
+        return
+    fi
+
+    # Stock FreeBSD, where the rc name and the process name agree and an
+    # unprivileged user can see the process table, gets a real second opinion.
+    if pgrep -x "$_svc" >/dev/null 2>&1; then
+        echo running
+    else
+        echo stopped
+    fi
 }
 
 check_services() {
@@ -264,16 +322,14 @@ check_services() {
     # The built-in lists remain the default for a host with no config file yet
     # — the script must stay correct on its own, since it is deployed by a
     # different task than its configuration.
-    #
-    # An entry is `service[:process]`. The process name is only used on
-    # FreeBSD, and only as the fallback described above.
     services="$CRITICAL_SERVICES"
 
     if [ "$OS_TYPE" = "debian" ]; then
         [ -n "$services" ] || services="ssh cron fail2ban"
 
-        for entry in $services; do
-            svc="${entry%%:*}"
+        # `systemctl is-active` answers the same for any caller, so there is no
+        # unknown state to handle here.
+        for svc in $services; do
             if systemctl is-active "$svc" >/dev/null 2>&1; then
                 print_status "success" "Service $svc: running"
             else
@@ -284,15 +340,19 @@ check_services() {
     elif [ "$OS_TYPE" = "freebsd" ]; then
         [ -n "$services" ] || services=$(freebsd_default_services)
 
-        for entry in $services; do
-            svc="${entry%%:*}"
-            proc="${entry#*:}"
-            if freebsd_service_running "$svc" "$proc"; then
-                print_status "success" "Service $svc: running"
-            else
-                print_status "error" "Service $svc: not running"
-                issues=$((issues + 1))
-            fi
+        for svc in $services; do
+            case $(freebsd_service_state "$svc") in
+                running)
+                    print_status "success" "Service $svc: running"
+                    ;;
+                stopped)
+                    print_status "error" "Service $svc: not running"
+                    issues=$((issues + 1))
+                    ;;
+                *)
+                    print_status "warning" "Service $svc: cannot verify as $(id -un) - no pidfile access and no view of other users' processes"
+                    ;;
+            esac
         done
     else
         print_status "warning" "Service check not configured for $OS_TYPE"
