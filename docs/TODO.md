@@ -232,6 +232,19 @@ Written and verified against a disposable Debian 13 LXC (CT 199), both direction
 
 **✅ Item 4, the healthchecks.io ping, is now FIXED IN CODE too (2026-08-06).** The "it needs laptop time" framing was wrong twice over: the check and the vault write were done remotely on 2026-08-04, and the ping itself needed neither. See the dead-man's-switch section below.
 
+### ✅ Pending-reboot check — ADDED 2026-08-06 (not deployed)
+
+`check_pending_reboot` in `system_health_check.sh`, aggregated like every other check. It exists to make `auto_reboot: false` on cwwk a *safe* trade rather than a downgrade: a kernel security update only takes effect on reboot, so switching off the unattended 04:00 restart without this swaps an unannounced reboot for an **unnoticed unpatched kernel**.
+
+**Graded by age, deliberately — warning-only would have been the same mistake in a new costume.** A warning exits 0, the wrapper records SUCCESS, and the message lands in `#home-logging`, which is an unwatched firehose: indistinguishable from writing no check at all. So a pending reboot is a **to-do for 7 days and a fault after**, matching `check_auto_upgrades`' window. That leaves room to reboot the hypervisor at a chosen moment without a page, and stops "later" lasting a quarter.
+
+- Reads `/run/reboot-required` (falling back to `/var/run/`), names the packages from `.pkgs` — the difference between "reboot sometime" and "you are running an unpatched kernel".
+- Age comes from the flag's mtime. It lives on **tmpfs**, so the mtime is genuinely when the update landed and the file vanishes on reboot: no cleanup path, and no way for it to go stale.
+- Guards what `stat` *yielded*, not that it exited 0 — an unparseable value evaluates to 0 in POSIX arithmetic, which would date the flag to 1970 and page instantly.
+- Non-Debian returns 0 early. FreeBSD has no equivalent flag, and opnsense no longer receives this script at all.
+
+`tests/cases/health_pending_reboot.sh` walks all three states — absent, fresh, and backdated 8 days — asserting the **exit status** in both directions, not just the output. Suite **9/9** on CT 199; **6 of its 7 assertions fail against `main`**. The one that passes there does so vacuously (main's script always exits 0), which is the reason the case asserts exit status on the fresh leg too.
+
 ### 🔴 The Slack watch self-destructs on its first quiet hour (root cause confirmed 2026-08-03)
 `investigate.sh --slack` has been failing every hour with `ERR invalid_ts_oldest`. Confirmed cause — `/home/choco/.agent/.last_slack_ts` contains **`0.000000`**.
 

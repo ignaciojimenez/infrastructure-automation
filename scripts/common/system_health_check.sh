@@ -35,6 +35,12 @@ THRESHOLD_DISK="${THRESHOLD_DISK:-85}"
 # genuine starvation.
 THRESHOLD_CPU_PRESSURE="${THRESHOLD_CPU_PRESSURE:-80}"
 
+# Days a pending reboot may sit before it stops being a to-do and becomes a
+# fault. 7 matches check_auto_upgrades' staleness window, and is deliberately
+# long enough to reboot the hypervisor at a moment of your choosing rather than
+# at the alert's.
+REBOOT_PENDING_STALE_DAYS="${REBOOT_PENDING_STALE_DAYS:-7}"
+
 # Optional per-host configuration, written by
 # ansible/playbooks/deploy_monitoring.yml from the inventory. Currently carries
 # CRITICAL_SERVICES; see check_services. Absent is normal and fine — every
@@ -469,6 +475,93 @@ check_failed_units() {
     return $issues
 }
 
+# A kernel or libc security update takes effect only after a reboot. Every
+# Debian host in the fleet has installed that update automatically since March
+# 2026 — and every one has also been rebooting itself at 04:00 to apply it,
+# because `auto_reboot` is undefined in the inventory and
+# tasks/debian_updates.yml defaults it to true.
+#
+# cwwk is being moved to `auto_reboot: false` because it is the hypervisor: an
+# unattended restart there takes the OPNsense VM, the house's internet and
+# every container with it, on a box that has overheated twice. That is the
+# right trade only if the pending reboot becomes *visible*, otherwise it swaps
+# an unannounced restart for an unnoticed unpatched kernel — a strictly worse
+# outcome, and precisely the "it stopped complaining, so it must be fixed"
+# shape this script spent its whole life in.
+#
+# ⚠️ Warning-only would have been that same mistake in a new costume. A warning
+# exits 0, the wrapper records SUCCESS, and the message lands in #home-logging,
+# which is an unwatched firehose. It would be indistinguishable from silence.
+#
+# So: graded by age, the same shape as check_auto_upgrades. A pending reboot is
+# a to-do for the first week and a fault after it. That leaves room to reboot
+# the hypervisor deliberately, at a chosen moment, without a page — and stops
+# "I'll do it later" from lasting a quarter.
+#
+# The flag lives on tmpfs, so its mtime is when the update landed and the file
+# vanishes on reboot. No cleanup, and no way for it to go stale.
+check_pending_reboot() {
+    echo "=== Pending Reboot ==="
+    issues=0
+
+    if [ "$OS_TYPE" != "debian" ]; then
+        # FreeBSD has no equivalent flag. opnsense also no longer receives this
+        # script at all — deploy_monitoring.yml excludes it there.
+        print_status "warning" "Pending-reboot check only available on Debian"
+        echo ""
+        return 0
+    fi
+
+    # /var/run is a symlink to /run on Debian; prefer /run and fall back, so a
+    # host with an unusual layout is not silently reported as clean.
+    flag=""
+    for candidate in /run/reboot-required /var/run/reboot-required; do
+        [ -f "$candidate" ] && { flag="$candidate"; break; }
+    done
+
+    if [ -z "$flag" ]; then
+        print_status "success" "No reboot pending"
+        echo ""
+        return 0
+    fi
+
+    # Name the packages when the kernel can tell us. This is the difference
+    # between "reboot sometime" and "you are running an unpatched kernel".
+    pkgs=""
+    for candidate in "${flag}.pkgs" /var/run/reboot-required.pkgs; do
+        if [ -r "$candidate" ]; then
+            pkgs=$(tr '\n' ' ' < "$candidate" | sed 's/  */ /g; s/ $//')
+            break
+        fi
+    done
+    [ -n "$pkgs" ] && pkgs=" (${pkgs})"
+
+    flag_epoch=$(stat -c %Y "$flag" 2>/dev/null || stat -f %m "$flag" 2>/dev/null)
+
+    # Guard what the read *yielded*, not that stat exited 0. An unparseable
+    # value in arithmetic evaluates to 0 under POSIX sh, which would date the
+    # flag to 1970 and page instantly.
+    case "${flag_epoch:-}" in
+        ''|*[!0-9]*)
+            print_status "warning" "Reboot pending${pkgs} - could not determine how long"
+            echo ""
+            return 0
+            ;;
+    esac
+
+    days_pending=$(( ( $(date +%s) - flag_epoch ) / 86400 ))
+
+    if [ "$days_pending" -ge "$REBOOT_PENDING_STALE_DAYS" ]; then
+        print_status "error" "Reboot pending for ${days_pending} days${pkgs} - ACTION REQUIRED"
+        issues=$((issues + 1))
+    else
+        print_status "warning" "Reboot pending${pkgs} - ${days_pending} day(s), fails after ${REBOOT_PENDING_STALE_DAYS}"
+    fi
+
+    echo ""
+    return $issues
+}
+
 check_network() {
     echo "=== Network Connectivity ==="
     issues=0
@@ -652,6 +745,7 @@ check_services;       total_issues=$((total_issues + $?))
 check_failed_units;   total_issues=$((total_issues + $?))
 check_network;        total_issues=$((total_issues + $?))
 check_auto_upgrades;  total_issues=$((total_issues + $?))
+check_pending_reboot; total_issues=$((total_issues + $?))
 
 echo "=============================="
 if [ "$total_issues" -gt 0 ]; then
