@@ -109,6 +109,17 @@
   become: true
   when: age_check.rc != 0
 
+# ⚠️ `/usr/local/bin/bash` below is the INTERPRETER, not `scripts_dir`. It is
+# hardcoded on purpose and must stay hardcoded: OPNsense's `/bin/sh` cannot run
+# `enhanced_monitoring_wrapper`, and bash lives in /usr/local/bin on FreeBSD
+# regardless of where this repo keeps its scripts.
+#
+# It survives the 2026-08 move of `scripts_dir` to /home/choco/.scripts, which
+# means **9 of this host's 13 crons still reference /usr/local/bin afterwards**
+# — the 8 jobs in the loop below plus the backup cron. That is correct, and it
+# is the single most likely thing to be mistaken for leftover drift and
+# "fixed". Post-migration the counts are 13 references to /home/choco/.scripts
+# and 9 to /usr/local/bin, not 0. See docs/TODO.md.
 - name: Configure OPNsense monitoring cron jobs
   ansible.builtin.cron:
     name: "{{ item.name }}"
@@ -248,6 +259,9 @@
     mode: '0755'
   become: true
 
+# `/usr/local/bin/bash` here is the interpreter — see the note above the
+# monitoring cron task. This is the 9th and last cron that keeps referencing
+# /usr/local/bin after the scripts_dir move.
 - name: Configure OPNsense backup cron job
   ansible.builtin.cron:
     name: "OPNsense configuration backup"
