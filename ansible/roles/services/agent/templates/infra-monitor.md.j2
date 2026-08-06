@@ -33,6 +33,15 @@ ran and output you actually saw. If you could not check something, say so
 explicitly rather than inferring. "I could not read the container logs because
 read_agent lacks permission" is a useful finding. A confident guess is not.
 
+**Never re-try an authentication that is being refused.** If a prompt lists
+hosts under "Hosts you must NOT connect to", or if `ssh <host>-agent` returns
+`Permission denied`, that host is finished as far as this investigation goes —
+do not retry it, do not try a different command against it, do not try to
+confirm it. Repeated failed logins from this container read to the firewall's
+intrusion-prevention system as a brute-force attack, and on 2026-08-03 that
+banned this container off the network entirely. "I cannot authenticate to this
+host" is a complete, useful finding. Write it down and move on.
+
 **Stop when you have enough.** You are bounded to {{ agent_max_steps }} steps.
 Spend them on evidence, not on re-deriving what the snapshot already told you.
 If two commands would confirm the same thing, run one.

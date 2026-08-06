@@ -27,6 +27,7 @@ ENV_FILE="{{ agent_env_file }}"
 AGENT_DIR="{{ agent_state_dir }}"
 PLANS_DIR="{{ agent_plans_dir }}"
 ANOMALY_FILE="$AGENT_DIR/last_anomaly.json"
+BACKOFF_DIR="$AGENT_DIR/ssh_backoff"
 MARKER="$AGENT_DIR/.last_investigated"
 FAIL_MARKER="$AGENT_DIR/.last_failure_alert"
 FAIL_COOLDOWN_SECONDS={{ agent_failure_alert_cooldown_seconds }}
@@ -54,6 +55,13 @@ ts_is_positive() {
 # digest modes all share it, so they serialize rather than pile up.
 LOCK="$AGENT_DIR/.investigate.lock"
 mkdir -p "$AGENT_DIR" "$SLACK_SEEN_DIR"
+
+# Prompts are assembled into a file rather than piped, because run_and_report
+# must run in THIS shell — it sets AGENT_RC/AGENT_COST that the callers read
+# afterwards, and the right-hand side of a pipeline is a subshell.
+PROMPT_FILE="$AGENT_DIR/.prompt.$$"
+trap 'rm -f "$PROMPT_FILE"' EXIT INT TERM
+
 exec 9>"$LOCK"
 if ! flock -n 9; then
     echo "another investigate.sh holds the lock; exiting" >&2
@@ -75,6 +83,70 @@ export ANTHROPIC_API_KEY
 [ -n "${FIREWORKS_API_KEY:-}" ] && export FIREWORKS_API_KEY
 
 mkdir -p "$PLANS_DIR"
+
+# ============================================================
+# SSH auth back-off — the hosts this agent must not touch
+#
+# The agent's only tool is `ssh <host>-agent`. So handing it "this host is
+# rejecting our key" as something to investigate means it retries the exact
+# authentication that is failing, dozens of times, from a container the
+# firewall's IPS is watching. That is not a hypothetical: it is how agent-lxc
+# banned itself off its own network on 2026-08-03, turning a single broken key
+# on opnsense into a total loss of fleet visibility.
+#
+# Tier 1 records those hosts in BACKOFF_DIR when it stops probing them. Two
+# consequences here: the agent is told, in the prompt, never to connect to
+# them; and an anomaly that concerns nothing else is not investigated at all,
+# because there is no evidence it could possibly gather.
+# ============================================================
+
+backed_off_hosts() {
+    [ -d "$BACKOFF_DIR" ] || return 0
+    for _f in "$BACKOFF_DIR"/*; do
+        [ -f "$_f" ] || continue
+        printf '%s\n' "${_f##*/}"
+    done
+}
+
+# Hosts named by the findings in a Tier 1 snapshot. Findings are written as
+# "<host>: <message>" strings, one per line; the surrounding JSON keys carry a
+# quote immediately before their colon and so never match.
+anomaly_finding_hosts() {
+    sed -n 's/^[[:space:]]*"\([^":]*\):.*/\1/p' "$ANOMALY_FILE"
+}
+
+# Appended to every prompt. Emits nothing when no host is backed off, so the
+# normal case is unchanged.
+ssh_backoff_directive() {
+    _blocked=$(backed_off_hosts | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+    [ -z "$_blocked" ] && return 0
+    cat <<EOF
+
+## Hosts you must NOT connect to
+
+$_blocked
+
+The Tier 1 sweep has suspended its own probing of these hosts because they are
+REJECTING this container's SSH key. Do not run \`ssh <host>-agent ...\` against
+any of them, not even once to confirm it. Repeated failed authentication from
+this container is what caused the firewall's intrusion-prevention system to ban
+it off the network on 2026-08-03 — an outage caused by the monitoring rather
+than found by it.
+
+Treat "SSH authentication is being rejected" as an established fact about those
+hosts, not as a symptom to verify. Investigate whatever else the findings name,
+from the hosts you can still reach. If a finding concerns only a blocked host,
+say so and stop: that is a complete answer, and the fix belongs to a human with
+credentials this agent does not have.
+EOF
+}
+
+# compose_prompt — prompt body on stdin, written to PROMPT_FILE with the
+# back-off directive appended.
+compose_prompt() {
+    cat > "$PROMPT_FILE"
+    ssh_backoff_directive >> "$PROMPT_FILE"
+}
 
 # ============================================================
 # Helpers
@@ -227,7 +299,7 @@ $_note"
 
 if [ "${1:-}" = "--digest" ]; then
     echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] weekly digest starting"
-    run_and_report "${AGENT_SLACK_LOGGING:-}" ":bar_chart: *Weekly fleet digest*" <<'PROMPT'
+    compose_prompt <<'PROMPT'
 Produce a weekly fleet health digest, following your normal output contract
 (the ===PLAN=== / ===SUMMARY=== structure).
 
@@ -241,6 +313,7 @@ short, severity-first "what to watch this week" for a human skimming it in
 #home-logging. If the fleet is simply healthy, say so in one line rather than
 padding it.
 PROMPT
+    run_and_report "${AGENT_SLACK_LOGGING:-}" ":bar_chart: *Weekly fleet digest*" < "$PROMPT_FILE"
     exit "$AGENT_RC"
 fi
 
@@ -373,7 +446,7 @@ for tsf, slug, text in sorted(rows):
             break
         fi
         echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] investigating slack alert: $_text"
-        run_and_report "${AGENT_SLACK_ALERT:-}" ":mag: *Fleet investigation*" <<PROMPT
+        compose_prompt <<PROMPT
 A failure alert was posted to the Slack channel #home-alerts:
 
 "$_text"
@@ -384,6 +457,7 @@ cause on the affected host and produce a plan following your output contract.
 Confirm the failure is still current before proposing a fix; these alerts often
 fire on a schedule and may have self-cleared.
 PROMPT
+        run_and_report "${AGENT_SLACK_ALERT:-}" ":mag: *Fleet investigation*" < "$PROMPT_FILE"
         touch "$_seen"
         _count=$((_count + 1))
     done < "$_tmp"
@@ -418,10 +492,33 @@ if [ -f "$MARKER" ] && [ ! "$ANOMALY_FILE" -nt "$MARKER" ]; then
     exit 0
 fi
 
+# If every finding names a host Tier 1 has stopped probing, there is nothing to
+# investigate: the agent's only access to those hosts is the SSH that is being
+# refused. Running anyway means paying an agent to rediscover an auth failure by
+# reproducing it — which is what banned this container. The marker is left
+# alone deliberately: the snapshot's mtime no longer advances while the findings
+# hold, so this stays free and re-evaluates the moment they change.
+blocked=$(backed_off_hosts | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+if [ -n "$blocked" ]; then
+    investigable=0
+    named=0
+    for h in $(anomaly_finding_hosts); do
+        named=$((named + 1))
+        case " $blocked " in
+            *" $h "*) ;;
+            *) investigable=1 ;;
+        esac
+    done
+    if [ "$named" -gt 0 ] && [ "$investigable" -eq 0 ]; then
+        echo "every finding concerns a host in SSH back-off ($blocked); nothing this agent can reach — skipping"
+        exit 0
+    fi
+fi
+
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] investigating new anomaly"
 anomaly=$(cat "$ANOMALY_FILE")
 
-run_and_report "${AGENT_SLACK_ALERT:-}" ":mag: *Fleet investigation*" <<PROMPT
+compose_prompt <<PROMPT
 The hourly Tier 1 fleet sweep reported the anomaly below. Investigate it and
 produce a plan following your output contract.
 
@@ -433,6 +530,7 @@ holds before reasoning about causes.
 $anomaly
 \`\`\`
 PROMPT
+run_and_report "${AGENT_SLACK_ALERT:-}" ":mag: *Fleet investigation*" < "$PROMPT_FILE"
 rc=$?
 
 # Mark handled only on success, so a transient failure retries next hour rather

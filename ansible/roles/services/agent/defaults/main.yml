@@ -30,6 +30,17 @@ agent_wrapper_max_age_hours: 26
 agent_ssh_timeout: 15
 agent_fleet_hosts: []
 
+# Back-off applied to a host that REJECTS this container's SSH key, doubling
+# from the base and capped at the max. Only failed *authentication* backs off:
+# a host that is simply down trips no IPS and is retried every sweep.
+#
+# Base is one sweep, so a transient rejection costs one skipped probe. The cap
+# bounds how long a recovered host stays unprobed — 6h, i.e. the sweep notices
+# a restored key within six hours rather than within one. That is the price of
+# not re-authenticating hourly against a firewall that bans on failed auth.
+agent_ssh_backoff_base_seconds: 3600   # 1h
+agent_ssh_backoff_max_seconds: 21600   # 6h
+
 # ============================================================
 # Phase B — OpenCode runtime and Tier 2 investigation
 # ============================================================

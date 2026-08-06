@@ -91,3 +91,6 @@ Do not propose rebuilding any of this.
 
 - `{{ agent_state_dir }}/last_anomaly.json` — the Tier 1 snapshot that triggered you.
 - `{{ agent_plans_dir }}/` — the plans you write. One per investigation.
+- `{{ agent_state_dir }}/ssh_backoff/` — one file per host whose SSH auth Tier 1
+  has given up on. A host named here will refuse you too; see the hard rule
+  about not retrying refused logins.
