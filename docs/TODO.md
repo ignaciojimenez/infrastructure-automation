@@ -47,6 +47,19 @@ Cleared with `cscli decisions delete --ip 10.30.40.203` on opnsense.
 
 **This is a feedback loop, not a one-off.** While `read_agent` is broken on opnsense, every sweep finds it, every Tier 2 run attacks it, and CrowdSec re-bans. Broken for now by removing the Tier 2 anomaly cron (manual — see ⚠️ below). Permanent fixes, in order of value: (1) restore `read_agent` on opnsense, (2) whitelist fleet IPs in CrowdSec so the infrastructure cannot ban itself, (3) have `fleet_health_check` back off a host that fails auth rather than retrying it hourly.
 
+#### ✅ (3) DONE in code 2026-08-06 — the loop is broken at both ends
+
+Branch `fix/agent-lxc-logs-dir-2026-08`. Covered by `tests/unit/ssh_backoff_test.sh` (17 assertions, laptop-only, no spend); 8 of them fail against `main`.
+
+- **Tier 1 backs off.** `ssh_probe` now captures stderr instead of discarding it, because "the far side refused our credentials" and "the far side is not there" are distinguishable only there. A rejection records `~/.agent/ssh_backoff/<host>` and suspends probing for a doubling window — 1h, 2h, 4h, capped at 6h (`agent_ssh_backoff_{base,max}_seconds`). A successful probe clears it.
+- **Scoped to rejected auth, deliberately.** A host that is merely down logs no failed auth and trips no IPS; backing off from it would blind the sweep for nothing. Tested both ways.
+- **It reports without connecting.** The finding still fires on every sweep — only the TCP connection stops. Silence would be the wrong fix; the human must keep being told.
+- **Tier 2 will not investigate a host it cannot log into.** If every finding in the snapshot names a backed-off host there is nothing the agent could gather — its only tool is `ssh <host>-agent` — so `investigate.sh` exits 0 without launching OpenCode. When *some* findings are reachable it runs, with a "Hosts you must NOT connect to" block appended to the prompt naming the rest. `infra-monitor.md` gained a matching hard rule.
+
+⚠️ **The two fixes are coupled, and the coupling is easy to break.** The back-off finding's wording is deliberately constant across sweeps. Put a timestamp or a retry counter in it and the snapshot content changes every hour, which silently un-fixes the dedup below. `ssh_backoff_test.sh` asserts the two sweeps produce byte-identical text for exactly this reason.
+
+Still open from that list: (1) opnsense `read_agent` durability, and (2) a CrowdSec whitelist for fleet IPs. The back-off makes the loop survivable, not impossible.
+
 ### Tier 2 has never completed a run — and the earlier cost warning was wrong
 `investigate.log` shows every Tier 2 run ending `rc=124 — opencode timed out after 600s and was killed`, `run cost: $0`, at 14:47 / 15:47 / 16:47. It never reached the Anthropic API because the CrowdSec ban had cut its network. **Actual spend to date: $0**, not the $7–13/day estimated from the re-billing bug below. That estimate was wrong in the reassuring direction — but the bug is real and simply never got the chance to fire. Tier 2's true cost and correctness remain **unmeasured**: it has not once produced a successful investigation.
 
@@ -64,7 +77,17 @@ Consequence worth noting: while journald was dead, **fail2ban was blind**, becau
 
 **Now codified** (`provision_agent_lxc.yml`): `--features nesting=1` on create, an idempotent `pct set` for existing containers, and — the more important half — the playbook now **fails the build on any failed unit after boot**. It previously accepted `degraded` by design (`failed_when: ... 'degraded' not in stdout`), which is precisely how a container with 19 failed units passed provisioning and stayed broken for weeks. "Finished booting" and "booted healthy" are different questions; it now asks both.
 
-### ⚠️ Cost bug — a persistent fault IS re-investigated (and re-billed) every hour
+### ✅ Cost bug — FIXED IN CODE 2026-08-06 (a persistent fault was re-investigated, and re-billed, every hour)
+
+Branch `fix/agent-lxc-logs-dir-2026-08`. `fleet_health_check.sh` now builds the snapshot in a temp file alongside the real one and replaces it — atomically, by rename — **only when the findings differ**. The `timestamp` line is excluded from that comparison, because it changes on every run by construction: comparing whole files would have left the guard exactly as dead, in a subtler way. So the snapshot's mtime tracks "new information" rather than "the sweep ran", which is what `investigate.sh`'s `-nt` guard always assumed it did.
+
+Covered by `tests/unit/anomaly_dedup_test.sh` — 8 assertions, laptop-only, no container and no spend. It asserts the *exact* predicate Tier 2 uses (`[ "$ANOMALY_FILE" -nt "$MARKER" ]`) rather than "the file was not written": a fix that wrote the file with a stale mtime would pass the weaker test and still fail in production. 3 of the 8 fail against `main`, including the whole-file-comparison trap.
+
+Both mtimes in that test are set explicitly with `touch -t`. Letting them land in the same second would make `-nt` false for the wrong reason and pass vacuously — the same class of structurally-guaranteed non-result as the "declared broken 1 minute into a 60-minute cron cycle" note above.
+
+Original diagnosis, kept:
+
+#### ⚠️ Cost bug — a persistent fault IS re-investigated (and re-billed) every hour
 `investigate.sh` gates on `[ ! "$ANOMALY_FILE" -nt "$MARKER" ]`, with the stated intent that "a persistent fault isn't re-investigated (and re-billed) every hour". But `fleet_health_check.sh:225` rewrites `last_anomaly.json` **unconditionally on every sweep that finds anything** — so its mtime advances hourly, the guard never engages, and Tier 2 re-investigates the identical finding every hour. The `--slack` path has proper content-dedup (7-day, signature-based); this path has none.
 
 Live exposure right now: opnsense is unreachable (below), so the sweep finds it every hour. At the repo's own figure of ~$0.30–0.55 per investigation that is roughly **$7–13/day** until opnsense is fixed. Also `SEND_TO_ALERT=true` on every failure with no dedup or cooldown (`enhanced_monitoring_wrapper:384`), so it is 24 push notifications/day to #home-alerts alongside the spend.
@@ -89,7 +112,8 @@ After the manual fix, the sweep was declared "still broken" on the basis of zero
 - [x] `systemctl --failed` on CT 103 is empty, `journald` active, cron execution visible in the journal — after `nesting=1`, 2026-08-03 17:02
 - [ ] `logs_dir` codified in the role and deployed, so the manual `mkdir` is no longer load-bearing
 - [ ] Tier 2 completes one successful investigation (never yet achieved — all runs timed out at 600s)
-- [ ] Tier 2 anomaly cron restored, after opnsense access is fixed and the re-billing bug is closed
+- [x] The re-billing bug is closed, and the ban loop has a back-off — in code 2026-08-06, both covered by unit tests that fail against `main`
+- [ ] Tier 2 anomaly cron restored (`/root/crontab.choco.bak.20260803` on CT 103), after the branch is deployed. **No longer blocked on opnsense access:** the back-off means a host that rejects the key is reported, not attacked. Restore it and watch the first real run — cost and correctness are still unmeasured.
 
 ### Incidental findings (this session)
 - **`roles/services/unifi` has the identical latent bug** — three crons redirect into `logs_dir` (lines 168/183/199) and the role never creates it. `unifi-lxc` is unaffected today because its `.logs` predates the role, but a rebuild reproduces the agent-lxc outage exactly. Same one-task fix; not applied here (out of scope for this branch).
@@ -97,6 +121,38 @@ After the manual fix, the sweep was declared "still broken" on the basis of zero
 - `system_health_check.sh` on agent-lxc reports `❌ Upgrade log not found - unattended-upgrades may not be configured`, but `/var/log/unattended-upgrades/` exists and is populated. The probe increments `issues_found` without failing the run, so it will show a red ❌ in every daily heartbeat without ever alerting. Cosmetic, but it trains the eye to ignore red.
 - Whole fleet rebooted 2026-07-31 ~13:45 (every host "up 2 days" on 08-03). Unexplained; predates nothing here (agent silence started 07-22) but worth knowing.
 - `touchid-agent` refuses non-interactive signing from an agent shell (`agent refused operation`), so Ansible runs against hosts without an `-agent` alias must be driven by hand.
+
+### Incidental findings — Tier 2 session, 2026-08-06
+
+- **The agent's `.j2` shell scripts are now unit-testable on the laptop.**
+  `tests/lib/render_j2.py` renders the small Jinja subset these templates use
+  (`{{ var }}` plus the one `agent_fleet_hosts` loop) with no jinja2 import —
+  the system python3 on macOS has none, and pulling a dependency into a shell
+  suite to substitute four variables is a poor trade. **It exits non-zero on
+  any construct it does not understand**, rather than leaving literal `{{ … }}`
+  in a script the test then "passes" against. Both new tests render, stub
+  `ssh`, and run the real script: no container, no fleet, no spend. Verified
+  under `dash` on CT 199 as well as on the laptop, since `/bin/sh` on macOS is
+  bash in POSIX mode and is more permissive than what agent-lxc actually runs.
+- **`run_and_report` must not be piped into.** It sets `AGENT_RC`/`AGENT_COST`
+  that its callers read *afterwards*, and the right-hand side of a POSIX
+  pipeline is a subshell, so `{ …; } | run_and_report` leaves them unset — with
+  `set -u` the digest's `exit "$AGENT_RC"` then dies. Prompts are therefore
+  assembled into a file and redirected. Anyone adding a fourth mode will hit
+  this; the alternative (unquoting the heredocs to interpolate) is worse, since
+  the digest prompt contains backticks that would then execute.
+- **A JSON fixture built with `echo` is not portable, and fails silently.**
+  bash's `echo` leaves `\n` alone while dash's expands it, which put real
+  newlines inside a JSON string, made the event unparseable, and made the
+  stubbed agent look like it had "exited 0 but produced no text". The test still
+  passed, because the assertion only checked that the agent had been *invoked*.
+  Two lessons: fixtures that are data use `printf '%s\n'`, and an assertion
+  about a happy path must check the run **succeeded**, not merely that it
+  started.
+- **macOS has neither `flock` nor `timeout`**, both of which `investigate.sh`
+  uses. The tests stub them unconditionally so a laptop run and a container run
+  exercise the same thing. Neither is under test; if either ever is, it needs a
+  container.
 
 ---
 
