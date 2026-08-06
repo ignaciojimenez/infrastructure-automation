@@ -161,9 +161,33 @@ and one is explicitly labelled `TEST`. The rules are almost certainly doing
 something useful — but what they are *called* no longer describes the estate,
 which is exactly the trap this document exists to prevent.
 
-OPNsense also transparently redirects outbound port 53 to Unbound, so clients
-cannot bypass it by hardcoding a public resolver. `tests/cases/health_no_internet.sh`
+### Unbound is fully recursive
+
+Verified on the live box: `/var/unbound/` contains **no `forward-zone` and no
+`forward-addr` anywhere**. `etc/dot.conf` and `etc/domainoverrides.conf` are both
+empty, and `unbound.conf` loads `root-hints`. Unbound resolves from the root
+servers itself; it does not forward to anything.
+
+This matters because `scripts/services/opnsense/monitor_dns_failover.sh` opens by
+describing a different architecture:
+
+```
+#   Layer 1: Unbound forwards to 4 Mullvad DNS servers (10.64.0.1, .3, .7, .11)
+#            Each routes through different tunnel - automatic failover
+#   Layer 2: This script - if ALL tunnels down, switch to Cloudflare
+```
+
+Layer 1 is not what is running. See
+[the failover script's premise](#3-the-dns-failover-scripts-premise-no-longer-holds).
+
+### Port 53 redirect
+
+OPNsense transparently redirects outbound port 53 to Unbound, so clients cannot
+bypass it by hardcoding a public resolver. `tests/cases/health_no_internet.sh`
 depends on this behaviour.
+
+Note the redirect catches **DNS only**. It does not affect ICMP or other traffic
+to the same address, which is what made the Quad9 finding below need care.
 
 ---
 
@@ -190,36 +214,91 @@ So Quad9 is unreachable from the firewall, confirmed by ping:
 1.1.1.1 → 2 packets transmitted, 2 received, 0.0% packet loss
 ```
 
-**Why it matters:** Unbound carries a leftover host override mapping the retired
-Pi-hole's name onto that same blackholed address —
+**The blast radius is narrow — and an earlier draft of this document got it
+wrong.** The static route applies only to traffic *originating on the firewall*.
+Forwarded LAN traffic follows per-rule policy routing instead, which overrides the
+routing table in pf. Verified from `cwwk`:
+
+```
+ping 9.9.9.9   → 2 transmitted, 2 received, 0% loss
+getent hosts deb.debian.org (via 9.9.9.9) → resolves
+```
+
+So LAN clients reach Quad9 normally. Only the firewall itself cannot.
+
+Nothing currently depends on that: Unbound is
+[fully recursive](#unbound-is-fully-recursive) and never queries Quad9, and both
+DNS monitoring scripts deliberately use `1.1.1.1` as their fallback, commented
+*"no VPN route, uses default gateway"* — the author knew to avoid the
+VPN-routed resolver.
+
+What remains is genuine but lower-severity: **a dead tunnel and a static route
+pointing into it**, plus a stale Unbound override naming the retired Pi-hole:
 
 ```
 local-data: "pihole.local  IN A 9.9.9.9"
 local-data-ptr: "9.9.9.9 pihole.local"
 ```
 
-Anything still pointed at `pihole.local` as its resolver therefore resolves to an
-address that cannot be reached. Resolution for the fleet as a whole is healthy —
-Unbound is running and the estate works — so this is a **latent trap, not an
-active outage**. It would surface as an unexplained DNS failure on whichever
-forgotten client still refers to `pihole.local`.
+No host in the repo or the fleet references `pihole.local` — grepped the repo and
+checked `/etc/resolv.conf` across five hosts. It is dead config, not a live trap.
 
-*Not yet verified:* whether any host actually still uses `pihole.local`, and
-whether `wg9` belongs to a gateway group where its deadness would also degrade
-failover. Both need checking before deciding the fix.
+*Still not verified:* whether `wg9` belongs to a gateway group where its deadness
+would degrade failover for other traffic. That needs `config.xml`, which
+`read_agent` cannot read.
 
-### 2. Two `wg1` peers have never connected
+### 2. `cwwk` bypasses the estate resolver
+
+The hypervisor's `/etc/resolv.conf` is `nameserver 9.9.9.9` — every other host
+checked (`cobra`, `hifipi`, `dockassist`, `unifi`) points at `10.30.40.254`.
+
+DNS works there today (Quad9 is reachable from the LAN, per above), so this is
+not an outage. But it means the single most critical host in the estate — the one
+whose failure takes the internet down with it — resolves names via a third party
+instead of the resolver the rest of the fleet uses, and gets none of Unbound's
+local overrides. It also looks like an oversight rather than a decision: `9.9.9.9`
+is the default upstream baked into the **archived** Pi-hole role
+(`ansible/roles/services/pihole/`), which is where the address entered this estate.
+
+### 3. The DNS failover script's premise no longer holds
+
+`scripts/services/opnsense/monitor_dns_failover.sh` is running and healthy — its
+state file reads `healthy|0|9359|vpn`, i.e. **9359 consecutive successful checks**
+in `vpn` mode. Its health probe is sound: it independently queries the four
+Mullvad resolvers with `drill` and they answer.
+
+But its *premise* and its *remediation* both target a configuration that is not
+in use. The script exists to switch Unbound's forwarder to Cloudflare when all
+tunnels drop — and Unbound has no forwarder to switch, because it resolves
+recursively from root hints.
+
+**Why this is the dangerous kind of stale:** the script reports healthy and will
+keep reporting healthy. Nothing about its output reveals that its Layer 2
+protection is aimed at a setting that isn't there. It is green because its
+probe passes, not because the protection works.
+
+The good news is that the protection is also no longer *needed* in its original
+form — recursive Unbound does not depend on the Mullvad tunnels for resolution,
+so tunnels dropping should not break DNS at all. That makes this a cleanup, not
+an outage risk.
+
+*Not verified:* what the script actually does to `config.xml` if it ever fires,
+and whether that would newly *introduce* forwarding. Testing it means taking all
+twelve tunnels down, which is not something to do casually. **Read the script's
+`switch_to_fallback` path before trusting either outcome.**
+
+### 4. Two `wg1` peers have never connected
 
 `10.30.41.7` and `10.30.41.8` — see above. Needs a decision: identify or remove.
 Unused peer slots are standing inbound credentials.
 
-### 3. One Ubiquiti device is a firmware generation behind
+### 5. One Ubiquiti device is a firmware generation behind
 
 `10.30.40.3` runs `dropbear_2024.86`; the other three run `dropbear_2025.89`.
 Consistent with a device that has missed an update cycle — worth checking in the
 controller, which is where the actual firmware state lives.
 
-### 4. Fleet name resolution has no fallback
+### 6. Fleet name resolution has no fallback
 
 Covered in [Name resolution runs on mDNS, not DNS](#name-resolution-runs-on-mdns-not-dns).
 Unbound serves the estate's recursive DNS but holds no records for the estate's
@@ -227,7 +306,7 @@ own hosts, so Ansible reachability rests entirely on mDNS crossing VLAN 40↔100
 Adding host overrides in Unbound for the seven fleet hosts would cost minutes and
 remove the dependency — **not done, proposed only.**
 
-### 5. Pi-hole-era naming outlived Pi-hole by nine months
+### 7. Pi-hole-era naming outlived Pi-hole by nine months
 
 Three firewall rules and one Unbound override still refer to a host retired in
 November 2025, and one rule is labelled `TEST`. Nothing is known to be broken by
