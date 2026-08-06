@@ -83,6 +83,9 @@ Host-independent checks live in `tests/unit/` and need no container at all:
 
 ```sh
 tests/unit/slack_watermark_test.sh
+tests/unit/ssh_backoff_test.sh
+tests/unit/anomaly_dedup_test.sh
+tests/unit/sweep_healthcheck_test.sh
 ```
 
 ## What this suite is for

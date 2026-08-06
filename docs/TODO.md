@@ -229,7 +229,7 @@ Written and verified against a disposable Debian 13 LXC (CT 199), both direction
 
 ⚠️ **The TODO's "one-line class of fix" framing for `system_health_check.sh` was wrong, in a way that mattered.** Six of the seven check functions had no `return` at all — only `check_auto_upgrades` did. Worse, `check_disk_usage` evaluated its loop inside a `df | grep | while` **pipeline, which POSIX runs in a subshell**, so counters incremented there are discarded when it exits. The obvious fix — add increments, sum at the end — would have left the disk check, the one most likely to fire, still returning 0 while printing a red ❌. Demonstrated rather than reasoned: identical input yields `issues=0` through a pipeline and `issues=2` through a here-doc. It now uses a here-doc. **Generalise this:** any `cmd | while` loop in this repo that accumulates state is silently discarding it.
 
-Still open from this section: **item 4, the healthchecks.io ping from the Tier 1 sweep** — untouched, and still the single highest-value item on this page. It needs a new check UUID and a vault write, so it was left for laptop time.
+**✅ Item 4, the healthchecks.io ping, is now FIXED IN CODE too (2026-08-06).** The "it needs laptop time" framing was wrong twice over: the check and the vault write were done remotely on 2026-08-04, and the ping itself needed neither. See the dead-man's-switch section below.
 
 ### 🔴 The Slack watch self-destructs on its first quiet hour (root cause confirmed 2026-08-03)
 `investigate.sh --slack` has been failing every hour with `ERR invalid_ts_oldest`. Confirmed cause — `/home/choco/.agent/.last_slack_ts` contains **`0.000000`**.
@@ -269,12 +269,24 @@ What is silently uncovered on all 7 hosts: **disk usage, memory, load, ssh/cron/
 
 **Fix:** aggregate the function return codes and exit non-zero when any check fails. Then force each failure condition and watch it fire — the red ❌ output proves the *printing* works, which is exactly what made this invisible.
 
-### No dead-man's switch on agent-lxc — nothing watches the watcher
+### ✅ No dead-man's switch on agent-lxc — FIXED IN CODE 2026-08-06 (not deployed)
 Tier 1 checks that every host's monitoring ran recently (`agent_wrapper_max_age_hours: 26`) — but it runs *from* agent-lxc, so it cannot detect its own death. That is precisely the 12-day outage.
 
 The mechanism already exists and is already in use: **healthchecks.io pings on proxmox, opnsense (WAN + DNS), homeassistant and pihole**. agent-lxc is the one host without one — the host whose silence was the entire failure. A ping from the Tier 1 sweep would have paged on day one.
 
 **Fix:** healthchecks.io ping at the end of `fleet_health_check.sh`. Small, reuses existing infrastructure, and is the single highest-value item on this page.
+
+**Done 2026-08-06.** `ping_healthcheck()` in `fleet_health_check.sh.j2`, one call site immediately before the report branches, driven by `agent_sweep_healthcheck_url` (role default → `vault_healthcheck_agent_sweep | default('')`). Check `agent-lxc Tier 1 fleet sweep`, period 1h, grace 25m — created and vaulted 2026-08-04.
+
+Three decisions worth keeping, because each has a plausible opposite:
+
+- **The ping is unconditional — it fires on a sweep that found problems.** Gating it on a clean sweep would stop the heartbeat the moment the fleet is unwell, conflating "the observer is dead" with "the fleet is broken", which are the two states this exists to separate. Findings already reach `#home-alerts` through the wrapper; this covers *silence*. ⚠️ Deliberately unlike `heartbeat_backup.sh`, which pings only on recent success — that one asserts a backup's freshness, not a run's existence.
+- **The ping can never change the sweep's exit status.** `|| true` on both branches and `return 0`. A dead-man's switch that can fail the thing it watches is a liability; hc-ping.com being down is healthchecks' problem to alert on, not a fleet finding.
+- **It lives inside the script, not in the cron line.** The 12-day outage killed the cron *at the redirect*, before the script was reached. A ping in the script therefore does not fire, which is exactly what should page. A ping appended to the cron line would have to survive the same redirect and might not.
+
+Covered by `tests/unit/sweep_healthcheck_test.sh` — 12 assertions, laptop-only, no container and no network. **6 of the 12 fail against `main`**, including all three "pings at all" assertions. `sh -n` and `dash -n` clean on the Ansible-rendered output; variable resolution confirmed in agent-lxc's real scope (`connection: local`), not just in the test renderer.
+
+⚠️ Two things this does **not** prove. The wget branch is unreachable on the deployed host — agent-lxc has both curl and wget (measured 2026-08-06), so it always takes the curl path; the test forces it only by building a curl-free `PATH`. And no ping has ever reached healthchecks.io from that container: **the first real ping happens at L5**, and its check goes from "new" to "up" then. Until then the check is armed and has never been fed.
 
 ### No check for failed systemd units
 `check_services` tests three named services (ssh, cron, fail2ban). Nothing anywhere checks `systemctl --failed`. A container with 19 failed units — journald among them — passed every check it had.

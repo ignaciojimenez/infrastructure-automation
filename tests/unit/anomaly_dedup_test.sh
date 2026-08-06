@@ -50,7 +50,11 @@ python3 "$REPO_ROOT/tests/lib/render_j2.py" "$TEMPLATE" "$WORK/sweep.sh" \
     agent_ssh_backoff_base_seconds=3600 \
     agent_ssh_backoff_max_seconds=21600 \
     agent_state_dir="$AGENT_DIR" \
+    agent_sweep_healthcheck_url="" \
     agent_fleet_hosts=cobra:linux,opnsense:linux || exit 1
+# ^ deliberately empty: an unconfigured URL is the sweep's "do not ping" path,
+# which keeps this test off the network. The ping itself is covered by
+# tests/unit/sweep_healthcheck_test.sh.
 
 # Answers as whichever host it was asked about, per $STUB_DIR/<host>.
 cat > "$WORK/bin/ssh" <<'STUB'

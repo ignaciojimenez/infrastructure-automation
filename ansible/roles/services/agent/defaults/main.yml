@@ -23,6 +23,16 @@ agent_ssh_key_comment: "agent-lxc fleet observer (read_agent)"
 agent_sweep_minute: "37"
 agent_sweep_hour: "*"
 
+# Dead-man's switch for the sweep itself — the one thing the sweep cannot
+# report, because a sweep that does not run reports nothing at all. This
+# container ran ZERO jobs for its first 12 days and nobody noticed, which is
+# the failure mode every other host is already covered against.
+#
+# Empty by default so the script degrades to "no ping" rather than curling a
+# literal `{{ ... }}` when the vault entry is absent (e.g. a test render).
+# Check: "agent-lxc Tier 1 fleet sweep", period 1h, grace 25m.
+agent_sweep_healthcheck_url: "{{ vault_healthcheck_agent_sweep | default('') }}"
+
 # Fleet sweep tuning — documented in group_vars/agent.yml, which is the
 # intended place to change them.
 agent_disk_threshold: 85

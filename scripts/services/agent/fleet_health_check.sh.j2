@@ -15,6 +15,7 @@ set -u
 DISK_THRESHOLD={{ agent_disk_threshold }}
 WRAPPER_MAX_AGE_HOURS={{ agent_wrapper_max_age_hours }}
 SSH_TIMEOUT={{ agent_ssh_timeout }}
+HEALTHCHECK_URL="{{ agent_sweep_healthcheck_url }}"
 BACKOFF_BASE_SECONDS={{ agent_ssh_backoff_base_seconds }}
 BACKOFF_MAX_SECONDS={{ agent_ssh_backoff_max_seconds }}
 AGENT_DIR="{{ agent_state_dir }}"
@@ -164,6 +165,42 @@ check_wrapper_freshness() {
 }
 
 # ============================================================
+# Dead-man's switch
+#
+# Everything above reports what the sweep FOUND. This reports that the sweep
+# RAN — the one fault it is structurally incapable of noticing itself. It is
+# not hypothetical: this container executed no jobs at all for its first 12
+# days (every cron died on a redirect into a directory that did not exist,
+# before the script was ever reached) and the silence went unnoticed because
+# agent-lxc was the only host in the fleet without a healthchecks.io check.
+# A ping from inside the script covers that exact shape — the cron dying early
+# means no ping, which is precisely what should page.
+#
+# Pinged UNCONDITIONALLY, including when the sweep found problems and will
+# exit 1. The gap this closes is silence, not findings: findings already reach
+# #home-alerts through the wrapper. Gating the ping on a clean sweep would mean
+# a sweep that runs and works stops pinging the moment it has something to say,
+# conflating "the observer is dead" with "the fleet is unwell" — the two states
+# that most need telling apart. (This deliberately differs from
+# heartbeat_backup.sh, which pings only on recent success because it is
+# asserting freshness of a backup, not existence of a run.)
+#
+# Never allowed to affect the sweep's own exit status: a dead-man's switch that
+# can fail the thing it watches is a liability. hc-ping.com being unreachable
+# is healthchecks' problem to alert on, not a fleet finding.
+# ============================================================
+
+ping_healthcheck() {
+    [ -n "$HEALTHCHECK_URL" ] || return 0
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsS -m 10 --retry 3 "$HEALTHCHECK_URL" >/dev/null 2>&1 || true
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q -T 10 -t 3 -O /dev/null "$HEALTHCHECK_URL" >/dev/null 2>&1 || true
+    fi
+    return 0
+}
+
+# ============================================================
 # Probes — one per host kind
 # ============================================================
 
@@ -288,6 +325,10 @@ done
 # ============================================================
 
 count=$(wc -l < "$FINDINGS" | tr -d ' ')
+
+# Before the branch, so there is exactly one call site and neither exit path
+# can drift away from it.
+ping_healthcheck
 
 if [ "$count" -eq 0 ]; then
     echo "Fleet OK — ${reachable}/${total} hosts reachable, no findings"
