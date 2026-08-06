@@ -79,11 +79,23 @@
         - curlbin_password | length > 0
       tags: [baseline, backup, credentials]
 
+    # `su` is not optional here, it is what keeps this working at all.
+    # logrotate refuses to rotate anything whose parent directory is writable by
+    # a group other than root, unless told which identity to rotate as — and
+    # logs_dir is owned by the infrastructure user by design. On agent-lxc,
+    # where the directory was created by hand (umask 002, so 0775), every user
+    # log was skipped and logrotate.service failed every night from 2026-08-04
+    # onward. Nobody noticed, because nothing checked failed units until now.
+    #
+    # Enforcing 0755 on the directory would also work, but only until the next
+    # host whose logs_dir arrives by some other route. `su` removes the coupling
+    # between two unrelated tasks instead of restating it.
     - name: Set up log rotation for user logs
       ansible.builtin.copy:
         dest: "/etc/logrotate.d/{{ primary_user }}"
         content: |
           {{ logs_dir }}/*.log {
+              su {{ primary_user }} {{ infrastructure_group }}
               daily
               rotate 7
               compress
