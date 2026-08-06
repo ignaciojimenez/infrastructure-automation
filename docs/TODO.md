@@ -276,10 +276,12 @@ Also confirmed while there, since both could have bitten opnsense at L3:
   `rm -f`s the temp file instead of leaving litter. Previously `... && mv`
   carried on as though the state had persisted.
 
-⚠️ **Still never executed on FreeBSD:** `mktemp "${STATE_FILE}.XXXXXX"` with a
-path-bearing template. FreeBSD's `mktemp(1)` documents the template operand, so
-this is expected to work — but it is *reasoned*, not run, and it is now the only
-executable unknown left for this branch on opnsense.
+✅ **`mktemp` verified on FreeBSD 2026-08-06** — run on opnsense itself:
+`mktemp /tmp/statetest.json.XXXXXX` returned `/tmp/statetest.json.hErSn4`. The
+path-bearing template works, so the wrapper's state update persists on the
+firewall and heartbeat dedup — the exact thing this branch exists to fix — does
+not silently break there after L3. **No executable unknown remains for this
+branch on opnsense.**
 
 Related: the three container checks all use `daily`, and the `--monitoring-name`
 parsing (`STATE_NAME="${MONITORING_NAME:-$(basename "$script_path")}"`) is
