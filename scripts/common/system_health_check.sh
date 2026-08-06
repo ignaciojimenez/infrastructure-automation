@@ -127,22 +127,52 @@ check_memory() {
     echo "=== Memory Usage ==="
     issues=0
 
+    arc_note=""
+
     if [ "$OS_TYPE" = "debian" ]; then
         # Linux memory check
         mem_total=$(grep MemTotal /proc/meminfo | awk '{print $2}')
         mem_available=$(grep MemAvailable /proc/meminfo | awk '{print $2}')
-        
+
+        # ZFS ARC is not counted in MemAvailable — it is neither free memory nor
+        # page cache as far as the kernel's accounting goes — so a host with a
+        # 10 GiB ARC cap reports most of that cap as used, permanently, for a
+        # cache doing exactly what it was configured to do. Measured on cwwk
+        # 2026-08-06: 82% used against a true 53%, which is a warning today and
+        # one more VM away from paging.
+        #
+        # Count only the part above `c_min`: that is what the ARC shrinker will
+        # actually hand back under pressure. Real pressure therefore still
+        # fires — ARC shrinks first, and what is left is what cannot be
+        # reclaimed, which is the number this check was always meant to report.
+        if [ -r /proc/spl/kstat/zfs/arcstats ]; then
+            arc_reclaimable=$(awk '
+                /^size /  { size = $3 }
+                /^c_min / { cmin = $3 }
+                END       { r = (size - cmin) / 1024; print (r > 0) ? int(r) : 0 }
+            ' /proc/spl/kstat/zfs/arcstats)
+
+            case "$arc_reclaimable" in
+                ''|*[!0-9]*) arc_reclaimable=0 ;;
+            esac
+
+            if [ "$arc_reclaimable" -gt 0 ]; then
+                mem_available=$((mem_available + arc_reclaimable))
+                arc_note=" ($((arc_reclaimable / 1048576)) GiB of it reclaimable ZFS ARC)"
+            fi
+        fi
+
         if [ "$mem_total" -gt 0 ]; then
             mem_used=$((mem_total - mem_available))
             mem_percent=$((mem_used * 100 / mem_total))
             
             if [ "$mem_percent" -gt "$THRESHOLD_MEM" ]; then
-                print_status "error" "Memory: ${mem_percent}% used (above ${THRESHOLD_MEM}%)"
+                print_status "error" "Memory: ${mem_percent}% used (above ${THRESHOLD_MEM}%)${arc_note}"
                 issues=$((issues + 1))
             elif [ "$mem_percent" -gt $((THRESHOLD_MEM - 10)) ]; then
-                print_status "warning" "Memory: ${mem_percent}% used"
+                print_status "warning" "Memory: ${mem_percent}% used${arc_note}"
             else
-                print_status "success" "Memory: ${mem_percent}% used"
+                print_status "success" "Memory: ${mem_percent}% used${arc_note}"
             fi
         fi
     elif [ "$OS_TYPE" = "freebsd" ]; then
