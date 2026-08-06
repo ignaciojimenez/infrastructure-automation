@@ -39,6 +39,12 @@
       run_once: true
       tags: [monitoring, scripts]
 
+    # `system_health_check.sh` is excluded on FreeBSD: the OPNsense role
+    # schedules its own `check_system_health.sh`, wrapped and alerting, with
+    # FreeBSD-native memory probing that the common script does not have.
+    # Shipping a second, unscheduled health check to the firewall is dead
+    # weight that reads as coverage — it sat in /usr/local/bin uninvoked until
+    # 2026-08-06, when reading the live crontab showed nothing ran it.
     - name: Deploy all common scripts
       ansible.builtin.copy:
         src: "{{ item.path }}"
@@ -47,7 +53,15 @@
         owner: "{{ infrastructure_user }}"
         group: "{{ infrastructure_group }}"
       loop: "{{ common_scripts.files }}"
+      when: not (os_family == "freebsd" and item.path | basename == "system_health_check.sh")
       register: common_scripts_deployed
+      tags: [monitoring, scripts]
+
+    - name: Remove the common health check from FreeBSD hosts
+      ansible.builtin.file:
+        path: "{{ scripts_dir }}/system_health_check.sh"
+        state: absent
+      when: os_family == "freebsd"
       tags: [monitoring, scripts]
 
     # The critical-service list is inventory-driven, because a host that calls
