@@ -420,6 +420,23 @@ These items have value but are not urgent. Ranked by value-to-effort ratio to he
 
 - **🔴 The firewall's `/usr/local/bin` is owned by an unprivileged user** `V:High E:VLow` — **Measured on opnsense 2026-08-06, and it is pre-existing, not new.** `scripts_dir` resolves to `/usr/local/bin` on that host (host-level override in `hosts.yml`), and `deploy_monitoring.yml` has always created `{{ scripts_dir }}` with `owner: {{ infrastructure_user }}`. So the directory is `choco:wheel 0755` — timestamp `Jul 21 22:47`, matching a deploy — instead of `root:wheel`. **Anything that can write as `choco` on the firewall can plant a binary in a directory on root's `PATH`**, on the host that is the internet SPOF and runs CrowdSec. It is not a privilege *escalation* by itself (`choco` has sudo) but it removes a step, and it means a compromise of the unprivileged account is immediately persistent and root-reachable.
 
+  ✅ **"Will a firmware upgrade revert it, like it did the users?" — answered with evidence, 2026-08-06. No.** The two failure modes are different mechanisms and it matters:
+
+  **OPNsense reverts what it *generates* from `config.xml`. It does not delete files it never owned.**
+
+  | Thing | Generated from config.xml? | Observed across the 2026-06-13 upgrade to 26.1.9 |
+  |---|---|---|
+  | User accounts, uid ≥ 2000 | yes — `local_sync_accounts` reconciles and deletes | 🔴 `read_agent` **deleted** |
+  | `sshd_config` | yes — `openssh.inc` hardcodes `AllowGroups wheel` | 🔴 **reverted** (hence the `sshd_config.d` override) |
+  | Files in `/usr/local/bin` | no | ✅ **survived** — `clean_old_backups.sh` and `import_gpg_github.sh` (both `choco`-owned) are dated **Nov 16 2025**, `switch-vpn-country.sh` Nov 29 2025, `monit-slack.sh` Oct 6 2025, `enhanced_monitoring_wrapper` Mar 28 2026. All predate the June upgrade by 3–8 months |
+  | Files in `/home/choco` | no | ✅ **survived** — read_agent's home dir and `authorized_keys` outlived the *deletion of the account itself*, left as an orphaned uid 2001 |
+
+  So both the current and the proposed location are proven durable, by direct observation on the live host. **The move is for consistency and to fix the ownership finding — not because `/usr/local/bin` is at risk.** Do not restate it as an upgrade-durability fix; that would be an unverified claim, and the evidence points the other way.
+
+  📌 Marginal argument for `/home` anyway: `/usr/local` is `pkg` territory, `/home` is in neither the base set nor any package set. Strictly less exposed, though nothing has ever exercised the difference.
+
+  🧹 **Cruft found on the firewall while checking this** — unmanaged files in `/usr/local/bin` that the repo does not deploy and nothing appears to call: `monit-slack.sh` and `monit-slack.sh.old` (monit is not in the current stack), `switch-vpn-country.sh`, `import_gpg_github.sh`. Predate everything current. Worth an inventory pass when the `scripts_dir` move happens, since that change is already touching this directory — but check each is genuinely uncalled before deleting anything on the firewall.
+
   ✅ **Resolution chosen 2026-08-06: make opnsense consistent with the fleet** — `scripts_dir: /home/choco/.scripts`, like every other host. Feasibility checked rather than assumed:
 
   - **Nothing outside the inventory pins it.** The other `/usr/local/bin` references in the repo (`agent_read`, `ha_state`, `cscli` in the FreeBSD sudoers, `pve_backup_helper`, `usb_recovery_helper`) are all explicitly pathed and none derive from `scripts_dir`, so they are untouched.
