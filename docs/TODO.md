@@ -212,6 +212,11 @@ container-check lines, one expected diff on `docker_system_prune`.**
 Checked in both directions, per the standing method: with the change stashed, all
 three lines report `DIFFERS`. A comparison that cannot fail is not evidence.
 
+✅ **The captured crontab was itself validated.** `sudo crontab -l -u choco` over
+`read_agent` was diffed against `crontab -l` run as `choco` on the host: **byte-for-byte
+identical**, no truncation or mangling. The byte-for-byte claim above therefore
+rests on confirmed source data, not on a privileged view that might differ.
+
 📌 **`read_agent` CAN read another user's crontab — argument order is the catch.**
 The sudoers rule is `/usr/bin/crontab -l -u *`, so `sudo crontab -l -u choco`
 works from `dockassist-agent` while the more natural `sudo crontab -u choco -l`
@@ -244,12 +249,37 @@ constraint (`services.yml --limit dockassist` before or with
 `deploy_monitoring.yml`) is not just necessary, it is *sufficient*: no other host
 needs a coordinated change, and no other job goes fatal.
 
-⚠️ **opnsense is UNMEASURED, not clean.** The FreeBSD sudoers has no
-`crontab -l -u *` rule, so `read_agent` is refused there (it is reachable — the
-refusal is authorisation, not connectivity). §1a established that the FreeBSD
-cron is unwrapped, which makes a wrapper cron unlikely, but that was about
-`system_health_check.sh` specifically and is not the same claim. One command
-settles it; see below.
+✅ **opnsense measured 2026-08-06 too — also clean.** Read by hand as `choco`
+(FreeBSD's sudoers has no `crontab -l -u *` rule, so `read_agent` is refused
+there; the host is reachable, the refusal is authorisation). Of 13 crons, **9
+invoke the wrapper**: `daily` ×8 and `never` ×1. Both valid, so nothing on
+opnsense goes fatal either.
+
+🔴 **Correction — "the FreeBSD cron is unwrapped" is false, and it has been used
+to rank deploy risk.** opnsense runs the wrapper on 9 of 13 crons, explicitly via
+`/usr/local/bin/bash`. The *narrow* claim in §1a survives untouched: the common
+`system_health_check.sh` is genuinely not scheduled there — what is scheduled is
+the role's own `check_system_health.sh`, a different file. But the generalisation
+drawn from it does not. **`deploy_monitoring.yml` ships
+`enhanced_monitoring_wrapper` to opnsense, where 9 live crons depend on it**, so
+the wrapper half of L3 has full blast radius on the firewall even though the
+`system_health_check.sh` half has none. Rank opnsense's L3 risk on the wrapper,
+not on the health script.
+
+Also confirmed while there, since both could have bitten opnsense at L3:
+- **`never` is explicit, not a fall-through.** It suppresses the heartbeat and
+  *still* sends recovery notifications. `opnsense_vpn_gateway` runs `*/15` with
+  `never`, so a regression here would have been either 96 msgs/day or a silently
+  lost recovery alert. Neither: behaviour is unchanged from `main`.
+- **The `mktemp` change is guarded.** An empty result is caught
+  (`[ -z "$state_tmp" ]` → warn, state not persisted) and a failed update
+  `rm -f`s the temp file instead of leaving litter. Previously `... && mv`
+  carried on as though the state had persisted.
+
+⚠️ **Still never executed on FreeBSD:** `mktemp "${STATE_FILE}.XXXXXX"` with a
+path-bearing template. FreeBSD's `mktemp(1)` documents the template operand, so
+this is expected to work — but it is *reasoned*, not run, and it is now the only
+executable unknown left for this branch on opnsense.
 
 Related: the three container checks all use `daily`, and the `--monitoring-name`
 parsing (`STATE_NAME="${MONITORING_NAME:-$(basename "$script_path")}"`) is
