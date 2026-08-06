@@ -507,15 +507,33 @@ These items have value but are not urgent. Ranked by value-to-effort ratio to he
 
   📌 The FreeBSD code paths stay in the script — it is cross-platform by contract and §8b's stock-FreeBSD VM would exercise them — but note they now have **no host on the current fleet**, so they are unexercised by definition until that VM exists. The decorative FreeBSD memory branch is the one worth fixing first if it is ever built.
 
-- **✅ Fleet pre-flight for L3, run from a phone 2026-08-06 — two findings, one fixed** `V:High E:Low` — Before deploying checks that have never been able to fail, the same probes were run by hand on `cwwk`, `dockassist` and `agent-lxc`. This is what that dry run was for and it earned its keep twice.
+- **✅ Fleet pre-flight for L3 — ALL SIX Debian hosts measured from a phone, 2026-08-06** `V:High E:Low` — Before deploying checks that have never been able to fail anywhere, the probes behind each check were run by hand on every host that will receive them. Two findings, both fixed; everything else confirmed rather than assumed.
 
-  ✅ **Confirmed healthy and correct:** all three report 0 failed units except agent-lxc (below); `ssh`, `cron` and `fail2ban` active everywhere, so the hardcoded Debian service list needs no per-host override yet; `systemd-detect-virt` answers `none` on cwwk and dockassist (they keep the load average) and `lxc` on agent-lxc (it switches to CPU pressure), so the new branch picks the right metric on real hosts; `cpu.pressure` is readable as `choco` and reads 0.00; `adm` is missing exactly where predicted (cwwk, agent-lxc) and present on dockassist. `dockassist` has **no `/sys/fs/cgroup/cpu.pressure` at all** — the RPi kernel is built without PSI — which is harmless because it never takes the container branch, but it does mean the pressure path has no RPi coverage even in principle.
+  | Host | `detect-virt` | failed units | ssh/cron/fail2ban | `adm` | mem | PSI |
+  |---|---|---|---|---|---|---|
+  | `cwwk` | none | 0 | all active | **NO** | 82% → **52%** after the ARC fix | present |
+  | `dockassist` | none | 0 | all active | yes | 44% | **absent** |
+  | `cobra` | none | 0 | all active | yes | 15% | **absent** |
+  | `hifipi` | none | 0 | all active | yes | 13% | **absent** |
+  | `vinylstreamer` | none | 0 | all active | yes | 51% | **absent** |
+  | `unifi-lxc` | **lxc** | 0 | all active | **NO** | 32% | `0.00` |
+  | `agent-lxc` | **lxc** | **1** → fixed | all active | **NO** | 3% | `0.00` |
 
-  🔴 **`cwwk` reported 82% memory used.** Not pressure — ZFS ARC. Fixed; see the ARC entry in the monitoring section. Without it the L3 lead host would have deployed straight into a permanent warning.
+  **What this establishes:**
 
-  🔴 **`agent-lxc`'s `logrotate.service` has failed every night since 2026-08-04 — root-caused and fixed.** See the logrotate entry below. `check_failed_units` is new, so this would have paged agent-lxc the moment L3 landed: the check working exactly as intended, on the host with the worst history, finding a fault that had been running silently for three days.
+  - **`systemd-detect-virt` picks the right metric on 7/7.** `none` on the four Pis and cwwk (they keep the load average), `lxc` on both containers (they switch to CPU pressure). That branch had only ever been tested on CT 199.
+  - **The container pressure path is confirmed on both real containers**, read as `choco` rather than over `read_agent`, both `0.00` across all three windows — including on a 2-core LXC. The 80 threshold has an enormous margin over observed normal.
+  - **`fail2ban` is active on all six**, so the hardcoded Debian service list needs no per-host override anywhere. The `critical_services` escape hatch stays deliberately unused.
+  - **The `adm` split is now directly measured rather than part-inferred:** missing on exactly cwwk, unifi-lxc and agent-lxc; present on all four Pis. The "3 of 7 hosts will page" claim is closed, and L2a will report `changed` on precisely those three.
+  - **No filesystem above 75% anywhere**, and no memory near threshold once the ARC fix landed.
+  - **One failed unit fleet-wide**, on agent-lxc, now fixed.
+  - **All four RPis lack PSI entirely** — the kernel is built without it, so this is the platform, not a dockassist quirk. Harmless, since a Pi never takes the container branch, but the pressure path has no RPi coverage even in principle.
 
-  📌 Also observed, informational: `cwwk` reports **133 pending updates**. The check deliberately does not alert on that count, and on a Proxmox host held-back packages are normal — but it is worth a glance when the `adm` task lands and upgrade freshness becomes visible there.
+  ⚠️ **What this is not.** These are the *probes* the checks run, not the script itself — only `cwwk` had the real script executed against it (clean, exit 0). It predicts the new behaviour rather than demonstrating it everywhere.
+
+  ⚠️ **One thing it deliberately could not test: upgrade freshness on the four Pis.** They are in `adm`, so `check_auto_upgrades` will parse the log and apply the 7-day staleness rule for the first time ever — that coverage has been invisible on every host, always. If `unattended-upgrades` has stalled on a Pi, L3 will report it. **That would be a true positive, not a false one**, so it is not a blocker; it is simply the first time anyone will hear about it. One command settles it per host: `grep "Starting unattended upgrades script" /var/log/unattended-upgrades/unattended-upgrades.log | tail -1`.
+
+  📌 Also observed, informational: `cwwk` reports **133 pending updates**. The check deliberately does not alert on that count, and held-back packages are normal on Proxmox — worth a glance once L2a makes freshness visible there.
 
 - **🔴 `check_load` divides the HOST's load by the CONTAINER's core count — a fifth false failure, and it also gates the fleet deploy** `V:High E:Med` — Found 2026-08-06 while verifying §1a, by the suite failing a case that had just passed. Measured, not inferred: `/proc/loadavg` inside CT 199, unifi-lxc and agent-lxc returns cwwk's values **byte for byte**, sampled against cwwk in the same second (`0.85 0.70 0.49` in both). `nproc` inside returns the container's limit — 1, 1 and 2 against cwwk's 8. lxcfs *is* mounted over `/proc/loadavg`, so the obvious detection does not work: Proxmox runs it without `--enable-loadavg`, in which mode it passes the host's file straight through. It virtualises `/proc/cpuinfo` either way, which is precisely what creates the mismatch — **container-scoped divisor, host-scoped numerator.**
 
