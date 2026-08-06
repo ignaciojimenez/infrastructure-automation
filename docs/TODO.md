@@ -464,7 +464,7 @@ These items have value but are not urgent. Ranked by value-to-effort ratio to he
 
   `scripts/services/proxmox/check_vm_status.sh:33` uses `while read … done < "$CONFIG_FILE"` — a redirect, not a pipe, so its arrays persist. That is the correct shape. Also checked and clean: `| {`, `| read`, `| for` (no instances; the `|| {` hits are error handlers).
 
-  ⚠️ The `fleet_health_check.sh.j2` case is right by accident of `note()` writing to a file. If anyone ever changes `note()` to increment a counter, that loop breaks silently and the sweep under-reports. Worth a comment there when that file is next touched — it is on `fix/agent-lxc-logs-dir-2026-08`, so it was deliberately not edited from the plumbing branch.
+  ✅ **Guarded 2026-08-06** (on `fix/agent-lxc-logs-dir-2026-08`, where that file lives). `note()` now carries a comment saying the file write is load-bearing and why: one of its callers runs inside `sed | while`, so a counter or an appended-to variable would be discarded in the subshell and the sweep would under-report **without failing**. It was correct by accident of how `note()` happened to be written; it is now correct on purpose.
 
 - **`agent_access` on FreeBSD "should assert the user exists" — RETIRED 2026-08-06, the premise is stale** `V:VLow E:VLow` — Carried forward as "creates a user with `pw` that OPNsense deletes, and reports success; should assert the user exists and fail with a pointer to OPNsense user management." Both halves are wrong against what Priority 2 above already established:
 
