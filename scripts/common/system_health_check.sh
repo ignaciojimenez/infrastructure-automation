@@ -20,10 +20,20 @@ elif [ -f /etc/redhat-release ]; then
     OS_TYPE="redhat"
 fi
 
-# Configuration
-THRESHOLD_CPU=80
-THRESHOLD_MEM=90
-THRESHOLD_DISK=85
+# Configuration. Overridable from the environment or the config file below, so
+# a host with a different normal can say so without editing a script that ships
+# to all seven.
+THRESHOLD_CPU="${THRESHOLD_CPU:-80}"
+THRESHOLD_MEM="${THRESHOLD_MEM:-90}"
+THRESHOLD_DISK="${THRESHOLD_DISK:-85}"
+# Share of the last 5 minutes during which at least one task was stalled
+# waiting for CPU. Calibrated, not picked: unifi-lxc and agent-lxc both read
+# 0.00 across all three windows in normal operation, and cwwk — the busiest
+# host in the fleet — reads 16.7 at its root cgroup. Sustained contention on a
+# 1-core container measured 88-96 on avg60 and climbing through 48 on avg300
+# within three minutes. 80 sits far above every observed normal and below
+# genuine starvation.
+THRESHOLD_CPU_PRESSURE="${THRESHOLD_CPU_PRESSURE:-80}"
 
 # Optional per-host configuration, written by
 # ansible/playbooks/deploy_monitoring.yml from the inventory. Currently carries
@@ -165,15 +175,33 @@ check_memory() {
 # over-reports by up to 8×, which on a 1-core container means a failure
 # whenever the host exceeds 10% utilisation.
 #
-# Nothing here can fix that: the number simply is not about this host. Restoring
-# real coverage means a different metric — cgroup cpu.pressure is genuinely
-# container-scoped — with its own threshold. Tracked in docs/TODO.md.
+# Nothing can fix the load average itself: the number simply is not about this
+# host. So inside a container the check switches metric — see read_cpu_pressure.
 in_container() {
     if command -v systemd-detect-virt >/dev/null 2>&1; then
         systemd-detect-virt --container --quiet && return 0
     fi
     [ "$(sysctl -n security.jail.jailed 2>/dev/null || echo 0)" = "1" ] && return 0
     return 1
+}
+
+# The `some` line of cgroup CPU pressure: the share of time at least one task
+# was runnable but waiting for CPU. It is cgroup-namespaced, so unlike
+# /proc/loadavg it really is about this container.
+#
+# It is also a better answer than the load average was. One busy task on a
+# 1-core container measures 0.00 — nothing is waiting, the container is simply
+# using what it has — where a load average of 1.00 would have read as 100%.
+# Pressure appears only under genuine contention. Measured on CT 199.
+#
+# avg300 rather than avg60: a five-minute window will not fire on a burst, and
+# the check runs every 15 minutes anyway.
+read_cpu_pressure() {
+    [ -r /sys/fs/cgroup/cpu.pressure ] || return 0
+    awk '/^some/ {
+        for (i = 2; i <= NF; i++)
+            if ($i ~ /^avg300=/) { sub(/^avg300=/, "", $i); print $i }
+    }' /sys/fs/cgroup/cpu.pressure
 }
 
 read_load_1min() {
@@ -219,13 +247,34 @@ check_load() {
             ;;
     esac
 
-    # Inside an LXC the numerator and the denominator describe different
-    # machines, so the ratio is meaningless — see in_container. Report the
-    # figures, never fail on them.
+    # Inside a container the load average describes the host, so the ratio
+    # against this container's core count is meaningless. Switch metric rather
+    # than compare the wrong numbers — or, where there is no pressure file to
+    # read, report and do not fail.
     if in_container; then
-        print_status "warning" "Load: ${load_avg} (host-wide) on ${cpu_count} container CPUs - not comparable, see docs/TODO.md"
+        pressure=$(read_cpu_pressure)
+
+        case "$pressure" in
+            ''|*[!0-9.]*|*.*.*)
+                print_status "warning" "Load: ${load_avg} is the host's, not this container's - and no cgroup CPU pressure to read instead"
+                echo ""
+                return 0
+                ;;
+        esac
+
+        # Integer part only: the comparison below is `test`, not awk.
+        pressure_int="${pressure%%.*}"
+
+        if [ "$pressure_int" -gt "$THRESHOLD_CPU_PRESSURE" ]; then
+            print_status "error" "CPU pressure: ${pressure}% of the last 5 min stalled waiting for CPU (above ${THRESHOLD_CPU_PRESSURE}%)"
+            issues=$((issues + 1))
+        elif [ "$pressure_int" -gt $((THRESHOLD_CPU_PRESSURE - 30)) ]; then
+            print_status "warning" "CPU pressure: ${pressure}% of the last 5 min stalled waiting for CPU"
+        else
+            print_status "success" "CPU pressure: ${pressure}% on ${cpu_count} CPUs (host load ${load_avg} is not this container's)"
+        fi
         echo ""
-        return 0
+        return $issues
     fi
 
     # Convert to percentage (rough estimate)

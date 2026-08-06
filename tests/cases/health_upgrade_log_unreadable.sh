@@ -20,9 +20,16 @@ LOG_FILE="$LOG_DIR/unattended-upgrades.log"
 
 describe "unreadable upgrade log warns, and does not fail the run"
 
+# The case arranges the whole fault, including the group membership. Asserting
+# "the user happens not to be in adm" would have quietly stopped testing
+# anything the moment debian_baseline started granting it.
+was_in_adm=no
+
 cleanup() {
     chown root:adm "$LOG_DIR" 2>/dev/null || true
     chmod 0750 "$LOG_DIR" 2>/dev/null || true
+    [ "$was_in_adm" = yes ] && gpasswd -a "$TEST_USER" adm >/dev/null 2>&1
+    return 0
 }
 
 [ -d "$LOG_DIR" ] || mkdir -p "$LOG_DIR"
@@ -32,6 +39,11 @@ chown root:adm "$LOG_DIR"
 chmod 0750 "$LOG_DIR"
 
 assert_precondition "a test user exists" test -n "$TEST_USER"
+
+if id -nG "$TEST_USER" | tr ' ' '\n' | grep -qx adm; then
+    was_in_adm=yes
+    gpasswd -d "$TEST_USER" adm >/dev/null 2>&1
+fi
 assert_precondition "$TEST_USER is not in adm" \
     sh -c "! id -nG '$TEST_USER' | tr ' ' '\n' | grep -qx adm"
 assert_precondition "the log exists and is unreadable to $TEST_USER" \
