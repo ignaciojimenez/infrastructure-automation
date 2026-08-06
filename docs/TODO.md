@@ -6,6 +6,9 @@ This document is the single source of truth for pending infrastructure work.
 Each item includes verified current state, concrete next steps, and acceptance criteria.
 Items are ordered by risk × effort — highest-impact, most-actionable items first.
 
+> **Network layer:** see [NETWORK.md](NETWORK.md) — topology, VLANs, VPN and DNS,
+> plus seven findings from deriving it on 2026-08-07 that are not yet tracked here.
+
 ---
 
 ## cwwk Thermal Stability — Root Cause + Headroom (mitigations deployed)
