@@ -175,7 +175,22 @@ other text — `kex_exchange_identification`, a banner, a timeout — the match
 fails and the host is reported `UNREACHABLE` instead, which is **today's
 behaviour**. The failure direction is fail-open: a missed match costs the
 back-off, never a false one. Worth confirming when opnsense next drifts, which
-`docs/TODO.md` says it will.
+this file says it will.
+
+**The cheap version of that check, for whoever picks this up** — it confirms the
+match from *inside* the fleet rather than from the laptop, needs no broken host,
+and deliberately does not touch opnsense (the string comes from the ssh client,
+so any Debian target proves it):
+
+```sh
+ssh cobra "ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no \
+    nosuchuser@dockassist true 2>&1 | tail -1"
+```
+
+Expect `Permission denied (publickey)`. Anything else means the match needs
+widening. One failed auth is orders of magnitude below CrowdSec's ssh-bf
+threshold — verified 2026-08-06, when a deliberate failed auth from the laptop
+produced no alert and no decision.
 
 📌 **Corroboration, found while checking this.** `cscli alerts list` on opnsense
 still holds the incident: `crowdsecurity/ssh-bf` against `10.30.40.203` at
@@ -566,6 +581,8 @@ These items have value but are not urgent. Ranked by value-to-effort ratio to he
   ⚠️ **The repo is public.** The live config contains the WAN address, Mullvad endpoint IPs and peer public keys. **None of that goes in** — RFC1918 internals, VLAN roles and tunnel *purposes* are publishable; anything identifying the edge or the VPN peers is not. Write it sanitized from the start rather than scrubbing later. (Deliberately omitted from this entry for the same reason.)
 
   **Blocked on Ignacio for two things**, and no agent can supply them: what each VLAN is *for* (which is IoT, trusted, guest, cameras — only `.40` = infrastructure is inferable), and why there are 12 Mullvad exits with traffic policy-routed across them. `read_agent` cannot read `/conf/config.xml` — root-only, not in its sudo allowlist — so this has to come from him or from a command run in his own session.
+
+  📌 **One fact for that diagram, measured 2026-08-06 and free to record now: the control machine is not on the fleet's segment.** The laptop sits on `10.30.80.1` and reaches `10.30.40.0/24` via `10.30.80.254` — so **every laptop→fleet connection crosses the firewall, including the ones a test makes.** This was asserted the other way round mid-session ("same segment, so this probe won't reach CrowdSec"), which was wrong; `route -n get <ip>` settles it in one command and should be the reflex before claiming any traffic stays local. Consequence worth carrying into the diagram: a CrowdSec ban on the laptop's address would look exactly like the agent-lxc incident — same symptom shape, different victim.
 
 - **🔴 `system_health_check.sh` reports THREE false failures on opnsense — fixed and verified on the box 2026-08-06; latent, since the script is not scheduled there** `V:High E:Low` — Measured on the live firewall 2026-08-05 (run by hand from a phone, as `choco` and again as root). The script currently exits 0 regardless, so none of this has ever been visible. **After the aggregation fix lands, opnsense pages every 15 minutes, permanently.** Three separate causes:
 
