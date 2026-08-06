@@ -220,6 +220,45 @@ that reading a live crontab needs a `choco` shell from the phone — it is
 autonomous, and any future "does the repo match the host?" check can be done the
 same way.
 
+### Fatal-interval blast radius — measured fleet-wide 2026-08-06
+
+The hardened wrapper makes an unrecognised `--heartbeat-interval` fatal
+(`daily|hourly|always|never` pass; anything else exits 1). Since the wrapper
+ships to every host via `deploy_monitoring.yml`, "which live cron lines does that
+kill?" is a question about the **crontabs**, not about the script — so it was
+counted rather than reasoned about, via `sudo crontab -l -u {choco,root}` over
+`read_agent`:
+
+| Host | always | daily | weekly |
+|---|---|---|---|
+| dockassist | 1 | 10 | **1** |
+| cobra | 1 | 9 | — |
+| hifipi | — | 7 | — |
+| vinylstreamer | — | 3 | — |
+| cwwk | 2 | 8 | — |
+| unifi-lxc | — | 4 | — |
+
+**Exactly one invalid value exists on the whole fleet: `docker_system_prune` on
+dockassist — the one this branch already fixes.** So the deploy-ordering
+constraint (`services.yml --limit dockassist` before or with
+`deploy_monitoring.yml`) is not just necessary, it is *sufficient*: no other host
+needs a coordinated change, and no other job goes fatal.
+
+⚠️ **opnsense is UNMEASURED, not clean.** The FreeBSD sudoers has no
+`crontab -l -u *` rule, so `read_agent` is refused there (it is reachable — the
+refusal is authorisation, not connectivity). §1a established that the FreeBSD
+cron is unwrapped, which makes a wrapper cron unlikely, but that was about
+`system_health_check.sh` specifically and is not the same claim. One command
+settles it; see below.
+
+Related: the three container checks all use `daily`, and the `--monitoring-name`
+parsing (`STATE_NAME="${MONITORING_NAME:-$(basename "$script_path")}"`) is
+**unchanged from `main`** on this branch — the hardening touched `mktemp`, the
+docs and the error path only. So the byte-identical cron lines derive identical
+state-file names under both the old and the hardened wrapper. That coupling was
+checked rather than assumed, because the branch changes the cron lines and the
+wrapper together.
+
 **Still outstanding after the manual step** (i.e. what the laptop session is actually for): the wrapper hardening, the interval validation, the `never`/default decision, and the `docker_system_prune` `weekly` → `always` fix. None of those are applied by hand.
 
 ### ✅ Status 2026-08-04 — prevention items DONE, required item NOT done
