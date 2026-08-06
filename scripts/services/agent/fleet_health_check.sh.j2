@@ -35,6 +35,19 @@ SSH_ERR=$(mktemp)
 SNAPSHOT=$(mktemp "$AGENT_DIR/.anomaly.XXXXXX")
 trap 'rm -f "$FINDINGS" "$PROBE_OUT" "$SSH_ERR" "$SNAPSHOT"' EXIT INT TERM
 
+# ⚠️ Appends to a FILE, and that is load-bearing rather than incidental.
+#
+# One caller runs inside `sed ... | while read`, and POSIX runs the right-hand
+# side of a pipeline in a subshell — so anything `note` accumulated in a shell
+# variable would be discarded when that loop exited, and the sweep would
+# under-report without failing. Writing to $FINDINGS survives, because the file
+# is not shell state.
+#
+# So do not "simplify" this into a counter or an appended-to variable. That is
+# the exact bug `check_disk_usage` carried in system_health_check.sh: it
+# printed a full disk correctly and still returned 0, because its increments
+# happened in a subshell. Repo-wide audit 2026-08-06 found this to be the only
+# remaining `cmd | while` that accumulates anything at all.
 note() {
     # note <host> <message>
     printf '%s: %s\n' "$1" "$2" >> "$FINDINGS"
