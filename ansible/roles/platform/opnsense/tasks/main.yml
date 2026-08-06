@@ -294,3 +294,65 @@
   become: true
   become_user: "{{ infrastructure_user }}"
   when: vault_healthcheck_backup_opnsense is defined
+
+# ============================================================
+# Migration off /usr/local/bin — added 2026-08-06
+#
+# `scripts_dir` was `/usr/local/bin` on this host alone. Moving it to the fleet
+# default leaves two things behind that Ansible will NOT clean up by itself:
+#
+#   * the old copies, which keep sitting in /usr/local/bin looking current.
+#     That is the drift class that had hifipi running a four-month-old script
+#     for four months without anyone noticing.
+#   * the directory's ownership. Ansible merely stops asserting `choco` on
+#     /usr/local/bin — it does not chown it back. Without the task below the
+#     firewall keeps a user-writable directory on root's PATH forever, now with
+#     nothing in the repo left to explain why.
+#
+# ⚠️ DELIBERATELY LAST IN THE FILE. Everything above has already deployed the
+# scripts to the new location and repointed all 13 crons at it, so a run that
+# fails anywhere earlier leaves the OLD layout intact and working. Cleaning up
+# first would open a window where the crons point at files that no longer
+# exist — on the firewall, silently, which is this repo's signature failure.
+#
+# ⚠️ The list is explicit rather than a wildcard, because /usr/local/bin also
+# holds files this repo does not manage — `import_gpg_github.sh`,
+# `switch-vpn-country.sh`, `monit-slack.sh` and its `.old` — some predating
+# everything current. A glob would delete those too. They are recorded in
+# docs/TODO.md for a separate inventory pass; do not fold that in here.
+#
+# Enumerated from the live host on 2026-08-06 (`ls -l | awk '$3=="choco"'`),
+# not from reading the role, so it matches what is actually there. Safe to keep
+# indefinitely: once the files are gone these are no-ops.
+# ============================================================
+
+- name: Remove monitoring scripts from their pre-2026-08 location
+  ansible.builtin.file:
+    path: "/usr/local/bin/{{ item }}"
+    state: absent
+  loop:
+    # scripts/common/, shipped by deploy_monitoring.yml
+    - backup_last_mod
+    - clean_old_backups.sh
+    - do_backup
+    - enhanced_monitoring_wrapper
+    - heartbeat_backup.sh
+    - system_health_check.sh
+    # this role's own
+    - backup_opnsense.sh
+    # the heartbeat scripts live in here; removing the directory takes them all
+    - monitoring
+  become: true
+  tags: [opnsense, monitoring, scripts]
+
+# Restores the FreeBSD default. /usr/local/bin is a system directory that was
+# only ever `choco:wheel` because it was doubling as scripts_dir.
+- name: Restore root ownership of /usr/local/bin
+  ansible.builtin.file:
+    path: /usr/local/bin
+    state: directory
+    owner: root
+    group: wheel
+    mode: '0755'
+  become: true
+  tags: [opnsense, monitoring, scripts, security]
