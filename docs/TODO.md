@@ -129,7 +129,7 @@ Caveats on evidence: Slack free-tier retention is ~90 days, so continuity betwee
 Scope deliberately split. **There is exactly one active bug**; everything under "prevention" is latent and currently produces zero noise. Do not let the prevention work gate the fix.
 
 **Required — this alone resolves the channel flood (467 → ~38 msgs/day):**
-- [ ] Add distinct `--monitoring-name={homeassistant,matter_server,mosquitto}_container` to the three cron jobs in `roles/services/homeassistant/tasks/main.yml` and `tasks/mqtt.yml`
+- [x] Add distinct `--monitoring-name={homeassistant,matter_server,mosquitto}_container` to the three cron jobs in `roles/services/homeassistant/tasks/main.yml` and `tasks/mqtt.yml` — **done 2026-08-06**, and verified byte-for-byte against dockassist's live crontab (see below)
 - [ ] `rm /home/choco/.log/check_container.sh.json*` on dockassist — orphaned once the new state names take over
 
 **Prevention — ACCEPTED 2026-08-02, to be done in the same pass:**
@@ -178,6 +178,47 @@ rm -f ~/.log/check_container.sh.json*
 **Verification (2026-08-02 19:30 CEST, first cron run after the change):** all three jobs report `Notification sent: No`, the `Sending daily heartbeat notification` line is gone, and no `mv: cannot stat` errors appear in any of the three logs. Confirms the root cause and the fix. Channel volume should now settle at ~38 msgs/day.
 
 Note for whoever verifies next: the `*/10` runs immediately *before* the crontab edit still show the old behaviour. Read the first run after the edit, not the last few lines, or you will conclude the fix failed.
+
+### Repo fix verified against the live crontab — 2026-08-06
+
+The three `--monitoring-name` values are now in the role, and the claim that they
+match dockassist byte-for-byte is **measured, not asserted**. Method, without
+connecting to the host as `choco` and without a playbook run:
+
+1. Capture the live crontab (see the `read_agent` note below).
+2. Parse the `job:` strings straight out of the two task files, render them with
+   Jinja2 against dockassist's real variables, and diff against the live lines.
+
+Variable resolution is the part that is easy to get wrong. `ansible-inventory
+--host dockassist` returns **neither role defaults nor the function-level
+`group_vars/homeassistant.yml`** — the latter is pulled in by `services.yml` with
+`include_vars` at runtime, keyed on `primary_function`, because dockassist is not
+in an Ansible group called `homeassistant`. Layer all three in precedence order
+(role defaults < inventory < `include_vars`) or the render silently uses fallback
+values: the first attempt produced a phantom diff on `Internet speed check`
+(300/150/100 from the `| default()` arms instead of the real 850/850/15).
+
+**Result: 12 of the 13 rendered cron jobs are byte-for-byte identical to the live
+crontab**, including all three target lines. The lines that were not touched
+matching is what makes the three that were meaningful — a render that agrees with
+reality everywhere else is a render worth trusting.
+
+**The one remaining diff is intentional**: `Docker system prune` is
+`--heartbeat-interval=weekly` live and `always` in the repo. That is this
+branch's own fix (see the prevention list above), not drift. **So L4's
+"`--check --diff` shows no diff" acceptance needs restating: no diff on the three
+container-check lines, one expected diff on `docker_system_prune`.**
+
+Checked in both directions, per the standing method: with the change stashed, all
+three lines report `DIFFERS`. A comparison that cannot fail is not evidence.
+
+📌 **`read_agent` CAN read another user's crontab — argument order is the catch.**
+The sudoers rule is `/usr/bin/crontab -l -u *`, so `sudo crontab -l -u choco`
+works from `dockassist-agent` while the more natural `sudo crontab -u choco -l`
+is rejected with "a password is required". This retires the standing assumption
+that reading a live crontab needs a `choco` shell from the phone — it is
+autonomous, and any future "does the repo match the host?" check can be done the
+same way.
 
 **Still outstanding after the manual step** (i.e. what the laptop session is actually for): the wrapper hardening, the interval validation, the `never`/default decision, and the `docker_system_prune` `weekly` → `always` fix. None of those are applied by hand.
 

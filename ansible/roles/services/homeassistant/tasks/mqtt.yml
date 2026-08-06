@@ -90,6 +90,7 @@
       {{ scripts_dir }}/enhanced_monitoring_wrapper
       --heartbeat-interval=daily
       --notify-fixed=true
+      --monitoring-name=mosquitto_container
       {{ logging_token }}
       {{ alert_token }}
       {{ scripts_dir }}/check_container.sh {{ alert_token }} {{ mosquitto_container_name | default('mosquitto') }}
