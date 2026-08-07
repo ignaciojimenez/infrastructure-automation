@@ -806,23 +806,58 @@ single least recoverable element of the network: if it fails, the upstairs
 wireless goes with it and there is no saved configuration to restore onto a
 replacement, because nobody can read the current one.
 
-**Where to start looking, when there's appetite:**
+### Four ways it was hunted, on 2026-08-07 — all negative
 
-1. **Find it on the wire.** It has never been ARP-visible in a sweep from
-   OPNsense, but a targeted scan of VLAN 40 from a host behind the coax run is a
-   different vantage point. EdgeOS defaults to `192.168.1.1` on `eth0` — a
-   management address on a *different subnet* than the one the sweep covers is
-   the most likely reason it looks absent.
-2. **Serial console.** The ERX has a physical console port. It is the reliable
-   answer and needs no guessing about addresses.
-3. **Accept and mitigate.** If recovery isn't worth the disruption, the cheap
-   insurance is knowing the model and having a documented rebuild plan, so a
-   failure means "configure a spare from notes" rather than "work out what it was
-   doing".
+Recorded so nobody repeats them. Run from CT 199 (`10.30.40.205`, VLAN 40) and
+from `dockassist` (VLAN 100):
 
-⚠️ Everything in this section is operator recollection plus EdgeOS defaults.
-**Nothing about this device has been verified**, including whether it is
-reachable at all.
+| Method | Result |
+|--------|--------|
+| Full ping/ARP sweep of `10.30.40.0/24` | 12 devices, **all identified** — no unknown host |
+| Secondary IP `192.168.1.250/24` + sweep of `192.168.1.0/24` | **nothing responded** |
+| LLDP neighbour tables from all four APs | APs see **only each other** — no switch, no router |
+| Ubiquiti discovery broadcast, UDP 10001, from **two** VLANs | only the two U6 Lite APs answered |
+
+The LLDP result is the informative one. The two wired APs report each other as
+directly-connected neighbours on `eth0`, even though the path between them runs
+through the coax converters, the ERX **and** the Zyxel. So every device on that
+path is **flooding LLDP rather than participating in it** — consistent with
+consumer switching gear in transparent mode.
+
+The Ubiquiti-discovery result is the strongest negative: EdgeOS normally answers
+that probe. It did not, from either VLAN.
+
+**Conclusion: the ERX has no reachable management interface on any segment
+tested.** It is behaving as a pure transparent L2 bridge. That is consistent with
+the operator's account — configuring switch mode left it with no addressable
+management interface, and nothing since has been able to find one.
+
+**What is left to try:**
+
+1. **Serial console.** The ERX has a physical console port. Given four failed
+   network approaches, this is now the *first* option rather than the fallback.
+2. **Probe from a tagged VLAN.** Everything above ran from untagged VLAN 40 and
+   from VLAN 100. If management was bound to VLAN 20, 80 or 200, it would not
+   have answered. Cheap to extend, but a long shot.
+3. **Accept and document.** Record the model and a rebuild plan so a failure
+   means "configure a spare from notes" rather than "work out what it did".
+
+⚠️ The negative results are solid; the *explanation* is inference. What is
+verified is that **four independent discovery methods from two VLANs found
+nothing** — not that no management interface exists anywhere.
+
+### An unexplained observation
+
+Ubiquiti discovery reports both U6 Lite APs as model `UFP-UAP-B`,
+`Unifi-Protect-UAP-Bridge`, firmware `UFP-UAP-B.MT7621.v1.1.0.4…260513.1827`.
+The Network controller reports the same two devices as `UAL6` / U6 Lite on
+firmware `6.7.54.15663`. The two views disagree on both model and version
+scheme, and the other two APs did not answer discovery at all.
+
+**No conclusion is drawn from this.** It may be a platform-identifier quirk of
+this model's discovery response, or a parsing artefact. The controller is
+authoritative for adopted state, and it shows both APs healthy and serving SSIDs.
+Noted only so it is not rediscovered as a surprise.
 
 ---
 
@@ -879,7 +914,9 @@ what fed CrowdSec into banning `agent-lxc` on 2026-08-03.
 | Switch VLAN/PVID map, accounts, no-SNMP | decoded `startupconfig.cfg` | 2026-08-07 |
 | Coax run on UI port 9 (`te1`) | **confirmed** — only port with forced speed | 2026-08-07 |
 | Which device is on which switch port | **not established** — counters only hint | — |
-| EdgeRouter X — config, access, MST behaviour | **never probed; no known access** | — |
+| EdgeRouter X unreachable on VLAN 40 + 100 | 4 discovery methods, 2 vantage points | 2026-08-07 |
+| EdgeRouter X — config, firmware, MST behaviour | **unknown; no access found** | — |
+| VLAN 40 host inventory (12 devices, all named) | ping/ARP sweep from CT 199 | 2026-08-07 |
 
 MAC addresses are deliberately not listed; vendor OUIs and roles are enough to
 work with and do not fingerprint individual devices in a public repository.
