@@ -108,6 +108,33 @@ This is a distinct shape from the three already tracked in this repo:
 
 Class 4 is arguably the worst to audit for: the coverage *looks* present and the code is not wrong. It belongs to the "start from failure modes, make the blanks the deliverable" review already proposed after Phase C — this is that review's first **demonstrated** member rather than a reasoned one.
 
+#### 🔴 The fan will REMOVE the only thing that detected this — plan for it before fitting it
+
+**Raised by Ignacio 2026-08-07, and the arithmetic confirms it.** Right now `check_thermal.sh` is, by accident, the fleet's only runaway-process detector. It is a bad one — indirect, and it names the wrong cause — but it is the reason this incident was noticed at all. **Fitting the fan removes it and puts nothing in its place.**
+
+Derived from measured values, not estimated:
+
+| | Measured | Source |
+|---|---|---|
+| Fanless idle | **68.8°C** (1,837 samples) | `thermal-history.log`, Aug 4–6 |
+| Fanless, one core pegged | **94.6°C** (290 samples) | the 2026-08-07 incident |
+| **Cost of one pegged core** | **+25.8°C** | difference of the two |
+| Fan-OK idle | **42–45°C** | RECURRENCE table, Jul 28–30 |
+| **⇒ Fan-OK, one core pegged** | **≈ 68–71°C** | 43 + 25.8 |
+
+Against repo `TEMP_WARN=85` and Tjmax 105°C, ~70°C is unremarkable — and the fan-OK baseline recorded **zero throttle events across three full days**. **So with the fan fitted, the exact incident of 2026-08-07 produces no throttle delta, no temperature warning, and no alert of any kind.** It runs indefinitely, silently.
+
+*(The ≈70°C figure is conservative in the safe direction: dissipation scales with ΔT to ambient, so a cooler starting point sheds the same watts at a smaller rise. The real number is likely lower, which only strengthens the conclusion.)*
+
+⚠️ **Generalise this — it is the actual lesson.** Every mitigation that widens a margin also removes the signal that the margin was being consumed. The RAPL cap did a milder version of this in June. A fix that makes an alert stop firing and a fix that makes the *fault* stop happening are indistinguishable from the alert stream alone — which is the "silencing an error is not fixing it" trap, arriving from the direction of a genuine improvement rather than a bad patch.
+
+**Consequences, all of which change the order of work:**
+
+1. **The runaway-process check stops being a nice-to-have and becomes the fan's prerequisite.** It is the replacement detector. Fitting the fan without it is a net *loss* of coverage on the host that takes the internet down.
+2. **Commissioning the fan must include proving detection survived it.** Per the standing rule — force the condition and watch it fire. On the cooled box, deliberately peg one core (`timeout 300 sh -c 'while :; do :; done'`) and confirm an alert reaches #home-alerts. **"Temps look fine now" is not acceptance**; it is exactly the observation a silenced detector produces.
+3. **L-E should follow the fan, not precede it.** The threshold restore reads differently on each side of it: on a fanless box the repo's `THROTTLE_WARN=20` pages constantly (see RESTORE ON RETURN), but **on a properly cooled box those repo values become correctly calibrated again** — 20 throttle events on a box that measured zero across three days is a real signal. Restore them *after* the fan and the wrapper-dedup dependency largely evaporates.
+4. **Re-baseline once cooled.** The RECURRENCE table's fan-OK figures predate this year's ambient and the KSM change. Take a fresh idle + pegged-core reading after commissioning so the next comparison has a true reference.
+
 #### Deferred — do after L-A, not before
 
 ⚠️ **None of this may be written before the nine branches merge.** Measured collisions, identical in kind to the ones that parked the token item:
@@ -124,7 +151,7 @@ Three items, in the order they earn their keep:
 
 1. **Bound agent diagnostics by wall-clock — `timeout`.** ✅ **Preferred, and it limits no capability.** A single hung command is what caused this; `timeout` catches *every* runaway shape (stuck grep, blocked read on a FIFO, hung `ssh`) without an allowlist to maintain and without narrowing what an agent may inspect. Deliberate design decision, taken 2026-08-07: **do not respond to this by restricting agent read access.** The failure was unbounded duration, not excessive scope.
 2. **`--devices=skip` on BSD-side recursive greps** — `scripts/services/opnsense/*` and `scripts/services/agent/investigate.sh.j2`. Belt-and-braces; on its own it only fixes the one shape that already bit us, and GNU grep needs nothing.
-3. **A runaway-process check.** Alert on a single process sustaining ~100% of one core across N consecutive samples. Reuse the `check_thermal.sh` counter-delta idiom (sample process CPU-time, alert on sustained growth) rather than a single-sample threshold. **Place it where the process runs, not on the hypervisor** — a pegged core on the firewall is nearly always wrong, whereas `kvm` at 109% on cwwk is sometimes legitimate. Host scope is an open decision; it touches `system_health_check.sh`, which reaches all eight hosts.
+3. **A runaway-process check.** 🔴 **Listed third but it is the one that matters most — it is the fan's prerequisite**, per the masking section above. Everything before it prevents *this* incident; only this one detects the *next* one, and after the fan nothing else will. Alert on a single process sustaining ~100% of one core across N consecutive samples. Reuse the `check_thermal.sh` counter-delta idiom (sample process CPU-time, alert on sustained growth) rather than a single-sample threshold. **Place it where the process runs, not on the hypervisor** — a pegged core on the firewall is nearly always wrong, whereas `kvm` at 109% on cwwk is sometimes legitimate. Host scope is an open decision; it touches `system_health_check.sh`, which reaches all eight hosts.
 
 ### ⚠️ RESTORE ON RETURN — manual drift on cwwk (do this FIRST when home)
 
@@ -191,6 +218,7 @@ If a controller is used anyway (noise), it must be wired **fail-safe: fan ON whe
 ### Next Steps — remaining
 - **Fan (ROOT CAUSE, now twice-proven):** move the cabinet fan to unswitched always-on power so neither a person nor a power cut can leave it off. Must not require a manual press after power restoration. *Still the actual fix — the cap only widens the margin.*
   - **Hardware bought 2026-08-02:** Noctua fan + a simple **mechanical** controller (USB voltage conversion, physical on/off switch, speed fader). A *mechanical* switch is the correct choice: it **retains its position through a power cut**, unlike the old USB fan's momentary soft-latch that reset to off on power-up — which is precisely what caused this incident.
+  - 🔴 **Commissioning check — prove the fan did not silence anything (added 2026-08-07).** Better cooling removes `check_thermal.sh` as the accidental runaway-process detector and puts nothing in its place — see *"The fan will REMOVE the only thing that detected this"* above for the measured arithmetic. **Do not accept "temps look fine now" as commissioning**; that is precisely what a silenced detector looks like. Peg one core deliberately on the cooled box (`timeout 300 sh -c 'while :; do :; done'`) and confirm something still alerts. If nothing does, the fan has traded a loud misattributed alert for silence, and the runaway-process check is now blocking rather than deferred.
   - ⚠️ **Commissioning check — fan START voltage exceeds RUN voltage.** A DC fan needs more voltage to overcome static friction than to keep spinning, so a fader set low can leave a fan that runs happily but **fails to start from cold** after a power cut — silently recreating this exact outage. **Do not validate by watching it spin.** Set the fader, then pull power, restore it, and confirm the fan starts *by itself* from stationary. Check the model's minimum start voltage in Noctua's spec sheet and keep the fader comfortably above it.
   - Remaining risk after this: a human switching it off (the 2026-06-30 cause). Mitigate with labelling.
 - **Alert-volume defect (not a threshold problem):** `enhanced_monitoring_wrapper` sends a Slack alert on *every* non-zero exit with no cooldown or dedup (`SEND_TO_ALERT=true` in the failure branch, ~line 384). A persistent known-bad condition therefore pages indefinitely at the cron interval. Same defect as the vinylstreamer 17-alert storm. Add per-monitor failure dedup: alert on transition into failure, then re-alert at a backoff interval, and alert on recovery. **Fix this in the wrapper — do not compensate by raising `check_thermal.sh` thresholds, which are correctly calibrated for a healthy box and would hide a genuine future event.** Cross-host benefit.
@@ -232,6 +260,8 @@ If a controller is used anyway (noise), it must be wired **fail-safe: fan ON whe
 - [x] Throttle-aware dedicated alert deployed (logic verified)
 - [x] Alert proven end-to-end — synthetic WARNING delivered a real #home-alerts message; returns to OK silently (no `--notify-fixed`, consistent with other checks — add it if closure pings are wanted)
 - [x] cwwk holds throttle-free under summer load — validated over 2 days (2026-06-30→07-02, 1445 samples): package temp mean 46.7°C, peak 70°C (vs 105°C throttle point), **zero throttle events**; counter flat at 22,841. *Scope note (2026-08-01): this held **with working airflow**, and was re-confirmed Jul 28–30 (zero throttle events over 3 days). It does not hold with the fan off — see RECURRENCE above.*
+- [ ] 🔴 **Detection survives the fan (added 2026-08-07).** After commissioning, peg one core on the cooled box and confirm an alert reaches **#home-alerts**. ⚠️ **This criterion cannot be met by a temperature reading** — the whole point is that temperature will look fine. It is met only by a fault being *reported*. Until it passes, cwwk has less runaway-process coverage with the fan than it had without one.
+- [ ] Fresh idle + pegged-core baseline recorded post-fan, so the next thermal comparison has a true reference (the Jul 28–30 fan-OK figures predate this year's ambient and the KSM change).
 
 ### Incidental findings (this session)
 - ✅ **cwwk cron/mail drift reconciled** (2026-07-01): adopted `save-dmesg` + `arc_summary` into the `platform/proxmox` role as managed root crons; removed the stale `Proxmox health check` cron (its target `proxmox_health.sh` didn't exist → failed every 4h). Root cause of the deferred-mail pileup was the 6 monitoring crons emitting the wrapper's stdout every run → now redirected to `~/.logs/proxmox_*.log` (matches the backup crons). Built `/etc/aliases.db` and flushed 2201 stale cron mails. cwwk root crontab is now 100% Ansible-managed.
