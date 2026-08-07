@@ -7,7 +7,13 @@ Each item includes verified current state, concrete next steps, and acceptance c
 Items are ordered by risk × effort — highest-impact, most-actionable items first.
 
 > **Network layer:** see [NETWORK.md](NETWORK.md) — topology, VLANs, VPN and DNS,
-> plus seven findings from deriving it on 2026-08-07 that are not yet tracked here.
+> plus thirteen findings from deriving it on 2026-08-07/08 that are not yet
+> tracked here.
+>
+> **Documentation consolidation** is briefed in
+> `~/.claude/plans/doc-consolidation-brief.md` — it moves those findings into
+> this file, drains this file of measurements, and adds `docs/ARCHITECTURE.md`.
+> **Blocked until L-A is merged**, because nine branches add ~1,600 lines here.
 
 ---
 
