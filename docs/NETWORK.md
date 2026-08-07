@@ -54,39 +54,44 @@ flowchart TD
     ISP([ISP]) -->|igc0| WAN[WAN / vlan0.300]
     WAN --> FW{{OPNsense<br/>VM 100 on cwwk}}
 
-    FW -->|ix0 · 802.1q trunk| SW[Unmanaged Zyxel switch]
-    SW --> AP1[U6-Lite-Office<br/>wired root AP]
-    AP1 -->|wired| AP2[U6+-Salon-TV]
-    AP1 -.->|mesh · RSSI 23| AP4[UAP-AC-Lite-Habitacion]
-    AP2 -.->|mesh · RSSI 18| AP3[U6-Lite-Salon-Relay]
+    FW -->|ix0 · 802.1q trunk| SW[Zyxel XGS1250-12<br/>10.30.40.50 · managed<br/>port 12 · 10G SFP+]
 
-    SW --> V40[VLAN 40 · 10.30.40.0/24<br/>Native · core infra]
-    AP1 --> V20[VLAN 20 · 10.30.20.0/24<br/>NO_VPN · SSID _novpn]
-    AP1 --> V80[VLAN 80 · 10.30.80.0/24<br/>VPN · SSID estonoesmazagon]
-    AP1 --> V100[VLAN 100 · 10.30.100.0/24<br/>IoT · SSID _iot]
-    AP1 --> V200[VLAN 200 · 10.30.200.0/24<br/>Guest · 2 SSIDs]
+    SW -->|ports 1-3 · untagged 100| V100[VLAN 100 · IoT<br/>dockassist · vinylstreamer<br/>Shelly · BroadLink · Tado]
+    SW -->|ports 4,5,8 · untagged 40| V40[VLAN 40 · core infra<br/>cobra · hifipi]
+    SW -->|port 10 · trunk| APS[Salon APs]
+    SW -->|port 9 · trunk| COAX[coax-Ethernet<br/>1G over TV coax]
 
-    V40 --- H40[cwwk · hifipi · cobra<br/>unifi-lxc · agent-lxc]
-    V100 --- H100[dockassist · vinylstreamer<br/>Shelly · BroadLink · Tado]
+    COAX --> ERX[EdgeRouter X<br/>upstairs · passes tagged]
+    ERX --> APU[Office + Bedroom APs]
 
-    H100 <-.->|mDNS · MPD · AirPlay<br/>inter-VLAN rules| H40
+    APS --> WIFI[VLAN 20 NO_VPN · VLAN 80 VPN<br/>VLAN 100 IoT · VLAN 200 Guest]
+    APU --> WIFI
+
+    V100 <-.->|mDNS · MPD · AirPlay<br/>inter-VLAN rules| V40
 
     FW -.->|policy route| MUL[12 × Mullvad WireGuard]
-    V80 -.-> MUL
+    WIFI -.->|VLAN 80| MUL
     MUL -.-> Internet([Internet])
-    V20 --> Internet
     V40 --> Internet
 
     style FW fill:#e8b4b8,stroke:#8b3a3f
+    style SW fill:#c9b8e8,stroke:#5f3a8b
     style V40 fill:#b8d4e8,stroke:#3a5f8b
-    style V100 fill:#b8d4e8,stroke:#3a5f8b
-    style H100 fill:#f5e6a8,stroke:#8b7a3a
+    style V100 fill:#f5e6a8,stroke:#8b7a3a
+    style ERX fill:#d4d4d4,stroke:#666
 ```
 
-The dashed link between the two host groups is the one to remember: the
-Ansible-managed fleet spans VLAN 40 **and** VLAN 100, and the audio system and
-hostname resolution both depend on traffic crossing it. See
-[Where the fleet actually lives](#where-the-fleet-actually-lives).
+Two things to carry from this diagram:
+
+- **The Zyxel is the single point through which all wired traffic passes.** It is
+  as load-bearing as OPNsense and, unlike OPNsense, its config is not backed up
+  anywhere — see [finding 12](#12-the-switch-configuration-is-not-backed-up).
+- **The Ansible-managed fleet spans VLAN 40 and VLAN 100.** The audio system and
+  hostname resolution both depend on traffic crossing that boundary. See
+  [Where the fleet actually lives](#where-the-fleet-actually-lives).
+
+There are **three VLAN-aware devices** in series on the upstairs path — OPNsense,
+the Zyxel, and the EdgeRouter X. Only the first two are documented here.
 
 ---
 
@@ -357,16 +362,120 @@ from the rest. Treat it as a documented trade-off to re-confirm, not a
 misconfiguration to go fix. Raising it to `optional` would be the test; if the
 Shelly devices drop off, the answer is no.
 
+### 10. Switch port 1 is running at 10 Mbps half-duplex
+
+Every other live port on the Zyxel is `1G-Full`. **Port 1 is `10M-Half`** — two
+orders of magnitude down, and half-duplex, which means collisions and
+retransmits. It is not idle: 600 K packets out, 203 K in.
+
+Port 1 is `PVID 100`, so whatever is on it is an **IoT-VLAN device**.
+
+Three plausible causes, in order of likelihood: a damaged or non-8-conductor
+cable (a break in the pairs used for gigabit will fall back exactly like this), a
+failing port or NIC, or a genuinely 10 Mbps device. **Swapping the cable is the
+one-minute test** — if it comes up at 1G, that was it.
+
+⚠️ *What is on port 1 is not established.* The switch UI shows link state, not
+device identity, and the ports aren't labelled in anything I can read. Given
+PVID 100, the candidates are `vinylstreamer` (`10.30.100.110`) or a wired IoT
+device. **If it is `vinylstreamer`, this matters more than it looks** — that host
+streams audio to `hifipi` via Icecast, and a half-duplex 10 Mbps link is a
+plausible contributor to any streaming stutter.
+
+### 11. Switch port 4 has a CRC error
+
+One. Not zero. Every other port is clean, and this counter is cumulative over
+163 hours of uptime, so it is a single event rather than a pattern.
+
+Not actionable on its own — but CRC errors come from physical-layer problems, and
+a cable that produces one will usually produce more. Worth re-reading the counter
+in a few weeks: still `1` means noise, climbing means a cable to replace.
+
+### 12. The switch configuration is not backed up
+
+`docs/BACKUP_AND_RECOVERY.md` covers OPNsense, Home Assistant, Plex, Proxmox and
+UniFi. It does not cover the Zyxel, whose UI has a
+**Configuration Restore/Backup** function producing a config file.
+
+That config is the entire VLAN and PVID map — the thing that decides which
+physical port lands in which network. Losing it means re-deriving the port map by
+hand, which is precisely the situation this document was written to prevent, and
+the switch is a single unit with no redundancy.
+
+Related, lower severity: **HTTP is enabled alongside HTTPS** on the management
+interface. Management is at least confined to VLAN 40 rather than VLAN 1, which
+is the more important half of that decision.
+
 ## Physical layer
 
 Read from the UniFi controller API (`unifi-lxc`, CT 101, `10.30.40.201:8443`)
 using a read-only account, and cross-checked against the firewall's ARP table.
 
+### The backbone switch — Zyxel XGS1250-12
+
+**Every wired host in the estate connects to this switch.** It is a *managed*
+switch at `10.30.40.50`, and it does the 802.1Q work: OPNsense trunks all VLANs
+to it over 10G, and it hands each host an untagged port in the right VLAN.
+
+| | |
+|---|---|
+| Model / firmware | XGS1250-12 · `V2.00(ABWE.1)C0` |
+| Address | `10.30.40.50/24`, gateway `10.30.40.254`, **static** (DHCP client disabled) |
+| Management VLAN | **40** — not VLAN 1 |
+| Uptime at capture | 163 h |
+| Management | HTTPS **and HTTP** both enabled, 15-min timeout |
+
+> Sourced from the switch's own web UI on 2026-08-07, supplied by the operator.
+> `read_agent` has no access to it — see [Getting at the switch](#getting-at-the-switch).
+
+#### Port map
+
+`U:` = untagged/access, `T:` = tagged/trunk. Traffic counters are cumulative
+since last clear, and are the strongest available hint at what is on each port.
+
+| Port | Link | PVID | Tagged | TX / RX pkts | Role |
+|-----:|------|-----:|--------|--------------|------|
+| 1 | 🔴 **10M-Half** | 100 | — | 600 K / 203 K | IoT host — **degraded, see finding 10** |
+| 2 | 1G-Full | 100 | — | **63 M / 74 M** | IoT host, busiest access port |
+| 3 | Down | 100 | — | 0 | spare IoT |
+| 4 | 1G-Full | 40 | — | 1.9 M / 3.7 M | VLAN 40 host · ⚠️ 1 CRC error |
+| 5 | 1G-Full | 40 | — | 1.2 M / 446 K | VLAN 40 host |
+| 6 | Down | 40 | 20, 80, 100… | 0 | spare trunk |
+| 7 | Down | 40 | 20, 80, 100… | 0 | spare trunk |
+| 8 | 1G-Full | 40 | — | 3.5 M / 1.6 M | VLAN 40 host |
+| 9 | 1G-Full | 40 | 20, 80, 100… | 2.2 M / 1.3 M | **coax backbone → upstairs** |
+| 10 | 1G-Full | 40 | 20, 80, 100… | 8.5 M / 13 M | AP trunk |
+| 11 | Down | 40 | 20, 80, 100… | 0 | spare trunk |
+| 12 | **10G-Full** | 1 | 20, 40, 80… | **90 M / 72 M** | 🔗 **SFP+ uplink to `cwwk` → OPNsense** |
+
+Two things worth reading off this:
+
+- **VLAN 40 is tagged on the uplink and untagged on the access ports.** So hosts
+  are genuinely untagged — the "native VLAN" description holds from the host's
+  point of view — but the trunk itself carries 40 tagged like any other VLAN.
+  Port 12's PVID is `1`, an unused VLAN, so untagged frames arriving on the trunk
+  go nowhere. That is the correct way round.
+- **Three trunk ports sit unused** (6, 7, 11), pre-configured with the same VLAN
+  set as the live ones. Spare capacity for another AP or uplink, already wired
+  for it.
+
+#### The upstairs run
+
+Port 9 leaves the cabinet over a **coax-to-Ethernet adapter**, using the house TV
+coax to carry 1G upstairs. Upstairs it lands in an **EdgeRouter X**, which exists
+specifically to pass tagged traffic onward — which is why port 9 is a trunk and
+not an access port. The office and main-bedroom APs hang off that EdgeRouter.
+
+⚠️ **Operator-supplied and not yet confirmed on the hardware** — the port number
+in particular. Everything else in the port map is read from the switch UI. The
+EdgeRouter X itself is **not** in this document: it has not been probed, its
+config is unknown, and it is a third VLAN-aware device in the path after
+OPNsense and the Zyxel.
+
 ### Access points
 
-**All four Ubiquiti devices are access points.** There is no UniFi-managed
-switch — the cabinet switch is an unmanaged Zyxel, which is why VLAN trunking is
-handled entirely between OPNsense and the APs.
+**All four Ubiquiti devices are access points**, trunked off the Zyxel — two in
+the cabinet's reach, two upstairs behind the coax run and the EdgeRouter.
 
 | Name | Address | Model | Firmware | Uplink |
 |------|---------|-------|----------|--------|
@@ -385,14 +494,24 @@ assert a pass/fail threshold for them* — UniFi's mesh RSSI scale is not a plai
 dBm figure and I could not verify how it maps. They are recorded because they are
 the only wireless links carrying infrastructure traffic.
 
-> **Correction.** An earlier version of this document inferred from open ports
-> that these were "two switches and two access points", and flagged `10.30.40.3`
-> as a *firmware generation behind* because its dropbear was older
-> (`2024.86` vs `2025.89`). **Both were wrong.** They are all APs, and
-> `10.30.40.3` is a different model (U7 Lite) on its own firmware line — running
-> `6.8.2`, which is *newer* than the other three. Model-specific version strings
-> are not comparable, and banner-grabbing an embedded SSH daemon does not tell
-> you what the device is.
+> **Corrections.** Two earlier claims in this document were wrong, both from
+> inferring hardware from network-level evidence:
+>
+> - *"Two switches and two access points"*, inferred from open ports. All four
+>   are APs. And `10.30.40.3` was flagged as a *firmware generation behind*
+>   because its dropbear banner was older (`2024.86` vs `2025.89`) — it is a
+>   different model (U7 Lite) on its own firmware line, running `6.8.2`, which is
+>   *newer*. Version strings are not comparable across models.
+> - *"The cabinet switch is an unmanaged Zyxel"* — **it is managed**, it is the
+>   backbone every wired host connects to, and it carries the entire VLAN
+>   configuration above. It never appeared in the firewall's ARP table (it was
+>   simply not ARP-active during the sweep) and it is not adopted into UniFi, so
+>   both of my discovery methods missed it completely.
+>
+> The lesson generalises: **ARP is not an inventory.** A device that isn't
+> talking during the sweep does not exist as far as `arp -an` is concerned, and
+> the most important switch in the estate is exactly the kind of device that sits
+> quiet.
 
 ### Wireless — SSID → VLAN
 
@@ -544,8 +663,44 @@ outside version control. **It should be moved into `vault.yml` as
 plaintext when it was set up. Until then, pass it via environment variable as
 above — never inline in a script, a cron entry or a committed file.
 
-⚠️ Still **not captured**: switch-port assignments and port profiles. Not an
-access limitation — there is no UniFi-managed switch to read them from.
+---
+
+## Getting at the switch
+
+The Zyxel is **not reachable by any automated path today**. It is not in UniFi,
+it has no SSH, and `read_agent` has no credentials for it. Everything in
+[the port map](#port-map) came from screenshots of its web UI.
+
+That is the largest remaining hole in this document, because the switch decides
+which physical port lands in which VLAN — and because its config is the one piece
+of estate-critical state with no backup at all.
+
+Three options, cheapest first:
+
+1. **Periodic manual export.** Its UI has *Configuration Restore/Backup*; save
+   the file into the repo's backup flow. Solves [finding 12](#12-the-switch-configuration-is-not-backed-up)
+   with no new access, and is worth doing regardless of the other two.
+2. **Read-only web credentials in the vault.** The XGS1250-12 is a web-managed
+   consumer switch — it has an admin password, not a role system, so a
+   "read-only" account may not exist. **Unverified**: the Management page shows
+   only *Change Password*, with no user list, which suggests a single account.
+   If so, any stored credential is an admin credential, and that changes the
+   risk calculation — it should not go in the vault without deciding that
+   deliberately.
+3. **Poll SNMP, if supported.** Would give port state, link speed and counters —
+   enough to alert on [finding 10](#10-switch-port-1-is-running-at-10-mbps-half-duplex)
+   automatically, and read-only by nature. **Unverified whether this model
+   supports it**; the visible tabs are System / Port / VLAN / Link Aggregation /
+   Mirroring / QoS / IGMP Snooping / Management, with no SNMP tab among them,
+   which is not encouraging.
+
+**Recommendation: do 1 now, and treat 3 as the thing worth checking** — a switch
+port silently dropping to 10M-Half is exactly the class of fault nothing in this
+estate currently watches for, and it is the same "nothing tells you a host needs
+attention" gap already raised in the handover.
+
+⚠️ **The EdgeRouter X is entirely undocumented.** It is a third VLAN-aware device,
+upstairs, passing tagged traffic to two APs. Nothing here has probed it.
 
 ---
 
@@ -598,7 +753,10 @@ what fed CrowdSec into banning `agent-lxc` on 2026-08-03.
 | SSID→VLAN, WLAN security settings | UniFi controller API, live | 2026-08-07 |
 | mDNS dependency | `dig` vs `dscacheutil`, live | 2026-08-07 |
 | Guest-SSID isolation gap (finding 8) | **reasoned from config, not tested** | — |
-| Switch ports / port profiles | n/a — no UniFi-managed switch exists | — |
+| Switch model, VLAN/PVID map, port state | Zyxel web UI, operator screenshots | 2026-08-07 |
+| Which device is on which switch port | **not established** — counters only hint | — |
+| Coax run, EdgeRouter X, port 9 | **operator recollection, unconfirmed** | — |
+| EdgeRouter X configuration | **never probed** | — |
 
 MAC addresses are deliberately not listed; vendor OUIs and roles are enough to
 work with and do not fingerprint individual devices in a public repository.
