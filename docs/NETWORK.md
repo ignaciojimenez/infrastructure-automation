@@ -375,12 +375,23 @@ cable (a break in the pairs used for gigabit will fall back exactly like this), 
 failing port or NIC, or a genuinely 10 Mbps device. **Swapping the cable is the
 one-minute test** — if it comes up at 1G, that was it.
 
-⚠️ *What is on port 1 is not established.* The switch UI shows link state, not
-device identity, and the ports aren't labelled in anything I can read. Given
-PVID 100, the candidates are `vinylstreamer` (`10.30.100.110`) or a wired IoT
-device. **If it is `vinylstreamer`, this matters more than it looks** — that host
-streams audio to `hifipi` via Icecast, and a half-duplex 10 Mbps link is a
-plausible contributor to any streaming stutter.
+**The operator expects it to be either the TV or the Tado hub** — both IoT-VLAN
+devices, consistent with `gi1`'s PVID 100. That narrows it usefully, and it makes
+a bad cable *more* likely rather than less:
+
+- Neither device is 10 Mbps-only. Both are at worst 10/100, and a healthy 10/100
+  device negotiates **100-Full**, not 10-Half.
+- **10-Half is the classic autonegotiation-failure signature.** It is what a link
+  falls back to when the negotiation cannot complete — most often because the
+  cable does not have all four pairs intact, or a connector is marginal.
+
+So the reading is: this is probably not "an old device being old", it is a link
+that failed to negotiate. Swap the cable first. If the device is the **Tado hub**,
+note that it is the bridge for the heating system, and the estate's Tado
+automation (`tado_presence.sh` on `dockassist`) reaches it over this segment.
+
+⚠️ *Still not formally established* — the switch UI shows link state, not device
+identity, and nothing readable maps ports to devices.
 
 ### 11. Switch port 4 has a CRC error
 
@@ -402,9 +413,38 @@ physical port lands in which network. Losing it means re-deriving the port map b
 hand, which is precisely the situation this document was written to prevent, and
 the switch is a single unit with no redundancy.
 
+🔑 **Store it encrypted.** The export is
+[XOR-obfuscated, not encrypted](#the-exported-config-is-obfuscated-not-encrypted),
+and it embeds the admin password hash. It belongs in `vault.yml`, not in a plain
+file in a public repo. This is the whole reason the backup gap is not a
+five-minute `git add`.
+
 Related, lower severity: **HTTP is enabled alongside HTTPS** on the management
-interface. Management is at least confined to VLAN 40 rather than VLAN 1, which
-is the more important half of that decision.
+interface (`ip http session-timeout 15` sits beside its HTTPS twin in the
+config). Management is at least confined to VLAN 40 rather than VLAN 1, which is
+the more important half of that decision.
+
+Also visible and worth an eye rather than an action: `spanning-tree mst
+configuration` carries a region name that is just the switch's own MAC — the
+default. With one switch and no loops that is inert. It would start to matter if
+the downstream **EdgeRouter X** speaks MST, since two devices in different MST
+regions do not form a common topology. *Not investigated* — the EdgeRouter has
+never been probed.
+
+### 13. The EdgeRouter X is unmanageable and unrecoverable
+
+Management access was lost years ago when it was switched into managed-switch
+mode. It carries every VLAN to two of the four APs, its firmware version and
+patch state are unknown, and there is **no saved configuration** to restore onto
+a replacement — because nobody can read the one it is running.
+
+It works today. It is simply the element with the worst failure story: if it
+dies, upstairs wireless dies with it and the rebuild starts from scratch.
+
+Full detail, and three ways in, under
+[The EdgeRouter X — a known unknown](#the-edgerouter-x--a-known-unknown).
+
+---
 
 ## Physical layer
 
@@ -425,39 +465,77 @@ to it over 10G, and it hands each host an untagged port in the right VLAN.
 | Uptime at capture | 163 h |
 | Management | HTTPS **and HTTP** both enabled, 15-min timeout |
 
-> Sourced from the switch's own web UI on 2026-08-07, supplied by the operator.
-> `read_agent` has no access to it — see [Getting at the switch](#getting-at-the-switch).
+> Sourced from the switch's web UI and its exported `startupconfig.cfg`, both
+> supplied by the operator on 2026-08-07. `read_agent` has no access to it — see
+> [Getting at the switch](#getting-at-the-switch).
+
+#### The exported config is obfuscated, not encrypted
+
+`startupconfig.cfg` looks like binary. It is the plaintext running-config
+**XOR'd with the single byte `0xa5`**:
+
+```bash
+python3 -c "import sys;d=open(sys.argv[1],'rb').read();\
+sys.stdout.write(bytes(b^0xa5 for b in d).decode())" startupconfig.cfg
+```
+
+🔑 **This matters for how the backup is stored.** The file is not protected in
+any meaningful sense, and it contains the **admin password hash** —
+`username "admin" secret 8 $8$…`. Anyone holding the file holds the switch's
+credential material. A backup of this file therefore belongs in **`vault.yml`
+(encrypted), never committed in the clear**, and never pasted into an issue,
+a chat or this document.
+
+Two things the config settles that were previously marked unverified:
+
+- **There is exactly one account, `admin`.** No user list, no roles. A
+  "read-only credential" for this switch **does not exist** — any stored
+  credential is a full admin credential.
+- **There is no SNMP.** Not a single `snmp-server` line, matching the operator's
+  own testing. Two independent sources agree, so treat automated polling of this
+  switch as unavailable rather than undiscovered.
 
 #### Port map
 
 `U:` = untagged/access, `T:` = tagged/trunk. Traffic counters are cumulative
 since last clear, and are the strongest available hint at what is on each port.
 
-| Port | Link | PVID | Tagged | TX / RX pkts | Role |
-|-----:|------|-----:|--------|--------------|------|
-| 1 | 🔴 **10M-Half** | 100 | — | 600 K / 203 K | IoT host — **degraded, see finding 10** |
-| 2 | 1G-Full | 100 | — | **63 M / 74 M** | IoT host, busiest access port |
-| 3 | Down | 100 | — | 0 | spare IoT |
-| 4 | 1G-Full | 40 | — | 1.9 M / 3.7 M | VLAN 40 host · ⚠️ 1 CRC error |
-| 5 | 1G-Full | 40 | — | 1.2 M / 446 K | VLAN 40 host |
-| 6 | Down | 40 | 20, 80, 100… | 0 | spare trunk |
-| 7 | Down | 40 | 20, 80, 100… | 0 | spare trunk |
-| 8 | 1G-Full | 40 | — | 3.5 M / 1.6 M | VLAN 40 host |
-| 9 | 1G-Full | 40 | 20, 80, 100… | 2.2 M / 1.3 M | **coax backbone → upstairs** |
-| 10 | 1G-Full | 40 | 20, 80, 100… | 8.5 M / 13 M | AP trunk |
-| 11 | Down | 40 | 20, 80, 100… | 0 | spare trunk |
-| 12 | **10G-Full** | 1 | 20, 40, 80… | **90 M / 72 M** | 🔗 **SFP+ uplink to `cwwk` → OPNsense** |
+The UI numbers ports 1–12; the config names them `gi1`–`gi8` (1 G copper) and
+`te1`–`te4` (10 G). **UI port 9 is `te1`, 10 is `te2`, 11 is `te3`, 12 is `te4`.**
 
-Two things worth reading off this:
+| UI | Config | Link | PVID | VLAN membership | TX / RX pkts | Role |
+|---:|--------|------|-----:|-----------------|--------------|------|
+| 1 | `gi1` | 🔴 **10M-Half** | 100 | untagged 100 only | 600 K / 203 K | IoT access — **degraded, [finding 10](#10-switch-port-1-is-running-at-10-mbps-half-duplex)** |
+| 2 | `gi2` | 1G-Full | 100 | untagged 100 only | **63 M / 74 M** | IoT access, busiest access port |
+| 3 | `gi3` | Down | 100 | untagged 100 only | 0 | spare IoT access |
+| 4 | `gi4` | 1G-Full | 40 | untagged 40 only | 1.9 M / 3.7 M | VLAN 40 access · ⚠️ 1 CRC error |
+| 5 | `gi5` | 1G-Full | 40 | untagged 40 only | 1.2 M / 446 K | VLAN 40 access |
+| 6 | `gi6` | Down | 40 | untagged 40 + tagged 20/80/100/200 | 0 | spare hybrid trunk |
+| 7 | `gi7` | Down | 40 | untagged 40 + tagged 20/80/100/200 | 0 | spare hybrid trunk |
+| 8 | `gi8` | 1G-Full | 40 | untagged 40 only | 3.5 M / 1.6 M | VLAN 40 access |
+| 9 | `te1` | 1G-Full | 40 | untagged 40 + tagged 20/80/100/200 | 2.2 M / 1.3 M | **coax backbone → upstairs** · ⭐ speed **forced** 1000/full |
+| 10 | `te2` | 1G-Full | 40 | untagged 40 + tagged 20/80/100/200 | 8.5 M / 13 M | AP trunk |
+| 11 | `te3` | Down | 40 | untagged 40 + tagged 20/80/100/200 | 0 | spare hybrid trunk |
+| 12 | `te4` | **10G-Full** | 1 | **tagged only**, all VLANs | **90 M / 72 M** | 🔗 **SFP+ uplink to `cwwk` → OPNsense** |
 
-- **VLAN 40 is tagged on the uplink and untagged on the access ports.** So hosts
-  are genuinely untagged — the "native VLAN" description holds from the host's
-  point of view — but the trunk itself carries 40 tagged like any other VLAN.
-  Port 12's PVID is `1`, an unused VLAN, so untagged frames arriving on the trunk
-  go nowhere. That is the correct way round.
-- **Three trunk ports sit unused** (6, 7, 11), pre-configured with the same VLAN
-  set as the live ones. Spare capacity for another AP or uplink, already wired
-  for it.
+Four things worth reading off this:
+
+- **`te1` is the only port with a hardcoded `speed 1000` / `duplex full`.** Every
+  other port autonegotiates. That is exactly what you would do for a media
+  converter that negotiates badly — and it **confirms the coax run is on UI port
+  9**, which had been operator recollection until now.
+- **VLAN 40 is tagged on the uplink and untagged everywhere else.** Hosts are
+  genuinely untagged, so the "native VLAN" description holds from their point of
+  view, while `te4` carries 40 tagged like any other VLAN. `te4` has no PVID line
+  and no untagged VLAN, so it is a pure tagged trunk and stray untagged frames
+  land in unused VLAN 1. That is the correct way round.
+- **The trunk ports are hybrid, not pure.** `gi6`, `gi7`, `te1`, `te2`, `te3` all
+  carry untagged VLAN 40 *plus* tagged 20/80/100/200 — so an AP or downstream
+  device gets its management on untagged 40 and its SSIDs on tags. Three of the
+  five (`gi6`, `gi7`, `te3`) are unused: spare capacity, already configured.
+- **Three of the four 10 G ports are not doing 10 G.** `te4` is the only one at
+  10G-Full. `te1` is pinned to 1 G by design, `te2` serves a 1 G AP, `te3` is
+  dark. Not a problem — just worth knowing the headroom is there.
 
 #### The upstairs run
 
@@ -675,32 +753,76 @@ That is the largest remaining hole in this document, because the switch decides
 which physical port lands in which VLAN — and because its config is the one piece
 of estate-critical state with no backup at all.
 
-Three options, cheapest first:
+**Two of the three obvious options are now ruled out by the config itself**, not
+by guesswork:
 
-1. **Periodic manual export.** Its UI has *Configuration Restore/Backup*; save
-   the file into the repo's backup flow. Solves [finding 12](#12-the-switch-configuration-is-not-backed-up)
-   with no new access, and is worth doing regardless of the other two.
-2. **Read-only web credentials in the vault.** The XGS1250-12 is a web-managed
-   consumer switch — it has an admin password, not a role system, so a
-   "read-only" account may not exist. **Unverified**: the Management page shows
-   only *Change Password*, with no user list, which suggests a single account.
-   If so, any stored credential is an admin credential, and that changes the
-   risk calculation — it should not go in the vault without deciding that
-   deliberately.
-3. **Poll SNMP, if supported.** Would give port state, link speed and counters —
-   enough to alert on [finding 10](#10-switch-port-1-is-running-at-10-mbps-half-duplex)
-   automatically, and read-only by nature. **Unverified whether this model
-   supports it**; the visible tabs are System / Port / VLAN / Link Aggregation /
-   Mirroring / QoS / IGMP Snooping / Management, with no SNMP tab among them,
-   which is not encouraging.
+- ~~Read-only credentials~~ — **impossible.** One account, `admin`, no roles.
+- ~~SNMP polling~~ — **not supported.** No `snmp-server` lines, and the operator
+  had already tested this independently.
 
-**Recommendation: do 1 now, and treat 3 as the thing worth checking** — a switch
-port silently dropping to 10M-Half is exactly the class of fault nothing in this
-estate currently watches for, and it is the same "nothing tells you a host needs
-attention" gap already raised in the handover.
+What remains:
 
-⚠️ **The EdgeRouter X is entirely undocumented.** It is a third VLAN-aware device,
-upstairs, passing tagged traffic to two APs. Nothing here has probed it.
+1. **Periodic manual export**, stored **encrypted in `vault.yml`**. Solves
+   [finding 12](#12-the-switch-configuration-is-not-backed-up), needs no new
+   access, and is the only option with no downside. Do this.
+2. **Scripted HTTP scrape with the admin credential.** Technically possible — the
+   UI is plain HTTP/HTTPS — but it means storing an admin password to read link
+   state. **Not recommended**: it trades a real credential for a nice-to-have,
+   on the one device that can partition the whole LAN if it is misconfigured.
+3. **Detect the symptom from elsewhere.** A port dropping to 10M-Half shows up as
+   throughput collapse on the *host* behind it, and hosts are already monitored.
+   An `ethtool`-based speed check in the existing monitoring would catch
+   [finding 10](#10-switch-port-1-is-running-at-10-mbps-half-duplex) on any Linux
+   host **without touching the switch at all**.
+
+**Recommendation: do 1 now, and consider 3 as the real fix.** A link silently
+falling to 10 Mbps is precisely the "nothing tells you a host needs attention"
+class already raised in the handover — and option 3 addresses it from the side
+of the estate that is already instrumented, rather than by adding admin
+credentials to a switch with no read-only mode.
+
+---
+
+## The EdgeRouter X — a known unknown
+
+Upstairs, behind the coax run, sits an **EdgeRouter X** configured in switch
+mode so it can pass tagged VLANs to the office and bedroom APs. It is the third
+VLAN-aware device in the path, after OPNsense and the Zyxel.
+
+**Its management access was lost years ago.** Per the operator: once it was put
+into managed-switch mode, its management address stopped being reachable and was
+never recovered. It has worked ever since, so it was left alone.
+
+That leaves a device which:
+
+- carries **every VLAN** to two of the four access points,
+- cannot be inspected, reconfigured or firmware-updated,
+- has an **unknown firmware version**, therefore an unknown patch state,
+- and would have to be **factory-reset to regain control**, which drops the
+  upstairs APs until it is reconfigured.
+
+Nothing here is on fire — it is passing traffic correctly today. But it is the
+single least recoverable element of the network: if it fails, the upstairs
+wireless goes with it and there is no saved configuration to restore onto a
+replacement, because nobody can read the current one.
+
+**Where to start looking, when there's appetite:**
+
+1. **Find it on the wire.** It has never been ARP-visible in a sweep from
+   OPNsense, but a targeted scan of VLAN 40 from a host behind the coax run is a
+   different vantage point. EdgeOS defaults to `192.168.1.1` on `eth0` — a
+   management address on a *different subnet* than the one the sweep covers is
+   the most likely reason it looks absent.
+2. **Serial console.** The ERX has a physical console port. It is the reliable
+   answer and needs no guessing about addresses.
+3. **Accept and mitigate.** If recovery isn't worth the disruption, the cheap
+   insurance is knowing the model and having a documented rebuild plan, so a
+   failure means "configure a spare from notes" rather than "work out what it was
+   doing".
+
+⚠️ Everything in this section is operator recollection plus EdgeOS defaults.
+**Nothing about this device has been verified**, including whether it is
+reachable at all.
 
 ---
 
@@ -753,10 +875,11 @@ what fed CrowdSec into banning `agent-lxc` on 2026-08-03.
 | SSID→VLAN, WLAN security settings | UniFi controller API, live | 2026-08-07 |
 | mDNS dependency | `dig` vs `dscacheutil`, live | 2026-08-07 |
 | Guest-SSID isolation gap (finding 8) | **reasoned from config, not tested** | — |
-| Switch model, VLAN/PVID map, port state | Zyxel web UI, operator screenshots | 2026-08-07 |
+| Switch port state, link speeds, counters | Zyxel web UI, operator screenshots | 2026-08-07 |
+| Switch VLAN/PVID map, accounts, no-SNMP | decoded `startupconfig.cfg` | 2026-08-07 |
+| Coax run on UI port 9 (`te1`) | **confirmed** — only port with forced speed | 2026-08-07 |
 | Which device is on which switch port | **not established** — counters only hint | — |
-| Coax run, EdgeRouter X, port 9 | **operator recollection, unconfirmed** | — |
-| EdgeRouter X configuration | **never probed** | — |
+| EdgeRouter X — config, access, MST behaviour | **never probed; no known access** | — |
 
 MAC addresses are deliberately not listed; vendor OUIs and roles are enough to
 work with and do not fingerprint individual devices in a public repository.
