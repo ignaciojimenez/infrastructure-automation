@@ -44,6 +44,88 @@ All as code in the `platform/proxmox` role (toggle `enable_proxmox_power_tuning`
 
 **Conclusion:** the mitigations are working. The unfixed item is the fan, as already noted below since 2026-06-30.
 
+### 2026-08-07 — THIRD thermal event, and the first one the fan did not cause
+
+**There is still no fan** — the Noctua + mechanical controller bought 2026-08-02 is not yet fitted, so cwwk has been running passively since 2026-07-31. That is the standing condition, not the news. The news is that **a single runaway process on a guest was enough to hold the box at ~95°C for ten hours**, and nothing in the fleet's monitoring could see it.
+
+**Sequence (measured, `thermal-history.log` + `procstat`):**
+
+| Time | Event |
+|---|---|
+| 01:44:05 | `grep -rn 'forward-addr\|forward-zone\|10.64.0.' /var/unbound/` starts on the **OPNsense guest** as `read_agent` |
+| 01:46 sample | cwwk `pkg` 76→92°C, `throttle_delta` 8→12,611, `load` 0.32→1.25 |
+| 01:46 → 11:42 | `pkg` **sustained 94–96°C**, delta ~16,000 per 2 min, load flat ~1.2. Host `kvm` (PID 1594 = VM 100) at **109% CPU**; nothing else above 1% |
+| 11:42 | process killed by hand |
+| 11:44 | `pkg=74`, `throttle_delta=69`, `load=0.25` — recovery inside two samples |
+
+**Why the grep never finished — verified, and it is platform-specific.** `procstat -f` showed fd 3 open on `/var/unbound/dev/random` at offset **181,681,487,872** (~169 GiB read). Unbound's chroot on OPNsense contains a **fully populated devfs** (`random`, `zero`, `null`, `mem`, …), and BSD `grep -r` descends into it and reads character devices as files. There is no EOF.
+
+```
+BSD grep 2.6.0-FreeBSD : grep -r over a device  → exit 124 (reads forever)
+                         --devices=skip         → exit 1   (clean skip)
+GNU grep 3.11 (Linux)  : grep -r over /dev      → exit 2   (skips devices already)
+```
+
+**So only the FreeBSD host is exposed to this shape** — which happens to be the internet SPOF *and* the guest of the fanless hypervisor. Both greps were run bounded with `timeout` to verify this; neither left anything running.
+
+**Origin (inferred, not proven):** the parent `sh -c` ends with `echo '(empty = Unbound is NOT forwarding to Mullvad DNS)'`, which is the exact question behind network finding 1 (`monitor_dns_failover.sh` asserting a forwarding config that does not exist). Timestamp and subject both match the network-documentation session of 2026-08-07. Recorded because it motivates the guard below, **not** as a reason to narrow what agents may inspect — see the design note.
+
+**What this says about the thermal picture — it does *not* overturn the fan conclusion:**
+
+- Prior peak-load samples already touched 89–95°C (load 13.77 → 95°C, 2026-08-06 03:04). The box reaches that temperature transiently under bursts *and* under one permanently-pegged core; the difference today was **sustained vs transient**, not a new cooling fault.
+- Steady-state with one core pegged, fanless, is therefore **~95°C**. That is the number to plan against, and it is 10°C from Tjmax.
+- ⚠️ **Idle has settled at 74°C**, against 67–69°C on 2026-08-04→06. **Unverified** whether that is residual soak from a ten-hour heat load or a genuine ambient rise — re-read `thermal-history.log` before drawing anything from it.
+
+**The drifted thresholds are now demonstrated, not theoretical.** At ~16,000 events per 2 min the `*/5` check computes a ~40,000 delta — landing exactly on the hand-applied `THROTTLE_CRIT=40000` and oscillating CRIT/WARN on nearly every run. That is the Slack spam. Temps of 94–96°C stayed *below* the hand-applied `TEMP_WARN=98`, so the alerts never mentioned temperature at all and pointed at "check fan/airflow" for ten hours while the cause was a stuck process one VM away. **This is a concrete argument for what to restore the thresholds to (see RESTORE ON RETURN below), and for the wrapper dedup work in Next Steps.**
+
+#### 🔴 The monitoring gap this exposed — a fourth failure class
+
+Every host already has CPU monitoring, in three separate implementations:
+
+- `scripts/common/system_health_check.sh:106` `check_load()` — all hosts
+- `scripts/services/opnsense/check_system_health.sh:42`
+- `scripts/services/proxmox/check_proxmox_health.sh:102`
+
+All three compute `load_1min / cpu_count × 100` against an 80% warn. **Normalising by core count makes a single runaway process undetectable by construction:**
+
+| Host | Cores | Pegged cores needed to warn | Reading during the incident |
+|---|---|---|---|
+| `unifi-lxc` | 2 | 1.6 | — |
+| Pis (×4) | 4 | 3.2 | — |
+| `opnsense` | 6 | 4.8 | **17% — "healthy"** |
+| `cwwk` | 8 | 6.4 | **16% — "healthy"** |
+
+OPNsense reported a comfortable 17% while one of its six cores was pinned. **This is not a cwwk-vs-the-rest gap — no host in the fleet, cwwk included, has a check that can see one stuck process.** cwwk caught it only via `check_thermal.sh`, a *physical downstream symptom* two layers from the cause, and misattributed it.
+
+This is a distinct shape from the three already tracked in this repo:
+
+| | Class | Example |
+|---|---|---|
+| 1 | Check exists, is broken | the five false failures, 2026-08-06 |
+| 2 | Nothing watches it at all | PVE package updates, OPNsense firmware |
+| 3 | Check runs, reports success, protects nothing | `monitor_dns_failover.sh` — 9,359 green checks on a false premise |
+| **4** | **Check exists, works correctly, and cannot cover the mode it appears to cover** | **`check_load()` — normalisation hides the single-process case** |
+
+Class 4 is arguably the worst to audit for: the coverage *looks* present and the code is not wrong. It belongs to the "start from failure modes, make the blanks the deliverable" review already proposed after Phase C — this is that review's first **demonstrated** member rather than a reasoned one.
+
+#### Deferred — do after L-A, not before
+
+⚠️ **None of this may be written before the nine branches merge.** Measured collisions, identical in kind to the ones that parked the token item:
+
+| File a fix needs | Already modified by |
+|---|---|
+| `scripts/common/system_health_check.sh` | `fix/agent-lxc-logs-dir-2026-08` |
+| `scripts/services/agent/investigate.sh.j2` | `fix/agent-lxc-logs-dir-2026-08` |
+| `playbooks/tasks/deploy_monitoring.yml` | `fix/agent-lxc-logs-dir` **and** `fix/deploy-plumbing-dirs` |
+
+Writing against a base that moves underneath, then resolving conflicts in cron and monitoring definitions, is this repo's signature failure mode. After L-A there is one branch and the collision is gone. (`check_system_health.sh` and `check_proxmox_health.sh` are clean on all nine branches, so a fix scoped to those two only *could* go earlier — it would not be the whole job.)
+
+Three items, in the order they earn their keep:
+
+1. **Bound agent diagnostics by wall-clock — `timeout`.** ✅ **Preferred, and it limits no capability.** A single hung command is what caused this; `timeout` catches *every* runaway shape (stuck grep, blocked read on a FIFO, hung `ssh`) without an allowlist to maintain and without narrowing what an agent may inspect. Deliberate design decision, taken 2026-08-07: **do not respond to this by restricting agent read access.** The failure was unbounded duration, not excessive scope.
+2. **`--devices=skip` on BSD-side recursive greps** — `scripts/services/opnsense/*` and `scripts/services/agent/investigate.sh.j2`. Belt-and-braces; on its own it only fixes the one shape that already bit us, and GNU grep needs nothing.
+3. **A runaway-process check.** Alert on a single process sustaining ~100% of one core across N consecutive samples. Reuse the `check_thermal.sh` counter-delta idiom (sample process CPU-time, alert on sustained growth) rather than a single-sample threshold. **Place it where the process runs, not on the hypervisor** — a pegged core on the firewall is nearly always wrong, whereas `kvm` at 109% on cwwk is sometimes legitimate. Host scope is an open decision; it touches `system_health_check.sh`, which reaches all eight hosts.
+
 ### ⚠️ RESTORE ON RETURN — manual drift on cwwk (do this FIRST when home)
 
 Temporary changes were applied by hand on cwwk on 2026-08-01 while away. **All are un-codified drift.** Ansible restores most of it, but do it deliberately rather than discovering it later:
@@ -55,6 +137,8 @@ Temporary changes were applied by hand on cwwk on 2026-08-01 while away. **All a
 | `check_thermal.sh` thresholds | **15000 / 40000 / 98 / 101** (repo: 20 / 500 / 85 / 95) | Any `platform/proxmox` run |
 | Thermal cron schedule | `*/5` — already back to the repo value | n/a |
 | **`ksmtuned` disabled** | `disabled` / `inactive (dead)` | ⚠️ **NOTHING — see below** |
+
+📌 **The threshold row is no longer just drift — 2026-08-07 measured what it costs.** At `*/5`, `THROTTLE_CRIT=40000` sat exactly on the delta produced by one pegged core, oscillating CRIT/WARN every run; and `TEMP_WARN=98` kept a real 94–96°C event out of the alert text entirely. Restoring the repo values is the right move, but do it **with** the wrapper dedup in Next Steps — the repo's `THROTTLE_WARN=20` on a fanless box will page constantly on its own. See the 2026-08-07 event section above.
 
 ⚠️ **`ksmtuned` is a different class of drift and will NOT self-heal.** Disabled by hand on 2026-08-02. Unlike the rows above it **survives reboots *and* Ansible runs**, because the repo contains no KSM references at all (`grep -ri ksm ansible/ scripts/` → nothing). The systemd `preset: enabled` means a **rebuilt cwwk would come back with KSM on**, silently diverging from the running host. Either codify the disable in the `platform/proxmox` role (a `proxmox_disable_ksm` toggle, matching the variables-over-groups convention) or consciously re-enable it. Do not leave it as invisible drift.
 
