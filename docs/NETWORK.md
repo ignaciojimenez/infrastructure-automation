@@ -17,9 +17,13 @@ by hand, from memory.
 > RFC1918 internals and design intent appear here. Do not paste raw
 > `configctl wireguard showconf` or `config.xml` output into this file.
 
-**Everything below was read from the live firewall**, not inferred, unless a line
-says otherwise. Probe commands are listed under [Re-deriving this document](#re-deriving-this-document)
-so it can be checked rather than trusted.
+**Everything below was read from the live firewall and the live UniFi
+controller**, not inferred, unless a line says otherwise — and where an earlier
+inference turned out to be wrong, the correction is left in rather than edited
+out. Probe commands are listed under
+[Re-deriving this document](#re-deriving-this-document) and
+[Reading the UniFi controller](#reading-the-unifi-controller), so this can be
+checked rather than trusted.
 
 ---
 
@@ -50,13 +54,17 @@ flowchart TD
     ISP([ISP]) -->|igc0| WAN[WAN / vlan0.300]
     WAN --> FW{{OPNsense<br/>VM 100 on cwwk}}
 
-    FW -->|ix0 · 802.1q trunk| UBI[4 × Ubiquiti<br/>switches + APs]
+    FW -->|ix0 · 802.1q trunk| SW[Unmanaged Zyxel switch]
+    SW --> AP1[U6-Lite-Office<br/>wired root AP]
+    AP1 -->|wired| AP2[U6+-Salon-TV]
+    AP1 -.->|mesh · RSSI 23| AP4[UAP-AC-Lite-Habitacion]
+    AP2 -.->|mesh · RSSI 18| AP3[U6-Lite-Salon-Relay]
 
-    UBI --> V20[VLAN 20 · 10.30.20.0/24<br/>NO_VPN]
-    UBI --> V40[VLAN 40 · 10.30.40.0/24<br/>Native · core infra]
-    UBI --> V80[VLAN 80 · 10.30.80.0/24<br/>WiFi VPN]
-    UBI --> V100[VLAN 100 · 10.30.100.0/24<br/>IoT]
-    UBI --> V200[VLAN 200 · 10.30.200.0/24<br/>Guest]
+    SW --> V40[VLAN 40 · 10.30.40.0/24<br/>Native · core infra]
+    AP1 --> V20[VLAN 20 · 10.30.20.0/24<br/>NO_VPN · SSID _novpn]
+    AP1 --> V80[VLAN 80 · 10.30.80.0/24<br/>VPN · SSID estonoesmazagon]
+    AP1 --> V100[VLAN 100 · 10.30.100.0/24<br/>IoT · SSID _iot]
+    AP1 --> V200[VLAN 200 · 10.30.200.0/24<br/>Guest · 2 SSIDs]
 
     V40 --- H40[cwwk · hifipi · cobra<br/>unifi-lxc · agent-lxc]
     V100 --- H100[dockassist · vinylstreamer<br/>Shelly · BroadLink · Tado]
@@ -292,11 +300,13 @@ twelve tunnels down, which is not something to do casually. **Read the script's
 `10.30.41.7` and `10.30.41.8` — see above. Needs a decision: identify or remove.
 Unused peer slots are standing inbound credentials.
 
-### 5. One Ubiquiti device is a firmware generation behind
+### 5. ~~One Ubiquiti device is a firmware generation behind~~ — RETRACTED
 
-`10.30.40.3` runs `dropbear_2024.86`; the other three run `dropbear_2025.89`.
-Consistent with a device that has missed an update cycle — worth checking in the
-controller, which is where the actual firmware state lives.
+Withdrawn once the controller was readable. `10.30.40.3` is a **different model**
+(U7 Lite) on its own firmware line, running `6.8.2` — *newer* than the other
+three at `6.7.54`. The older dropbear banner reflects the model's own release
+train, not a missed update. See the correction note under
+[Access points](#access-points).
 
 ### 6. Fleet name resolution has no fallback
 
@@ -315,29 +325,99 @@ believes them.
 
 ---
 
+### 8. Two SSIDs share the guest VLAN with different isolation
+
+`candela.gorostiza` has **L2 isolation on**. `estonoesmazagon_guest` is on the
+**same VLAN 200** with **L2 isolation off**.
+
+Because they share a broadcast domain, the isolation on the first is only as
+strong as the second: a client associated to `estonoesmazagon_guest` is not
+prevented from reaching clients on `candela.gorostiza`. Whatever the isolation
+was meant to protect, an unisolated SSID sits beside it on the same segment.
+
+⚠️ **Reasoned from the configuration, not tested.** Confirming it means
+associating a device to each SSID and attempting traffic between them. Worth
+doing before deciding whether this matters — the intent behind two guest SSIDs
+isn't recorded anywhere, and one of them is named after a person, which suggests
+it was set up deliberately for someone.
+
+### 9. The IoT SSID has protected management frames disabled
+
+`estonoesmazagon_iot` is the only SSID with `pmf_mode=disabled`; the other four
+are `optional`. Without 802.11w, management frames are unauthenticated and
+clients can be deauthenticated by anyone in range — the classic precondition for
+forced-reassociation and handshake-capture attacks.
+
+The IoT VLAN is where the Shelly devices, the BroadLink IR blasters and the Tado
+bridge live, so this is the segment controlling **heating and mains power**.
+
+⚠️ **`disabled` is very likely deliberate** — cheap ESP32-class devices often
+cannot associate with PMF enabled, which is exactly why this SSID would differ
+from the rest. Treat it as a documented trade-off to re-confirm, not a
+misconfiguration to go fix. Raising it to `optional` would be the test; if the
+Shelly devices drop off, the answer is no.
+
 ## Physical layer
 
-Derived from the firewall's ARP table, vendor OUI lookup and SSH banner grabs —
-**not** from the UniFi controller, which turned out to be unreadable (see
-[Why this came from the firewall](#why-this-came-from-the-firewall)).
+Read from the UniFi controller API (`unifi-lxc`, CT 101, `10.30.40.201:8443`)
+using a read-only account, and cross-checked against the firewall's ARP table.
 
-### Network hardware
+### Access points
 
-Four Ubiquiti devices sit on VLAN 40, all running dropbear. The controller
-(`unifi-lxc`, CT 101) manages them from `10.30.40.201`.
+**All four Ubiquiti devices are access points.** There is no UniFi-managed
+switch — the cabinet switch is an unmanaged Zyxel, which is why VLAN trunking is
+handled entirely between OPNsense and the APs.
 
-| Address | Vendor (OUI) | SSH | Also listening |
-|---------|--------------|-----|----------------|
-| `10.30.40.1` | Ubiquiti | `dropbear_2025.89` | — |
-| `10.30.40.2` | Ubiquiti | `dropbear_2025.89` | `8080` |
-| `10.30.40.3` | Ubiquiti | ⚠️ `dropbear_2024.86` | — |
-| `10.30.40.4` | Ubiquiti | `dropbear_2025.89` | `8080` |
+| Name | Address | Model | Firmware | Uplink |
+|------|---------|-------|----------|--------|
+| `U6-Lite-Office` | `10.30.40.2` | U6 Lite | `6.7.54.15663` | **wired root**, 1 Gbps |
+| `U6+-Salon-TV` | `10.30.40.1` | U6+ | `6.7.54.15663` | wired ← `U6-Lite-Office` port 1, 1 Gbps |
+| `U6-Lite-Salon-Relay` | `10.30.40.4` | U6 Lite | `6.7.54.15663` | ⚠️ **wireless mesh** ← `U6+-Salon-TV`, RSSI 18 |
+| `UAP-AC-Lite-Habitacion` | `10.30.40.3` | U7 Lite | `6.8.2.15592` | ⚠️ **wireless mesh** ← `U6-Lite-Office`, RSSI 23 |
 
-They split cleanly into two pairs by open ports, which is consistent with two
-switches and two access points — but **which is which cannot be established
-without the controller**, so this document does not claim it. What *is*
-established: there are four of them, and `10.30.40.3` is a firmware generation
-behind the other three.
+All four adopted, all `state=1` (connected).
+
+**Two of the four are wireless-meshed, not wired** — `Salon-Relay` (the name says
+so) and `Habitacion`. Every client on those two APs has its traffic relayed over
+the air before it reaches the wired network. The reported mesh RSSI values, 18
+and 23, are the two lowest link metrics in the estate. *This document does not
+assert a pass/fail threshold for them* — UniFi's mesh RSSI scale is not a plain
+dBm figure and I could not verify how it maps. They are recorded because they are
+the only wireless links carrying infrastructure traffic.
+
+> **Correction.** An earlier version of this document inferred from open ports
+> that these were "two switches and two access points", and flagged `10.30.40.3`
+> as a *firmware generation behind* because its dropbear was older
+> (`2024.86` vs `2025.89`). **Both were wrong.** They are all APs, and
+> `10.30.40.3` is a different model (U7 Lite) on its own firmware line — running
+> `6.8.2`, which is *newer* than the other three. Model-specific version strings
+> are not comparable, and banner-grabbing an embedded SSH daemon does not tell
+> you what the device is.
+
+### Wireless — SSID → VLAN
+
+Five SSIDs, each bound to a network in the controller. This is the mapping that
+turns the segmentation table above into something a client actually lands in:
+
+| SSID | Network | VLAN | L2 isolation | PMF (802.11w) |
+|------|---------|-----:|--------------|---------------|
+| `estonoesmazagon` | VPN | 80 | off | optional |
+| `estonoesmazagon_novpn` | NO_VPN | 20 | off | optional |
+| `estonoesmazagon_iot` | IOT | 100 | off | ⚠️ **disabled** |
+| `estonoesmazagon_guest` | GUEST | 200 | ⚠️ **off** | optional |
+| `candela.gorostiza` | GUEST | 200 | on | optional |
+
+All five are WPA2-PSK. **None uses WPA3**, and none is configured as a UniFi
+"guest" network (`is_guest=false` throughout) — so guest treatment comes entirely
+from OPNsense's VLAN 200 rules, not from the controller's guest-control features.
+
+The default SSID `estonoesmazagon` lands on **VLAN 80**, meaning ordinary WiFi
+traffic egresses through Mullvad by default, and `_novpn` is the opt-out. That is
+the inverse of the usual arrangement and worth knowing before debugging anything
+that looks geo-blocked.
+
+`candela.gorostiza` and `estonoesmazagon_guest` **share VLAN 200** — see
+[finding 8](#8-two-ssids-share-the-guest-vlan-with-different-isolation).
 
 ### Compute
 
@@ -428,27 +508,44 @@ the test containers (`.205`/`.206`). Those are immune. The rest are not.
 
 ---
 
-## Why this came from the firewall
+## Reading the UniFi controller
 
-The intent was to read the physical topology from the UniFi controller. That path
-is closed, and it is worth recording so the next attempt doesn't repeat it:
+Two paths were tried. **The database is not reachable; the API is.**
 
-- `read_agent` on `unifi` has **no MongoDB client** — `/usr/lib/unifi/bin/mongod`
+Closed — do not retry:
+
+- `read_agent` on `unifi` has **no MongoDB client**. `/usr/lib/unifi/bin/mongod`
   is a symlink to the *server* binary, and no `mongo`/`mongosh` exists on the box.
-- The controller's `mongod` listens on `127.0.0.1:27117`, so it is reachable only
-  from the container itself.
-- There are **no UniFi API credentials in the vault**. Checked the full key list:
-  `vault_healthcheck_backup_unifi` exists, but it is a healthchecks.io ping token,
-  not controller auth.
+- The controller's `mongod` binds `127.0.0.1:27117`, so it is unreachable from
+  off-host anyway.
 
-So the device layer above was reconstructed from ARP, OUI and banner data
-instead. It is accurate about *what exists* and deliberately silent about
-switch-port assignments, SSID→VLAN bindings and port profiles, which genuinely
-require the controller.
+Works — a **read-only controller account** against the standalone controller's
+REST API. Log in once to get a session cookie, then GET:
 
-**To close that gap**, either add read-only UniFi controller credentials to the
-vault, or install a mongo client on `unifi-lxc` and extend `read_agent`'s sudo
-allowlist to a scoped query helper in the style of `agent_read`.
+```bash
+curl -sk -c /tmp/unifi.cookies -X POST "https://10.30.40.201:8443/api/login" \
+     -H "Content-Type: application/json" \
+     -d "{\"username\":\"read_agent\",\"password\":\"$UNIFI_PASS\"}"
+
+BASE="https://10.30.40.201:8443/api/s/default"
+curl -sk -b /tmp/unifi.cookies "$BASE/stat/device"       # APs: model, firmware, uplink
+curl -sk -b /tmp/unifi.cookies "$BASE/rest/networkconf"  # networks → VLAN → subnet
+curl -sk -b /tmp/unifi.cookies "$BASE/rest/wlanconf"     # SSIDs → network, security
+curl -sk -b /tmp/unifi.cookies "$BASE/stat/sta"          # associated clients
+```
+
+The account's View Only role is enforced server-side: the session cookie carries
+those permissions, so `POST`s that would change configuration are rejected by the
+controller rather than by convention.
+
+🔑 **The password is not in this repo and must not be.** It currently exists only
+outside version control. **It should be moved into `vault.yml` as
+`vault_unifi_readonly_password` and rotated**, since it was transmitted in
+plaintext when it was set up. Until then, pass it via environment variable as
+above — never inline in a script, a cron entry or a committed file.
+
+⚠️ Still **not captured**: switch-port assignments and port profiles. Not an
+access limitation — there is no UniFi-managed switch to read them from.
 
 ---
 
@@ -497,9 +594,11 @@ what fed CrowdSec into banning `agent-lxc` on 2026-08-03.
 | Rule names | `config.xml` via operator session | 2026-08-07 |
 | Device inventory, VLAN placement | `arp -an` on opnsense, live | 2026-08-07 |
 | Vendor identification | OUI lookup against local `nmap-mac-prefixes` | 2026-08-07 |
-| Network-device firmware | SSH banner grab, live | 2026-08-07 |
+| APs: model, firmware, mesh uplinks | UniFi controller API, live | 2026-08-07 |
+| SSID→VLAN, WLAN security settings | UniFi controller API, live | 2026-08-07 |
 | mDNS dependency | `dig` vs `dscacheutil`, live | 2026-08-07 |
-| Switch ports, SSID→VLAN, port profiles | — | **not captured — controller unreadable** |
+| Guest-SSID isolation gap (finding 8) | **reasoned from config, not tested** | — |
+| Switch ports / port profiles | n/a — no UniFi-managed switch exists | — |
 
 MAC addresses are deliberately not listed; vendor OUIs and roles are enough to
 work with and do not fingerprint individual devices in a public repository.
