@@ -141,9 +141,15 @@ Against repo `TEMP_WARN=85` and Tjmax 105°C, ~70°C is unremarkable — and the
 
 | File a fix needs | Already modified by |
 |---|---|
-| `scripts/common/system_health_check.sh` | `fix/agent-lxc-logs-dir-2026-08` |
+| `scripts/common/system_health_check.sh` | `fix/agent-lxc-logs-dir-2026-08` **and** `feat/link-speed-check-2026-08` |
 | `scripts/services/agent/investigate.sh.j2` | `fix/agent-lxc-logs-dir-2026-08` |
 | `playbooks/tasks/deploy_monitoring.yml` | `fix/agent-lxc-logs-dir` **and** `fix/deploy-plumbing-dirs` |
+
+🔴 **`check_load()` had a SECOND reason it could never alert — found 2026-08-07 on `feat/link-speed-check-2026-08`.** That branch's commit records it: *"Without this the script always exited 0, so every red ❌ it printed was cosmetic."* `system_health_check.sh` had no aggregation and no final `exit`, so its status was that of the last `echo`. `enhanced_monitoring_wrapper` keys purely on exit status. **So even a genuine whole-box saturation — the one case `check_load()` *was* designed for — never reached Slack, on any host, ever.**
+
+Two independent defects in the same check, from opposite directions: the **threshold** could not represent a single-process fault (this section), and the **exit path** discarded every fault it did detect. Either alone makes it silent. That both existed undetected for months is the strongest possible argument for the "start from failure modes, make the blanks the deliverable" review — neither would have been found by reading the check and asking whether it looked correct, because it *did*.
+
+⚠️ **Build the runaway-process check on `feat/link-speed-check`'s post-merge shape, not on `main`'s.** That branch converts the script to counted returns (`total_issues`) and adds a real `exit`. A check written against `main` would inherit the exit-0 bug. See the A2 notes in the handover — merging those two branches has a trap that silently recreates it.
 
 Writing against a base that moves underneath, then resolving conflicts in cron and monitoring definitions, is this repo's signature failure mode. After L-A there is one branch and the collision is gone. (`check_system_health.sh` and `check_proxmox_health.sh` are clean on all nine branches, so a fix scoped to those two only *could* go earlier — it would not be the whole job.)
 
