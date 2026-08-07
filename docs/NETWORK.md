@@ -413,11 +413,16 @@ physical port lands in which network. Losing it means re-deriving the port map b
 hand, which is precisely the situation this document was written to prevent, and
 the switch is a single unit with no redundancy.
 
-🔑 **Store it encrypted.** The export is
-[XOR-obfuscated, not encrypted](#the-exported-config-is-obfuscated-not-encrypted),
-and it embeds the admin password hash. It belongs in `vault.yml`, not in a plain
-file in a public repo. This is the whole reason the backup gap is not a
-five-minute `git add`.
+✅ **Resolved 2026-08-07.** The decoded config is committed at
+**`docs/reference/zyxel-xgs1250-12.cfg`** with the credential line redacted, and
+`docs/BACKUP_AND_RECOVERY.md` carries the refresh and recovery procedure.
+
+Committed as **plain text, not vaulted**, on purpose: what remains after
+redaction is the VLAN and PVID map, which is already published in this document.
+Keeping it readable means `git diff` shows a port changing VLAN — a vaulted blob
+would hide precisely the change worth noticing. The one genuinely sensitive line
+(`username "admin" secret 8 $8$…`) is stripped, and is not worth backing up
+anyway, since restoring onto a factory-reset switch means setting a new password.
 
 Related, lower severity: **HTTP is enabled alongside HTTPS** on the management
 interface (`ip http session-timeout 15` sits beside its HTTPS twin in the
@@ -516,7 +521,15 @@ The UI numbers ports 1–12; the config names them `gi1`–`gi8` (1 G copper) an
 | 9 | `te1` | 1G-Full | 40 | untagged 40 + tagged 20/80/100/200 | 2.2 M / 1.3 M | **coax backbone → upstairs** · ⭐ speed **forced** 1000/full |
 | 10 | `te2` | 1G-Full | 40 | untagged 40 + tagged 20/80/100/200 | 8.5 M / 13 M | AP trunk |
 | 11 | `te3` | Down | 40 | untagged 40 + tagged 20/80/100/200 | 0 | spare hybrid trunk |
-| 12 | `te4` | **10G-Full** | 1 | **tagged only**, all VLANs | **90 M / 72 M** | 🔗 **SFP+ uplink to `cwwk` → OPNsense** |
+| 12 | `te4` | **10G-Full** | 1 | **tagged only**, all VLANs | **90 M / 72 M** | 🔗 **SFP+ trunk to OPNsense's `ix0`** |
+
+⚠️ **`te4` goes to OPNsense, not to `cwwk` as such.** Both NICs are on the same
+physical CWWK board, but they are different ports with different treatment:
+OPNsense's `ix0` is passed through to the VM and lands on the tagged trunk, while
+`cwwk`'s own management NIC (`enp2s0`, `10.30.40.51`) sits on a plain
+**untagged VLAN 40 access port** — one of `gi4`/`gi5`/`gi8`. Verified from
+`/etc/network/interfaces`: `vmbr0` is a non-VLAN-aware bridge over `enp2s0`,
+which is also why Proxmox guests only ever see untagged VLAN 40.
 
 Four things worth reading off this:
 
@@ -817,6 +830,7 @@ from `dockassist` (VLAN 100):
 | Secondary IP `192.168.1.250/24` + sweep of `192.168.1.0/24` | **nothing responded** |
 | LLDP neighbour tables from all four APs | APs see **only each other** — no switch, no router |
 | Ubiquiti discovery broadcast, UDP 10001, from **two** VLANs | only the two U6 Lite APs answered |
+| Ubiquiti discovery on VLANs **20, 80, 100 and 200**, from OPNsense | **zero responders** |
 
 The LLDP result is the informative one. The two wired APs report each other as
 directly-connected neighbours on `eth0`, even though the path between them runs
@@ -832,19 +846,30 @@ tested.** It is behaving as a pure transparent L2 bridge. That is consistent wit
 the operator's account — configuring switch mode left it with no addressable
 management interface, and nothing since has been able to find one.
 
+**Every VLAN has now been covered.** The tagged-VLAN probe was run from OPNsense,
+which holds an interface on all of them, and returned **zero responders** on 20,
+80, 100 and 200. Combined with the VLAN 40 sweeps, there is no segment left where
+a discovery-speaking Ubiquiti device could be hiding.
+
+*(Note on method: the container could not do this. `cwwk`'s `vmbr0` is a plain,
+non-VLAN-aware bridge on `enp2s0`, so guests only ever see untagged VLAN 40.
+OPNsense was the only available vantage point with all VLANs terminated.)*
+
 **What is left to try:**
 
-1. **Serial console.** The ERX has a physical console port. Given four failed
-   network approaches, this is now the *first* option rather than the fallback.
-2. **Probe from a tagged VLAN.** Everything above ran from untagged VLAN 40 and
-   from VLAN 100. If management was bound to VLAN 20, 80 or 200, it would not
-   have answered. Cheap to extend, but a long shot.
+1. **Serial console.** The ERX has a physical console port. With every network
+   approach exhausted, this is now the only reliable route in.
+2. **Factory reset and reconfigure.** Regains control at the cost of dropping
+   upstairs wireless until it is set up again. Only worth it alongside option 1
+   failing, or a decision to replace the device.
 3. **Accept and document.** Record the model and a rebuild plan so a failure
    means "configure a spare from notes" rather than "work out what it did".
 
 ⚠️ The negative results are solid; the *explanation* is inference. What is
-verified is that **four independent discovery methods from two VLANs found
-nothing** — not that no management interface exists anywhere.
+verified is that **five discovery methods across every VLAN found nothing** —
+not that no management interface exists at all. A device answering only on a
+non-broadcast protocol, or with discovery services disabled, would look
+identical.
 
 ### An unexplained observation
 
