@@ -19,6 +19,17 @@
 # uses. Testing "the file was not written" would pass for a fix that wrote it
 # with a stale mtime and still fail in production for some third reason; this
 # tests the question Tier 2 actually asks.
+#
+# shellcheck disable=SC3013
+# SC3013 ("in POSIX sh, -nt is undefined") is suppressed for the whole file,
+# and only after checking rather than assuming: `-nt` was run under real dash
+# on cwwk 2026-08-08 and is correct in both directions. Keeping `-nt` is the
+# point — investigate.sh gates on `[ ! "$ANOMALY_FILE" -nt "$MARKER" ]`, so
+# rewriting this as `find -newer` would test a predicate production does not
+# use, which is exactly the vacuous pass the header above warns about.
+# Surfaced only after the L-A merge: the CI shellcheck step arrived on
+# test/e2e-harness, this file on fix/agent-lxc-logs-dir, and neither branch
+# alone had both.
 
 set -u
 
