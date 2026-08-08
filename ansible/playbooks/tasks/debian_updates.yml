@@ -9,6 +9,15 @@
     state: present
   tags: [updates]
 
+# ⚠️ This template is the ONLY thing that sets Automatic-Reboot,
+# Automatic-Reboot-Time and Automatic-Reboot-WithUsers. Two `lineinfile` tasks
+# used to sit further down this file claiming to do it; they were gated on
+# `auto_reboot is defined`, which was never true anywhere in the inventory, so
+# they had never run — and their regexps matched the *commented* stock lines,
+# which this template does not emit. Defining the variable would therefore have
+# made them live, found nothing to match, and appended a second, conflicting
+# directive to a file the template had just written. Removed 2026-08-06, at the
+# moment `auto_reboot` was defined for the first time.
 - name: Configure unattended-upgrades
   ansible.builtin.template:
     src: "{{ playbook_dir }}/../../../templates/debian/50unattended-upgrades.j2"
@@ -31,26 +40,6 @@
     group: root
     mode: '0644'
   tags: [updates, configuration]
-
-- name: Configure automatic reboot if needed
-  ansible.builtin.lineinfile:
-    path: /etc/apt/apt.conf.d/50unattended-upgrades
-    regexp: '^//Unattended-Upgrade::Automatic-Reboot '
-    line: 'Unattended-Upgrade::Automatic-Reboot "{{ auto_reboot | default(true) }}";'
-    create: false
-  when: auto_reboot is defined
-  ignore_errors: "{{ ansible_check_mode }}"
-  tags: [updates, reboot]
-
-- name: Set automatic reboot time
-  ansible.builtin.lineinfile:
-    path: /etc/apt/apt.conf.d/50unattended-upgrades
-    regexp: '^//Unattended-Upgrade::Automatic-Reboot-Time '
-    line: 'Unattended-Upgrade::Automatic-Reboot-Time "{{ auto_reboot_time | default("04:00") }}";'
-    create: false
-  when: auto_reboot_time is defined
-  ignore_errors: "{{ ansible_check_mode }}"
-  tags: [updates, reboot]
 
 - name: Create monitoring script for updates
   ansible.builtin.copy:
