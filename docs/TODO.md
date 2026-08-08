@@ -135,9 +135,39 @@ Against repo `TEMP_WARN=85` and Tjmax 105°C, ~70°C is unremarkable — and the
 3. **L-E should follow the fan, not precede it.** The threshold restore reads differently on each side of it: on a fanless box the repo's `THROTTLE_WARN=20` pages constantly (see RESTORE ON RETURN), but **on a properly cooled box those repo values become correctly calibrated again** — 20 throttle events on a box that measured zero across three days is a real signal. Restore them *after* the fan and the wrapper-dedup dependency largely evaporates.
 4. **Re-baseline once cooled.** The RECURRENCE table's fan-OK figures predate this year's ambient and the KSM change. Take a fresh idle + pegged-core reading after commissioning so the next comparison has a true reference.
 
-#### 🔴 OPEN AND UNANSWERED — does `system_health_check.sh` false-alarm for `choco`? (gates L-B)
+#### ✅ ANSWERED 2026-08-08 — the `choco` false failures are real, and the merge already fixes all of them
 
-**Every false-failure measurement in this repo was taken as `read_agent`. The cron runs as `choco`.** Nobody has checked whether they persist for the user that actually runs the check, and the exit-status aggregation converts any that do into **a page every 15 minutes, permanently, the moment L-B deploys.**
+**Measured as `choco`** on cobra, cwwk and opnsense (the user the cron actually runs as; every previous measurement was `read_agent`). **All three §1 predictions confirmed — none refuted.** All three hosts exit `0` today, as expected: the aggregation is not deployed yet, so the ❌ lines are cosmetic.
+
+| Host | ❌ / ⚠️ observed as `choco` | Fixed by | After L-A+L-B |
+|---|---|---|---|
+| `cobra` | none — fully green | n/a | ✅ exit 0 |
+| `cwwk` | ❌ `Upgrade log not found` · ⚠️ `Memory: 81%` | `fix/agent-lxc-logs-dir` | ✅ exit 0 |
+| `opnsense` | ❌ `Service sshd: not running` · ❌ `Service cron: not running` · ⚠️ `Load: 4:10PM on 6 CPUs (67%)` | `fix/agent-lxc-logs-dir` | ✅ exit 0 |
+
+**Why L-B is safe — verified in the branch, not assumed:**
+
+- **`sshd` → `openssh`:** `freebsd_default_services()` probes `/etc/rc.d` and `/usr/local/etc/rc.d` for an `openssh` script and returns `"openssh cron"` on OPNsense. The name is detected, not hardcoded.
+- **`cron` permission-dependence:** `freebsd_service_state()` tries `service status` first and only falls back to `pgrep` when `can_inspect_processes`; otherwise it returns `unknown`, which `check_services` grades as a **warning that increments nothing**. An unprivileged user who cannot see the process table can no longer manufacture a critical.
+- **Unreadable upgrade log:** `check_auto_upgrades` now separates *unreadable* from *missing* and reports the former as a **warning**. Worth noting this means **B2 (the `adm` group) is no longer load-bearing for alert volume** — it is still correct and still worth doing, but the code now degrades safely without it.
+
+🔴 **NEW — the FreeBSD load bug is TIME-DEPENDENT, and that is a diagnostic trap.** `check_load` returns the clock instead of the load, and awk coerces it: `load_percent = hour / ncpu × 100`. On opnsense's 6 CPUs:
+
+| Clock hour | Reported | Severity |
+|---|---|---|
+| 1–3 | 17–50% | ✅ silent |
+| **4** | **67%** | ⚠️ warning |
+| **5–12** | **83–200%** | ❌ **error** |
+
+**So it is an error for 8 of every 12 clock hours — 16 hours a day — and silent or merely advisory for the other 8.** The 2026-08-08 measurement was taken at 16:10, i.e. `4:10PM`, one of only four hours in twelve where it is not an error. An hour later it would have been ❌.
+
+⚠️ **Had the aggregation shipped without this fix, opnsense would have paged for two-thirds of the day and gone quiet for the rest — an intermittent alert that looks exactly like a real fluctuating load problem.** It is fixed on `fix/agent-lxc-logs-dir` by `read_load_1min()`, which asks `sysctl -n vm.loadavg` rather than parsing `uptime` prose. **General lesson: a parse bug whose output is a plausible number is worse than one that crashes — this one was invisible for months because every value it produced was a number a busy box could genuinely report.**
+
+<details>
+<summary>Original brief (kept — it is why this was asked)</summary>
+
+**Every false-failure measurement in this repo was taken as `read_agent`. The cron runs as `choco`.** Nobody had checked whether they persist for the user that actually runs the check, and the exit-status aggregation converts any that do into a page every 15 minutes, permanently, the moment L-B deploys.
+</details>
 
 ⚠️ **An agent cannot answer this.** Autonomous SSH must use the `-agent` suffix; `choco` uses a Secretive key requiring Touch ID. Confirmed 2026-08-08 — `ssh -o BatchMode=yes` to cobra, cwwk and opnsense as `choco` all return `Permission denied (publickey)`, failing fast rather than hanging. **And re-running as `read_agent` would reproduce exactly the flaw this item exists to close.** It needs a human shell (the phone works).
 
