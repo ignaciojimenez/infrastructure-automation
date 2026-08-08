@@ -580,6 +580,95 @@ check_network() {
     return $issues
 }
 
+check_link_speed() {
+    echo "=== Link Speed ==="
+
+    # Catches a NIC or cable that has silently fallen back below gigabit.
+    # Added after the backbone switch was found with a port linked at
+    # 10M-Half — see docs/NETWORK.md. Nothing on this fleet watched for it.
+    #
+    # Counts errors and returns the total, matching every other check on
+    # fix/agent-lxc-logs-dir. That branch replaces the HEALTH_ISSUE_FILE tally
+    # with summed return values, and a check that reports only via
+    # print_status contributes nothing to it — it would print ❌ and never
+    # alert, which is the exact bug this check was written to catch. Only
+    # errors count; warnings stay advisory.
+    found=0
+    issues=0
+
+    if [ "$OS_TYPE" = "freebsd" ]; then
+        for iface in $(ifconfig -l 2>/dev/null); do
+            case "$iface" in lo*|pflog*|pfsync*|enc*|wg*|vlan*) continue ;; esac
+            ifconfig "$iface" 2>/dev/null | grep -q "status: active" || continue
+            found=1
+            media=$(ifconfig "$iface" 2>/dev/null | sed -n 's/.*media: Ethernet \(.*\)/\1/p' | head -1)
+
+            # FreeBSD is not consistent about capitalisation in media strings —
+            # this box reports "10Gbase-Twinax" and "2500Base-T" on adjacent
+            # interfaces. Match case-insensitively or 2500Base-T falls through
+            # to the unknown branch, which is exactly what happened first try.
+            media_lc=$(printf '%s' "$media" | tr '[:upper:]' '[:lower:]')
+
+            case "$media_lc" in
+                *half-duplex*)
+                    print_status "error" "$iface: $media (half-duplex)"
+                    issues=$((issues + 1)) ;;
+                *1000base*|*2500base*|*5000base*|*10gbase*|*25gbase*|*40gbase*)
+                    print_status "success" "$iface: $media" ;;
+                *100base*|*10base*)
+                    print_status "error" "$iface: $media (below gigabit)"
+                    issues=$((issues + 1)) ;;
+                *)
+                    print_status "warning" "$iface: ${media:-unknown media}" ;;
+            esac
+        done
+    else
+        # SYSFS_NET exists so the Linux path can be tested against a fixture
+        # tree. It is never set in production — seven of eight hosts run this
+        # branch, and leaving it untestable would mean verifying only the
+        # FreeBSD half of a check whose whole point is that it reports faults.
+        for path in "${SYSFS_NET:-/sys/class/net}"/*; do
+            [ -e "$path" ] || continue
+            iface=$(basename "$path")
+
+            # Skip virtual interfaces. A real NIC has a device symlink;
+            # veth/bridge/tun do not, and their "speed" is meaningless —
+            # LXC veths report 10000 regardless of the physical link.
+            [ -e "$path/device" ] || continue
+            [ "$(cat "$path/operstate" 2>/dev/null)" = "up" ] || continue
+            found=1
+
+            speed=$(cat "$path/speed" 2>/dev/null)
+            duplex=$(cat "$path/duplex" 2>/dev/null)
+
+            # Wireless NICs report a rate that varies with signal; not a fault.
+            if [ -d "$path/wireless" ] || [ -e "$path/phy80211" ]; then
+                print_status "success" "$iface: wireless (${speed:-?}Mb/s, not graded)"
+                continue
+            fi
+
+            case "$speed" in
+                ''|-1|0)
+                    print_status "warning" "$iface: link speed unavailable" ;;
+                *)
+                    if [ "$speed" -lt 1000 ] 2>/dev/null; then
+                        print_status "error" "$iface: ${speed}Mb/s ${duplex:-?} (below gigabit)"
+                        issues=$((issues + 1))
+                    elif [ "$duplex" = "half" ]; then
+                        print_status "error" "$iface: ${speed}Mb/s half-duplex"
+                        issues=$((issues + 1))
+                    else
+                        print_status "success" "$iface: ${speed}Mb/s ${duplex:-?}"
+                    fi ;;
+            esac
+        done
+    fi
+
+    [ "$found" -eq 1 ] || print_status "warning" "No physical interfaces found (virtualised guest?)"
+    echo ""
+    return $issues
+}
+
 check_auto_upgrades() {
     echo "=== Auto-Upgrades Status ==="
     
@@ -744,6 +833,7 @@ check_load;           total_issues=$((total_issues + $?))
 check_services;       total_issues=$((total_issues + $?))
 check_failed_units;   total_issues=$((total_issues + $?))
 check_network;        total_issues=$((total_issues + $?))
+check_link_speed;     total_issues=$((total_issues + $?))
 check_auto_upgrades;  total_issues=$((total_issues + $?))
 check_pending_reboot; total_issues=$((total_issues + $?))
 
