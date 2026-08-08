@@ -6,6 +6,15 @@ This document is the single source of truth for pending infrastructure work.
 Each item includes verified current state, concrete next steps, and acceptance criteria.
 Items are ordered by risk × effort — highest-impact, most-actionable items first.
 
+> **Network layer:** see [NETWORK.md](NETWORK.md) — topology, VLANs, VPN and DNS,
+> plus thirteen findings from deriving it on 2026-08-07/08 that are not yet
+> tracked here.
+>
+> **Documentation consolidation** is briefed in
+> `~/.claude/plans/doc-consolidation-brief.md` — it moves those findings into
+> this file, drains this file of measurements, and adds `docs/ARCHITECTURE.md`.
+> **Blocked until L-A is merged**, because nine branches add ~1,600 lines here.
+
 ---
 
 ## agent-lxc — Tier 1/2 monitoring never ran for 12 days (ROOT CAUSE FIXED; codify + cleanup pending)
@@ -1606,6 +1615,7 @@ These items have value but are not urgent. Ranked by value-to-effort ratio to he
 
   ⚠️ **One inference this overturned.** agent-lxc's `~/.logs` was expected to be `0775` (hand-created with umask 002 during the outage fix, and the reason `logrotate.service` failed nightly). It is **`0755`** — the chmod was already applied — and `logrotate.service` now reports `inactive` with `ExecMainStatus 0` and **zero failed units on the host**. The L2b hazard ("agent-lxc pages on its first run after L3") is therefore already gone in practice. The `su` directive fix is still worth deploying, but as prevention for the next host, not as a prerequisite.
 
+- **Rotate the UniFi read-only password** `V:Med E:Low` — Added to the vault 2026-08-07 as `vault_unifi_readonly_user` / `vault_unifi_readonly_password` (UniFi Network controller, View Only role, enforced server-side). **The current value was transmitted in plaintext when it was set up**, so it should be changed. Storing it in the vault is fine and matches how every other credential here is handled — this item is purely about the one-time exposure, not the storage. To rotate: change it in the controller (Settings → Admins), then `ansible-vault edit ansible/inventory/group_vars/all/vault.yml` and update the value. Nothing consumes these variables yet; they exist so topology reads (`docs/NETWORK.md` § *Reading the UniFi controller*) do not need the password pasted in.
 - **Failures alert the watched channel; recoveries land in the unwatched one** `V:Med E:Low` — Observed 2026-07-22 while testing the Tier 1 alert path. `enhanced_monitoring_wrapper` sends failures via `alert_token` (#home-alerts) but the "recovered / notify-fixed" message via `logging_token` (#home-logging). So a check that fails and then self-heals leaves a red `:x: ALERT` in the watched channel with the all-clear posted somewhere you don't watch — the alert looks permanently open unless you go looking. This is fleet-wide wrapper behaviour, not specific to any one check, and it is probably why stale-looking alerts accumulate. Fix is a one-line change to route the recovery path to `alert_token`; decide whether recoveries should be as loud as failures, or whether a threaded/quieter form is preferable.
 
 

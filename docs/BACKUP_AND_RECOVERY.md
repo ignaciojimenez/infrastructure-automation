@@ -16,8 +16,41 @@ Complete reference for what is backed up, where backups live, and how to recover
 | opnsense | `/conf/config.xml` | Daily | 04:15 | `backup_opnsense.sh` | Latest per upload |
 | hifipi | — | — | — | Pure IaC, no unique state | — |
 | vinylstreamer | — | — | — | Pure IaC, no unique state | — |
+| **zyxel switch** | VLAN/PVID map | **Manual** | — | Web UI export → `docs/reference/` | In git |
 
 All backups are age-encrypted (asymmetric, public key on hosts) and uploaded to curlbin. Success/failure notifications go to Slack.
+
+### Zyxel XGS1250-12 — manual, and deliberately so
+
+The backbone switch has **no SSH, no SNMP and no API**, and exactly one `admin`
+account with no roles — so there is no way to automate this and no read-only
+credential to store. See `docs/NETWORK.md` § *Getting at the switch*.
+
+The current export lives at **`docs/reference/zyxel-xgs1250-12.cfg`**, decoded
+and committed in plain text on purpose: it is the VLAN and PVID map, which is
+already documented in `NETWORK.md`, and keeping it readable means `git diff`
+shows you when a port's VLAN changes. A binary blob would hide exactly that.
+
+**To refresh it** after any switch change:
+
+```bash
+# 1. Web UI → Management → Configuration Restore/Backup → Backup
+# 2. Decode it (the export is XOR 0xa5 — obfuscation, not encryption):
+python3 -c "import sys;d=open(sys.argv[1],'rb').read();\
+sys.stdout.write(bytes(b^0xa5 for b in d).decode())" startupconfig.cfg \
+  > docs/reference/zyxel-xgs1250-12.cfg
+# 3. Redact the credential line before committing:
+#    username "admin" secret 8 $8$...   →   ! REDACTED: ...
+```
+
+🔑 **Always strip the `username` line.** The raw export embeds the admin password
+hash, and this repository is public. The hash is not worth backing up anyway —
+restoring onto a factory-reset switch means setting a new password regardless.
+
+**Recovery:** factory-reset the switch, set its IP to `10.30.40.50/24` with
+gateway `10.30.40.254`, set management VLAN to 40, then re-enter the VLAN and
+per-port config from the committed file. There is no import path for a redacted
+config, so this is a manual re-entry — roughly 15 minutes for 12 ports.
 
 ## Prerequisites for Any Recovery
 
