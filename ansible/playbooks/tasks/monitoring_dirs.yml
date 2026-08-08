@@ -1,0 +1,36 @@
+---
+# The two directories every monitoring cron and script depends on.
+#
+# Extracted into one file because the same omission has now been found four
+# times in four places, and because the failure it causes is silent by
+# construction: a cron redirects its output into logs_dir, and a shell that
+# cannot open a redirect target fails BEFORE running the command. There is no
+# output, so the wrapper is never invoked, so nothing reaches Slack. The job
+# does not fail — it never runs, forever, while `crontab -l` shows it present
+# and the playbook that installed it printed a green ✅. That is exactly how
+# agent-lxc executed zero jobs for twelve days.
+#
+# ⚠️ The tag list is the point of this file, not an afterthought. Splitting
+# "create the directory" and "write into the directory" across different tags
+# means a tag-filtered run does the second without the first — which is how
+# `--tags scripts` produced a host with all six common scripts and no ~/.logs
+# (reproduced on CT 199, 2026-08-04). So this carries every tag under which
+# anything is deployed into either directory. Adding a new tag that writes
+# here means adding it here too.
+#
+# Owner is `primary_user` rather than `infrastructure_user` — they resolve to
+# the same account, but scripts_dir and logs_dir are themselves derived from
+# primary_user, so pairing them keeps the two from ever drifting apart.
+
+- name: Ensure the monitoring script and log directories exist
+  become: true
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ primary_user }}"
+    group: "{{ infrastructure_group }}"
+    mode: '0755'
+  loop:
+    - "{{ scripts_dir }}"
+    - "{{ logs_dir }}"
+  tags: [monitoring, scripts, logs, cron, config, security, ssh]

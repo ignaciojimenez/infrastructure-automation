@@ -1,6 +1,14 @@
 ---
 # Deploy Monitoring Infrastructure - Cross-platform
 
+# This half never created either directory at all. It installs a cron
+# redirecting into logs_dir, writes a script into scripts_dir, and then prints
+# "✅ Monitoring deployed" — on a host where neither exists, all three are true
+# and none of them work. `system/preflight.yml` only asserts the *variable* is
+# defined, which is satisfied by a path that was never made.
+- name: Ensure the monitoring directories exist
+  ansible.builtin.import_tasks: monitoring_dirs.yml
+
 - name: Set up monitoring cron jobs (Debian/Linux)
   ansible.builtin.cron:
     name: "System health check"

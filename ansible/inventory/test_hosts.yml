@@ -77,9 +77,14 @@ all:
               # Deliberately unmatched: no roles/services/test/ and no
               # group_vars/test.yml exist, so services.yml deploys the
               # monitoring play and nothing else. Point it at a real function to
-              # exercise that role. It has to be set to *something* —
-              # services.yml:46 evaluates `primary_function == "media"` with no
-              # `is defined` guard and errors out on a host that omits it.
+              # exercise that role.
+              #
+              # It used to be mandatory here for the wrong reason —
+              # services.yml compared `primary_function` with no guard and
+              # errored out on a host that omitted it. Fixed 2026-08-06 (every
+              # comparison now carries `| default("")`), so omitting this is
+              # once again a way to test the no-function path rather than a way
+              # to abort the run.
               primary_function: test
 
               # Dead webhook paths. The monitoring cron tasks are gated on these

@@ -154,6 +154,13 @@
   when: os_family == 'debian'
   tags: [ssh, service]
 
+# Fourth instance of the same omission, and the only one that fails loudly:
+# `copy` into a missing scripts_dir aborts the play with "Destination directory
+# does not exist", which is how it was found on 2026-08-04 against a container
+# whose ~/.scripts had been reset away.
+- name: Ensure the monitoring directories exist
+  ansible.builtin.import_tasks: monitoring_dirs.yml
+
 - name: Create SSH monitoring script
   ansible.builtin.copy:
     content: |

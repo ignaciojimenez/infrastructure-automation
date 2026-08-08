@@ -11,23 +11,11 @@
     # firewall does not own under /etc there is liable to be regenerated.
     monitoring_config_dir: "{{ '/usr/local/etc/monitoring' if os_family == 'freebsd' else '/etc/monitoring' }}"
   tasks:
-    - name: Ensure base scripts directory exists
-      ansible.builtin.file:
-        path: "{{ scripts_dir }}"
-        state: directory
-        owner: "{{ infrastructure_user }}"
-        group: "{{ infrastructure_group }}"
-        mode: '0755'
-      tags: [monitoring, scripts]
-
-    - name: Ensure logs directory exists
-      ansible.builtin.file:
-        path: "{{ logs_dir }}"
-        state: directory
-        owner: "{{ infrastructure_user }}"
-        group: "{{ infrastructure_group }}"
-        mode: '0755'
-      tags: [monitoring, logs]
+    # Was two tasks here, tagged `scripts` and `logs` respectively — so
+    # `--tags scripts` created ~/.scripts, deployed all six common scripts,
+    # exited green, and left no ~/.logs for the crons to redirect into.
+    - name: Ensure the monitoring directories exist
+      ansible.builtin.import_tasks: tasks/monitoring_dirs.yml
 
     - name: Find all scripts in common directory
       ansible.builtin.find:
