@@ -135,6 +135,26 @@ Against repo `TEMP_WARN=85` and Tjmax 105°C, ~70°C is unremarkable — and the
 3. **L-E should follow the fan, not precede it.** The threshold restore reads differently on each side of it: on a fanless box the repo's `THROTTLE_WARN=20` pages constantly (see RESTORE ON RETURN), but **on a properly cooled box those repo values become correctly calibrated again** — 20 throttle events on a box that measured zero across three days is a real signal. Restore them *after* the fan and the wrapper-dedup dependency largely evaporates.
 4. **Re-baseline once cooled.** The RECURRENCE table's fan-OK figures predate this year's ambient and the KSM change. Take a fresh idle + pegged-core reading after commissioning so the next comparison has a true reference.
 
+#### 🔴 OPEN AND UNANSWERED — does `system_health_check.sh` false-alarm for `choco`? (gates L-B)
+
+**Every false-failure measurement in this repo was taken as `read_agent`. The cron runs as `choco`.** Nobody has checked whether they persist for the user that actually runs the check, and the exit-status aggregation converts any that do into **a page every 15 minutes, permanently, the moment L-B deploys.**
+
+⚠️ **An agent cannot answer this.** Autonomous SSH must use the `-agent` suffix; `choco` uses a Secretive key requiring Touch ID. Confirmed 2026-08-08 — `ssh -o BatchMode=yes` to cobra, cwwk and opnsense as `choco` all return `Permission denied (publickey)`, failing fast rather than hanging. **And re-running as `read_agent` would reproduce exactly the flaw this item exists to close.** It needs a human shell (the phone works).
+
+```sh
+ssh cobra    '~/.scripts/system_health_check.sh; echo EXIT=$?'
+ssh cwwk     '~/.scripts/system_health_check.sh; echo EXIT=$?'
+ssh opnsense '/usr/local/bin/system_health_check.sh; echo EXIT=$?'
+```
+
+Record the **exit code and every ❌ line** per host. Predictions from §1 of the handover, to be confirmed or refuted rather than assumed:
+
+- The `adm` false failure should still fire — **B2 is not deployed yet.**
+- opnsense's `sshd` is really **`openssh`**, so `check_services` probes a service that does not exist.
+- opnsense's `cron` check is **permission-dependent** — `❌` as `choco`, `✅` as root, seconds apart. The cron runs as `choco`, so `choco` gets the false answer.
+
+**This is a read. It changes nothing on any host.** Until it is answered, L-B's blast radius is unknown.
+
 #### Deferred — do after L-A, not before
 
 ⚠️ **None of this may be written before the nine branches merge.** Measured collisions, identical in kind to the ones that parked the token item:
