@@ -22,7 +22,15 @@ AcceptEnv XMODIFIERS
 Subsystem	sftp	/usr/lib/openssh/sftp-server
 
 # Security settings
+{% if is_test_environment | default(false) %}
+# Test container only. `is_test_environment` is set in test_hosts.yml and never
+# in the fleet inventory, so a real host always takes the `no` below. Root key
+# auth is the rig's second way in; without it the only recovery path is `pct`
+# on the hypervisor.
+PermitRootLogin prohibit-password
+{% else %}
 PermitRootLogin no
+{% endif %}
 PasswordAuthentication {{ ssh_password_auth | default('no') }}
 ChallengeResponseAuthentication no
 PubkeyAuthentication yes

@@ -23,11 +23,55 @@
   check_mode: false
   tags: [ssh, keys]
 
+# `exclusive: true` is the point of this task — the GitHub key set is the whole
+# truth for this user, so a key revoked upstream disappears from every host. It
+# is also why a test container has to be handled explicitly: the key Ansible
+# connected with is the only way into a disposable host, and wiping it locks the
+# rig out of itself with `pct` on the hypervisor as the sole way back.
+#
+# So on a test host the connecting key is appended to the authoritative set
+# rather than the task being skipped. Hardening still runs, still deploys the
+# same config, and is still exercised — it just does not saw off the branch.
+# `is_test_environment` is set only in test_hosts.yml and never in the fleet
+# inventory, so this branch cannot be reached by a real host.
+# Double-quoted, not a folded `>-` block: YAML only expands \n as a newline
+# inside double quotes, and a folded scalar hands Jinja a literal backslash-n
+# that authorized_key then rejects as an invalid key.
+- name: Build the authoritative key set
+  ansible.builtin.set_fact:
+    authorized_key_set: "{{ key_lines | select | join('\n') }}"
+  vars:
+    key_lines:
+      - "{{ github_keys_fetched.content | default('') | trim }}"
+      - "{{ test_environment_ssh_key | default('')
+            if is_test_environment | default(false) else '' }}"
+  when: github_keys_fetched is succeeded
+  tags: [ssh, keys]
+
+# Ordered before the write on purpose: once `exclusive: true` has run there is
+# no way back in to fix it.
+- name: Assert a test host keeps a way in
+  ansible.builtin.assert:
+    that:
+      # Length first: an empty string is a substring of everything, so the
+      # membership check alone would wave through a blank key.
+      - test_environment_ssh_key | default('') | length > 0
+      - test_environment_ssh_key in authorized_key_set
+    fail_msg: >-
+      is_test_environment is set on {{ inventory_hostname }} but the connecting
+      key is not in the key set. Hardening would lock Ansible out of this host
+      permanently — recoverable only with pct/qm on the hypervisor. Set
+      test_environment_ssh_key in the test inventory.
+  when:
+    - is_test_environment | default(false)
+    - github_keys_fetched is succeeded
+  tags: [ssh, keys]
+
 - name: Set authorized keys for standard user from github
   ansible.posix.authorized_key:
     user: "{{ ansible_user }}"
     state: present
-    key: "{{ github_keys_fetched.content | default('') }}"
+    key: "{{ authorized_key_set }}"
     exclusive: true
   when: github_keys_fetched is succeeded
   tags: [ssh, keys]
@@ -70,7 +114,13 @@
     # console admin menu on VGA/serial. Replacing it with nologin would remove
     # the console recovery path, so only lock the password there.
     shell: "{{ '/sbin/nologin' if os_family == 'debian' else omit }}"
-  when: ansible_user != "root"
+  # Skipped on a test container so root SSH survives as a second way in. It
+  # means root-disabling itself is the one part of hardening the rig does not
+  # exercise — an accepted trade, because the alternative is a single point of
+  # access on a host only `pct` can rescue.
+  when:
+    - ansible_user != "root"
+    - not (is_test_environment | default(false))
   tags: [ssh, security]
 
 - name: Lock the user account password
@@ -78,7 +128,11 @@
   ansible.builtin.user:
     name: "{{ ansible_user }}"
     password_lock: true
-  when: inventory_hostname not in ['devpi']  # Don't lock out devpi yet
+  # Was `inventory_hostname not in ['devpi']` — the right intent keyed to a host
+  # that was never in the fleet inventory and has not been used in a long time.
+  # Generalised to the flag the test inventory sets. See docs/TODO.md for the
+  # devpi decision.
+  when: not (is_test_environment | default(false))
   tags: [ssh, security]
 
 - name: Allow only specific users (optional)
