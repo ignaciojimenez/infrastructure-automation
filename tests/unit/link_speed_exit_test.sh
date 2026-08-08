@@ -51,7 +51,7 @@ printf '\n── check_link_speed exit convention\n'
 # will actually guard. Found by review, 2026-08-08, before it could matter.
 main_line=$(grep -nE '^check_uptime([^(]|$)' "$SCRIPT" | head -1 | cut -d: -f1)
 if [ -z "$main_line" ]; then
-    printf '   ✗ could not locate the main call section (no `check_uptime` call line)\n'
+    printf '   ✗ could not locate the main call section (no check_uptime call line)\n'
     printf '     The extraction below would silently source the whole script.\n'
     exit 1
 fi
