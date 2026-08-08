@@ -692,6 +692,163 @@ reaches dockassist via `services.yml` while the wrapper reaches all hosts via
 
 ---
 
+## hifipi `amixer` Alerts — Repo Fix Never Deployed (fix written, awaiting deploy — 2026-08-02)
+
+**Risk:** None operational — audio is verifiably healthy. This is `#home-alerts` noise, and that is the *watched, push-notified* channel, so it is worse than pure log spam: it trains the owner to ignore real alerts. 8 false alerts/week.
+
+### Symptom
+
+| Alert | Schedule | Script | Error |
+|---|---|---|---|
+| 1 | daily 00:00:04 | `check_audio_output.sh` | `amixer: Unable to find simple control 'Master',0` |
+| 2 | **Sundays only** 00:00:06 | `restart_audio_services.sh` | `amixer: Unable to find simple control 'Digital',0` |
+
+Slack corroborates exactly: one alert on 07-22/23/24/25/27/28/29/30 and 08-01, **two** on 07-26 and 08-02 — both Sundays (`@weekly` = Sunday 00:00). That cadence is why it read as "one alert that sometimes doubles".
+
+### Root cause — the fix existed in the repo and was never deployed
+
+`9972e65` (**2026-03-23**) already corrected both scripts to target the real hardware control (`amixer -c 0 … 'DAC'`). hifipi was still running the **pre-March versions**. Verified by checksum, not inferred — exactly the two files that commit touched differed; every other audio script and every common script matched.
+
+**Why the drift persisted:** these scripts are deployed *only* by the `audio_playback` role (`ansible/roles/services/audio_playback/tasks/main.yml:301`), via `services.yml`/`site.yml`. `deploy_monitoring.yml` — the playbook you'd naturally reach for when chasing monitoring noise, and which `CLAUDE.md` calls *"Deploy monitoring scripts to all hosts"* — copies only `scripts/common/`. So common scripts stayed in sync (proving the host *was* being deployed to) while role-owned ones rotted for four months with no failing signal.
+
+### Hardware ground truth (verified)
+
+Card 0 `sndrpihifiberry` (HiFiBerry DAC+ HD) exposes only `DAC Playback Volume` and `PCM Playback Volume` (`/var/lib/alsa/asound.state`). There is **no `Master`, `Digital` or `Analogue` control on this card at all** — the old names were never valid for this DAC. `DAC` sits at `240/240` = 0 dB = 100%; `PCM` at unity. `systemctl --failed` empty, MPD/Shairport/Raspotify healthy. **Zero audio impact — always pure monitoring noise.**
+
+### Three bugs, not one — the control names were only the visible layer
+
+Redeploying `9972e65` as-is would **not** have silenced alert 2:
+
+1. `restart_audio_services.sh` still called `/usr/bin/amixer sset 'Master' 100%` (no `-c 0`) under `set -e`. No PulseAudio session exists in cron, so `Master` is absent → exit 1 → the Sunday alert would keep firing, merely renaming the control. Proven by the deployed check script failing on that exact control in that exact context nightly. **Fixed: line dropped** (the hardware DAC line above it does the real work; `|| true` would have preserved a permanent no-op).
+2. `check_audio_output.sh` used bare `alsactl store` with no `sudo`; `/var/lib/alsa/asound.state` is root-owned `0644` → fails as `choco` → `set -e` → exit 1. Invisible today because that branch only runs when DAC < 90%, and DAC is pinned at 100%. The sibling script already did it correctly. **Fixed: `sudo /usr/sbin/alsactl store`**, matching. `choco` holds `NOPASSWD: ALL` (`ansible/playbooks/bootstrap.yml:133`), and `sudo systemctl restart …` already succeeds from cron in the same script.
+
+`asound.state` was last written **Mar 23 19:18** — during the manual session that produced the fix. No `alsactl store` has succeeded since.
+
+### Coverage check — does the fix still catch what the monitoring is for?
+
+The intent is "audio device present, at max volume". Checking this surfaced **a third bug**, unrelated to the control names and older than them:
+
+- **Device present:** `aplay -l | grep -q 'card'` → unchanged; still exits 1 + alerts if the card disappears. Always worked.
+- **Max volume:** now reads `DAC` (the real hardware volume, 0–240) instead of `Master`, which never existed. **But pointing at the right control was not sufficient — the value was never usable.** See below.
+- **Dropped `Master` write:** loses nothing. No such control exists on this card in any context.
+- **Known gap (accepted):** `PCM Playback Volume` is not checked. It sits at unity (0 dB of −102.39…+4.00 dB) and nothing in the repo ever writes it. Worth adding only if a "quiet audio" incident ever occurs with `DAC` at 100%.
+
+#### Bug 3 — the volume threshold never evaluated (fixed 2026-08-02)
+
+`grep -E 'Left:|Mono:'` matches **two** lines on a stereo control, because `amixer` prints an empty `Mono:` header above the channels:
+
+```
+  Mono:
+  Front Left: Playback 240 [100%] [0.00dB]
+  Front Right: Playback 240 [100%] [0.00dB]
+```
+
+`awk -F'[][]' '{print $2}'` emits a blank field for `Mono:` and `100%` for `Front Left:`, so `VOLUME` is `"\n100"` — multi-line. That fails the `^[0-9]+$` guard, so `[ "$VOLUME" -lt 90 ]` **never runs**, the script always falls through to the success branch, and the self-heal path is unreachable. A DAC at 10% would have been reported as "configured correctly".
+
+Pre-existing, not introduced by the `Master`→`DAC` migration: the old version had the identical `grep` and simply never reached it. Fixed by taking the first percentage and not filtering by channel label:
+
+```sh
+VOLUME=$(amixer -c 0 sget 'DAC',0 | grep -oE '[0-9]+%' | head -1 | tr -d '%')
+```
+
+Verified against hifipi's real `amixer` output (clean `100`, threshold runs) and a mono-card variant (`50` → correctly flagged low). The replacement carries a comment recording the trap so the channel-label filter is not reintroduced.
+
+**Lesson — this is the one worth keeping.** The bug survived two passes because verifying that a parse *matches* is not the same as verifying what it *yields*. The reasoning "`'Front Left:'` contains `'Left:'`, so the grep is fine" was correct and useless: the failure was in the second matching line, not the first. Check the produced value, not the pattern. It only became visible when real `amixer` output was pasted into the session — no amount of reading the script would have shown it.
+
+### Why the earlier investigation didn't close it
+
+The 2026-07-25 Tier 2 agent investigation ($0.44) diagnosed alert 1 correctly — "monitoring-script bug, this DAC has no `Master`, no audio impact" — but recommended *a human patch the check script*, not knowing the patch had been in git for four months. Its mitigations were therefore redundant, and it never saw alert 2 because that Sunday job hadn't fired in its lookback. **Lesson: on a `Script Failed` alert, diff the deployed script against the repo before diagnosing its logic.**
+
+### Diagnostic gotcha — do not trust `amixer` from `read_agent`
+
+`read_agent` is not in the `audio` group (`choco` is, gid 29). From a `read_agent` session `aplay -l` reports *"no soundcards found"* while `amixer scontrols` reports a phantom `'Master'`/`'Capture'` — the exact opposite of the truth. Read control names from `/var/lib/alsa/asound.state` (world-readable) instead.
+
+### Status
+
+- [x] Repo fix written and committed on branch `fix/hifipi-amixer-alerts-2026-08` (both latent bugs above). **Local only — not pushed**; pushing needs Touch ID and the owner was on a phone.
+- [x] **Interim manual mitigation applied 2026-08-02 (~20:55 CEST) and independently verified** — see below.
+- [x] Deployed checksums confirmed byte-identical to the repo (agent-side `shasum` via `agent_read`, not self-reported). Full re-audit of hifipi afterwards: **0 drift** across all repo-matched scripts.
+- [x] **Second paste 2026-08-02 (~21:40 CEST)** — `check_audio_output.sh` volume-parse fix (bug 3). Host hash `9c0c2f5d8df31147d810087b426b13fff310a794`, confirmed by the owner. `restart_audio_services.sh` unchanged (`aafb6939…`).
+- [ ] Deploy: `ansible-playbook ansible/playbooks/services.yml --limit hifipi --tags audio_playback` — **expect changed=0 on both scripts.** Anything else means something drifted after 2026-08-02; stop and diff.
+- [ ] Verify a clean 00:00 run, **and a clean Sunday 00:00 run** — alert 2 needs a full week. Do not close this on a Monday.
+
+#### What is and isn't proven as of 2026-08-02 21:00 CEST
+
+| | Status |
+|---|---|
+| Files on host == repo | ✅ verified by checksum from the agent side (2nd paste hash `9c0c2f5d…` confirmed by owner) |
+| `check_audio_output.sh` runs clean interactively | ✅ smoke-tested, exit 0, prints a single-line `DAC volume: 100%` |
+| Volume threshold + self-heal branch actually fire | ✅ proven by forcing `DAC` to 50%: detected, reset to 100%, exit 0 |
+| `sudo /usr/sbin/alsactl store` works from `choco` | ✅ **proven.** `sudo -n -l` shows `(ALL) NOPASSWD: ALL`; `sudo -n /usr/sbin/alsactl store` → exit 0 |
+| `restart_audio_services.sh` runs clean end-to-end | ✅ run manually in full: all three services restarted, DAC set, `alsactl store` succeeded, exit 0 |
+| `check_audio_output.sh` runs clean **under cron** | ⏳ first proof at **00:00 Mon 2026-08-03** |
+| `restart_audio_services.sh` runs clean under cron | ⏳ first proof at **00:00 Sun 2026-08-09** (`@weekly`) |
+
+**The `NOPASSWD` risk flagged earlier is closed** — proven by hand rather than left to Aug 9. `sudo -n` was used deliberately: plain `sudo` from an interactive session would have prompted and succeeded, proving nothing about cron, which cannot answer a prompt.
+
+Only the cron-context runs remain, and both scripts have now executed successfully end-to-end by hand. Residual risk is low and confined to environment differences between an interactive session and cron (`PATH`, no TTY) — real but unlikely, since every other job on this host runs fine under the same wrapper.
+
+#### Expected Slack behaviour on the first clean run — do not misread it
+
+The wrapper sends a **recovery notification** when the previous run failed (`enhanced_monitoring_wrapper:402`), and that goes to `$monitor_hook` → **`#home-logging`**, not `#home-alerts` (`:420`). So the first clean run of each script produces **one message in `#home-logging`** (recovery, coinciding with the daily heartbeat) and **zero in `#home-alerts`**.
+
+That is success, not a residual failure. The acceptance test is therefore precise: **any `Script Failed on hifipi` in `#home-alerts` after 2026-08-02 means the fix did not work.** A `#home-logging` message is expected and correct.
+
+### Incidental findings on hifipi (not investigated)
+
+- Slack webhook tokens are literal in every crontab line — the same instance as Priority 3 below, observed again here.
+- Stale artefact deployed alongside real scripts: `~/.scripts/do_backup.127013.2026-03-14@17:07:39~`. Harmless; folds into the clutter cleanup item below.
+- `system_health_check` reports **194 pending updates** (informational, not alerting). `unattended-upgrades` is running and last upgraded 2026-08-02, so this is the usual non-security backlog rather than a stalled updater — worth a glance at the laptop, not an action item.
+
+### Interim manual mitigation (hand-applied from a phone)
+
+Constraints at the time: owner remote with phone-only SSH to hifipi — no laptop, so no Ansible deploy, and no `git push` (Touch ID). `read_agent` is read-only, so the agent could not apply it either. The fix was therefore written to the repo *first* and then hand-transcribed, so the two are byte-identical by construction and the eventual Ansible run is a true no-op, **not drift**.
+
+Procedure: back up both scripts to `~/*.bak.20260802`, then `cat > ~/.scripts/<script> <<'EOF' … EOF` with the exact repo contents of `scripts/services/audio/{check_audio_output,restart_audio_services}.sh`, then `chmod 755`.
+
+**The verification that makes this safe** — these must match the repo exactly:
+
+```
+4eaeef7b4c269e3e57de2dbadcac2632300a7aa7  check_audio_output.sh
+aafb6939693bb06e262dccc363c845aae7fbb40f  restart_audio_services.sh
+```
+
+If a hash differs the paste was mangled (phone keyboards, smart quotes, the em-dash in the restart script's comment) — restore from `~/*.bak.20260802` rather than hand-patching.
+
+Smoke test: `~/.scripts/check_audio_output.sh` → `✅ Audio system is configured correctly (DAC volume: 100%)`, exit 0. Note this does **not** exercise the new `sudo /usr/sbin/alsactl store`, which only runs when DAC < 90%. Only `restart_audio_services.sh` exercises it — and that restarts MPD/Shairport/Raspotify, so run it deliberately, not while listening.
+
+- [ ] Delete `~/check_audio_output.sh.bak.20260802` and `~/restart_audio_services.sh.bak.20260802` once the repo fix is deployed and verified
+
+### Fleet-wide drift audit (done this session — no systemic problem)
+
+Checksummed every deployed script against its repo counterpart on all six Debian hosts:
+
+| Host | Checked | Drifted |
+|---|---|---|
+| dockassist | 34 | 0 |
+| cobra | 24 | **1** (inactive, see below) |
+| hifipi | 16 | **2** (this issue) |
+| vinylstreamer | 13 | 0 |
+| cwwk | 14 | 0 |
+| unifi | 12 | 0 |
+
+Also confirmed **every cron entry on every host is Ansible-managed** (job count == `#Ansible` count on all six) — no unmanaged scheduled code anywhere.
+
+- **cobra `internet_speed_monitor` — stale but inert.** A pre-migration copy, older than `a000f71`, missing the `type:"result"` JSON filter. It is *not* in cobra's crontab and *not* called by `run_all_monitoring.sh`. The live copy is owned by the **homeassistant** role on dockassist (`roles/services/homeassistant/tasks/main.yml:467`) and is in sync. Orphaned leftover; delete rather than deploy.
+- Remaining unmatched files are benign: rendered `.j2` templates (`dockassist_monitor.sh`, `vinylstreamer_monitor.sh`, `backup_ha`, `update_ha`), scripts generated inline by task files (`check_auto_updates.sh` → `debian_updates.yml`, `check_ssh_security.sh` → `ssh_hardening.yml`, `run_all_monitoring.sh` → `deploy_monitoring.yml`), and manual `*.bkp` / `test*` leftovers.
+- **`import_gpg_github.sh`** is on every host with no repo counterpart and no inline generator — genuinely unmanaged, but not scheduled. Low priority; identify and either codify or delete.
+- ⚠️ **OPNsense was NOT audited** — `read_agent` has no key there (`opnsense-agent`: `Permission denied (publickey)`). Its 13 scripts under `scripts/services/opnsense/` are unverified. See Priority 2.
+
+### Prevention — the more valuable half
+
+- [ ] Repo-vs-host drift on role-owned scripts is currently **undetectable**: `deploy_monitoring.yml` reports success while leaving them stale, with no failing signal. Options, cheapest first:
+  1. Fix `CLAUDE.md`, which describes `deploy_monitoring.yml` as "Deploy monitoring scripts to all hosts" — it deploys only `scripts/common/`. **That wording is what made this trap invisible; do this one regardless.**
+  2. Add a periodic checksum drift check (repo vs host) alerting to `#home-logging`. The audit loop above is the prototype — note `ssh` inside a `while read` loop eats stdin; use `ssh -n`.
+  3. Extend `deploy_monitoring.yml` to also sync `scripts/services/*/` by `primary_function`, so the obvious playbook does the obvious thing.
+- [ ] Clean up: cobra's orphaned `internet_speed_monitor`, and the `*.manual.bkp` / `monitoring_wrapper.last.working` / `test*` clutter in `~/.scripts` fleet-wide.
+
+---
+
 ## Priority 1 — Autonomous Agent LXC (Phases A + B delivered; C remains)
 
 **Risk:** Medium. A production container with SSH reach to all 7 hosts. Compromise exposes read-only infrastructure visibility plus a spend-capped API key. Scoped by `from=` IP pinning on `authorized_keys`, read-only NOPASSWD sudo, OpenCode `deny` on all writes, UFW default-deny inbound, and revocation in one Ansible run.
