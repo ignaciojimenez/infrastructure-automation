@@ -11,7 +11,12 @@
       register: health_check
       failed_when: false
       changed_when: false
-      when: enable_monitoring | default(true)
+      # Not deployed on FreeBSD — the OPNsense role has its own health check.
+      # `failed_when: false` would have hidden this, which is why it is spelled
+      # out rather than left to swallow the error.
+      when:
+        - enable_monitoring | default(true)
+        - os_family != "freebsd"
       tags: [validation]
 
     - name: Display validation result

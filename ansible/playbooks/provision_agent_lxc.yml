@@ -118,6 +118,7 @@
           --searchdomain {{ agent_lxc_searchdomain }}
           --ostype debian
           --unprivileged 1
+          --features nesting=1
           --onboot 1
           --password {{ vault_bootstrap_password | quote }}
       when: agent_lxc_config.rc != 0
@@ -131,6 +132,22 @@
       when:
         - agent_lxc_config.rc == 0
         - "'onboot: 1' not in agent_lxc_config.stdout"
+      changed_when: true
+      tags: [provision, create]
+
+    # Debian 13 ships systemd 257, which needs nesting to set up its
+    # credentials tmpfs. Without it the container boots with ~19 failed units —
+    # journald, tmpfiles-setup and every mount unit, all exiting 243/CREDENTIALS.
+    # Proxmox says so outright on start ("Systemd 257 detected. You may need to
+    # enable nesting"), but nothing was reading that. A dead journald is the
+    # expensive part: it took a 12-day silent cron outage with it.
+    # Takes effect on the next container start, not immediately.
+    - name: Ensure nesting is enabled on an existing container
+      ansible.builtin.command:
+        cmd: pct set {{ agent_lxc_vmid }} --features nesting=1
+      when:
+        - agent_lxc_config.rc == 0
+        - "'nesting=1' not in agent_lxc_config.stdout"
       changed_when: true
       tags: [provision, create]
 
@@ -176,6 +193,38 @@
       # Skipped under --check: there is nothing to wait for when the container
       # has not been created, and a skipped task registers no rc to test.
       when: not ansible_check_mode
+      tags: [provision, start]
+
+    # "Finished booting" and "booted healthy" are different questions, and the
+    # task above only answers the first — it accepts `degraded` on purpose, so
+    # a container whose journald never started still passes provisioning. That
+    # is exactly how CT 103 shipped with 19 failed units and stayed that way
+    # for weeks. Ask the second question explicitly, and fail the build rather
+    # than hand back a container that cannot log why it is broken.
+    - name: Collect failed units after boot
+      ansible.builtin.command:
+        cmd: pct exec {{ agent_lxc_vmid }} -- systemctl --failed --no-legend --plain
+      register: agent_lxc_failed_units
+      changed_when: false
+      failed_when: false
+      when: not ansible_check_mode
+      tags: [provision, start]
+
+    - name: Fail when the container booted with failed units
+      ansible.builtin.fail:
+        msg: |
+          CT {{ agent_lxc_vmid }} finished booting but has failed systemd units:
+
+          {{ agent_lxc_failed_units.stdout }}
+
+          Do not treat this as cosmetic. If journald is among them the container
+          cannot log its own failures, and anything that breaks later breaks
+          silently. `243/CREDENTIALS` on journald/tmpfiles/mount units means
+          nesting is off — check `pct config {{ agent_lxc_vmid }}` for
+          `features: nesting=1` and restart the container.
+      when:
+        - not ansible_check_mode
+        - agent_lxc_failed_units.stdout | default('') | trim | length > 0
       tags: [provision, start]
 
     # ============================================================

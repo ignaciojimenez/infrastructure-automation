@@ -103,6 +103,30 @@
     mode: '0750'
   tags: [agent, monitoring]
 
+# Every cron this role writes redirects into logs_dir. A shell that cannot open
+# a redirect target fails BEFORE running the command, so a missing logs_dir does
+# not produce a failing job that alerts — it produces a job that never runs at
+# all, silently, forever. Only deploy_monitoring.yml and two platform roles
+# create this directory; agent-lxc is the first host whose monitoring is
+# entirely role-owned, so it was the first to be deployed without one.
+# Same reasoning as the wrapper below: deploy what the crons depend on rather
+# than assuming another playbook has already been run.
+#
+# It carries `cron` and `scripts` as well as `logs` deliberately: a tag that
+# installs a cron redirecting into this directory must also be able to create
+# it. Tagging it `logs` alone means `--tags cron` writes a crontab pointing
+# into a directory the same run just declined to make — which is the original
+# 12-day outage, reachable again through a different door.
+- name: Ensure agent log directory exists
+  become: true
+  ansible.builtin.file:
+    path: "{{ logs_dir }}"
+    state: directory
+    owner: "{{ primary_user }}"
+    group: "{{ infrastructure_group }}"
+    mode: '0755'
+  tags: [agent, monitoring, logs, scripts, cron]
+
 # site.yml does not push scripts/common/ (only the standalone
 # deploy_monitoring.yml playbook does), so the role deploys the wrapper it
 # depends on rather than assuming it. Same approach as roles/services/unifi.
@@ -170,6 +194,24 @@
     - vault_anthropic_api_key is defined
   tags: [agent, investigate]
   block:
+    # With no watermark file the Slack watch falls back to oldest=0 and pulls
+    # the last 50 messages of #home-alerts — so a fresh deploy spends Tier 2
+    # budget investigating alerts that were resolved weeks ago, and the first
+    # thing the agent ever reports is a fault that no longer exists. Seeding
+    # "now" makes the watch strictly forward-looking from the moment it is
+    # installed. Seeded before the cron below exists, so no run can race it.
+    #
+    # `creates` makes this first-deploy-only: a redeploy never rewinds a live
+    # watermark (re-investigating and re-billing history) nor advances one
+    # (silently skipping alerts that arrived between runs).
+    - name: Seed the Slack watch watermark on first deploy
+      become: true
+      become_user: "{{ primary_user }}"
+      ansible.builtin.shell: "date +%s > {{ agent_state_dir }}/.last_slack_ts"
+      args:
+        creates: "{{ agent_state_dir }}/.last_slack_ts"
+      tags: [agent, investigate, slack]
+
     - name: Check the installed OpenCode version
       ansible.builtin.command:
         cmd: "{{ opencode_bin }} --version"

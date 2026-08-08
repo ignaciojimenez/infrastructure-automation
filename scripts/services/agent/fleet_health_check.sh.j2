@@ -15,29 +15,55 @@ set -u
 DISK_THRESHOLD={{ agent_disk_threshold }}
 WRAPPER_MAX_AGE_HOURS={{ agent_wrapper_max_age_hours }}
 SSH_TIMEOUT={{ agent_ssh_timeout }}
+HEALTHCHECK_URL="{{ agent_sweep_healthcheck_url }}"
+BACKOFF_BASE_SECONDS={{ agent_ssh_backoff_base_seconds }}
+BACKOFF_MAX_SECONDS={{ agent_ssh_backoff_max_seconds }}
 AGENT_DIR="{{ agent_state_dir }}"
 ANOMALY_FILE="$AGENT_DIR/last_anomaly.json"
+BACKOFF_DIR="$AGENT_DIR/ssh_backoff"
 
 # name:kind pairs, from group_vars/agent.yml
 FLEET="{% for h in agent_fleet_hosts %}{{ h.name }}:{{ h.kind }} {% endfor %}"
 
-mkdir -p "$AGENT_DIR"
+mkdir -p "$AGENT_DIR" "$BACKOFF_DIR"
 
 FINDINGS=$(mktemp)
 PROBE_OUT=$(mktemp)
-trap 'rm -f "$FINDINGS" "$PROBE_OUT"' EXIT INT TERM
+SSH_ERR=$(mktemp)
+# In AGENT_DIR rather than /tmp, so replacing the snapshot below is a
+# same-filesystem rename and never leaves a half-written file for Tier 2.
+SNAPSHOT=$(mktemp "$AGENT_DIR/.anomaly.XXXXXX")
+trap 'rm -f "$FINDINGS" "$PROBE_OUT" "$SSH_ERR" "$SNAPSHOT"' EXIT INT TERM
 
+# ⚠️ Appends to a FILE, and that is load-bearing rather than incidental.
+#
+# One caller runs inside `sed ... | while read`, and POSIX runs the right-hand
+# side of a pipeline in a subshell — so anything `note` accumulated in a shell
+# variable would be discarded when that loop exited, and the sweep would
+# under-report without failing. Writing to $FINDINGS survives, because the file
+# is not shell state.
+#
+# So do not "simplify" this into a counter or an appended-to variable. That is
+# the exact bug `check_disk_usage` carried in system_health_check.sh: it
+# printed a full disk correctly and still returned 0, because its increments
+# happened in a subshell. Repo-wide audit 2026-08-06 found this to be the only
+# remaining `cmd | while` that accumulates anything at all.
 note() {
     # note <host> <message>
     printf '%s: %s\n' "$1" "$2" >> "$FINDINGS"
 }
 
 ssh_probe() {
-    # ssh_probe <host> — probe script on stdin, KEY=VALUE lines on stdout
+    # ssh_probe <host> — probe script on stdin, KEY=VALUE lines on stdout.
+    #
+    # stderr is captured rather than discarded. Telling "the far side refused
+    # our credentials" apart from "the far side is not there" is what the
+    # back-off below rests on, and that distinction exists only in stderr.
+    : > "$SSH_ERR"
     ssh -o BatchMode=yes \
         -o ConnectTimeout="$SSH_TIMEOUT" \
         -o StrictHostKeyChecking=accept-new \
-        "${1}-agent" "sh -s" 2>/dev/null
+        "${1}-agent" "sh -s" 2>"$SSH_ERR"
 }
 
 # Reads KEY from the probe output. Absent keys yield an empty string, so a
@@ -54,6 +80,70 @@ is_number() {
         ''|*[!0-9]*) return 1 ;;
         *) return 0 ;;
     esac
+}
+
+# ============================================================
+# SSH auth back-off
+#
+# 2026-08-03: a genuine read_agent key failure on opnsense became a fleet
+# outage. Every sweep found the host unreachable, Tier 2 investigated that
+# finding the only way it can — by SSHing at the host — and the resulting
+# burst of failed publickey auth read to CrowdSec as a brute-force. CrowdSec
+# runs on the firewall, the firewall is the gateway, so it banned this
+# container off its own network. The monitoring caused an outage instead of
+# detecting one.
+#
+# So a host that REJECTS us is not re-probed on a fixed hourly cadence: its
+# probe is suspended for a doubling window. Scoped deliberately to
+# authentication failures — a host that is merely down logs no failed auth and
+# trips no IPS, and is still worth retrying every sweep.
+#
+# The finding is still emitted on every sweep. Only the connection stops; the
+# human keeps being told. Its wording is deliberately constant across sweeps,
+# because the snapshot dedup at the bottom of this file compares content.
+# ============================================================
+
+AUTH_REJECTED_NOTE="SSH auth rejected as read_agent — probing suspended (back-off); repeated failed auth trips the firewall IPS"
+
+ssh_auth_rejected() {
+    # Did the last probe fail on our credentials, rather than on reachability?
+    grep -q -e 'Permission denied' \
+            -e 'Too many authentication failures' \
+            -e 'No supported authentication methods' "$SSH_ERR"
+}
+
+backoff_state() {
+    # "<consecutive_rejections> <next_attempt_epoch>", or nothing.
+    [ -f "$BACKOFF_DIR/$1" ] || return 1
+    cat "$BACKOFF_DIR/$1" 2>/dev/null
+}
+
+backoff_active() {
+    _state=$(backoff_state "$1") || return 1
+    _next=${_state##* }
+    is_number "$_next" || return 1
+    [ "$(date +%s)" -lt "$_next" ]
+}
+
+backoff_record() {
+    # Doubling window, capped: the first rejection suspends probing for
+    # BACKOFF_BASE_SECONDS, and every rejection that survives a retry doubles
+    # it. A host broken for a day therefore costs a handful of failed auths in
+    # total rather than one an hour forever, while a transient failure is
+    # retried on the next sweep.
+    _prev=$(backoff_state "$1" || echo "0 0")
+    _count=${_prev%% *}
+    is_number "$_count" || _count=0
+    _count=$((_count + 1))
+    # Keeps the shift below inside integer range; the cap makes it moot anyway.
+    [ "$_count" -gt 16 ] && _count=16
+    _delay=$(( BACKOFF_BASE_SECONDS << (_count - 1) ))
+    [ "$_delay" -gt "$BACKOFF_MAX_SECONDS" ] && _delay="$BACKOFF_MAX_SECONDS"
+    printf '%s %s\n' "$_count" "$(( $(date +%s) + _delay ))" > "$BACKOFF_DIR/$1"
+}
+
+backoff_clear() {
+    rm -f "$BACKOFF_DIR/$1"
 }
 
 check_disk() {
@@ -85,6 +175,42 @@ check_wrapper_freshness() {
     else
         note "$1" "no monitoring run found in the journal"
     fi
+}
+
+# ============================================================
+# Dead-man's switch
+#
+# Everything above reports what the sweep FOUND. This reports that the sweep
+# RAN — the one fault it is structurally incapable of noticing itself. It is
+# not hypothetical: this container executed no jobs at all for its first 12
+# days (every cron died on a redirect into a directory that did not exist,
+# before the script was ever reached) and the silence went unnoticed because
+# agent-lxc was the only host in the fleet without a healthchecks.io check.
+# A ping from inside the script covers that exact shape — the cron dying early
+# means no ping, which is precisely what should page.
+#
+# Pinged UNCONDITIONALLY, including when the sweep found problems and will
+# exit 1. The gap this closes is silence, not findings: findings already reach
+# #home-alerts through the wrapper. Gating the ping on a clean sweep would mean
+# a sweep that runs and works stops pinging the moment it has something to say,
+# conflating "the observer is dead" with "the fleet is unwell" — the two states
+# that most need telling apart. (This deliberately differs from
+# heartbeat_backup.sh, which pings only on recent success because it is
+# asserting freshness of a backup, not existence of a run.)
+#
+# Never allowed to affect the sweep's own exit status: a dead-man's switch that
+# can fail the thing it watches is a liability. hc-ping.com being unreachable
+# is healthchecks' problem to alert on, not a fleet finding.
+# ============================================================
+
+ping_healthcheck() {
+    [ -n "$HEALTHCHECK_URL" ] || return 0
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsS -m 10 --retry 3 "$HEALTHCHECK_URL" >/dev/null 2>&1 || true
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q -T 10 -t 3 -O /dev/null "$HEALTHCHECK_URL" >/dev/null 2>&1 || true
+    fi
+    return 0
 }
 
 # ============================================================
@@ -157,6 +283,12 @@ for entry in $fleet_to_check; do
     host="${entry%%:*}"
     kind="${entry##*:}"
 
+    # A host in back-off is reported, not contacted.
+    if backoff_active "$host"; then
+        note "$host" "$AUTH_REJECTED_NOTE"
+        continue
+    fi
+
     : > "$PROBE_OUT"
     "probe_${kind}" "$host"
 
@@ -164,9 +296,15 @@ for entry in $fleet_to_check; do
     # the probe's own exit status is unreliable here, because the forced
     # command wrapper on the far side masks it.
     if [ -z "$(field DISK)" ]; then
-        note "$host" "UNREACHABLE (no response as read_agent)"
+        if ssh_auth_rejected; then
+            backoff_record "$host"
+            note "$host" "$AUTH_REJECTED_NOTE"
+        else
+            note "$host" "UNREACHABLE (no response as read_agent)"
+        fi
         continue
     fi
+    backoff_clear "$host"
     reachable=$((reachable + 1))
 
     check_disk "$host"
@@ -201,6 +339,10 @@ done
 
 count=$(wc -l < "$FINDINGS" | tr -d ' ')
 
+# Before the branch, so there is exactly one call site and neither exit path
+# can drift away from it.
+ping_healthcheck
+
 if [ "$count" -eq 0 ]; then
     echo "Fleet OK — ${reachable}/${total} hosts reachable, no findings"
     exit 0
@@ -222,6 +364,24 @@ cat "$FINDINGS"
         awk '{ printf "%s    \"%s\"", (NR>1 ? ",\n" : ""), $0 } END { print "" }'
     printf '  ]\n'
     printf '}\n'
-} > "$ANOMALY_FILE"
+} > "$SNAPSHOT"
+
+# Replace the snapshot only when the FINDINGS change.
+#
+# Tier 2 decides whether to investigate by comparing this file's mtime against
+# its own marker, with the stated intent that a persistent fault is not
+# re-investigated every hour. Rewriting the file on every sweep that found
+# anything advanced that mtime hourly and defeated the guard completely: a
+# fault lasting days was re-investigated, and re-billed, every hour.
+#
+# The timestamp line is excluded from the comparison because it changes on
+# every run by construction — comparing whole files would leave the guard just
+# as dead, in a subtler way.
+if [ -f "$ANOMALY_FILE" ] &&
+   [ "$(grep -v '"timestamp":' "$ANOMALY_FILE")" = "$(grep -v '"timestamp":' "$SNAPSHOT")" ]; then
+    echo "(findings unchanged since the last sweep — $ANOMALY_FILE left untouched)"
+else
+    mv -f "$SNAPSHOT" "$ANOMALY_FILE"
+fi
 
 exit 1

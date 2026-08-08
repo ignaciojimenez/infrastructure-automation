@@ -23,20 +23,30 @@
   # as system_health_check.sh already includes disk and memory checks
   # System health check is deployed to ALL hosts, including network_controller
 
-- name: Set up monitoring cron jobs (FreeBSD)
+# FreeBSD deliberately has no equivalent of the cron above. `roles/platform/
+# opnsense` already schedules eight wrapped checks, including its own
+# `check_system_health.sh`, which covers memory, disk and load with FreeBSD-
+# native probes — where the common script's FreeBSD memory branch measures
+# nothing at all. Scheduling both would duplicate three checks at two different
+# sets of thresholds.
+#
+# The two entries that used to live here were removed 2026-08-06 after reading
+# the live crontab, which had neither. One ran the common script *unwrapped*,
+# so a failure would have gone to local mail rather than Slack; the other
+# pointed at `check_pf_status.sh`, which has never existed in this repo — a
+# cron installed against a missing script, which is precisely the silent-
+# failure shape this sprint exists to remove.
+#
+# `state: absent` rather than deletion alone: any host that ever received them
+# gets cleaned on the next run.
+- name: Remove monitoring cron jobs that belong to the OPNsense role (FreeBSD)
   ansible.builtin.cron:
-    name: "{{ item.name }}"
-    minute: "{{ item.minute }}"
-    hour: "{{ item.hour | default('*') }}"
-    job: "{{ item.job }}"
+    name: "{{ item }}"
+    state: absent
     user: "{{ primary_user }}"
   loop:
-    - name: "System health check"
-      minute: "{{ monitoring_interval | default('*/15') }}"
-      job: "{{ scripts_dir }}/system_health_check.sh"
-    - name: "Firewall status check"
-      minute: "*/5"
-      job: "{{ scripts_dir }}/check_pf_status.sh"
+    - "System health check"
+    - "Firewall status check"
   when: os_family == "freebsd"
   tags: [monitoring, cron]
 

@@ -42,6 +42,23 @@
   when: timezone_set is changed
   tags: [timezone]
 
+# The monitoring scripts run as this user under cron and read logs they do not
+# own: /var/log/unattended-upgrades is root:adm 0750, and the journal is
+# readable to `adm` without sudo. bootstrap.yml sets `groups: sudo` and nothing
+# else, but only inside a block gated on connecting as root AND the user not
+# existing — so on every live host that block never runs and the membership was
+# never granted. cwwk, unifi-lxc and agent-lxc were measured missing it; the
+# four Pis have it only by accident, inherited from the Pi image.
+#
+# This is the half that restores coverage: without it check_auto_upgrades can
+# only report "cannot verify", which is honest but blind.
+- name: Ensure the infrastructure user can read system logs
+  ansible.builtin.user:
+    name: "{{ infrastructure_user }}"
+    groups: adm
+    append: true
+  tags: [users, groups, logs]
+
 - name: Set ping capabilities for non-root users (LXC compatibility)
   ansible.builtin.command:
     cmd: setcap cap_net_raw+ep /bin/ping

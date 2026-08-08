@@ -8,6 +8,361 @@ Items are ordered by risk × effort — highest-impact, most-actionable items fi
 
 ---
 
+## agent-lxc — Tier 1/2 monitoring never ran for 12 days (ROOT CAUSE FIXED; codify + cleanup pending)
+
+**Risk:** High — silent blind spot. The fleet observer has produced **zero** output since it was built (2026-07-22). Nothing alerted, because the thing that would alert is the thing that is broken. Discovered 2026-08-03 only because the absence of reports was noticed by hand.
+
+### Confirmed (2026-08-03)
+- CT 103 is running, `cron.service` active, crontab installed and byte-for-byte what the role intends (all 5 jobs).
+- **Exactly one Slack message ever** from `agent-lxc`: 2026-07-22 09:06, and that was the `/tmp/fleet_synth.sh` synthetic test (threshold forced to 1%). The real crons have never posted anything.
+- **Zero SSH connections** from `10.30.40.203` to `dockassist`/`hifipi`/`cobra` — grep proven capable against the same journals (51 `Accepted` lines). Tier 1 has never reached a single host.
+- `~/.logs/` **did not exist**. Every cron redirects `>> {{ logs_dir }}/*.log`; a shell that cannot open a redirect target fails *before* executing the command. Silent, permanent, unlogged.
+- Egress/DNS/`choco` account/`/tmp` perms/`cron.allow`/spool perms all verified healthy — none of them are the cause.
+
+### Fixed on branch `fix/agent-lxc-logs-dir-2026-08`
+- `roles/services/agent` now creates `logs_dir` itself instead of assuming `deploy_monitoring.yml` ran. Only that playbook and two platform roles created it; agent-lxc is the first host with entirely role-owned monitoring, so it was the first deployed without one.
+- Seeds `.last_slack_ts` on first deploy. Without it the Slack watch falls back to `oldest=0`, pulls the last 50 messages of #home-alerts, and burns Tier 2 budget investigating resolved alerts — worse, the agent's first-ever report would describe a fault that no longer exists.
+
+### Verified fixed (2026-08-03) — end to end, on a real failure
+`mkdir -p ~/.logs` applied by hand at ~14:12. Cron had been executing on schedule all along; the redirect was killing every job before it started. **The missing directory was the entire root cause.**
+
+Proven, not inferred:
+- **14:15:03** — first-ever real monitoring message in #home-logging (`System Health Check`, SUCCESS, `Host: agent-lxc`), on the next `*/15` tick.
+- **14:37:01** — Tier 1 sweep ran, SSH fan-out confirmed on all six checkable hosts by counting `10.30.40.203` in each host's own sshd journal (independent of anything the agent reports about itself).
+- **14:37:16** — sweep found a genuine issue, exited 1, and the wrapper posted `:x: ALERT` to **#home-alerts** (the watched channel). The alert path is verified against a real fault, not a synthetic one.
+
+⚠️ **This fix is manual and lives only on the box.** The branch codifies it, but until that is deployed a rebuild recreates the outage.
+
+### Not the cause — but real, and worth its own work
+The container's systemd is badly broken: **19 failed units**, including *every* mount unit (`tmp.mount`, `run-lock.mount`, `dev-mqueue.mount`) and all four `systemd-tmpfiles-*` services. `systemd-journald` and `systemd-tmpfiles-setup` both exit `243/CREDENTIALS` — systemd cannot set up its credentials tmpfs, i.e. the container cannot mount filesystems. Likely an LXC capability/config issue (unprivileged + newer systemd).
+
+This did **not** cause the outage — cron works fine. But dead `journald` is *why the outage hid for 12 days*: cron's record of what it ran and why it failed goes nowhere, and `/var/log/syslog` has been 0 bytes since 2026-07-14. A monitoring host that cannot log will keep failing invisibly.
+
+### The agent got itself banned by CrowdSec within 10 minutes of working (2026-08-03)
+The moment Tier 1 started working it found `opnsense: UNREACHABLE (no response as read_agent)` — a real, pre-existing key failure. Tier 2 then fired at 14:47 to investigate **that finding**, which meant OpenCode repeatedly SSH'd at opnsense and failed publickey auth every time. OPNsense runs CrowdSec; a burst of failed SSH auth from `10.30.40.203` is textbook ssh-bruteforce, so **CrowdSec banned the agent container**. Since OPNsense *is* the gateway, the container lost everything beyond its own L2 segment.
+
+Symptom shape, for next time: same-segment hosts reachable (cobra pings in 0.3 ms), everything routed dead; gateway ARP entry `REACHABLE` but ping to it 100% loss (L2 fine, L3 filtered); **survives a full container reboot** — which is the tell that the block is not in the container. Diagnosed by comparing a same-segment host against an off-segment one; the container itself looked perfectly healthy throughout (0.065% CPU, 187 MB/2 GB, 15 processes).
+
+Cleared with `cscli decisions delete --ip 10.30.40.203` on opnsense.
+
+**This is a feedback loop, not a one-off.** While `read_agent` is broken on opnsense, every sweep finds it, every Tier 2 run attacks it, and CrowdSec re-bans. Broken for now by removing the Tier 2 anomaly cron (manual — see ⚠️ below). Permanent fixes, in order of value: (1) restore `read_agent` on opnsense, (2) whitelist fleet IPs in CrowdSec so the infrastructure cannot ban itself, (3) have `fleet_health_check` back off a host that fails auth rather than retrying it hourly.
+
+#### ✅ (3) DONE in code 2026-08-06 — the loop is broken at both ends
+
+Branch `fix/agent-lxc-logs-dir-2026-08`. Covered by `tests/unit/ssh_backoff_test.sh` (17 assertions, laptop-only, no spend); 8 of them fail against `main`.
+
+- **Tier 1 backs off.** `ssh_probe` now captures stderr instead of discarding it, because "the far side refused our credentials" and "the far side is not there" are distinguishable only there. A rejection records `~/.agent/ssh_backoff/<host>` and suspends probing for a doubling window — 1h, 2h, 4h, capped at 6h (`agent_ssh_backoff_{base,max}_seconds`). A successful probe clears it.
+- **Scoped to rejected auth, deliberately.** A host that is merely down logs no failed auth and trips no IPS; backing off from it would blind the sweep for nothing. Tested both ways.
+- **It reports without connecting.** The finding still fires on every sweep — only the TCP connection stops. Silence would be the wrong fix; the human must keep being told.
+- **Tier 2 will not investigate a host it cannot log into.** If every finding in the snapshot names a backed-off host there is nothing the agent could gather — its only tool is `ssh <host>-agent` — so `investigate.sh` exits 0 without launching OpenCode. When *some* findings are reachable it runs, with a "Hosts you must NOT connect to" block appended to the prompt naming the rest. `infra-monitor.md` gained a matching hard rule.
+
+⚠️ **The two fixes are coupled, and the coupling is easy to break.** The back-off finding's wording is deliberately constant across sweeps. Put a timestamp or a retry counter in it and the snapshot content changes every hour, which silently un-fixes the dedup below. `ssh_backoff_test.sh` asserts the two sweeps produce byte-identical text for exactly this reason.
+
+Still open from that list: (1) opnsense `read_agent` durability, and (2) a CrowdSec whitelist for fleet IPs. The back-off makes the loop survivable, not impossible.
+
+### Tier 2 has never completed a run — and the earlier cost warning was wrong
+`investigate.log` shows every Tier 2 run ending `rc=124 — opencode timed out after 600s and was killed`, `run cost: $0`, at 14:47 / 15:47 / 16:47. It never reached the Anthropic API because the CrowdSec ban had cut its network. **Actual spend to date: $0**, not the $7–13/day estimated from the re-billing bug below. That estimate was wrong in the reassuring direction — but the bug is real and simply never got the chance to fire. Tier 2's true cost and correctness remain **unmeasured**: it has not once produced a successful investigation.
+
+Each failed run still burns 10 minutes of the container's single CPU on a hung `opencode`, hourly.
+
+### ⚠️ Manual state on the box, not yet codified (2026-08-03)
+- `mkdir -p ~/.logs` — the actual outage fix. Codified on this branch; **deploy it or a rebuild reproduces the outage.**
+- Tier 2 anomaly cron **removed by hand** to break the CrowdSec ban loop (backup at `/root/crontab.choco.bak.20260803` inside CT 103). Any `services.yml --tags agent` run restores it — do not deploy until opnsense access is fixed.
+- `pct set 103 --features nesting=1` — see below. Persisted in the CT config, not in this repo; nothing in Ansible manages container features.
+
+### systemd breakage fixed — enable nesting
+The 19 failed units (`journald`, `tmpfiles-setup`, every mount unit, all `243/CREDENTIALS`) were a missing `nesting=1` feature flag. Proxmox says so itself on reboot: `WARN: Systemd 257 detected. You may need to enable nesting.` After `pct set 103 --features nesting=1` + reboot, `systemctl --failed` returns **0 units** and `journald` is active — cron execution is finally visible in the journal.
+
+Consequence worth noting: while journald was dead, **fail2ban was blind**, because its sshd filter reads `_SYSTEMD_UNIT=ssh.service` from the journal. `Currently banned: 0 / Total failed: 0` meant "no visibility", not "no attacks". Any host with a dead journald has decorative fail2ban.
+
+**Now codified** (`provision_agent_lxc.yml`): `--features nesting=1` on create, an idempotent `pct set` for existing containers, and — the more important half — the playbook now **fails the build on any failed unit after boot**. It previously accepted `degraded` by design (`failed_when: ... 'degraded' not in stdout`), which is precisely how a container with 19 failed units passed provisioning and stayed broken for weeks. "Finished booting" and "booted healthy" are different questions; it now asks both.
+
+### ✅ Cost bug — FIXED IN CODE 2026-08-06 (a persistent fault was re-investigated, and re-billed, every hour)
+
+Branch `fix/agent-lxc-logs-dir-2026-08`. `fleet_health_check.sh` now builds the snapshot in a temp file alongside the real one and replaces it — atomically, by rename — **only when the findings differ**. The `timestamp` line is excluded from that comparison, because it changes on every run by construction: comparing whole files would have left the guard exactly as dead, in a subtler way. So the snapshot's mtime tracks "new information" rather than "the sweep ran", which is what `investigate.sh`'s `-nt` guard always assumed it did.
+
+Covered by `tests/unit/anomaly_dedup_test.sh` — 8 assertions, laptop-only, no container and no spend. It asserts the *exact* predicate Tier 2 uses (`[ "$ANOMALY_FILE" -nt "$MARKER" ]`) rather than "the file was not written": a fix that wrote the file with a stale mtime would pass the weaker test and still fail in production. 3 of the 8 fail against `main`, including the whole-file-comparison trap.
+
+Both mtimes in that test are set explicitly with `touch -t`. Letting them land in the same second would make `-nt` false for the wrong reason and pass vacuously — the same class of structurally-guaranteed non-result as the "declared broken 1 minute into a 60-minute cron cycle" note above.
+
+Original diagnosis, kept:
+
+#### ⚠️ Cost bug — a persistent fault IS re-investigated (and re-billed) every hour
+`investigate.sh` gates on `[ ! "$ANOMALY_FILE" -nt "$MARKER" ]`, with the stated intent that "a persistent fault isn't re-investigated (and re-billed) every hour". But `fleet_health_check.sh:225` rewrites `last_anomaly.json` **unconditionally on every sweep that finds anything** — so its mtime advances hourly, the guard never engages, and Tier 2 re-investigates the identical finding every hour. The `--slack` path has proper content-dedup (7-day, signature-based); this path has none.
+
+Live exposure right now: opnsense is unreachable (below), so the sweep finds it every hour. At the repo's own figure of ~$0.30–0.55 per investigation that is roughly **$7–13/day** until opnsense is fixed. Also `SEND_TO_ALERT=true` on every failure with no dedup or cooldown (`enhanced_monitoring_wrapper:384`), so it is 24 push notifications/day to #home-alerts alongside the spend.
+
+**Fix:** write `last_anomaly.json` only when its *content* changes (compare against the previous file and skip the write if identical), so mtime tracks "new information" rather than "sweep ran". Content-hash dedup like the `--slack` path is the better long-term shape.
+
+**Until fixed:** either resolve opnsense access (removes the finding), or temporarily remove the Tier 2 anomaly cron.
+
+### Next Steps
+1. **Deploy the branch** so `logs_dir` is codified and the hand-made directory stops being load-bearing.
+2. Fix the container's systemd/mount breakage (needs root on CT 103; `pct exec` is deliberately not in read_agent's sudo allowlist).
+3. Restore `journald` — the observability gap that made this a 12-day outage instead of a 1-hour one.
+4. Re-run `agent_access` against agent-lxc: it is missing `/usr/local/bin/agent_read` (commit `067bba5`) that every other host has. That helper reads exactly the logs that were needed here, and its absence is why this could not be diagnosed remotely.
+
+### Process note — how this was nearly misdiagnosed
+After the manual fix, the sweep was declared "still broken" on the basis of zero SSH connections. That check ran ~1 minute after the directory was created, against a Tier 1 job that runs at `:37` — no cycle had occurred yet. The negative result was structurally guaranteed and proved nothing. **Before concluding a fix failed, confirm at least one scheduled cycle has actually elapsed.** A check that cannot yet have fired is not evidence of anything.
+
+### Acceptance Criteria
+- [x] A monitoring message appears in #home-logging tagged `Host: agent-lxc` — 2026-08-03 14:15:03
+- [x] `fleet_health_check.sh` (Tier 1, `:37`) produces SSH connections from `10.30.40.203` on all fleet hosts — verified 14:37 from each host's own sshd journal
+- [x] Alert path proven on a real fault — `:x: ALERT` in #home-alerts at 14:37:16 (opnsense unreachable), not a synthetic test
+- [x] `systemctl --failed` on CT 103 is empty, `journald` active, cron execution visible in the journal — after `nesting=1`, 2026-08-03 17:02
+- [ ] `logs_dir` codified in the role and deployed, so the manual `mkdir` is no longer load-bearing
+- [ ] Tier 2 completes one successful investigation (never yet achieved — all runs timed out at 600s)
+- [x] The re-billing bug is closed, and the ban loop has a back-off — in code 2026-08-06, both covered by unit tests that fail against `main`
+- [ ] Tier 2 anomaly cron restored (`/root/crontab.choco.bak.20260803` on CT 103), after the branch is deployed. **No longer blocked on opnsense access:** the back-off means a host that rejects the key is reported, not attacked. Restore it and watch the first real run — cost and correctness are still unmeasured.
+
+### Incidental findings (this session)
+- **`roles/services/unifi` has the identical latent bug** — three crons redirect into `logs_dir` (lines 168/183/199) and the role never creates it. `unifi-lxc` is unaffected today because its `.logs` predates the role, but a rebuild reproduces the agent-lxc outage exactly. Same one-task fix; not applied here (out of scope for this branch).
+- `deploy_monitoring.yml` tags its logs-dir task `[monitoring, logs]` but its scripts task `[monitoring, scripts]`. A run with `--tags scripts` deploys scripts into a directory it silently skips creating. Plausible (unverified) explanation for how agent-lxc ended up with all six `scripts/common/` files and no `.logs`. **Confirmed and reproduced 2026-08-04** — see the Priority 2 entry below.
+- **The agent role had the identical tag gap, found 2026-08-06 while fixing the above.** Its `Ensure agent log directory exists` was tagged `[agent, monitoring, logs]` while the cron writing into that directory was `[agent, monitoring, cron]`, so `--tags cron` installed a crontab redirecting into a directory the same run declined to create — the 12-day outage reachable through a second door on the very host it happened to. Fixed on `fix/agent-lxc-logs-dir-2026-08`: the directory task now carries `logs`, `scripts` **and** `cron`. Verified with `--list-tasks` under a static `roles:` include, since `--list-tasks` cannot see through the `include_role` that `services.yml` uses. **General rule, worth applying to any new role: the task that creates a directory carries every tag that writes into it.**
+- `system_health_check.sh` on agent-lxc reports `❌ Upgrade log not found - unattended-upgrades may not be configured`, but `/var/log/unattended-upgrades/` exists and is populated. The probe increments `issues_found` without failing the run, so it will show a red ❌ in every daily heartbeat without ever alerting. Cosmetic, but it trains the eye to ignore red.
+- Whole fleet rebooted 2026-07-31 ~13:45 (every host "up 2 days" on 08-03). Unexplained; predates nothing here (agent silence started 07-22) but worth knowing.
+- `touchid-agent` refuses non-interactive signing from an agent shell (`agent refused operation`), so Ansible runs against hosts without an `-agent` alias must be driven by hand.
+
+### Incidental findings — Tier 2 session, 2026-08-06
+
+- **The agent's `.j2` shell scripts are now unit-testable on the laptop.**
+  `tests/lib/render_j2.py` renders the small Jinja subset these templates use
+  (`{{ var }}` plus the one `agent_fleet_hosts` loop) with no jinja2 import —
+  the system python3 on macOS has none, and pulling a dependency into a shell
+  suite to substitute four variables is a poor trade. **It exits non-zero on
+  any construct it does not understand**, rather than leaving literal `{{ … }}`
+  in a script the test then "passes" against. Both new tests render, stub
+  `ssh`, and run the real script: no container, no fleet, no spend. Verified
+  under `dash` on CT 199 as well as on the laptop, since `/bin/sh` on macOS is
+  bash in POSIX mode and is more permissive than what agent-lxc actually runs.
+- **`run_and_report` must not be piped into.** It sets `AGENT_RC`/`AGENT_COST`
+  that its callers read *afterwards*, and the right-hand side of a POSIX
+  pipeline is a subshell, so `{ …; } | run_and_report` leaves them unset — with
+  `set -u` the digest's `exit "$AGENT_RC"` then dies. Prompts are therefore
+  assembled into a file and redirected. Anyone adding a fourth mode will hit
+  this; the alternative (unquoting the heredocs to interpolate) is worse, since
+  the digest prompt contains backticks that would then execute.
+- **A JSON fixture built with `echo` is not portable, and fails silently.**
+  bash's `echo` leaves `\n` alone while dash's expands it, which put real
+  newlines inside a JSON string, made the event unparseable, and made the
+  stubbed agent look like it had "exited 0 but produced no text". The test still
+  passed, because the assertion only checked that the agent had been *invoked*.
+  Two lessons: fixtures that are data use `printf '%s\n'`, and an assertion
+  about a happy path must check the run **succeeded**, not merely that it
+  started.
+- **macOS has neither `flock` nor `timeout`**, both of which `investigate.sh`
+  uses. The tests stub them unconditionally so a laptop run and a container run
+  exercise the same thing. Neither is under test; if either ever is, it needs a
+  container.
+
+#### The back-off's trigger, checked against real ssh output rather than a fixture
+
+The back-off fires on a string match against ssh's stderr, which is exactly the
+"verify what the parse *yields*, against real captured output" trap. So it was
+checked against real output, not against the strings the test stubs emit:
+
+| Condition | Real stderr | Matches? | Wanted |
+|---|---|---|---|
+| Rejected key (bogus key → CT 199) | `Permission denied (publickey,password).` | ✅ | back off |
+| Host absent (unused address) | `ssh: connect to host … port 22: Operation timed out` | ✅ no match | keep probing |
+
+The matched substring — `Permission denied` — is emitted by the **ssh client**,
+not by the server, so it does not depend on opnsense's sshd config or on which
+auth methods it advertises. That is what makes this portable across the fleet.
+
+⚠️ **It has still never fired against opnsense's actual failure mode** (the
+`read_agent` account deleted by config regeneration). If that produces some
+other text — `kex_exchange_identification`, a banner, a timeout — the match
+fails and the host is reported `UNREACHABLE` instead, which is **today's
+behaviour**. The failure direction is fail-open: a missed match costs the
+back-off, never a false one. Worth confirming when opnsense next drifts, which
+this file says it will.
+
+**The cheap version of that check, for whoever picks this up** — it confirms the
+match from *inside* the fleet rather than from the laptop, needs no broken host,
+and deliberately does not touch opnsense (the string comes from the ssh client,
+so any Debian target proves it):
+
+```sh
+ssh cobra "ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no \
+    nosuchuser@dockassist true 2>&1 | tail -1"
+```
+
+Expect `Permission denied (publickey)`. Anything else means the match needs
+widening. One failed auth is orders of magnitude below CrowdSec's ssh-bf
+threshold — verified 2026-08-06, when a deliberate failed auth from the laptop
+produced no alert and no decision.
+
+📌 **Corroboration, found while checking this.** `cscli alerts list` on opnsense
+still holds the incident: `crowdsecurity/ssh-bf` against `10.30.40.203` at
+`2026-08-03T12:47:12Z` — 14:47 local, exactly the Tier 2 cron minute. The
+account of what happened is now confirmed from the firewall's own record, not
+only from the agent's logs. No active decisions.
+
+#### What an offline Jinja render can and cannot prove
+
+Both templates were rendered through **real jinja2 with the real variable set**
+(role defaults + `group_vars/agent.yml` + inventory + vault) and the output
+parsed under `dash` on CT 199. The new knobs resolve to `3600` / `21600`.
+
+But the render leaves `{{ vault_infrastructure_user | default(lookup('env',
+'USER')) }}` unresolved in three places, and **that is a limit of rendering
+outside Ansible, not a template bug**: Jinja evaluates `default()`'s argument
+eagerly, and `lookup` is an Ansible plugin that does not exist in a bare
+Environment. It is a pre-existing line (`group_vars/all/main.yml:14`, from the
+initial migration), and agent-lxc's live crontab shows Ansible resolves it —
+`/home/choco/.scripts/fleet_health_check.sh`. **Anything needing `lookup`,
+`vault`, or a connection can only be proven by a real playbook run.**
+
+---
+
+## Monitoring gaps — what would actually have caught 2026-08-03
+
+Asked after the fact: which check, if it existed, would have caught each failure? The answer for several of them is "one that already exists and does nothing."
+
+### ✅ Status 2026-08-04 — items 1, 2 and 3 are FIXED IN CODE (not deployed)
+
+Written and verified against a disposable Debian 13 LXC (CT 199), both directions: each fix's tests were also run against `main`, because a test that does not fail there proves nothing. **Nothing is deployed; no fleet host has been modified.**
+
+- **`system_health_check.sh` exit status** — fixed, `tests/cases/health_*.sh`. Against `main` the suite reproduces the bug exactly: output reads `❌ Service cron: not running` immediately above `Health check completed`, exit status **0**. 4 of 5 cases fail on `main`, all 5 pass on this branch.
+- **`systemctl --failed` check** — added in the same pass, covered by `health_failed_unit.sh`.
+- **Slack watch watermark** — fixed, `tests/unit/slack_watermark_test.sh` (runs on the laptop, no container or network). Quiet poll returns `OK 0.000000` on `main` vs the preserved watermark here. **The fix is self-healing**: a non-positive watermark on disk is now treated as absent, so CT 103's poisoned `0.000000` recovers on its next run with no manual reseed.
+
+⚠️ **The TODO's "one-line class of fix" framing for `system_health_check.sh` was wrong, in a way that mattered.** Six of the seven check functions had no `return` at all — only `check_auto_upgrades` did. Worse, `check_disk_usage` evaluated its loop inside a `df | grep | while` **pipeline, which POSIX runs in a subshell**, so counters incremented there are discarded when it exits. The obvious fix — add increments, sum at the end — would have left the disk check, the one most likely to fire, still returning 0 while printing a red ❌. Demonstrated rather than reasoned: identical input yields `issues=0` through a pipeline and `issues=2` through a here-doc. It now uses a here-doc. **Generalise this:** any `cmd | while` loop in this repo that accumulates state is silently discarding it.
+
+**✅ Item 4, the healthchecks.io ping, is now FIXED IN CODE too (2026-08-06).** The "it needs laptop time" framing was wrong twice over: the check and the vault write were done remotely on 2026-08-04, and the ping itself needed neither. See the dead-man's-switch section below.
+
+### ✅ Pending-reboot check — ADDED 2026-08-06 (not deployed)
+
+`check_pending_reboot` in `system_health_check.sh`, aggregated like every other check. It exists to make `auto_reboot: false` on cwwk a *safe* trade rather than a downgrade: a kernel security update only takes effect on reboot, so switching off the unattended 04:00 restart without this swaps an unannounced reboot for an **unnoticed unpatched kernel**.
+
+**Graded by age, deliberately — warning-only would have been the same mistake in a new costume.** A warning exits 0, the wrapper records SUCCESS, and the message lands in `#home-logging`, which is an unwatched firehose: indistinguishable from writing no check at all. So a pending reboot is a **to-do for 7 days and a fault after**, matching `check_auto_upgrades`' window. That leaves room to reboot the hypervisor at a chosen moment without a page, and stops "later" lasting a quarter.
+
+- Reads `/run/reboot-required` (falling back to `/var/run/`), names the packages from `.pkgs` — the difference between "reboot sometime" and "you are running an unpatched kernel".
+- Age comes from the flag's mtime. It lives on **tmpfs**, so the mtime is genuinely when the update landed and the file vanishes on reboot: no cleanup path, and no way for it to go stale.
+- Guards what `stat` *yielded*, not that it exited 0 — an unparseable value evaluates to 0 in POSIX arithmetic, which would date the flag to 1970 and page instantly.
+- Non-Debian returns 0 early. FreeBSD has no equivalent flag, and opnsense no longer receives this script at all.
+
+`tests/cases/health_pending_reboot.sh` walks all three states — absent, fresh, and backdated 8 days — asserting the **exit status** in both directions, not just the output. Suite **9/9** on CT 199; **6 of its 7 assertions fail against `main`**. The one that passes there does so vacuously (main's script always exits 0), which is the reason the case asserts exit status on the fresh leg too.
+
+### 🔴 The Slack watch self-destructs on its first quiet hour (root cause confirmed 2026-08-03)
+`investigate.sh --slack` has been failing every hour with `ERR invalid_ts_oldest`. Confirmed cause — `/home/choco/.agent/.last_slack_ts` contains **`0.000000`**.
+
+The embedded Python initialises `maxts = 0.0` and always emits `print(f"OK {maxts:.6f}")`. A poll that returns **zero new messages** therefore reports `OK 0.000000`. The shell then persists it:
+```sh
+[ -n "$_maxts" ] && [ "$_maxts" != "0" ] && printf '%s' "$_maxts" > "$SLACK_TS_FILE"
+```
+That guard exists to prevent exactly this, but it is a **string** comparison against `"0"` while Python emits `"0.000000"` — so it passes, and the watermark is clobbered. Every later poll sends `oldest=0.000000`, which Slack rejects.
+
+**It cannot self-recover:** the watermark is only rewritten after a *successful* fetch, and the fetch now always fails. So the watch dies permanently the first hour nothing new arrives — i.e. almost immediately on a healthy fleet. Evidence in `investigate.log`: three `slack watch done; investigated 0 alert(s)` (the quiet polls), then unbroken `ERR invalid_ts_oldest`.
+
+Corollary: **the Slack watch has almost certainly never worked in production.** The earlier worry that a fresh deploy would backfill 50 messages of #home-alerts was misplaced — it would have poisoned its own watermark and stopped instead.
+
+**Fix (repo, not live):** initialise `maxts` to the `oldest` value the poll was made with, so an empty window *preserves* the watermark instead of resetting it; and make the guard numeric rather than a string compare against `"0"`. Reseeding the file by hand only buys one hour — the next quiet poll re-poisons it.
+
+### 🔴 `system_health_check.sh` can never fail — every host, every 15 minutes, since forever
+Each check function increments `issues_found`, and `check_auto_upgrades` even ends `return $issues_found`. But the main body just calls the functions in sequence:
+```sh
+check_uptime
+check_disk_usage
+check_memory
+check_load
+check_services
+check_network
+check_auto_upgrades
+
+echo "=============================="
+echo "Health check completed"
+echo "=============================="
+```
+No aggregation, and **no final `exit`**. A script's status is that of its last command — here, `echo`. So it exits **0 unconditionally**, and `enhanced_monitoring_wrapper` only alerts on non-zero. This check has therefore **never alerted on any host, ever.**
+
+Verified against the *deployed* copy on cwwk (via `agent_read`), not just the repo. Empirical proof from today: agent-lxc's 14:15 run printed `❌ Upgrade log not found - unattended-upgrades may not be configured` and the wrapper recorded `Status: SUCCESS / Exit Code: 0`.
+
+What is silently uncovered on all 7 hosts: **disk usage, memory, load, ssh/cron/fail2ban being down, internet reachability, and auto-upgrade staleness.** The internet-reachability check is the one that would have caught today's CrowdSec cutoff within 15 minutes.
+
+**Fix:** aggregate the function return codes and exit non-zero when any check fails. Then force each failure condition and watch it fire — the red ❌ output proves the *printing* works, which is exactly what made this invisible.
+
+### ✅ No dead-man's switch on agent-lxc — FIXED IN CODE 2026-08-06 (not deployed)
+Tier 1 checks that every host's monitoring ran recently (`agent_wrapper_max_age_hours: 26`) — but it runs *from* agent-lxc, so it cannot detect its own death. That is precisely the 12-day outage.
+
+The mechanism already exists and is already in use: **healthchecks.io pings on proxmox, opnsense (WAN + DNS), homeassistant and pihole**. agent-lxc is the one host without one — the host whose silence was the entire failure. A ping from the Tier 1 sweep would have paged on day one.
+
+**Fix:** healthchecks.io ping at the end of `fleet_health_check.sh`. Small, reuses existing infrastructure, and is the single highest-value item on this page.
+
+**Done 2026-08-06.** `ping_healthcheck()` in `fleet_health_check.sh.j2`, one call site immediately before the report branches, driven by `agent_sweep_healthcheck_url` (role default → `vault_healthcheck_agent_sweep | default('')`). Check `agent-lxc Tier 1 fleet sweep`, period 1h, grace 25m — created and vaulted 2026-08-04.
+
+Three decisions worth keeping, because each has a plausible opposite:
+
+- **The ping is unconditional — it fires on a sweep that found problems.** Gating it on a clean sweep would stop the heartbeat the moment the fleet is unwell, conflating "the observer is dead" with "the fleet is broken", which are the two states this exists to separate. Findings already reach `#home-alerts` through the wrapper; this covers *silence*. ⚠️ Deliberately unlike `heartbeat_backup.sh`, which pings only on recent success — that one asserts a backup's freshness, not a run's existence.
+- **The ping can never change the sweep's exit status.** `|| true` on both branches and `return 0`. A dead-man's switch that can fail the thing it watches is a liability; hc-ping.com being down is healthchecks' problem to alert on, not a fleet finding.
+- **It lives inside the script, not in the cron line.** The 12-day outage killed the cron *at the redirect*, before the script was reached. A ping in the script therefore does not fire, which is exactly what should page. A ping appended to the cron line would have to survive the same redirect and might not.
+
+Covered by `tests/unit/sweep_healthcheck_test.sh` — 12 assertions, laptop-only, no container and no network. **6 of the 12 fail against `main`**, including all three "pings at all" assertions. `sh -n` and `dash -n` clean on the Ansible-rendered output; variable resolution confirmed in agent-lxc's real scope (`connection: local`), not just in the test renderer.
+
+⚠️ Two things this does **not** prove. The wget branch is unreachable on the deployed host — agent-lxc has both curl and wget (measured 2026-08-06), so it always takes the curl path; the test forces it only by building a curl-free `PATH`. And no ping has ever reached healthchecks.io from that container: **the first real ping happens at L5**, and its check goes from "new" to "up" then. Until then the check is armed and has never been fed.
+
+### No check for failed systemd units
+`check_services` tests three named services (ssh, cron, fail2ban). Nothing anywhere checks `systemctl --failed`. A container with 19 failed units — journald among them — passed every check it had.
+
+**Fix:** add a failed-unit count to `system_health_check.sh` (after the exit-code fix, or it will be as inert as the rest).
+
+### Design note — do NOT move local checks to agent-lxc
+Tempting after today, but backwards. agent-lxc was itself the single point of failure, and centralising would have made the blast radius larger, not smaller. Local checks also see things a remote prober cannot (0700 homes, ALSA on hifipi, per-host service state).
+
+The correct split is the one already in place, plus one missing piece:
+- **local checks** stay local — they have the access
+- **agent-lxc** does cross-host correlation — which it does well
+- **an external watchdog** detects *absence* — the one thing neither a host nor agent-lxc can do for itself
+
+Absence-detection is the actual gap, not check placement.
+
+### Priority
+1. Fix `system_health_check.sh` exit status — restores ~7 checks across 7 hosts, one-line class of fix, largest coverage gain available
+2. healthchecks.io ping from the Tier 1 sweep — closes the watch-the-watcher hole
+3. `systemctl --failed` check
+4. Then the Tier 2 bugs (re-billing, retry guard)
+
+---
+
+## opnsense — `read_agent` access is broken (found by the agent's first real sweep)
+
+**Risk:** Medium-high — the firewall is the one host neither the fleet observer nor autonomous diagnostics can see. Silent until now because the observer that would have reported it was itself dead.
+
+**Confirmed 2026-08-03:** Tier 1's first real run reported `opnsense: UNREACHABLE (no response as read_agent)`. Verified independently from the Mac — `ssh opnsense-agent` returns `Permission denied (publickey)`. The host answers on 22, so it is the key/account that is broken, not the box. Note this fails from *both* the container and the laptop, so it is not specific to the agent-lxc identity — `read_agent`'s key is missing or wrong on opnsense generally.
+
+`agent_access` runs `hosts: all` and has a FreeBSD sudoers template, so opnsense is in scope by design; it has simply drifted (same class as agent-lxc missing `agent_read`).
+
+### Root cause: OPNsense deletes accounts it does not own — and will not give a non-admin a shell
+The account was **gone entirely**, not merely missing a key. `sshd_config.d/10-read_agent.conf` survived from the 2026-07-22 Ansible run while the user did not: OPNsense regenerates system accounts from `config.xml`, so anything created by `pw` (which is what `ansible.builtin.user` uses) has a limited lifespan. The `agent_access` role's FreeBSD user task therefore reports `changed` and achieves nothing durable.
+
+Worse, **OPNsense will not give a non-admin user a login shell at all.** From `src/etc/inc/auth.inc`:
+```php
+$is_admin   = userIsAdmin($user['name']);
+$user_shell = $is_admin && !empty($user['shell']) ? $user['shell'] : '/usr/sbin/nologin';
+// userIsAdmin() → userHasPrivilege(getUserEntry($username), 'page-all')
+```
+The only privilege that unlocks the shell is **`page-all` ("GUI: All pages") — full administrator**. There is no granular shell-access privilege. Granting it to a read-only monitoring account on the firewall is not an acceptable trade, so **do not**.
+
+### Current state (2026-08-03, working but fragile)
+- User + both authorized keys (with `from=` pinning) created via the OPNsense UI → stored in `config.xml` → **durable**, survives upgrades.
+- Group `read_agent` (gid 2000, no privileges) created to satisfy `AllowGroups wheel read_agent`.
+- Login shell set with `pw usermod read_agent -s /bin/sh` → **NOT durable**, lives only in `/etc/passwd` and reverts whenever OPNsense regenerates accounts.
+
+Verified: `ssh opnsense-agent` works, and the 19:37 sweep returned SUCCESS across all 7 hosts — the first fully clean sweep since the container was built.
+
+### Next Steps
+- **Preferred: stop SSH-probing opnsense.** It is not a general-purpose host and it has a proper API. Monitoring it via a read-only API key removes the shell-durability problem *and* permanently eliminates the failed-auth → CrowdSec trigger. This is the architectural fix.
+- Failing that: accept the `pw` shell as drift and rely on the sweep to detect the revert — it alerts within the hour, which is exactly how this was found. Note the alert repeats hourly with no dedup.
+- Change `agent_access` on FreeBSD to **assert** the user exists and fail with a pointer to OPNsense user management, instead of creating one with `pw` and reporting success.
+
+### Acceptance Criteria
+- [x] `ssh opnsense-agent "uname -a"` succeeds from the Mac — 2026-08-03 19:38
+- [x] Tier 1 sweep reports 0 issues across 7 hosts — 19:37:15 SUCCESS
+- [ ] opnsense monitoring no longer depends on a shell that OPNsense will revert
+
+---
+
 ## cwwk Thermal Stability — Root Cause + Headroom (mitigations deployed)
 
 **Risk:** High operational impact — cwwk hosts the OPNsense firewall (VM 100, onboot), so a cwwk crash takes down all internet. Recurring silent resets.
@@ -253,7 +608,9 @@ These items have value but are not urgent. Ranked by value-to-effort ratio to he
 
   **Blocked on Ignacio for two things**, and no agent can supply them: what each VLAN is *for* (which is IoT, trusted, guest, cameras — only `.40` = infrastructure is inferable), and why there are 12 Mullvad exits with traffic policy-routed across them. `read_agent` cannot read `/conf/config.xml` — root-only, not in its sudo allowlist — so this has to come from him or from a command run in his own session.
 
-- **🔴 `system_health_check.sh` reports THREE false failures on opnsense — the worst of the false-positive blockers** `V:High E:Low` — Measured on the live firewall 2026-08-05 (run by hand from a phone, as `choco` and again as root). The script currently exits 0 regardless, so none of this has ever been visible. **After the aggregation fix lands, opnsense pages every 15 minutes, permanently.** Three separate causes:
+  📌 **One fact for that diagram, measured 2026-08-06 and free to record now: the control machine is not on the fleet's segment.** The laptop sits on `10.30.80.1` and reaches `10.30.40.0/24` via `10.30.80.254` — so **every laptop→fleet connection crosses the firewall, including the ones a test makes.** This was asserted the other way round mid-session ("same segment, so this probe won't reach CrowdSec"), which was wrong; `route -n get <ip>` settles it in one command and should be the reflex before claiming any traffic stays local. Consequence worth carrying into the diagram: a CrowdSec ban on the laptop's address would look exactly like the agent-lxc incident — same symptom shape, different victim.
+
+- **🔴 `system_health_check.sh` reports THREE false failures on opnsense — fixed and verified on the box 2026-08-06; latent, since the script is not scheduled there** `V:High E:Low` — Measured on the live firewall 2026-08-05 (run by hand from a phone, as `choco` and again as root). The script currently exits 0 regardless, so none of this has ever been visible. **After the aggregation fix lands, opnsense pages every 15 minutes, permanently.** Three separate causes:
 
   1. **The FreeBSD load check has never worked, on any run, ever.** `check_load` does `uptime | sed 's/.*load average://'` — but FreeBSD's `uptime` prints **`load averages:`**, plural. The substitution never matches, nothing is stripped, and `awk '{print $1}'` returns the *first field of the whole uptime line* — the clock. Observed: `❌ Load: 12:27AM on 6 CPUs (200%)`, while the real averages were `0.24, 0.25, 0.24`. The 200% comes from awk coercing `12:27AM` to `12`, then `12/6*100`. A textbook case of the rule this repo already writes down: verify what a parse *yields*, not that the pattern matched.
   2. **`sshd` is not the service name on OPNsense.** `check_services` uses `SERVICES="sshd cron"` on FreeBSD; OPNsense's is `openssh` — the repo already knows this, in `ssh_hardening`'s note about `service openssh onereload`. So `service sshd status` always fails and reports `❌ Service sshd: not running` **on a host reached over that very SSH session**.
@@ -263,7 +620,109 @@ These items have value but are not urgent. Ranked by value-to-effort ratio to he
 
   ⚠️ **Do not blanket-rename `sshd` → `openssh`.** `openssh` is the *OPNsense* service name; **stock FreeBSD uses `sshd`**. A hardcoded rename fixes the one host in the fleet and silently breaks the moment §8b's stock-FreeBSD test VM exists — i.e. it breaks the thing built to catch exactly this class of bug. Make the critical-service list **inventory-driven** (a `critical_services` var per platform, defaulted in group_vars) rather than a hardcoded `SERVICES=` string per `$OS_TYPE`. That also removes the Debian hardcode, which has the same latent problem: `fail2ban` is in the list for every Debian host whether or not it is installed there.
 
-- **⚠️ `check_auto_upgrades` false-alerts on 3 of 7 hosts — blocks the fleet-wide `system_health_check.sh` deploy** `V:High E:VLow` — Diagnosed 2026-08-04; this is the "❌ Upgrade log not found on agent-lxc even though the directory is populated" symptom, root-caused. `/var/log/unattended-upgrades/` is `root:adm 0750`, and `bootstrap.yml` creates the infrastructure user with `groups: sudo` and nothing else. So on every host whose user came from bootstrap the log is simply unreadable and the check reports it as missing. Measured, not inferred: **`cwwk`, `unifi-lxc` and `agent-lxc` — `choco` is NOT in `adm`** (the first two over `read_agent` on 2026-08-04, agent-lxc confirmed by hand 2026-08-05: `groups=1000(choco),27(sudo)` against a `drwxr-x--- root adm` directory). `dockassist` (and by provenance the other three Pis) **is** in `adm`, because that user predates bootstrap and inherited the Pi image's group list. That asymmetry is exactly why this went unnoticed: it never fired on the hosts anyone watched.
+  **Status 2026-08-06 — all three fixed in code on `fix/agent-lxc-logs-dir-2026-08`, none verified on FreeBSD.** What changed:
+
+  1. **Load.** `check_load` now reads the kernel — `/proc/loadavg` on Linux, `sysctl -n vm.loadavg` on FreeBSD — instead of parsing `uptime` prose, and the `uptime` route survives only as a last-resort fallback with a `load averages*` pattern that matches both spellings. A new guard validates what the read *yielded* (`case` against `*[!0-9.]*`) before any arithmetic; it rejects the exact observed `12:27AM` and accepts `0.24`. The old guard only inspected the computed percentage, and `200` is a perfectly plausible integer — which is why the fault survived a guard that was already there.
+  2. **Service names.** `CRITICAL_SERVICES` is now inventory-driven: `deploy_monitoring.yml` writes `{{ monitoring_config_dir }}/health_check.conf` (`/usr/local/etc/monitoring` on FreeBSD, `/etc/monitoring` elsewhere) when a host defines `critical_services`, and removes it when one stops. The script keeps a built-in default, because the script and its config ship from different tasks and the script must be correct on its own — and that default *probes* for an `openssh` rc script rather than assuming, so OPNsense and stock FreeBSD each get the right name with no configuration at all.
+
+     📌 **The mechanism currently has no users, and that is deliberate rather than an oversight.** The opnsense override was removed once the script stopped being deployed there, and no Debian host needs one *yet* — the pre-flight confirmed `ssh`, `cron` and `fail2ban` are all active on cwwk, dockassist and agent-lxc. It exists for the case the entry above names: `fail2ban` is in the hardcoded Debian list for every Debian host whether or not it is installed there, and the first host where that stops being true needs a one-line inventory entry rather than a script change. If a fourth Debian host ever turns out not to run it, that is the escape hatch.
+  3. **Permission-dependent status.** On FreeBSD the check falls back to the process table when `service <name> status` declines to answer. ⚠️ **As first written this used a `service[:process]` entry syntax and assumed `pgrep` was permission-independent. Both were wrong — see the measurements below, which supersede this line.**
+
+  ### Measured on opnsense 2026-08-06, as `choco` and again as root — two of the three fixes were wrong
+
+  Run by hand on the live firewall. The load fix survived; the service fix did not, and the impact assessment was wrong twice over.
+
+  ✅ **Load — confirmed correct.** `sysctl -n vm.loadavg | awk '{print $2}'` returns `0.25`, matching `uptime`'s first figure exactly; as root, `0.16` both ways. The field index is right. The old parse returned `2:07AM`, as before.
+
+  ✅ **Service name — confirmed correct.** Only `/usr/local/etc/rc.d/openssh` exists (`/etc/rc.d/openssh` does not), and as root `service openssh status` succeeds while `service sshd status` fails. The inventory value and the rc-script probe both land. Note the inventory value is now `["openssh", "cron"]` — see below.
+
+  🔴 **The `pgrep` fallback did not work, and the reason kills the whole approach.** As `choco`, `pgrep -x cron` finds **nothing** on a host where root finds it seconds later. OPNsense hides other users' processes from unprivileged callers, so the process table is not a permission-independent oracle there — it is a second way of being told "no". `/var/run/cron.pid` is `0600 root:wheel`, which is the other half. And `pgrep -x sshd` finds nothing **even as root**, so the `openssh:sshd` process mapping was wrong too.
+
+  **Rewritten accordingly.** `freebsd_service_state` returns `running | stopped | unknown`, and **`unknown` is not a failure**: `service X status` first, then the process table *only when it can actually be seen* — probed by looking for PID 1, which exists everywhere and belongs to root, rather than by reading `security.bsd.see_other_uids`. The `service[:process]` syntax is gone; its only use case was a host where the fallback cannot run. Stock FreeBSD, where rc name and process name agree and an unprivileged user can see the process table, still gets a real second opinion.
+
+  📌 **Correction, twice over, to what this entry claimed about impact.** First: `tasks/deploy_monitoring.yml` schedules `system_health_check.sh` bare on FreeBSD — no wrapper, no tokens — so a non-zero exit would be local cron mail, not a page. Second, and settled by reading the live crontab: **it is not scheduled on opnsense at all.** The Ansible-managed entries there are the opnsense role's own `check_system_health.sh` and `check_dns_health.sh`, both correctly wrapped. `system_health_check.sh` is *deployed* to `/usr/local/bin` by the fleet-wide script copy and never run. So all three opnsense faults are **latent, not live** — real, worth fixing, and not urgent.
+
+  ✅ **RESOLVED 2026-08-06 — stop deploying it there.** `roles/platform/opnsense` already schedules eight wrapped checks including its own `check_system_health.sh`, which covers memory, disk and load with FreeBSD-native probes — and better: **the common script's FreeBSD memory branch runs two sysctls and prints "Memory check completed" without comparing anything to anything.** Unifying on the common script would have *lost* real memory monitoring on the firewall. Running both would duplicate three checks at two different sets of thresholds.
+
+  So `deploy_monitoring.yml` now skips `system_health_check.sh` on FreeBSD and removes any existing copy, and the FreeBSD cron block in `tasks/deploy_monitoring.yml` is gone — replaced by `state: absent` for its two entries, so a host that ever received them gets cleaned. **That block's second entry pointed at `check_pf_status.sh`, which has never existed anywhere in this repo**: a cron installed against a missing script, which is the same silent-failure shape as the `logs_dir` bug. Neither entry was on the live box.
+
+  **What is lost: nothing measurable.** Disk, memory and load → the role's own check. Internet reachability → `check_gateway.sh` every 10 min plus the healthchecks.io WAN ping. Cron liveness → those pings are dead-man's switches, so a dead cron pages by silence. sshd liveness → Tier 1's hourly `ssh opnsense-agent` sweep, which is how the July account breakage was found. Failed systemd units and unattended-upgrades have no FreeBSD meaning at all.
+
+  📌 The FreeBSD code paths stay in the script — it is cross-platform by contract and §8b's stock-FreeBSD VM would exercise them — but note they now have **no host on the current fleet**, so they are unexercised by definition until that VM exists. The decorative FreeBSD memory branch is the one worth fixing first if it is ever built.
+
+- **✅ Fleet pre-flight for L3 — ALL SIX Debian hosts measured from a phone, 2026-08-06** `V:High E:Low` — Before deploying checks that have never been able to fail anywhere, the probes behind each check were run by hand on every host that will receive them. Two findings, both fixed; everything else confirmed rather than assumed.
+
+  | Host | `detect-virt` | failed units | ssh/cron/fail2ban | `adm` | mem | PSI |
+  |---|---|---|---|---|---|---|
+  | `cwwk` | none | 0 | all active | **NO** | 82% → **52%** after the ARC fix | present |
+  | `dockassist` | none | 0 | all active | yes | 44% | **absent** |
+  | `cobra` | none | 0 | all active | yes | 15% | **absent** |
+  | `hifipi` | none | 0 | all active | yes | 13% | **absent** |
+  | `vinylstreamer` | none | 0 | all active | yes | 51% | **absent** |
+  | `unifi-lxc` | **lxc** | 0 | all active | **NO** | 32% | `0.00` |
+  | `agent-lxc` | **lxc** | **1** → fixed | all active | **NO** | 3% | `0.00` |
+
+  **What this establishes:**
+
+  - **`systemd-detect-virt` picks the right metric on 7/7.** `none` on the four Pis and cwwk (they keep the load average), `lxc` on both containers (they switch to CPU pressure). That branch had only ever been tested on CT 199.
+  - **The container pressure path is confirmed on both real containers**, read as `choco` rather than over `read_agent`, both `0.00` across all three windows — including on a 2-core LXC. The 80 threshold has an enormous margin over observed normal.
+  - **`fail2ban` is active on all six**, so the hardcoded Debian service list needs no per-host override anywhere. The `critical_services` escape hatch stays deliberately unused.
+  - **The `adm` split is now directly measured rather than part-inferred:** missing on exactly cwwk, unifi-lxc and agent-lxc; present on all four Pis. The "3 of 7 hosts will page" claim is closed, and L2a will report `changed` on precisely those three.
+  - **No filesystem above 75% anywhere**, and no memory near threshold once the ARC fix landed.
+  - **One failed unit fleet-wide**, on agent-lxc, now fixed.
+  - **All four RPis lack PSI entirely** — the kernel is built without it, so this is the platform, not a dockassist quirk. Harmless, since a Pi never takes the container branch, but the pressure path has no RPi coverage even in principle.
+
+  ⚠️ **What this is not.** These are the *probes* the checks run, not the script itself — only `cwwk` had the real script executed against it (clean, exit 0). It predicts the new behaviour rather than demonstrating it everywhere.
+
+  ⚠️ **One thing it deliberately could not test: upgrade freshness on the four Pis.** They are in `adm`, so `check_auto_upgrades` will parse the log and apply the 7-day staleness rule for the first time ever — that coverage has been invisible on every host, always. If `unattended-upgrades` has stalled on a Pi, L3 will report it. **That would be a true positive, not a false one**, so it is not a blocker; it is simply the first time anyone will hear about it. One command settles it per host: `grep "Starting unattended upgrades script" /var/log/unattended-upgrades/unattended-upgrades.log | tail -1`.
+
+  📌 Also observed, informational: `cwwk` reports **133 pending updates**. The check deliberately does not alert on that count, and held-back packages are normal on Proxmox — worth a glance once L2a makes freshness visible there.
+
+- **🔴 `check_load` divides the HOST's load by the CONTAINER's core count — a fifth false failure, and it also gates the fleet deploy** `V:High E:Med` — Found 2026-08-06 while verifying §1a, by the suite failing a case that had just passed. Measured, not inferred: `/proc/loadavg` inside CT 199, unifi-lxc and agent-lxc returns cwwk's values **byte for byte**, sampled against cwwk in the same second (`0.85 0.70 0.49` in both). `nproc` inside returns the container's limit — 1, 1 and 2 against cwwk's 8. lxcfs *is* mounted over `/proc/loadavg`, so the obvious detection does not work: Proxmox runs it without `--enable-loadavg`, in which mode it passes the host's file straight through. It virtualises `/proc/cpuinfo` either way, which is precisely what creates the mismatch — **container-scoped divisor, host-scoped numerator.**
+
+  So the arithmetic is meaningless on every LXC. `agent-lxc` (1 core) reports `❌ Load` whenever cwwk's 1-minute average exceeds **0.8 — about 10% of an 8-core box**, which is routine; `unifi-lxc` (2 cores) at 1.6. Both were observed above threshold during this session. Invisible today for the same reason as the other four — the script exits 0 regardless — and it pages the moment the aggregation fix lands, which puts it in exactly the same class as §1a's four. **The Pis and opnsense are unaffected** (bare metal and a VM respectively).
+
+  Not introduced by the 2026-08-06 load fix — `uptime` read the same passed-through file — and not fixed by it either, since the fix corrected *which* number is read, not whose machine it describes.
+
+  ✅ **DECIDED AND FIXED 2026-08-06.** Option 1: **report, never fail, on a container.** `in_container` uses `systemd-detect-virt --container` (verified on CT 199 → `lxc`, rc 0) with a `security.jail.jailed` fallback for FreeBSD, and `check_load` prints `⚠️ Load: 0.63 (host-wide) on 1 container CPUs - not comparable` and returns 0. Chosen over PSI because it cannot false-page, it is three lines, and swapping metrics deserves its own calibration rather than being dropped into the existing 80% comparison mid-sprint.
+
+  Verified both directions: on CT 199 the run exits 0 with the warning; on a genuine non-container (the Mac, 8 cores, real load 1.76) the same code path errors and counts the issue once the threshold is crossed. `tests/cases/health_container_load.sh` asserts the target *is* a container reading a host-scoped file before asserting anything else, so it fails loudly rather than passing vacuously if lxcfs is ever reconfigured; against `main` it fails with `❌ Load: 0.90 on 1 CPUs (90%)`, the fault itself.
+
+  ✅ **Coverage restored the same day — the container branch now reads cgroup CPU pressure**, not a host-wide number it refuses to act on. `/sys/fs/cgroup/cpu.pressure` is cgroup-namespaced and genuinely container-scoped.
+
+  **It is a better signal than the load average was, not merely a safe one.** One busy task on a 1-core container measures `0.00`: nothing is *waiting*, the container is simply using what it has — where a load average of 1.00 read as 100%. Pressure appears only under real contention. That is the question `check_load` was always trying to answer.
+
+  **Threshold calibrated, not picked** — 80% on `avg300`:
+
+  | Measurement | `some` pressure |
+  |---|---|
+  | `unifi-lxc`, normal operation | `avg10/60/300 = 0.00` |
+  | `agent-lxc`, normal operation | `avg10/60/300 = 0.00` |
+  | `cwwk` root cgroup (busiest host in the fleet) | `avg300 = 16.7` |
+  | CT 199, one busy task on its one core | `avg10 = 0.00` |
+  | CT 199, sustained 2–4× oversubscription | `avg60 = 88–96`, `avg300` through 48 in 3 min |
+
+  80 sits far above every observed normal and below genuine starvation; `avg300` rather than `avg60` so a burst cannot fire it, and the check runs every 15 minutes anyway. All four thresholds are now environment-overridable, which is also how `health_container_load.sh` forces the failing direction: it reads the container's *actual* pressure and sets the threshold one point below it, so the failure comes from a real reading. Against `main` that case fails on three of four assertions.
+
+- **✅ logrotate skipped every user log on a host whose `logs_dir` was 0775 — fixed 2026-08-06** `V:Med E:VLow` — Found via the failed unit on agent-lxc. `system/baseline.yml` writes `/etc/logrotate.d/{{ primary_user }}` for `{{ logs_dir }}/*.log` **with no `su` directive**, and logrotate refuses to rotate anything whose parent directory is writable by a group other than root unless told which identity to rotate as. `logs_dir` is owned by the infrastructure user *by design*, so the config only works while the directory happens to be `0755`.
+
+  On agent-lxc it was `0775`: created by hand on 2026-08-03 with umask 002, during the fix for the 12-day outage. Result — `fleet_health_check.log`, `investigate.log` and `system_health_check.log` all skipped, and the unit exiting 1, **every night from 2026-08-04 to 2026-08-06**, entirely invisible.
+
+  Fixed by adding `su {{ primary_user }} {{ infrastructure_group }}` to the config, which is what logrotate's own error message asks for. Enforcing `0755` on the directory would also work, but only until the next host whose `logs_dir` arrives by a route other than the two tasks that set the mode — `su` removes the coupling rather than restating it. **Reproduced and cleared on CT 199:** at 0775 with no `su`, `logrotate -d` emits agent-lxc's error verbatim; with `su`, nothing. Render verified against the test inventory.
+
+  ⚠️ **Deploy path is `system/baseline.yml --tags logging`, not `deploy_monitoring.yml`** — a third playbook, so do not assume L3 carries it. Until then, `chmod 0755 ~/.logs` on agent-lxc is the one-command equivalent.
+
+  📌 **The wider lesson, and it is the point of this sprint:** this ran silently for three days on a host under active investigation, and was found only because a check for failed units was added. Two independent Ansible tasks had a permissions coupling neither of them stated.
+
+- **✅ `check_memory` counted ZFS ARC as used — fixed 2026-08-06** `V:High E:VLow` — Found by the L3 pre-flight above. `cwwk` reported **82% used** where the true figure is 52%: `MemAvailable` does not count ZFS ARC, which is neither free memory nor page cache in the kernel's accounting, so a 10 GiB ARC cap reads as 10 GiB used. Measured: ARC `size` 9.91 GiB, `c_min` 0.97 GiB, MemTotal 31.09 GiB, MemAvailable 5.67 GiB.
+
+  The check now adds the part above `c_min` to available — that is what the ARC shrinker actually returns under pressure, and only that. **It is not a threshold fudge and it does not lobotomise the check:** genuine pressure shrinks ARC first, so the unreclaimable share rises and the check still fires. Verified on cwwk by running the script there, both directions — `81% → 52%` with a clean run and exit 0, and `❌ 53% (above 40%)` with `THRESHOLD_MEM=40`, exit 1.
+
+  ⚠️ **No container can cover this** — none of them have ZFS, so `/proc/spl/kstat/zfs/arcstats` does not exist on the rig. Verified on the host and nowhere else, same as the FreeBSD branches. cwwk is the only ZFS host; the containers see lxcfs-virtualised `meminfo` and are unaffected.
+
+  📌 Side effect worth knowing: this also removed a flake. CT 199 has 1 core and read an 8-core host's load, so **any case asserting exit 0 was flaky whenever cwwk was busy** — one run of the 7 cases failed that way and passed on retry, which is how the fault was found in the first place.
+
+- **⚠️ `check_auto_upgrades` false-alerts on 3 of 7 hosts — check-side fix DONE 2026-08-06, group side still open** `V:High E:VLow` — Diagnosed 2026-08-04; this is the "❌ Upgrade log not found on agent-lxc even though the directory is populated" symptom, root-caused. `/var/log/unattended-upgrades/` is `root:adm 0750`, and `bootstrap.yml` creates the infrastructure user with `groups: sudo` and nothing else. So on every host whose user came from bootstrap the log is simply unreadable and the check reports it as missing. Measured, not inferred: **`cwwk`, `unifi-lxc` and `agent-lxc` — `choco` is NOT in `adm`** (the first two over `read_agent` on 2026-08-04, agent-lxc confirmed by hand 2026-08-05: `groups=1000(choco),27(sudo)` against a `drwxr-x--- root adm` directory). `dockassist` (and by provenance the other three Pis) **is** in `adm`, because that user predates bootstrap and inherited the Pi image's group list. That asymmetry is exactly why this went unnoticed: it never fired on the hosts anyone watched.
 
   Cosmetic today because the script exits 0 regardless. **Once the aggregation fix on `fix/agent-lxc-logs-dir-2026-08` lands, those three hosts page every 15 minutes** — the false-positive risk that branch's deploy notes warn about, now with names attached.
 
@@ -271,8 +730,12 @@ These items have value but are not urgent. Ranked by value-to-effort ratio to he
 
   Two parts, and they are independent:
 
-  1. **The check side — this is what unblocks the deploy.** `check_auto_upgrades` tests `[ -f "$log_file" ]` and reports "Upgrade log not found — may not be configured" when it is false. As an unprivileged user that is false because `/var/log/unattended-upgrades/` is `0750 root:adm` and cannot be traversed — the file is there and readable to root. Distinguish the two: if the directory exists but is not readable, report "cannot verify (no read access)" as a **warning that does not fail the run**, and keep the hard failure for genuinely absent or stale logs. Reproduce and verify as the unprivileged user with `tests/sandbox.sh --run system_health_check.sh`; the batch suite runs as root and reports green either way.
-  2. **The group side — the underlying fix, optional and separate.** Needs a *new* idempotent task that ensures group membership on every host regardless of how the user got there, not an edit to the create-user block. Also gets `journalctl` working without sudo. Deploys via whatever play that task lands in — decide the path deliberately, since bootstrap/site.yml is a much heavier run than `deploy_monitoring.yml`.
+  1. ✅ **The check side — DONE 2026-08-06, and this is what unblocks the deploy.** `check_auto_upgrades` now branches four ways instead of one: directory absent → error (unchanged); directory present but not readable/traversable → **warning naming the mode and the user, run still passes**; log file present but unreadable → warning; otherwise the existing freshness parse. Verified on CT 199 as `choco` across all six states — unreadable dir, unreadable file, absent dir, absent file, 65-day-stale log, fresh log — with only the two permission states passing. Covered permanently by `tests/cases/health_upgrade_log_{unreadable,missing}.sh`, which run the script through the new `run_uut_as` harness helper as the unprivileged user; both fail against `main`.
+
+     ⚠️ **This narrows coverage, deliberately.** On the three hosts that cannot read the log, the freshness check is now silent rather than wrong — `unattended-upgrades` genuinely stalling there would not be caught. The service-enabled, service-active and config checks still fire. Part 2 is what closes it properly.
+  2. ✅ **The group side — DONE 2026-08-06, and it restores what part 1 gave up.** A new idempotent task in `tasks/debian_baseline.yml` (`tags: [users, groups, logs]`) ensures the infrastructure user is in `adm` regardless of how the user got there, rather than editing bootstrap's create-user block, which never runs on a live host. Deploy path: `ansible-playbook ansible/playbooks/platform/debian.yml --tags groups` — a one-task run, far lighter than `site.yml`. Verified end to end on CT 199: `⚠️ cannot verify freshness` before, `✅ Last upgrade: 2026-08-05` after; second run `changed=0`. Also gets `journalctl` without sudo.
+
+     ⚠️ **Gotcha that will cost the next person what it cost this session.** It looked like it had failed. **SSH `ControlPersist` was serving a session established before the change**, so `id` reported the old group set for ten minutes, while `id -nG <user>` — which queries the database rather than the process — showed the new one. Group changes are invisible to a multiplexed "new" connection. Check with `-o ControlPath=none` before concluding anything about group membership. The test suite is immune: `run_uut_as` uses `su`, which calls `initgroups` fresh.
 
 - **`deploy_monitoring.yml --tags scripts` deploys into a directory it skips creating** `V:High E:VLow` — **Reproduced end to end 2026-08-04** on CT 199, previously only reasoned about. The scripts-dir task is tagged `[monitoring, scripts]` and the logs-dir task `[monitoring, logs]`, so `--tags scripts` against a fresh host creates `~/.scripts`, deploys all six scripts, exits green — and leaves no `~/.logs`. Every monitoring cron redirects into that directory, so each one dies at `>> ~/.logs/x.log: No such file or directory` before the script ever runs: no output, no wrapper, no Slack, exit 1. That is the CT 103 12-day silence, mechanism for mechanism. `tasks/deploy_monitoring.yml` (the `services.yml` half) is worse — it never creates `logs_dir` at all, installs the cron pointing into it, and prints `✅ Monitoring deployed`. `system/preflight.yml` only asserts the *variable* is defined, not that the directory exists. Fix: one task creating both directories, tagged with every tag that deploys anything into them.
 
@@ -369,6 +832,8 @@ These items have value but are not urgent. Ranked by value-to-effort ratio to he
   Still not run against a container: `bootstrap.yml` and a full `site.yml`. Hardening was the piece that made them dangerous and that is handled, but the rest of them remains unexercised.
 
 - **`run_tests.sh` connects as root and so cannot see permission-class faults** `V:Med E:Med` — Found 2026-08-04, by the suite reporting green on a bug that was live on the same container. The cases fill disks and stop services, so the runner connects as root; the fleet's checks run as the infrastructure user under cron. Same script, same host, same minute: `❌ Upgrade log not found` as `choco`, `✅ Last upgrade: 2026-08-04` as root. Every fault that depends on file ownership is structurally invisible to the whole suite, which is exactly the class the `adm` bug above belongs to. Documented in `tests/run_tests.sh` and `tests/README.md`, and `tests/sandbox.sh --run` covers it manually, but the proper fix is for the runner to connect as the infrastructure user and have the cases escalate with `sudo` where they genuinely need to. Not attempted yet because it means editing every case, and breaking a working suite to widen it is the wrong order.
+
+  **Partly closed 2026-08-06, from the other end.** Rather than change how the runner connects, `tests/lib/harness.sh` gained `run_uut_as <user> <script>`: the case still arranges its fault as root and then runs the script under test as the unprivileged user, which is the combination the fleet actually has. `health_upgrade_log_unreadable.sh` uses it and fails against `main`, so the permission class is no longer structurally invisible. The original item stands for the general case — every *other* case still runs the script as root — but the cheap version of the fix turned out to be per-case opt-in, not a runner rewrite.
 
 - **`--check --diff` can be green on a run that fails immediately** `V:Med E:VLow` — Worth knowing before every laptop deploy, since the whole workflow leans on it. Observed 2026-08-04: `deploy_monitoring.yml --check --diff` against a fresh container reported `changed=4`, `failed=0` and rendered full file diffs; the real run then failed on the *first* task with `chown failed: failed to look up user choco`. Check mode does not resolve users, groups or paths on the target, so anything whose failure mode is "this identity or directory does not exist" passes silently. A clean `--check` is evidence that the *diff* is what you expect, not that the run will succeed. This is a documentation/expectation item, not a code fix — the existing note on `baseline.yml` says "worth a `--check --diff` pass per host" and should be read with this caveat.
 
