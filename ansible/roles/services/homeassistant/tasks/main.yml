@@ -274,6 +274,7 @@
       {{ scripts_dir }}/enhanced_monitoring_wrapper
       --heartbeat-interval=daily
       --notify-fixed=true
+      --monitoring-name=homeassistant_container
       {{ logging_token }}
       {{ alert_token }}
       {{ scripts_dir }}/check_container.sh {{ alert_token }} {{ homeassistant_container_name | default('home-assistant') }}
@@ -356,7 +357,7 @@
     special_time: "weekly"
     job: >
       {{ scripts_dir }}/enhanced_monitoring_wrapper
-      --heartbeat-interval=weekly
+      --heartbeat-interval=always
       --notify-fixed=true
       --monitoring-name=docker_system_prune
       {{ logging_token }}
@@ -546,6 +547,7 @@
       {{ scripts_dir }}/enhanced_monitoring_wrapper
       --heartbeat-interval=daily
       --notify-fixed=true
+      --monitoring-name=matter_server_container
       {{ logging_token }}
       {{ alert_token }}
       {{ scripts_dir }}/check_container.sh {{ alert_token }} matter-server

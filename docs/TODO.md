@@ -1,6 +1,6 @@
 # Infrastructure TODO — Prioritized Action List
 
-Updated: 2026-07-21 | Validated against live hosts via read_agent autonomous assessment
+Updated: 2026-08-02 | Validated against live hosts via read_agent autonomous assessment
 
 This document is the single source of truth for pending infrastructure work.
 Each item includes verified current state, concrete next steps, and acceptance criteria.
@@ -401,6 +401,296 @@ All as code in the `platform/proxmox` role (toggle `enable_proxmox_power_tuning`
 
 ---
 
+## #home-logging Flooded by dockassist Container Checks (NEW, 2026-08-02)
+
+**Risk:** Low operational, high signal-to-noise. `#home-logging` is the unwatched firehose, so nothing is *missed* — but ~92% of the channel is three duplicated messages, which makes the channel useless for the "scan it occasionally" purpose it exists for. No alerting impact (`#home-alerts` is a separate webhook and is unaffected).
+
+### Symptom (measured 2026-08-02)
+
+dockassist posts **3 messages every 10 minutes, 24/7** — `check_container.sh` for `home-assistant`, `matter-server` and `mosquitto`:
+
+| Source | msgs/day |
+|---|---|
+| dockassist `check_container.sh` × 3 | **432** |
+| Entire rest of the fleet (daily heartbeat burst at 00:00) | ~35 |
+
+Every other host behaves correctly: one heartbeat per job per day, all fired in a single 00:00 CEST burst.
+
+### Root cause (verified on the live host, not inferred)
+
+All three cron jobs invoke the **same script** and none passes `--monitoring-name`. The wrapper then derives its state-file name from the script basename:
+
+```sh
+STATE_NAME="${MONITORING_NAME:-$(basename "$script_path")}"   # enhanced_monitoring_wrapper:301
+```
+
+→ all three share `/home/choco/.log/check_container.sh.json`, and they run in the same second. The state write is a fixed tmp path with no locking:
+
+```sh
+jq … "$STATE_FILE" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "$STATE_FILE"   # :432
+```
+
+Three concurrent writers trample it. Live evidence from `~/.logs/homeassistant_container_check.log`:
+
+```
+[2026-08-02 17:10:02] Sending daily heartbeat notification
+mv: cannot stat '/home/choco/.log/check_container.sh.json.tmp': No such file or directory
+```
+
+162 such occurrences in the mosquitto log alone. State never persists → `LAST_NOTIFICATION_DATE` never matches today → the "daily" heartbeat fires on every run.
+
+**Control case on the same host:** `check_docker.sh` — same wrapper, same `--heartbeat-interval=daily`, also no `--monitoring-name`, but a *unique* basename → `Notification sent: No` for 12 hours straight. That isolates the fault to the state-file collision, not to the heartbeat logic.
+
+### It is a bug, not an intentional design (theory evaluated + rejected)
+
+Considered and disproved the theory that these were meant to be chatty and the wrapper was simply misused:
+
+- The cron explicitly says `--heartbeat-interval=daily`. If per-run posting were wanted, the correct knob is `--heartbeat-interval=always`, which this repo **already uses deliberately** in 4 other places (backups, HA update, USB recovery sync). The author knew the knob.
+- The `mv: cannot stat` error on every single run is a malfunction signature, not a configuration.
+- Identical config to the quiet `check_docker.sh` on the same host.
+
+**But the "wrapper wasn't fully understood" half of the theory is correct, and is the real lesson:**
+
+- `--monitoring-name` was introduced 2025-11-16 (`5adbec1`, proxmox/opnsense) — *one day after* the HA container check shipped in the initial migration (`a000f71`, 2025-11-15). It was never retrofitted onto the pre-existing HA jobs, and adoption stayed patchy: cwwk 5/5 jobs, cobra 2/10, dockassist 2/12, hifipi/vinylstreamer/unifi 0.
+- The wrapper documents the flag as *"Name of the monitoring task (used for state file if provided)"* — it reads as cosmetic. Nothing signals **"required whenever two jobs on a host share a script."** That is an API footgun, not operator error.
+
+### Timeline — this is NOT from the recent HA/MQTT work
+
+The Mosquitto addition (`67d9454`, 2026-07-12) only took it from 2 messages to 3. Slack evidence, sampled at three points:
+
+| Date sampled | msgs / 10 min | Which |
+|---|---|---|
+| 2026-05-10 (Slack retention edge) | 2 | — |
+| 2026-06-15 | 2 | `home-assistant` + `matter-server` |
+| 2026-07-11 (day before Mosquitto) | 2 | `home-assistant` + `matter-server` |
+| 2026-08-02 (now) | 3 | + `mosquitto` |
+
+The Matter Server cron was committed **2025-11-30** (`45d0f11`) — in the *same commit* that created the container, so monitoring shipped with it — and is provably live from at least 2026-05-10, two months before any MQTT work.
+
+**Breakage began at N=2 container checks, not N=3.** With a single `check_container.sh` job the state file is unique and the wrapper behaves correctly; the second one is what created the collision.
+
+Caveats on evidence: Slack free-tier retention is ~90 days, so continuity between 2025-11-30 and 2026-05-10 is inferred from git, not observed. Docker container creation dates are **not** usable as "first deployed" evidence — an image update recreates the container (`home-assistant` reports `Created=2026-07-10` despite running for years).
+
+### Related latent issues found in the same pass
+
+1. **The wrapper silently accepts invalid `--heartbeat-interval` values.** The `if/elif` chain (`:390–399`) only handles `daily|hourly|always`; anything else matches no branch and silently disables heartbeats entirely. Two live instances:
+   - `--heartbeat-interval=weekly` on dockassist `docker_system_prune` — almost certainly unintended; that job has never heartbeated.
+   - `heartbeat: "never"` on the OPNsense VPN gateway tracking job (`roles/platform/opnsense/tasks/main.yml:160`) — intent is clear and it works, but only *by accident*. Should become a first-class supported value.
+2. **The state-write race is fleet-wide latent, not dockassist-specific.** `check_volume_quota.sh` already runs on both cobra and vinylstreamer — different hosts, so no collision *today*. The next same-host duplicate re-arms the identical bug.
+3. **A failed state update is invisible.** `… && mv` with no error handling means the wrapper carries on as if it persisted.
+
+### Fix (repo — requires laptop, Ansible deploy)
+
+Scope deliberately split. **There is exactly one active bug**; everything under "prevention" is latent and currently produces zero noise. Do not let the prevention work gate the fix.
+
+**Required — this alone resolves the channel flood (467 → ~38 msgs/day):**
+- [x] Add distinct `--monitoring-name={homeassistant,matter_server,mosquitto}_container` to the three cron jobs in `roles/services/homeassistant/tasks/main.yml` and `tasks/mqtt.yml` — **done 2026-08-06**, and verified byte-for-byte against dockassist's live crontab (see below)
+- [ ] `rm /home/choco/.log/check_container.sh.json*` on dockassist — orphaned once the new state names take over
+
+**Prevention — ACCEPTED 2026-08-02, to be done in the same pass:**
+- [ ] Harden `scripts/common/enhanced_monitoring_wrapper`: `mktemp` for the state tmp file instead of the fixed `${STATE_FILE}.tmp` (~2 lines). Disarms this bug class on every host for every future job.
+- [ ] Make `never` a **first-class, documented, validated** value for `--heartbeat-interval` — see decision below
+- [ ] Hard-fail on unrecognised `--heartbeat-interval` values instead of silently disabling heartbeats
+- [ ] Fix `--heartbeat-interval=weekly` on `docker_system_prune` → **`always`** (not `daily`). That job runs `@weekly`, so "heartbeat on every run" *is* one message per week — `always` states the intent honestly. (`daily` would behave identically here since runs are 7 days apart; `always` is the clearer expression. This supersedes the earlier `→ daily` suggestion.)
+
+#### Decision — heartbeat interval semantics (2026-08-02)
+
+Owner's intent, stated explicitly: **do not add more frequency values** (`weekly`, `monthly`, …). The supported set stays `daily | hourly | always | never`, where the job's own cron schedule carries the cadence and the heartbeat setting only says *how often to speak about it*. Both live oddities (`weekly` on `docker_system_prune`, `never` on the OPNsense VPN job) came from the same assumption — that an unlisted value would degrade to "no heartbeat". It does, but only by accident, and silently.
+
+⚠️ **One open sub-decision, deliberately unresolved.** Owner's stated preference is that *leaving the interval undefined* should mean "no heartbeat". The wrapper currently defaults to `HEARTBEAT_INTERVAL="daily"` (`:203`) when the flag is absent.
+
+Recommendation: **make `never` explicit but keep `daily` as the absent-flag default.** Reason: a job that silently never heartbeats is indistinguishable from a job that is broken or not running at all — silence is the one signal monitoring must never default to. A forgotten flag should produce one noisy message a day, not permanent quiet. All 40+ live wrapper invocations currently pass the flag explicitly, so this default is never actually exercised today; the choice only affects future jobs.
+
+Owner may overrule at implementation time — if so, flip the default to `never` **and** add a CI lint requiring `--heartbeat-interval` to be present on every wrapper invocation, so the silence is always deliberate rather than forgotten.
+
+**Deliberately dropped** (churn across 7 hosts for no current benefit):
+- ~~Stagger the three container checks~~ — redundant once the tmp path is unique
+- ~~Fleet-wide `--monitoring-name` retrofit~~ — the flag only matters when two jobs on one host share a script basename. Better addressed as a CI lint that fails on same-host duplicate basenames without `--monitoring-name`, if it recurs.
+
+**Deploy:** `ansible-playbook ansible/playbooks/services.yml --limit dockassist` (container checks) + `ansible-playbook ansible/playbooks/deploy_monitoring.yml` (wrapper, all hosts — only if the prevention items are taken).
+
+**Acceptance:** `#home-logging` drops from ~467 to ~38 msgs/day; dockassist's three container checks each post exactly once per day in the 00:00 burst; no `mv: cannot stat` lines in `~/.logs/*container_check.log`.
+
+### Interim manual mitigation (applied by hand while remote)
+
+**This is NOT drift.** The hand-applied `--monitoring-name` values are byte-identical to what the Ansible fix will render (`homeassistant_container`, `matter_server_container`, `mosquitto_container`), so deploying the repo fix is a no-op on these three lines. The cron `name:` comments are untouched, so the playbook overwrites cleanly with **no duplicate entries** (see the cron-naming gotcha in `CLAUDE.md`).
+
+Exact command applied (idempotent — the `/--monitoring-name/!` guard makes a second run a no-op; dry-run verified against the live crontab with the host's GNU sed):
+
+```sh
+crontab -l > ~/crontab.bak.$(date +%Y%m%d)
+crontab -l | sed -E \
+ -e '/check_container\.sh [^ ]+ home-assistant /{/--monitoring-name/!s#--notify-fixed=true#--notify-fixed=true --monitoring-name=homeassistant_container#}' \
+ -e '/check_container\.sh [^ ]+ matter-server /{/--monitoring-name/!s#--notify-fixed=true#--notify-fixed=true --monitoring-name=matter_server_container#}' \
+ -e '/check_container\.sh [^ ]+ mosquitto /{/--monitoring-name/!s#--notify-fixed=true#--notify-fixed=true --monitoring-name=mosquitto_container#}' \
+ | crontab -
+rm -f ~/.log/check_container.sh.json*
+```
+
+- [x] **Applied on dockassist 2026-08-02, between 19:20 and 19:30 CEST — verified working.**
+- [ ] Backup at `~/crontab.bak.20260802` — delete once the repo fix is deployed and verified
+
+**Verification (2026-08-02 19:30 CEST, first cron run after the change):** all three jobs report `Notification sent: No`, the `Sending daily heartbeat notification` line is gone, and no `mv: cannot stat` errors appear in any of the three logs. Confirms the root cause and the fix. Channel volume should now settle at ~38 msgs/day.
+
+Note for whoever verifies next: the `*/10` runs immediately *before* the crontab edit still show the old behaviour. Read the first run after the edit, not the last few lines, or you will conclude the fix failed.
+
+### Repo fix verified against the live crontab — 2026-08-06
+
+The three `--monitoring-name` values are now in the role, and the claim that they
+match dockassist byte-for-byte is **measured, not asserted**. Method, without
+connecting to the host as `choco` and without a playbook run:
+
+1. Capture the live crontab (see the `read_agent` note below).
+2. Parse the `job:` strings straight out of the two task files, render them with
+   Jinja2 against dockassist's real variables, and diff against the live lines.
+
+Variable resolution is the part that is easy to get wrong. `ansible-inventory
+--host dockassist` returns **neither role defaults nor the function-level
+`group_vars/homeassistant.yml`** — the latter is pulled in by `services.yml` with
+`include_vars` at runtime, keyed on `primary_function`, because dockassist is not
+in an Ansible group called `homeassistant`. Layer all three in precedence order
+(role defaults < inventory < `include_vars`) or the render silently uses fallback
+values: the first attempt produced a phantom diff on `Internet speed check`
+(300/150/100 from the `| default()` arms instead of the real 850/850/15).
+
+**Result: 12 of the 13 rendered cron jobs are byte-for-byte identical to the live
+crontab**, including all three target lines. The lines that were not touched
+matching is what makes the three that were meaningful — a render that agrees with
+reality everywhere else is a render worth trusting.
+
+**The one remaining diff is intentional**: `Docker system prune` is
+`--heartbeat-interval=weekly` live and `always` in the repo. That is this
+branch's own fix (see the prevention list above), not drift. **So L4's
+"`--check --diff` shows no diff" acceptance needs restating: no diff on the three
+container-check lines, one expected diff on `docker_system_prune`.**
+
+Checked in both directions, per the standing method: with the change stashed, all
+three lines report `DIFFERS`. A comparison that cannot fail is not evidence.
+
+✅ **The captured crontab was itself validated.** `sudo crontab -l -u choco` over
+`read_agent` was diffed against `crontab -l` run as `choco` on the host: **byte-for-byte
+identical**, no truncation or mangling. The byte-for-byte claim above therefore
+rests on confirmed source data, not on a privileged view that might differ.
+
+📌 **`read_agent` CAN read another user's crontab — argument order is the catch.**
+The sudoers rule is `/usr/bin/crontab -l -u *`, so `sudo crontab -l -u choco`
+works from `dockassist-agent` while the more natural `sudo crontab -u choco -l`
+is rejected with "a password is required". This retires the standing assumption
+that reading a live crontab needs a `choco` shell from the phone — it is
+autonomous, and any future "does the repo match the host?" check can be done the
+same way.
+
+### Fatal-interval blast radius — measured fleet-wide 2026-08-06
+
+The hardened wrapper makes an unrecognised `--heartbeat-interval` fatal
+(`daily|hourly|always|never` pass; anything else exits 1). Since the wrapper
+ships to every host via `deploy_monitoring.yml`, "which live cron lines does that
+kill?" is a question about the **crontabs**, not about the script — so it was
+counted rather than reasoned about, via `sudo crontab -l -u {choco,root}` over
+`read_agent`:
+
+| Host | always | daily | weekly |
+|---|---|---|---|
+| dockassist | 1 | 10 | **1** |
+| cobra | 1 | 9 | — |
+| hifipi | — | 7 | — |
+| vinylstreamer | — | 3 | — |
+| cwwk | 2 | 8 | — |
+| unifi-lxc | — | 4 | — |
+
+**Exactly one invalid value exists on the whole fleet: `docker_system_prune` on
+dockassist — the one this branch already fixes.** So the deploy-ordering
+constraint (`services.yml --limit dockassist` before or with
+`deploy_monitoring.yml`) is not just necessary, it is *sufficient*: no other host
+needs a coordinated change, and no other job goes fatal.
+
+✅ **opnsense measured 2026-08-06 too — also clean.** Read by hand as `choco`
+(FreeBSD's sudoers has no `crontab -l -u *` rule, so `read_agent` is refused
+there; the host is reachable, the refusal is authorisation). Of 13 crons, **9
+invoke the wrapper**: `daily` ×8 and `never` ×1. Both valid, so nothing on
+opnsense goes fatal either.
+
+🔴 **Correction — "the FreeBSD cron is unwrapped" is false, and it has been used
+to rank deploy risk.** opnsense runs the wrapper on 9 of 13 crons, explicitly via
+`/usr/local/bin/bash`. The *narrow* claim in §1a survives untouched: the common
+`system_health_check.sh` is genuinely not scheduled there — what is scheduled is
+the role's own `check_system_health.sh`, a different file. But the generalisation
+drawn from it does not. **`deploy_monitoring.yml` ships
+`enhanced_monitoring_wrapper` to opnsense, where 9 live crons depend on it**, so
+the wrapper half of L3 has full blast radius on the firewall even though the
+`system_health_check.sh` half has none. Rank opnsense's L3 risk on the wrapper,
+not on the health script.
+
+Also confirmed while there, since both could have bitten opnsense at L3:
+- **`never` is explicit, not a fall-through.** It suppresses the heartbeat and
+  *still* sends recovery notifications. `opnsense_vpn_gateway` runs `*/15` with
+  `never`, so a regression here would have been either 96 msgs/day or a silently
+  lost recovery alert. Neither: behaviour is unchanged from `main`.
+- **The `mktemp` change is guarded.** An empty result is caught
+  (`[ -z "$state_tmp" ]` → warn, state not persisted) and a failed update
+  `rm -f`s the temp file instead of leaving litter. Previously `... && mv`
+  carried on as though the state had persisted.
+
+✅ **`mktemp` verified on FreeBSD 2026-08-06** — run on opnsense itself:
+`mktemp /tmp/statetest.json.XXXXXX` returned `/tmp/statetest.json.hErSn4`. The
+path-bearing template works, so the wrapper's state update persists on the
+firewall and heartbeat dedup — the exact thing this branch exists to fix — does
+not silently break there after L3. **No executable unknown remains for this
+branch on opnsense.**
+
+Related: the three container checks all use `daily`, and the `--monitoring-name`
+parsing (`STATE_NAME="${MONITORING_NAME:-$(basename "$script_path")}"`) is
+**unchanged from `main`** on this branch — the hardening touched `mktemp`, the
+docs and the error path only. So the byte-identical cron lines derive identical
+state-file names under both the old and the hardened wrapper. That coupling was
+checked rather than assumed, because the branch changes the cron lines and the
+wrapper together.
+
+**Still outstanding after the manual step** (i.e. what the laptop session is actually for): the wrapper hardening, the interval validation, the `never`/default decision, and the `docker_system_prune` `weekly` → `always` fix. None of those are applied by hand.
+
+### ✅ Status 2026-08-04 — prevention items DONE, required item NOT done
+
+Written and verified against a disposable Debian 13 LXC (CT 199) by
+`tests/cases/wrapper_state_collision.sh`, run in both directions. **Nothing is
+deployed.**
+
+Done on this branch:
+- **`mktemp` for the state temp file.** Against `main` the test reproduces the
+  dockassist fault on demand: **6 × `mv: cannot stat`** across 15 concurrent
+  runs, leaving an empty, corrupt state file. Zero on this branch.
+- **`--heartbeat-interval` is validated.** `never` is now first-class;
+  unrecognised values are fatal instead of silently disabling heartbeats.
+- **`docker_system_prune` `weekly` → `always`.**
+- **`--monitoring-name` documented as REQUIRED** when two jobs on a host wrap
+  the same script. It read as cosmetic, which is an API footgun rather than
+  operator error.
+
+Sub-decision resolved as recommended: an **absent** `--heartbeat-interval` still
+defaults to `daily`. Silence is the one signal monitoring must never default to
+— a job that quietly never heartbeats is indistinguishable from one that is
+broken. All 40+ live invocations pass the flag explicitly, so the default is not
+exercised today.
+
+⚠️ **STILL NOT DONE: the three `--monitoring-name` cron values** — the
+"Required" item, and the only one that actually clears the channel flood. The
+interim hand-applied crontab fix on dockassist is still what is holding the
+channel quiet, and an unmodified `services.yml` run STILL REVERTS IT. Nothing
+about this branch has changed that.
+
+⚠️ **Deploy ordering.** Making unknown intervals fatal means
+`docker_system_prune` would hard-fail weekly if the wrapper reached a host
+before the cron fix. Audited: the repo now contains 35 `daily`, 4 `always`, 1
+`always` (was `weekly`), and `never` on the OPNsense VPN job. The cron fix
+reaches dockassist via `services.yml` while the wrapper reaches all hosts via
+`deploy_monitoring.yml`, so they are committed on this one branch deliberately
+— do not split them.
+
+### Session decisions (2026-08-02)
+
+- Prevention items: **accepted** — do them in the same pass as the required fix.
+- Implementation: **deferred entirely to laptop time.** This plan is committed to branch `docs/monitoring-heartbeat-collision-2026-08` (off `main`, independent of the cwwk thermal branch); **no code has been written and nothing has been deployed** — deliberate, because the wrapper change touches all 7 hosts and cannot be tested remotely (`read_agent` is read-only; deploys need Touch ID).
+
+---
 
 ## Priority 1 — Autonomous Agent LXC (Phases A + B delivered; C remains)
 
