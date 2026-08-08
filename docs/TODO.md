@@ -379,8 +379,290 @@ All as code in the `platform/proxmox` role (toggle `enable_proxmox_power_tuning`
 - **Governor:** `performance` → **`powersave`** (intel_pstate; still boosts under load). Verified: all 8 cores `powersave`.
 - **Dedicated thermal alert:** `check_thermal.sh` (cron `*/5`, via `enhanced_monitoring_wrapper` → #home-alerts) alerts on throttle-counter **delta**. Logic verified across OK/WARN/CRIT/reboot. Temp alerting moved out of `check_proxmox_health.sh` (no double-alerts).
 
+### RECURRENCE — 2026-07-31/08-01 (second occurrence, same root cause)
+
+**The 2026-06-30 root cause repeated, with a different trigger.** A house power outage on 2026-07-30 ~13:40 cut power to everything; when it returned (2026-07-31 13:45) the USB cabinet fan did **not** resume, because it requires a manual switch press after power-on. Combined with a Netherlands heatwave, cwwk has been throttling continuously ever since. Diagnosed remotely 2026-08-01 while away from home.
+
+**Quantified (from `thermal-history.log`, 2160 samples spanning both states):**
+
+| | fan OK (Jul 28 → Jul 30 13:40) | fan dead (Jul 31 13:45 → now) |
+|---|---|---|
+| pkg avg | 42–45°C | **67–70°C** |
+| pkg peak | 50–60°C | **94°C** (1 Hz sampling) |
+| throttle events | **0** across 3 full days | continuous |
+
+- Throttle duty cycle is only **0.2%** (142s of throttling over 19.4h). `temp1_crit_alarm` never latched. Tjmax = 105°C — it is throttling gracefully, exactly as the PL1 cap was designed to make it.
+- Throttling is **bursty, not sustained**: median 2-min delta = 4 events, p90 = 176, p99 = 1515, max = 4632 (03:04, during `pve-daily-update`). Roughly half the `*/5` check runs exceed `THROTTLE_WARN=20` → ~1 Slack alert per 10 min.
+- **Heat is component-local, not cabinet-wide.** All Pis polled: hifipi 69°C, cobra/dockassist 56°C — **zero** under-voltage/throttle kernel events fleet-wide in 5 days, and these are consistent with the measured 26.5°C room ambient (Tado) rather than a heat-trapped enclosure. `vinylstreamer` read 45°C but **is not in the cabinet** — it is a house-ambient control, not a cabinet data point. Heatwave contributes ~+5–6°C to everything; fan loss contributes ~+20°C to the cwwk package alone.
+  - ⚠️ **Superseded evidence:** an earlier version of this analysis argued "board ambient is only +1.3°C over room" from `acpitz` (27.8°C) and "NVMe flat at 35.9°C". **Both readings were later proven to be static stubs — see the Sensor reliability section below.** Cabinet air temperature is *unmeasured*. The component-local conclusion still holds, but rests on the Pi temperatures and room ambient, not on those two sensors.
+- **No fire risk** — and this does *not* depend on the discredited sensors. Sustained package power is hard-capped by RAPL (PL1 20W, verified writable and enforced), the silicon self-protects by throttling at Tjmax 105°C and THERMTRIPping above it, and peak measured was 94°C with `temp1_crit_alarm` never latching. The worst realistic outcome is a clean power-off that takes OPNsense (and therefore all internet) with it — an **availability** risk, not a safety one.
+
+**Conclusion:** the mitigations are working. The unfixed item is the fan, as already noted below since 2026-06-30.
+
+### 2026-08-07 — THIRD thermal event, and the first one the fan did not cause
+
+**There is still no fan** — the Noctua + mechanical controller bought 2026-08-02 is not yet fitted, so cwwk has been running passively since 2026-07-31. That is the standing condition, not the news. The news is that **a single runaway process on a guest was enough to hold the box at ~95°C for ten hours**, and nothing in the fleet's monitoring could see it.
+
+**Sequence (measured, `thermal-history.log` + `procstat`):**
+
+| Time | Event |
+|---|---|
+| 01:44:05 | `grep -rn 'forward-addr\|forward-zone\|10.64.0.' /var/unbound/` starts on the **OPNsense guest** as `read_agent` |
+| 01:46 sample | cwwk `pkg` 76→92°C, `throttle_delta` 8→12,611, `load` 0.32→1.25 |
+| 01:46 → 11:42 | `pkg` **sustained 94–96°C**, delta ~16,000 per 2 min, load flat ~1.2. Host `kvm` (PID 1594 = VM 100) at **109% CPU**; nothing else above 1% |
+| 11:42 | process killed by hand |
+| 11:44 | `pkg=74`, `throttle_delta=69`, `load=0.25` — recovery inside two samples |
+
+**Why the grep never finished — verified, and it is platform-specific.** `procstat -f` showed fd 3 open on `/var/unbound/dev/random` at offset **181,681,487,872** (~169 GiB read). Unbound's chroot on OPNsense contains a **fully populated devfs** (`random`, `zero`, `null`, `mem`, …), and BSD `grep -r` descends into it and reads character devices as files. There is no EOF.
+
+```
+BSD grep 2.6.0-FreeBSD : grep -r over a device  → exit 124 (reads forever)
+                         --devices=skip         → exit 1   (clean skip)
+GNU grep 3.11 (Linux)  : grep -r over /dev      → exit 2   (skips devices already)
+```
+
+**So only the FreeBSD host is exposed to this shape** — which happens to be the internet SPOF *and* the guest of the fanless hypervisor. Both greps were run bounded with `timeout` to verify this; neither left anything running.
+
+**Origin (inferred, not proven):** the parent `sh -c` ends with `echo '(empty = Unbound is NOT forwarding to Mullvad DNS)'`, which is the exact question behind network finding 1 (`monitor_dns_failover.sh` asserting a forwarding config that does not exist). Timestamp and subject both match the network-documentation session of 2026-08-07. Recorded because it motivates the guard below, **not** as a reason to narrow what agents may inspect — see the design note.
+
+**What this says about the thermal picture — it does *not* overturn the fan conclusion:**
+
+- Prior peak-load samples already touched 89–95°C (load 13.77 → 95°C, 2026-08-06 03:04). The box reaches that temperature transiently under bursts *and* under one permanently-pegged core; the difference today was **sustained vs transient**, not a new cooling fault.
+- Steady-state with one core pegged, fanless, is therefore **~95°C**. That is the number to plan against, and it is 10°C from Tjmax.
+- ⚠️ **Idle has settled at 74°C**, against 67–69°C on 2026-08-04→06. **Unverified** whether that is residual soak from a ten-hour heat load or a genuine ambient rise — re-read `thermal-history.log` before drawing anything from it.
+
+**The drifted thresholds are now demonstrated, not theoretical.** At ~16,000 events per 2 min the `*/5` check computes a ~40,000 delta — landing exactly on the hand-applied `THROTTLE_CRIT=40000` and oscillating CRIT/WARN on nearly every run. That is the Slack spam. Temps of 94–96°C stayed *below* the hand-applied `TEMP_WARN=98`, so the alerts never mentioned temperature at all and pointed at "check fan/airflow" for ten hours while the cause was a stuck process one VM away. **This is a concrete argument for what to restore the thresholds to (see RESTORE ON RETURN below), and for the wrapper dedup work in Next Steps.**
+
+#### 🔴 The monitoring gap this exposed — a fourth failure class
+
+Every host already has CPU monitoring, in three separate implementations:
+
+- `scripts/common/system_health_check.sh:106` `check_load()` — all hosts
+- `scripts/services/opnsense/check_system_health.sh:42`
+- `scripts/services/proxmox/check_proxmox_health.sh:102`
+
+All three compute `load_1min / cpu_count × 100` against an 80% warn. **Normalising by core count makes a single runaway process undetectable by construction:**
+
+| Host | Cores | Pegged cores needed to warn | Reading during the incident |
+|---|---|---|---|
+| `unifi-lxc` | 2 | 1.6 | — |
+| Pis (×4) | 4 | 3.2 | — |
+| `opnsense` | 6 | 4.8 | **17% — "healthy"** |
+| `cwwk` | 8 | 6.4 | **16% — "healthy"** |
+
+OPNsense reported a comfortable 17% while one of its six cores was pinned. **This is not a cwwk-vs-the-rest gap — no host in the fleet, cwwk included, has a check that can see one stuck process.** cwwk caught it only via `check_thermal.sh`, a *physical downstream symptom* two layers from the cause, and misattributed it.
+
+This is a distinct shape from the three already tracked in this repo:
+
+| | Class | Example |
+|---|---|---|
+| 1 | Check exists, is broken | the five false failures, 2026-08-06 |
+| 2 | Nothing watches it at all | PVE package updates, OPNsense firmware |
+| 3 | Check runs, reports success, protects nothing | `monitor_dns_failover.sh` — 9,359 green checks on a false premise |
+| **4** | **Check exists, works correctly, and cannot cover the mode it appears to cover** | **`check_load()` — normalisation hides the single-process case** |
+
+Class 4 is arguably the worst to audit for: the coverage *looks* present and the code is not wrong. It belongs to the "start from failure modes, make the blanks the deliverable" review already proposed after Phase C — this is that review's first **demonstrated** member rather than a reasoned one.
+
+#### 🔴 The fan will REMOVE the only thing that detected this — plan for it before fitting it
+
+**Raised by Ignacio 2026-08-07, and the arithmetic confirms it.** Right now `check_thermal.sh` is, by accident, the fleet's only runaway-process detector. It is a bad one — indirect, and it names the wrong cause — but it is the reason this incident was noticed at all. **Fitting the fan removes it and puts nothing in its place.**
+
+Derived from measured values, not estimated:
+
+| | Measured | Source |
+|---|---|---|
+| Fanless idle | **68.8°C** (1,837 samples) | `thermal-history.log`, Aug 4–6 |
+| Fanless, one core pegged | **94.6°C** (290 samples) | the 2026-08-07 incident |
+| **Cost of one pegged core** | **+25.8°C** | difference of the two |
+| Fan-OK idle | **42–45°C** | RECURRENCE table, Jul 28–30 |
+| **⇒ Fan-OK, one core pegged** | **≈ 68–71°C** | 43 + 25.8 |
+
+Against repo `TEMP_WARN=85` and Tjmax 105°C, ~70°C is unremarkable — and the fan-OK baseline recorded **zero throttle events across three full days**. **So with the fan fitted, the exact incident of 2026-08-07 produces no throttle delta, no temperature warning, and no alert of any kind.** It runs indefinitely, silently.
+
+*(The ≈70°C figure is conservative in the safe direction: dissipation scales with ΔT to ambient, so a cooler starting point sheds the same watts at a smaller rise. The real number is likely lower, which only strengthens the conclusion.)*
+
+⚠️ **Generalise this — it is the actual lesson.** Every mitigation that widens a margin also removes the signal that the margin was being consumed. The RAPL cap did a milder version of this in June. A fix that makes an alert stop firing and a fix that makes the *fault* stop happening are indistinguishable from the alert stream alone — which is the "silencing an error is not fixing it" trap, arriving from the direction of a genuine improvement rather than a bad patch.
+
+**Consequences, all of which change the order of work:**
+
+1. **The runaway-process check stops being a nice-to-have and becomes the fan's prerequisite.** It is the replacement detector. Fitting the fan without it is a net *loss* of coverage on the host that takes the internet down.
+2. **Commissioning the fan must include proving detection survived it.** Per the standing rule — force the condition and watch it fire. On the cooled box, deliberately peg one core (`timeout 300 sh -c 'while :; do :; done'`) and confirm an alert reaches #home-alerts. **"Temps look fine now" is not acceptance**; it is exactly the observation a silenced detector produces.
+3. **L-E should follow the fan, not precede it.** The threshold restore reads differently on each side of it: on a fanless box the repo's `THROTTLE_WARN=20` pages constantly (see RESTORE ON RETURN), but **on a properly cooled box those repo values become correctly calibrated again** — 20 throttle events on a box that measured zero across three days is a real signal. Restore them *after* the fan and the wrapper-dedup dependency largely evaporates.
+4. **Re-baseline once cooled.** The RECURRENCE table's fan-OK figures predate this year's ambient and the KSM change. Take a fresh idle + pegged-core reading after commissioning so the next comparison has a true reference.
+
+#### ✅ ANSWERED 2026-08-08 — the `choco` false failures are real, and the merge already fixes all of them
+
+**Measured as `choco`** on cobra, cwwk and opnsense (the user the cron actually runs as; every previous measurement was `read_agent`). **All three §1 predictions confirmed — none refuted.** All three hosts exit `0` today, as expected: the aggregation is not deployed yet, so the ❌ lines are cosmetic.
+
+| Host | ❌ / ⚠️ observed as `choco` | Fixed by | After L-A+L-B |
+|---|---|---|---|
+| `cobra` | none — fully green | n/a | ✅ exit 0 |
+| `cwwk` | ❌ `Upgrade log not found` · ⚠️ `Memory: 81%` | `fix/agent-lxc-logs-dir` | ✅ exit 0 |
+| `opnsense` | ❌ `Service sshd: not running` · ❌ `Service cron: not running` · ⚠️ `Load: 4:10PM on 6 CPUs (67%)` | `fix/agent-lxc-logs-dir` | ✅ exit 0 |
+
+**Why L-B is safe — verified in the branch, not assumed:**
+
+- **`sshd` → `openssh`:** `freebsd_default_services()` probes `/etc/rc.d` and `/usr/local/etc/rc.d` for an `openssh` script and returns `"openssh cron"` on OPNsense. The name is detected, not hardcoded.
+- **`cron` permission-dependence:** `freebsd_service_state()` tries `service status` first and only falls back to `pgrep` when `can_inspect_processes`; otherwise it returns `unknown`, which `check_services` grades as a **warning that increments nothing**. An unprivileged user who cannot see the process table can no longer manufacture a critical.
+- **Unreadable upgrade log:** `check_auto_upgrades` now separates *unreadable* from *missing* and reports the former as a **warning**. Worth noting this means **B2 (the `adm` group) is no longer load-bearing for alert volume** — it is still correct and still worth doing, but the code now degrades safely without it.
+
+🔴 **NEW — the FreeBSD load bug is TIME-DEPENDENT, and that is a diagnostic trap.** `check_load` returns the clock instead of the load, and awk coerces it: `load_percent = hour / ncpu × 100`. On opnsense's 6 CPUs:
+
+| Clock hour | Reported | Severity |
+|---|---|---|
+| 1–3 | 17–50% | ✅ silent |
+| **4** | **67%** | ⚠️ warning |
+| **5–12** | **83–200%** | ❌ **error** |
+
+**So it is an error for 8 of every 12 clock hours — 16 hours a day — and silent or merely advisory for the other 8.** The 2026-08-08 measurement was taken at 16:10, i.e. `4:10PM`, one of only four hours in twelve where it is not an error. An hour later it would have been ❌.
+
+⚠️ **Had the aggregation shipped without this fix, opnsense would have paged for two-thirds of the day and gone quiet for the rest — an intermittent alert that looks exactly like a real fluctuating load problem.** It is fixed on `fix/agent-lxc-logs-dir` by `read_load_1min()`, which asks `sysctl -n vm.loadavg` rather than parsing `uptime` prose. **General lesson: a parse bug whose output is a plausible number is worse than one that crashes — this one was invisible for months because every value it produced was a number a busy box could genuinely report.**
+
+<details>
+<summary>Original brief (kept — it is why this was asked)</summary>
+
+**Every false-failure measurement in this repo was taken as `read_agent`. The cron runs as `choco`.** Nobody had checked whether they persist for the user that actually runs the check, and the exit-status aggregation converts any that do into a page every 15 minutes, permanently, the moment L-B deploys.
+</details>
+
+⚠️ **An agent cannot answer this.** Autonomous SSH must use the `-agent` suffix; `choco` uses a Secretive key requiring Touch ID. Confirmed 2026-08-08 — `ssh -o BatchMode=yes` to cobra, cwwk and opnsense as `choco` all return `Permission denied (publickey)`, failing fast rather than hanging. **And re-running as `read_agent` would reproduce exactly the flaw this item exists to close.** It needs a human shell (the phone works).
+
+```sh
+ssh cobra    '~/.scripts/system_health_check.sh; echo EXIT=$?'
+ssh cwwk     '~/.scripts/system_health_check.sh; echo EXIT=$?'
+ssh opnsense '/usr/local/bin/system_health_check.sh; echo EXIT=$?'
+```
+
+Record the **exit code and every ❌ line** per host. Predictions from §1 of the handover, to be confirmed or refuted rather than assumed:
+
+- The `adm` false failure should still fire — **B2 is not deployed yet.**
+- opnsense's `sshd` is really **`openssh`**, so `check_services` probes a service that does not exist.
+- opnsense's `cron` check is **permission-dependent** — `❌` as `choco`, `✅` as root, seconds apart. The cron runs as `choco`, so `choco` gets the false answer.
+
+**This is a read. It changes nothing on any host.** Until it is answered, L-B's blast radius is unknown.
+
+#### Deferred — do after L-A, not before
+
+⚠️ **None of this may be written before the nine branches merge.** Measured collisions, identical in kind to the ones that parked the token item:
+
+| File a fix needs | Already modified by |
+|---|---|
+| `scripts/common/system_health_check.sh` | `fix/agent-lxc-logs-dir-2026-08` **and** `feat/link-speed-check-2026-08` |
+| `scripts/services/agent/investigate.sh.j2` | `fix/agent-lxc-logs-dir-2026-08` |
+| `playbooks/tasks/deploy_monitoring.yml` | `fix/agent-lxc-logs-dir` **and** `fix/deploy-plumbing-dirs` |
+
+🔴 **`check_load()` had a SECOND, independent reason it could never alert.** `system_health_check.sh` had no aggregation and no final `exit`, so its status was that of the last `echo`; `enhanced_monitoring_wrapper` keys purely on exit status. **So even a genuine whole-box saturation — the one case `check_load()` *was* designed for — never reached Slack, on any host, ever.**
+
+⚠️ **Provenance corrected 2026-08-08 — this section first credited that to `feat/link-speed-check-2026-08` (2026-08-07). Wrong.** It was **measured 2026-08-05** and is already written up in the handover's §1, and `fix/agent-lxc-logs-dir-2026-08` already fixes it with per-check return codes. The link-speed branch re-derived it independently, and a second session (this one) then re-reported it as new — the same finding claimed three times. **The bug is real and the compounding argument below stands; only the "newly discovered" framing was false.** Recording it because re-discovery that looks like discovery is exactly how a fixed item gets re-opened and re-worked.
+
+Two independent defects in the same check, from opposite directions: the **threshold** could not represent a single-process fault (this section), and the **exit path** discarded every fault it did detect. Either alone makes it silent. That both existed undetected for months is the strongest possible argument for the "start from failure modes, make the blanks the deliverable" review — neither would have been found by reading the check and asking whether it looked correct, because it *did*.
+
+⚠️ **Build the runaway-process check on the post-L-A `main`, not today's.** `fix/agent-lxc-logs-dir-2026-08` is what converts the script to per-check counted returns summed into `total_issues` with a real `exit` — a check written against today's `main` would inherit the exit-0 bug and be cosmetic. Any new check must **count its faults and `return` the total**; reporting via `print_status` alone contributes nothing. That is not hypothetical: `check_link_speed` was written that way and had to be corrected (`db08910`) before it could ever alert.
+
+Writing against a base that moves underneath, then resolving conflicts in cron and monitoring definitions, is this repo's signature failure mode. After L-A there is one branch and the collision is gone. (`check_system_health.sh` and `check_proxmox_health.sh` are clean on all nine branches, so a fix scoped to those two only *could* go earlier — it would not be the whole job.)
+
+Three items, in the order they earn their keep:
+
+1. **Bound agent diagnostics by wall-clock — `timeout`.** ✅ **Preferred, and it limits no capability.** A single hung command is what caused this; `timeout` catches *every* runaway shape (stuck grep, blocked read on a FIFO, hung `ssh`) without an allowlist to maintain and without narrowing what an agent may inspect. Deliberate design decision, taken 2026-08-07: **do not respond to this by restricting agent read access.** The failure was unbounded duration, not excessive scope.
+2. **`--devices=skip` on BSD-side recursive greps** — `scripts/services/opnsense/*` and `scripts/services/agent/investigate.sh.j2`. Belt-and-braces; on its own it only fixes the one shape that already bit us, and GNU grep needs nothing.
+3. **A runaway-process check.** 🔴 **Listed third but it is the one that matters most — it is the fan's prerequisite**, per the masking section above. Everything before it prevents *this* incident; only this one detects the *next* one, and after the fan nothing else will. Alert on a single process sustaining ~100% of one core across N consecutive samples. Reuse the `check_thermal.sh` counter-delta idiom (sample process CPU-time, alert on sustained growth) rather than a single-sample threshold. **Place it where the process runs, not on the hypervisor** — a pegged core on the firewall is nearly always wrong, whereas `kvm` at 109% on cwwk is sometimes legitimate. Host scope is an open decision; it touches `system_health_check.sh`, which reaches all eight hosts.
+
+### ⚠️ RESTORE ON RETURN — manual drift on cwwk (do this FIRST when home)
+
+Temporary changes were applied by hand on cwwk on 2026-08-01 while away. **All are un-codified drift.** Ansible restores most of it, but do it deliberately rather than discovering it later:
+
+| Change | Current (drifted) state | Restored by |
+|---|---|---|
+| RAPL PL1 | **15W** (repo says 20W) | Reboot, or the `Restart cwwk power tuning` handler |
+| RAPL PL2 | **20W** (repo/firmware default 35W) | Reboot only — the script does not manage PL2 |
+| `check_thermal.sh` thresholds | **15000 / 40000 / 98 / 101** (repo: 20 / 500 / 85 / 95) | Any `platform/proxmox` run |
+| Thermal cron schedule | `*/5` — already back to the repo value | n/a |
+| **`ksmtuned` disabled** | `disabled` / `inactive (dead)` | ⚠️ **NOTHING — see below** |
+
+📌 **The threshold row is no longer just drift — 2026-08-07 measured what it costs.** At `*/5`, `THROTTLE_CRIT=40000` sat exactly on the delta produced by one pegged core, oscillating CRIT/WARN every run; and `TEMP_WARN=98` kept a real 94–96°C event out of the alert text entirely. Restoring the repo values is the right move, but do it **with** the wrapper dedup in Next Steps — the repo's `THROTTLE_WARN=20` on a fanless box will page constantly on its own. See the 2026-08-07 event section above.
+
+⚠️ **`ksmtuned` is a different class of drift and will NOT self-heal.** Disabled by hand on 2026-08-02. Unlike the rows above it **survives reboots *and* Ansible runs**, because the repo contains no KSM references at all (`grep -ri ksm ansible/ scripts/` → nothing). The systemd `preset: enabled` means a **rebuilt cwwk would come back with KSM on**, silently diverging from the running host. Either codify the disable in the `platform/proxmox` role (a `proxmox_disable_ksm` toggle, matching the variables-over-groups convention) or consciously re-enable it. Do not leave it as invisible drift.
+
+```bash
+# restore everything to the repo's source of truth
+ansible-playbook ansible/playbooks/platform/proxmox.yml --limit proxmox --check --diff   # inspect first
+ansible-playbook ansible/playbooks/platform/proxmox.yml --limit proxmox
+```
+
+**Then verify** — an Ansible run alone does *not* reset PL2, because `cwwk_power_tuning.sh` only manages PL1:
+
+```bash
+ssh cwwk-agent "grep . /sys/class/powercap/intel-rapl:0/constraint_[01]_power_limit_uw"   # expect 20000000 / 35000000
+ssh cwwk-agent "sudo -n /usr/bin/crontab -l -u choco | grep proxmox_thermal"              # expect a single */5 line, no duplicate
+```
+
+If PL2 still reads `20000000`, reboot cwwk or write `35000000` back by hand. Also confirm the thermal cron did not duplicate (the `cron` module keys on its `#Ansible:` marker — see the rename gotcha in `CLAUDE.md`).
+
+### ⚠️ Sensor reliability — `acpitz` and the NVMe temp on cwwk are NOT trustworthy
+
+Discovered 2026-08-01 while using them as evidence. Five reads over 20s:
+
+- `nvme` `temp1/2/3_input` = **35850 on all three sensors, identical, zero variation** — and `nvme=35` in every one of 2160 log samples across four days. Three identical sensors that never move is not a live measurement.
+- `acpitz` (`thermal_zone0`) = **27800, constant across hours.** Almost certainly a fixed ACPI value, not a real probe.
+- `x86_pkg_temp` varied normally over the same reads (68/65/66/71/65°C) — **this one is real.**
+
+**Consequence:** the earlier "board ambient is only +1.3°C above room, so the cabinet ventilates fine" claim rests on `acpitz` and is **withdrawn**. Cabinet air temperature is currently *unmeasured* — which is precisely the gap the ambient probe below fills. Trust only `x86_pkg_temp`/`coretemp` on cwwk and the Pis' `thermal_zone0`; do not use `acpitz` or the NVMe reading for anything.
+
+### KSM is a hidden thermal variable on cwwk (discovered 2026-08-02)
+
+Throttling collapsed from ~3,500 events/hour (all afternoon and evening of Aug 1) to **~0/hour from 05:00 on Aug 2** — with *no* fan change, room ambient actually 0.7°C **higher** (27.2°C vs 26.5°C), unchanged guests, and similar load. Cause traced to **KSM (Kernel Samepage Merging)**:
+
+- `ksmd` averaged 6.2% CPU over the host's lifetime but now measures **0 ticks in 20s**, and `/sys/kernel/mm/ksm/run` = **0**.
+- `ksmtuned` enables KSM when free memory drops below ~20% of total and disables it above. Host total is 31,834 MB → threshold ≈ 6,367 MB. Free currently reads **6,398 MB** — i.e. the host sits *right on the activation boundary* and toggles across it.
+- `general_profit` = **-201,384,320** (negative): KSM is costing more than it saves here anyway, with only 52 pages shared.
+
+**Mechanism:** KSM scanning is a low-level *continuous* CPU burn spread across all cores. On a cooling-starved CPU that is already sitting a few degrees under Tjmax, that constant background load is enough to hold it above the TCC trip point. Package average was ~69–70°C with KSM on versus ~66–68°C with it off — a ~3°C shift that produces a **cliff-edge** change in throttle counts, because throttling is a threshold effect, not a linear one.
+
+**Consequences:**
+1. **It confounds the RAPL cap experiment.** The 03:00 `pve-daily-update` comparison (14,002 events on Aug 1 without caps vs 8,682 on Aug 2 with caps) is *not* evidence the caps work — peak load also differed (12.65 vs 8.10), and KSM state differed. **The caps still have no demonstrated benefit.** See the `stress-ng` item for the only clean way to settle it.
+2. **Latent issue independent of the fan:** this host runs close enough to the KSM threshold that memory growth in any guest silently adds continuous CPU load. **Note the thermal urgency disappears once ventilation is fixed** — a ~6%-of-one-core burn only matters on a cooling-starved CPU. The *memory* case stands on its own though: per the kernel docs, `general_profit =~ ksm_saved_pages * sizeof(page) - (all_rmap_items) * sizeof(rmap_item)`, so cwwk's **−201,384,320** means KSM's tracking overhead exceeds its savings by ~192 MiB, while `pages_sharing=52` is only ~208 KiB actually saved. KSM pays off with many near-identical VMs; cwwk runs *one* big FreeBSD VM plus three LXCs (which already share the host kernel and page cache), so there is almost nothing to merge. **DONE manually 2026-08-02** (`systemctl disable --now ksmtuned`; verified `disabled` / `inactive (dead)`, `ksm/run=0`). **Still needs codifying** — see the RESTORE ON RETURN note above, since this one does not self-heal. Trivially reversible if guest topology ever changes. Ref: <https://docs.kernel.org/admin-guide/mm/ksm.html>
+3. Any future thermal comparison on cwwk **must record `/sys/kernel/mm/ksm/run`**, or it is uninterpretable.
+
+### Design lesson — the fan must not be able to fail OFF
+
+Two incidents, two different triggers (a person in June, a power cut in July), **one shared mechanism: the fan ended up off**. A thermostat-controlled fan would add a *third* way for that to happen. The durable fix is a fan on unswitched, always-on power — a dumb always-on fan cannot fail off, and a ~5W USB fan costs ~€1.50/yr to run continuously.
+
+If a controller is used anyway (noise), it must be wired **fail-safe: fan ON when the controller loses power or faults** — never fail-off.
+
 ### Next Steps — remaining
-- **Fan:** ensure the cwwk fan can't be casually switched off (physical / labelling). *Still the actual fix — the cap only widens the margin.*
+- **Fan (ROOT CAUSE, now twice-proven):** move the cabinet fan to unswitched always-on power so neither a person nor a power cut can leave it off. Must not require a manual press after power restoration. *Still the actual fix — the cap only widens the margin.*
+  - **Hardware bought 2026-08-02:** Noctua fan + a simple **mechanical** controller (USB voltage conversion, physical on/off switch, speed fader). A *mechanical* switch is the correct choice: it **retains its position through a power cut**, unlike the old USB fan's momentary soft-latch that reset to off on power-up — which is precisely what caused this incident.
+  - 🔴 **Commissioning check — prove the fan did not silence anything (added 2026-08-07).** Better cooling removes `check_thermal.sh` as the accidental runaway-process detector and puts nothing in its place — see *"The fan will REMOVE the only thing that detected this"* above for the measured arithmetic. **Do not accept "temps look fine now" as commissioning**; that is precisely what a silenced detector looks like. Peg one core deliberately on the cooled box (`timeout 300 sh -c 'while :; do :; done'`) and confirm something still alerts. If nothing does, the fan has traded a loud misattributed alert for silence, and the runaway-process check is now blocking rather than deferred.
+  - ⚠️ **Commissioning check — fan START voltage exceeds RUN voltage.** A DC fan needs more voltage to overcome static friction than to keep spinning, so a fader set low can leave a fan that runs happily but **fails to start from cold** after a power cut — silently recreating this exact outage. **Do not validate by watching it spin.** Set the fader, then pull power, restore it, and confirm the fan starts *by itself* from stationary. Check the model's minimum start voltage in Noctua's spec sheet and keep the fader comfortably above it.
+  - Remaining risk after this: a human switching it off (the 2026-06-30 cause). Mitigate with labelling.
+- **Alert-volume defect (not a threshold problem):** `enhanced_monitoring_wrapper` sends a Slack alert on *every* non-zero exit with no cooldown or dedup (`SEND_TO_ALERT=true` in the failure branch, ~line 384). A persistent known-bad condition therefore pages indefinitely at the cron interval. Same defect as the vinylstreamer 17-alert storm. Add per-monitor failure dedup: alert on transition into failure, then re-alert at a backoff interval, and alert on recovery. **Fix this in the wrapper — do not compensate by raising `check_thermal.sh` thresholds, which are correctly calibrated for a healthy box and would hide a genuine future event.** Cross-host benefit.
+
+  **⚠️ Do NOT "fix" alert volume by lengthening the cron interval.** `check_thermal.sh` alerts on a *delta since last run*, so a longer interval accumulates a **larger** delta. Moving `*/5` → `*/30` during this incident cut alert count 6× but pushed each run's delta from ~275 (WARNING, ≥20) past `THROTTLE_CRIT=500` into **CRITICAL** — fewer alerts, all of them now critical. This trap applies to any delta-based check.
+
+  **Validated patch (written and tested 2026-08-01, never deployed).** Replaces the bare `SEND_TO_ALERT=true` at line 385 of `scripts/common/enhanced_monitoring_wrapper`. Passed `bash -n`, and 5 logic cases: first failure → alert; repeat within window → suppressed; repeat after window → alert; recovery-then-failure → alert; corrupt marker → **fails open** (alerts). Uses the existing `LAST_STATUS`, `STATE_FILE` and `log_msg`:
+
+  ```bash
+  # --- alert cooldown ---
+  # Alert on transition INTO failure, then at most once per ALERT_COOLDOWN while
+  # the same failure persists. Recovery notification is unaffected.
+  ALERT_COOLDOWN="${ALERT_COOLDOWN_SECONDS:-21600}"
+  _marker="${STATE_FILE}.lastalert"
+  _now=$(date +%s)
+  _last=0
+  if [ -f "$_marker" ]; then
+    _last=$(cat "$_marker" 2>/dev/null || echo 0)
+    case "$_last" in ''|*[!0-9]*) _last=0 ;; esac
+  fi
+  if [ "$LAST_STATUS" != "failure" ] || [ $(( _now - _last )) -ge "$ALERT_COOLDOWN" ]; then
+    SEND_TO_ALERT=true
+    echo "$_now" > "$_marker"
+  else
+    log_msg "Alert suppressed by cooldown ($(( (ALERT_COOLDOWN - (_now - _last)) / 60 )) min remaining)"
+  fi
+  ```
+
+  **Known limitation to resolve before deploying:** the cooldown keys on *failure*, not severity — a WARNING→CRITICAL escalation is suppressed inside the window. Either make it severity-aware (reset the marker when `exit_code` rises) or keep the window short enough that the worst-case delay is acceptable.
+- **`cwwk_power_tuning.sh` fails silently (robustness, small):** both RAPL writes are wrapped in `|| true` and the unit still exits `0/SUCCESS`, so a rejected cap would be invisible — and because the BIOS defaults may coincide with the target values, reading the value back does **not** prove the script applied it. This cost real time on 2026-08-01 chasing a suspected BIOS lock. *(RAPL is confirmed **not** locked — `rdmsr -f 63:63 0x610` = 0, and both constraints are writable as root; the earlier failures were running on the wrong host and then as the wrong user.)* Fix: drop `|| true`, verify each write by reading the value back, and log/exit non-zero on mismatch so the unit goes `failed` and surfaces in `systemctl --failed`.
+- **Consider a PL2 (burst) Ansible variable:** `proxmox_rapl_pl1_watts` exists but PL2 is deliberately left at the firmware default (35W). The 94°C spikes are burst-driven, so PL2 is the effective lever under degraded airflow. Consider `proxmox_rapl_pl2_watts` for a documented degraded-airflow mode. Note `constraint_0_max_power_uw` reads 15W — the chip's rated ceiling — so the current PL1 of 20W is actually *above* spec.
 - **Validate under load:** `stress-ng` comparison at 35W vs 20W to quantify the temp drop (brief router-core load — schedule for a quiet window).
 - **Live-fire the alert:** trigger a synthetic throttle delta and confirm the #home-alerts message + recovery end-to-end.
 - **BIOS:** currently 5.27 (2024-11-26), board reports "Default string" — check CWWK for a newer release.
@@ -390,14 +672,22 @@ All as code in the `platform/proxmox` role (toggle `enable_proxmox_power_tuning`
 - [x] Power cap + governor applied as code and documented in decisions log
 - [x] Throttle-aware dedicated alert deployed (logic verified)
 - [x] Alert proven end-to-end — synthetic WARNING delivered a real #home-alerts message; returns to OK silently (no `--notify-fixed`, consistent with other checks — add it if closure pings are wanted)
-- [x] cwwk holds throttle-free under summer load — validated over 2 days (2026-06-30→07-02, 1445 samples): package temp mean 46.7°C, peak 70°C (vs 105°C throttle point), **zero throttle events**; counter flat at 22,841.
+- [x] cwwk holds throttle-free under summer load — validated over 2 days (2026-06-30→07-02, 1445 samples): package temp mean 46.7°C, peak 70°C (vs 105°C throttle point), **zero throttle events**; counter flat at 22,841. *Scope note (2026-08-01): this held **with working airflow**, and was re-confirmed Jul 28–30 (zero throttle events over 3 days). It does not hold with the fan off — see RECURRENCE above.*
+- [ ] 🔴 **Detection survives the fan (added 2026-08-07).** After commissioning, peg one core on the cooled box and confirm an alert reaches **#home-alerts**. ⚠️ **This criterion cannot be met by a temperature reading** — the whole point is that temperature will look fine. It is met only by a fault being *reported*. Until it passes, cwwk has less runaway-process coverage with the fan than it had without one.
+- [ ] Fresh idle + pegged-core baseline recorded post-fan, so the next thermal comparison has a true reference (the Jul 28–30 fan-OK figures predate this year's ambient and the KSM change).
 
 ### Incidental findings (this session)
 - ✅ **cwwk cron/mail drift reconciled** (2026-07-01): adopted `save-dmesg` + `arc_summary` into the `platform/proxmox` role as managed root crons; removed the stale `Proxmox health check` cron (its target `proxmox_health.sh` didn't exist → failed every 4h). Root cause of the deferred-mail pileup was the 6 monitoring crons emitting the wrapper's stdout every run → now redirected to `~/.logs/proxmox_*.log` (matches the backup crons). Built `/etc/aliases.db` and flushed 2201 stale cron mails. cwwk root crontab is now 100% Ansible-managed.
 - ⚠️ **Move webhook tokens out of cron arg lines** (elevated) — the Slack tokens are literal in every monitoring cron `job`, so they leak into `crontab -l`, `--diff` output, and cron-mail subjects (seen repeatedly this session). Move to a sourced env file read by `enhanced_monitoring_wrapper`. Given the repeated exposure, **consider rotating the two webhooks**. Cross-host (all monitored hosts).
 - Monitoring logs (`~/.logs/proxmox_*.log`) and `zfs-arc.log` have no rotation — add logrotate if they grow.
 - ✅ **cobra timezone skew — RESOLVED 2026-07-21.** cobra was on `Europe/London` (BST, 1h behind the rest of the fleet). No code change was needed: `timezone: "Europe/Madrid"` already lives in `group_vars/all/main.yml` and `debian_baseline.yml --tags timezone` already applies it — cobra had simply drifted and was the only outlier (all 6 other hosts verified `Europe/Madrid`/CEST). Applied with `ansible-playbook ansible/playbooks/platform/debian.yml --tags timezone --limit cobra`. **Gotcha worth remembering:** `cron` caches the timezone at process start and does *not* pick up a `/etc/localtime` change on its own, and `community.general.timezone` did not restart it here — cobra's cron was still 901s old (pre-change) after the module reported `changed`, so every cobra cron would have kept firing an hour off. **Now codified** (2026-07-21): `debian_baseline.yml` registers the timezone task and restarts cron only when it actually changed — verified idempotent (`changed=0`, restart skipped, on a second run against cobra). Note the FreeBSD path (`freebsd_baseline.yml`, `tzsetup`) has the same latent gap and was deliberately left alone — opnsense is the firewall and its timezone is managed through `config.xml` anyway; revisit only if its zone ever needs changing.
-- No UPS monitoring (NUT/apcupsd) on cwwk; the 2026-06-30 split (cwwk down, Pis up) suggests cwwk may not share the Pis' power protection — worth confirming UPS topology.
+- No UPS monitoring (NUT/apcupsd) on cwwk; the 2026-06-30 split (cwwk down, Pis up) suggests cwwk may not share the Pis' power protection — worth confirming UPS topology. **Reinforced 2026-07-30:** a house power cut took the whole fleet down for ~24h, and the only reason it was recoverable remotely is that everything came back on its own.
+
+**Findings from the 2026-08-01/02 thermal session:**
+- 🔁 **`read_agent` on opnsense is broken AGAIN — this is a recurrence of Priority 2 below, not a new issue.** `ssh opnsense-agent` returned `Permission denied (publickey)` on 2026-08-01, the exact symptom documented in Priority 2 (OPNsense's `local_sync_accounts` wipes `pw`-managed uid ≥ 2000 accounts on firmware upgrade). **Fix is the known one-liner:** `ansible-playbook ansible/playbooks/system/agent_access.yml --limit opnsense` (~9s, idempotent). It blocked autonomous diagnosis of the firewall during this incident — the 10G interface/media state had to be gathered by hand, which is precisely the cost Priority 2 predicts.
+  - ⚠️ **The detection works — the *signal* was lost, which is worse.** Checked the code: `opnsense` **is** in `agent_fleet_hosts` (`kind: freebsd`, `inventory/group_vars/agent.yml`), and `fleet_health_check.sh.j2` explicitly handles a dead probe — absence of the `DISK` field emits `note "$host" "UNREACHABLE (no response as read_agent)"`. So the hourly sweep has almost certainly been reporting opnsense UNREACHABLE the entire time, and it went unnoticed **while ~336 thermal alerts/week were being generated**. This is textbook alert fatigue: a real, correctly-detected failure buried under a known-condition alert storm. **It is the strongest argument for the wrapper dedup above** — that work is not cosmetic, it protects the signal-to-noise of every other check. Action on return: read back `fleet_health_check.log` / #home-alerts history to confirm how long opnsense has been flagged, then run the Priority 2 repair command.
+- **Postfix on cwwk is deferring mail to `me@ignacio.systems`** — repeated `connect to mx0*.mail.icloud.com[...]:25: Connection timed out`, with items aging up to ~41h in the queue (`delay=149861`). Outbound :25 is very likely blocked (ISP or OPNsense egress rule). Cron/monitoring mail is therefore silently not being delivered. Either route through an authenticated smarthost on :587 or accept it and stop generating mail. Related to the 2026-07-01 cron-mail cleanup above.
+- **`fs.protected_regular` gotcha (cost real time debugging):** on Debian 12+/Proxmox, **root cannot write to a file it does not own inside a sticky world-writable dir** like `/tmp`. A shell redirect such as `2>/tmp/foo.err` fails with `Permission denied` *even as root* if `/tmp/foo.err` is owned by another user. Worse, bash processes redirections left-to-right and **aborts the whole command** if one fails — so `cmd 2>/tmp/foo.err > /sys/...` never runs `cmd` at all, and the resulting "failure" is entirely spurious. Use `/root/` for scratch error files when debugging as root.
 
 ---
 
@@ -846,6 +1136,37 @@ Also confirmed **every cron entry on every host is Ansible-managed** (job count 
   2. Add a periodic checksum drift check (repo vs host) alerting to `#home-logging`. The audit loop above is the prototype — note `ssh` inside a `while read` loop eats stdin; use `ssh -n`.
   3. Extend `deploy_monitoring.yml` to also sync `scripts/services/*/` by `primary_function`, so the obvious playbook does the obvious thing.
 - [ ] Clean up: cobra's orphaned `internet_speed_monitor`, and the `*.manual.bkp` / `monitoring_wrapper.last.working` / `test*` clutter in `~/.scripts` fleet-wide.
+
+---
+
+## Cabinet-Wide Thermal Monitoring — ambient sensing + fan strategy (NEW, 2026-08-01)
+
+**Risk:** Medium. The cabinet holds cwwk (→ OPNsense → all internet), several Raspberry Pis, and a 10Gb switch. Today thermal health is inferred *only* from CPU die temperatures, which conflate workload with airflow — and only cwwk has any thermal history at all. Neither 2026-06-30 nor 2026-07-31 was detected as "the cabinet lost cooling"; both surfaced as CPU throttle alerts after the fact.
+
+### The gap
+- **No ambient sensor in the cabinet.** cwwk's `acpitz` is the only proxy (27.8°C on 2026-08-01 vs 26.5°C living room) and it is a motherboard sensor, not cabinet air.
+- **No temperature history for the Pis.** `save_temps.sh` is proxmox-only. Spot check 2026-08-01: hifipi 69°C, cobra 56°C, dockassist 56°C — but with no baseline there is nothing to compare against. hifipi in particular is worth a baseline. **Cabinet contents: `cwwk`, the Zyxel switch, and the Pis `cobra`, `hifipi`, `dockassist`. `vinylstreamer` is NOT in the cabinet** (confirmed 2026-08-02) — it read 45°C against the others' 56–70°C in the same sweep, so it makes a useful *control* for house ambient but must be excluded from cabinet heat-budget calculations.
+- **No telemetry at all from the 10Gb switch**, which the operator reports runs hot.
+
+### Next Steps
+- **Switch telemetry: RESOLVED — none available.** The 10Gb switch is a **Zyxel XGS1250-12**, *not* UniFi, so it is invisible to the `unifi-lxc` controller. It is a *web-managed* (not smart-managed) switch and **does not support SNMP**, confirmed by Zyxel staff on their own community forum: *"the XGS1250-12 is designed primarily for basic home use and small office setups, which is why it currently does not support SNMP"* — with SNMP "under evaluation" but at "currently low" priority. Source: <https://community.zyxel.com/en/discussion/21955/support-snmp-feature-on-xgs1210-12-xgs1250-12>
+- **BUT there is an indirect signal — the switch's own Overheat Protection.** Verified in the official user guide §7.3: *"If any 10G Ethernet copper port on the XGS1250-12 overheats for too long, the port speed will decrease from 10 Gbps to 1 Gbps for Switch protection."* The web UI flags it with an exclamation icon and offers a **Restore** button to force the port back to 10 Gbps; if the underlying heat problem persists, *"protection will be triggered again and the port speed will change back to 1 Gbps."* The guide also specifies **ambient air around the switch must not exceed 40°C**, which gives a citable threshold for the cabinet sensor. Recent firmware additionally added "Smart Fan" control that ramps the fan at high temperature — so the switch actively cools itself and is *designed* to run warm.
+- **That free monitoring path does NOT apply to this topology — checked and ruled out (2026-08-01).** The single 10G link is cabled to cwwk but PCI-passed-through to the **OPNsense VM (100)**, so it terminates in FreeBSD. `ifconfig` on opnsense reports `ix0: media: Ethernet autoselect (`**`10Gbase-Twinax`**` <full-duplex,rxpause,txpause>)` — i.e. an **SFP+ DAC** link on the switch's SFP+ port, *not* one of its three 10G **copper** ports. Zyxel's Overheat Protection is documented only for *"any 10G Ethernet **copper** port"*, so there is no downshift signal to watch here. Correction to an earlier note in this file: the web UI shows no *numeric temperature*, but it does surface a binary overheat indicator (for copper ports).
+- **Thermal upside of that topology.** 10GBASE-T copper PHYs are the dominant heat source in this class of switch (roughly 2–5W per active port); a passive SFP+ DAC is a fraction of that. With the three 10G copper ports unused and everything else at gigabit, **the switch is already running in its lowest-heat configuration** — which is consistent with Overheat Protection never having tripped. If the 10G copper ports are ever populated, expect a materially hotter switch and revisit this.
+- **Net: no switch telemetry of any kind is obtainable.** External probe confirmed as the only route.
+- **Baseline as of 2026-08-01:** the Zyxel web UI reports the port at **10G**, i.e. Overheat Protection has *not* triggered despite the heatwave and the cabinet fan being dead. The switch running warm to the touch is so far not corroborated by any distress signal from the switch itself.
+- **Conclusion: no numeric temperature is obtainable from the switch by any means.** An external probe remains the only way to get a real reading, which makes the cabinet ambient sensor below the single highest-value item in this section rather than a nice-to-have.
+- **Add one cabinet ambient sensor.** Cheapest path that fits the existing stack: a Shelly H&T (or Shelly Add-On + DS18B20 probe) reporting into HA via the existing authenticated Mosquitto broker on dockassist. This is the sensor that would have caught *both* incidents directly, as an airflow signal rather than a CPU-load signal.
+- **Alert on ambient, not just on die temps.** A cabinet-ambient threshold is the honest "the cabinet is too hot" alert the current throttle alert is standing in for.
+- **Extend `save_temps.sh` fleet-wide** (or a lightweight equivalent) so the Pis get the same thermal history cwwk has. Low effort, makes any future "is this hot?" question answerable with data instead of a spot check.
+- **Fan strategy — see the design lesson in the cwwk section above.** Preference is a dumb always-on fan on unswitched power. An external thermostat (e.g. Inkbird ITC-308 driving a mains fan) was considered; it is acceptable *only* if wired fail-safe (fan ON on controller fault/power loss), since fail-off is the exact mechanism behind both outages. A Shelly plug + HA automation gives telemetry and control but adds a circular dependency (HA runs on dockassist, inside the same cabinet).
+
+### Acceptance Criteria
+- [x] Zyxel switch telemetry question answered — **XGS1250-12 has no SNMP and no temperature readout; external probe is the only route** (verified 2026-08-01 against Zyxel staff statement)
+- [ ] Cabinet ambient temperature visible in HA and retained in the recorder
+- [ ] Ambient-based alert to #home-alerts, verified end-to-end
+- [ ] Pi temperature history collected fleet-wide
+- [ ] Cabinet fan cannot end up OFF after a power cut or a human switching it
 
 ---
 
