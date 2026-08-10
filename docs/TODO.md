@@ -13,7 +13,9 @@ Items are ordered by risk × effort — highest-impact, most-actionable items fi
 > **Documentation consolidation** is briefed in
 > `~/.claude/plans/doc-consolidation-brief.md` — it moves those findings into
 > this file, drains this file of measurements, and adds `docs/ARCHITECTURE.md`.
-> **Blocked until L-A is merged**, because nine branches add ~1,600 lines here.
+> ~~**Blocked until L-A is merged**, because nine branches add ~1,600 lines here.~~
+> ✅ **UNBLOCKED 2026-08-10** — L-A merged all nine (`main` @ `650909f`), so the
+> ~1,600 lines have landed and this can start. Branch `docs/consolidation-2026-08`.
 
 ---
 
