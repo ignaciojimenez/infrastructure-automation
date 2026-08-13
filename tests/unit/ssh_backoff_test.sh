@@ -54,6 +54,7 @@ python3 "$REPO_ROOT/tests/lib/render_j2.py" "$SWEEP_TMPL" "$WORK/sweep.sh" \
     agent_ssh_timeout=5 \
     agent_ssh_backoff_base_seconds=3600 \
     agent_ssh_backoff_max_seconds=21600 \
+    agent_fleet_wide_threshold=3 \
     agent_state_dir="$AGENT_DIR" \
     agent_sweep_healthcheck_url="" \
     agent_fleet_hosts=cobra:linux,opnsense:linux || exit 1

@@ -13,6 +13,10 @@
 #                                             on the same host wrap the same script: without it the
 #                                             state file is derived from the script's basename and
 #                                             the jobs share — and corrupt — one state file.
+#   --alert-repeat-base=SECONDS               Delay before an UNCHANGED failure is re-alerted
+#                                             (default 3600). 0 disables suppression entirely.
+#   --alert-repeat-max=SECONDS                Cap on that doubling delay (default 86400), so a
+#                                             fault that persists still speaks at least daily.
 
 # Don't use set -e here as we want to capture script failures
 set -u          # stop on unset variables
@@ -56,6 +60,9 @@ usage() {
   echo "                                            it the state file is derived from the script's"
   echo "                                            basename and the jobs share - and corrupt - one"
   echo "                                            state file."
+  echo "  --alert-repeat-base=SECONDS               Delay before an UNCHANGED failure is re-alerted"
+  echo "                                            (default 3600). 0 disables suppression entirely."
+  echo "  --alert-repeat-max=SECONDS                Cap on that doubling delay (default 86400)."
   echo ""
   echo "  monitor_webhook_id: Slack webhook ID for regular monitoring notifications"
   echo "  alert_webhook_id: Optional Slack webhook ID for error alerts (failures only)"
@@ -80,7 +87,15 @@ send_slack_notification() {
   local output=$4
   local webhook_url=$5
   local is_alert=${6:-false}
-  
+  # Set only for a REPEAT alert (see the repeat-suppression block below). It
+  # carries how long the fault has persisted and how many runs it has survived
+  # — a reminder therefore says strictly more than the original page, not less.
+  local repeat_note=${7:-}
+
+  if [ -n "$repeat_note" ]; then
+    output="${repeat_note}"$'\n\n'"${output}"
+  fi
+
   # Truncate output if too long (Slack has a limit)
   local max_output_length=1500
   if [ ${#output} -gt $max_output_length ]; then
@@ -112,7 +127,11 @@ send_slack_notification() {
   # Create a more informative title for alerts
   local title="${emoji} Script Execution: ${status}"
   if [ "$is_alert" = "true" ]; then
-    title="${emoji} ALERT: Script Failed on ${hostname}"
+    if [ -n "$repeat_note" ]; then
+      title="${emoji} STILL FAILING on ${hostname}"
+    else
+      title="${emoji} ALERT: Script Failed on ${hostname}"
+    fi
   fi
   
   # Create a JSON payload using a template approach
@@ -211,6 +230,8 @@ HEARTBEAT_INTERVAL="daily"
 NOTIFY_FIXED="true"
 STATE_FILE=""
 MONITORING_NAME=""
+ALERT_REPEAT_BASE=3600
+ALERT_REPEAT_MAX=86400
 
 while [[ "$1" == --* ]]; do
   case "$1" in
@@ -228,6 +249,14 @@ while [[ "$1" == --* ]]; do
       ;;
     --monitoring-name=*)
       MONITORING_NAME="${1#*=}"
+      shift
+      ;;
+    --alert-repeat-base=*)
+      ALERT_REPEAT_BASE="${1#*=}"
+      shift
+      ;;
+    --alert-repeat-max=*)
+      ALERT_REPEAT_MAX="${1#*=}"
       shift
       ;;
     --help)
@@ -263,6 +292,32 @@ case "$HEARTBEAT_INTERVAL" in
     exit 1
     ;;
 esac
+
+# A value is only usable if it is a non-empty run of digits. Same guard, and
+# the same reasoning, as the sweep's: an empty or malformed string silently
+# becomes 0 in arithmetic, and 0 here means "suppress nothing" — a typo would
+# quietly restore the flood this option exists to stop. Fatal, like the
+# heartbeat interval above, for the same reason.
+is_number() {
+  case "${1:-}" in
+    ''|*[!0-9]*) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+if ! is_number "$ALERT_REPEAT_BASE"; then
+  log_msg "${RED}Error: --alert-repeat-base must be a whole number of seconds, got '${ALERT_REPEAT_BASE}'${NC}"
+  exit 1
+fi
+if ! is_number "$ALERT_REPEAT_MAX"; then
+  log_msg "${RED}Error: --alert-repeat-max must be a whole number of seconds, got '${ALERT_REPEAT_MAX}'${NC}"
+  exit 1
+fi
+
+if [ "$ALERT_REPEAT_MAX" -lt "$ALERT_REPEAT_BASE" ]; then
+  log_msg "${RED}Error: --alert-repeat-max ($ALERT_REPEAT_MAX) is below --alert-repeat-base ($ALERT_REPEAT_BASE)${NC}"
+  exit 1
+fi
 
 # Validate arguments
 E_NOARGS=85
@@ -350,6 +405,61 @@ LAST_STATUS=$(jq -r '.last_status' "$STATE_FILE" 2>/dev/null || echo "unknown")
 LAST_NOTIFICATION=$(jq -r '.last_notification' "$STATE_FILE" 2>/dev/null || echo "never")
 LAST_SUCCESS_NOTIFICATION=$(jq -r '.last_success_notification' "$STATE_FILE" 2>/dev/null || echo "never")
 
+# Repeat-suppression state. Absent on every state file written before this
+# change, and `jq -r` renders a missing key as the string "null" — which
+# is_number rejects, so the first run after deploy takes the "fail open" path
+# and alerts. That is the intended migration: a fleet mid-upgrade pages once
+# more than it needs to, never once less.
+LAST_FAILURE_SIGNATURE=$(jq -r '.failure_signature // ""' "$STATE_FILE" 2>/dev/null || echo "")
+FAILURE_SINCE=$(jq -r '.failure_since // ""' "$STATE_FILE" 2>/dev/null || echo "")
+FAILURE_RUNS=$(jq -r '.failure_runs // ""' "$STATE_FILE" 2>/dev/null || echo "")
+FAILURE_ALERTS=$(jq -r '.failure_alerts // ""' "$STATE_FILE" 2>/dev/null || echo "")
+NEXT_ALERT_EPOCH=$(jq -r '.next_alert_epoch // ""' "$STATE_FILE" 2>/dev/null || echo "")
+
+# Digest of WHAT failed, used to tell "the same fault, again" from "a second,
+# different fault on an already-failing host". The second must always page
+# immediately, cooldown or not — otherwise suppression becomes the very thing
+# it was written to prevent.
+#
+# Two normalisations, both measured against real captured output rather than
+# assumed (2026-08-13, agent-lxc, two consecutive runs 15 min apart):
+#
+#   * ANSI colour codes are stripped. The markers below sit *between* SGR
+#     sequences in the real output (`ESC[0;31m❌ESC[0m`), so anything matching
+#     or hashing raw bytes is at the mercy of whether a tty was attached.
+#   * digits collapse to `#`. Consecutive healthy runs differ only in numbers
+#     — uptime, load average, `Memory: -447%` vs `-448%`. Hashing them raw
+#     re-alerts on every single run and suppresses nothing at all.
+#
+# Then: prefer the lines that actually carry a failure. Digit-masking alone is
+# not enough, because the header line `Date: Fri Aug 14 00:00:01 CEST 2026`
+# varies by weekday and month *name* — non-numeric, so it survives the mask and
+# would mint a new signature every midnight. Nearly every wrapped script in this
+# repo marks errors with ❌ via print_status. Scripts that do not — the Tier 1
+# sweep is the one that matters, and its output is byte-identical across runs —
+# fall back to the whole masked body, which is correct for them.
+#
+# cksum, not sha256: POSIX, present on both Debian and FreeBSD (verified on
+# opnsense), and this is change detection, not a security boundary. It emits a
+# byte count alongside the CRC, so length changes alone already differ.
+failure_signature() {
+  local body marked esc
+  esc=$'\033'
+  body=$(printf '%s\n' "$1" | sed "s/${esc}\[[0-9;]*m//g")
+
+  marked=$(printf '%s\n' "$body" | grep -F '❌' || true)
+  if [ -n "$marked" ]; then
+    body="$marked"
+  fi
+
+  printf '%s\n' "$body" \
+    | sed -e 's/[0-9][0-9]*/#/g' \
+          -e 's/[[:space:]][[:space:]]*/ /g' \
+          -e 's/^ //' -e 's/ $//' \
+    | cksum \
+    | awk -v rc="$2" '{print rc ":" $1 "-" $2}'
+}
+
 # Get current date/time information
 CURRENT_DATE=$(date +"%Y-%m-%d")
 CURRENT_HOUR=$(date +"%H")
@@ -408,11 +518,94 @@ fi
 # Determine if we should send a notification
 SEND_TO_MONITOR=false
 SEND_TO_ALERT=false
+REPEAT_NOTE=""
+NOW_EPOCH=$(date +%s)
+# Initialised before the branch so `set -u` cannot trip on the state write
+# below if a future edit adds a status that neither branch handles.
+CURRENT_FAILURE_SIGNATURE=""
 
-# Always notify on failures
+# ============================================================
+# Failure repeat suppression
+#
+# This branch used to read, in full:
+#
+#     # Always notify on failures
+#     if [ "$CURRENT_STATUS" = "failure" ]; then
+#       SEND_TO_ALERT=true
+#
+# No cooldown, no dedup. A fault that persists pages on every single run, so
+# the alert rate is set by cron's schedule rather than by anything about the
+# fault. Measured 2026-08-13: agent-lxc's hourly sweep had posted
+# `ALERT: Script Failed` at :37 of every hour for 24 hours, all of them the
+# same opnsense finding. On opnsense itself, where checks run every 1–5
+# minutes, the same branch is worth up to 288 pages a day from one fault.
+#
+# The cost is not the noise. It is that a correct detection of a real outage
+# — the sweep calling vinylstreamer UNREACHABLE, which was true for days — was
+# buried inside its own repetition and went unread. The detection worked; the
+# alerting hid it.
+#
+# So an UNCHANGED failure is re-alerted on a doubling delay: immediately, then
+# after base, 2×base, 4×base … capped at max. Over a four-day outage that is
+# roughly 8 pages instead of 96.
+#
+# Three properties keep this a fix rather than a lobotomy, and each has its own
+# regression test in tests/unit/wrapper_alert_dedup_test.sh:
+#
+#   1. A CHANGED failure alerts immediately, whatever the cooldown says. A
+#      second, different fault arriving on an already-failing host is exactly
+#      the case where silence would be most expensive.
+#   2. The cap is a floor on speech, not a ceiling on silence: while a fault
+#      persists it is re-stated at least once per max (default: daily). It can
+#      never go quiet permanently.
+#   3. Unparseable or absent state fails OPEN — it alerts. Same rule as the
+#      sweep's back-off state machine.
+#
+# ⚠️ Not covered, stated rather than implied: a FLAPPING fault. Success clears
+# the failure state, so fail→recover→fail pages on every cycle. That is
+# deliberate — each recovery is real and suppressing it would hide a genuine
+# state change — but it means flap sources must be fixed at the source. The one
+# known live case, vinylstreamer's single-ping connectivity check, is fixed in
+# system_health_check.sh in this same change.
+# ============================================================
+
 if [ "$CURRENT_STATUS" = "failure" ]; then
-  SEND_TO_ALERT=true
-  
+  CURRENT_FAILURE_SIGNATURE=$(failure_signature "$execution_result" "$exit_code")
+
+  if [ "$CURRENT_FAILURE_SIGNATURE" != "$LAST_FAILURE_SIGNATURE" ]; then
+    # A new or changed fault. Always speaks, and resets the ladder.
+    SEND_TO_ALERT=true
+    FAILURE_SINCE="$NOW_EPOCH"
+    FAILURE_RUNS=1
+    FAILURE_ALERTS=1
+    NEXT_ALERT_EPOCH=$((NOW_EPOCH + ALERT_REPEAT_BASE))
+    log_msg "Sending alert (new or changed failure)"
+  else
+    is_number "$FAILURE_RUNS" || FAILURE_RUNS=0
+    FAILURE_RUNS=$((FAILURE_RUNS + 1))
+    is_number "$FAILURE_ALERTS" || FAILURE_ALERTS=1
+    is_number "$FAILURE_SINCE" || FAILURE_SINCE="$NOW_EPOCH"
+
+    if [ "$ALERT_REPEAT_BASE" -eq 0 ]; then
+      SEND_TO_ALERT=true
+      log_msg "Sending alert (repeat suppression disabled)"
+    elif ! is_number "$NEXT_ALERT_EPOCH" || [ "$NOW_EPOCH" -ge "$NEXT_ALERT_EPOCH" ]; then
+      SEND_TO_ALERT=true
+      FAILURE_ALERTS=$((FAILURE_ALERTS + 1))
+      # Keeps the shift below inside integer range; the cap makes it moot.
+      [ "$FAILURE_ALERTS" -gt 16 ] && FAILURE_ALERTS=16
+      _delay=$(( ALERT_REPEAT_BASE << (FAILURE_ALERTS - 1) ))
+      [ "$_delay" -gt "$ALERT_REPEAT_MAX" ] && _delay="$ALERT_REPEAT_MAX"
+      NEXT_ALERT_EPOCH=$((NOW_EPOCH + _delay))
+
+      _elapsed=$(( (NOW_EPOCH - FAILURE_SINCE) / 60 ))
+      REPEAT_NOTE=":repeat: Unchanged failure — ${FAILURE_RUNS} consecutive failing runs over ${_elapsed} minute(s). Next reminder in $(( _delay / 60 )) minute(s) unless the failure changes or clears."
+      log_msg "Sending alert (repeat reminder: run ${FAILURE_RUNS}, next in ${_delay}s)"
+    else
+      log_msg "Alert suppressed: unchanged failure, ${FAILURE_RUNS} consecutive runs, next reminder in $(( (NEXT_ALERT_EPOCH - NOW_EPOCH) / 60 )) minute(s)"
+    fi
+  fi
+
 # For successes, notification rules depend on settings
 elif [ "$CURRENT_STATUS" = "success" ]; then
   # Heartbeat notifications based on interval setting
@@ -442,12 +635,27 @@ elif [ "$CURRENT_STATUS" = "success" ]; then
     SEND_TO_MONITOR=true
     log_msg "Sending notification for self-healing actions"
   fi
+
+  # A success ends the current failure episode. The next failure is therefore
+  # a NEW one and pages at once, even if it turns out to be the same fault
+  # returning — the recovery in between was a real state change, and the ladder
+  # must not carry across it.
+  CURRENT_FAILURE_SIGNATURE=""
+  FAILURE_SINCE=""
+  FAILURE_RUNS=""
+  FAILURE_ALERTS=""
+  NEXT_ALERT_EPOCH=""
 fi
 
 # Send notifications if needed
 if [ "$SEND_TO_ALERT" = true ]; then
-  send_slack_notification "FAILED" "$execution_time" "$exit_code" "$execution_result" "$alert_hook" "true"
+  send_slack_notification "FAILED" "$execution_time" "$exit_code" "$execution_result" "$alert_hook" "true" "$REPEAT_NOTE"
   echo "$(date) - Sent alert notification" >> "${STATE_FILE}.log"
+elif [ "$CURRENT_STATUS" = "failure" ]; then
+  # Logged locally even though nothing was sent. A suppressed alert that leaves
+  # no trace is indistinguishable from a check that stopped running, which is
+  # the failure mode this whole file exists to avoid.
+  echo "$(date) - Suppressed alert (unchanged failure, run ${FAILURE_RUNS})" >> "${STATE_FILE}.log"
 fi
 
 if [ "$SEND_TO_MONITOR" = true ]; then
@@ -477,7 +685,15 @@ if command -v jq >/dev/null 2>&1; then
   elif jq --arg status "$CURRENT_STATUS" \
      --arg notification "$(date +"%Y-%m-%d %H:%M:%S")" \
      --arg success_notification "$LAST_SUCCESS_NOTIFICATION" \
-     '.last_status = $status | .last_notification = $notification | .last_success_notification = $success_notification' \
+     --arg failure_signature "$CURRENT_FAILURE_SIGNATURE" \
+     --arg failure_since "$FAILURE_SINCE" \
+     --arg failure_runs "$FAILURE_RUNS" \
+     --arg failure_alerts "$FAILURE_ALERTS" \
+     --arg next_alert_epoch "$NEXT_ALERT_EPOCH" \
+     '.last_status = $status | .last_notification = $notification | .last_success_notification = $success_notification
+      | .failure_signature = $failure_signature | .failure_since = $failure_since
+      | .failure_runs = $failure_runs | .failure_alerts = $failure_alerts
+      | .next_alert_epoch = $next_alert_epoch' \
      "$STATE_FILE" > "$state_tmp" && mv "$state_tmp" "$STATE_FILE"; then
     :
   else
@@ -485,8 +701,10 @@ if command -v jq >/dev/null 2>&1; then
     log_msg "${YELLOW}Warning: state update failed; $STATE_FILE left unchanged${NC}"
   fi
 else
-  # Fallback if jq is not available
-  echo "{\"last_status\": \"$CURRENT_STATUS\", \"last_notification\": \"$(date +"%Y-%m-%d %H:%M:%S")\", \"last_success_notification\": \"$LAST_SUCCESS_NOTIFICATION\"}" > "$STATE_FILE"
+  # Fallback if jq is not available. Carries the repeat-suppression fields too:
+  # without them the signature read back is always empty, so every failure looks
+  # like a new one and the host silently keeps the old page-every-run behaviour.
+  echo "{\"last_status\": \"$CURRENT_STATUS\", \"last_notification\": \"$(date +"%Y-%m-%d %H:%M:%S")\", \"last_success_notification\": \"$LAST_SUCCESS_NOTIFICATION\", \"failure_signature\": \"$CURRENT_FAILURE_SIGNATURE\", \"failure_since\": \"$FAILURE_SINCE\", \"failure_runs\": \"$FAILURE_RUNS\", \"failure_alerts\": \"$FAILURE_ALERTS\", \"next_alert_epoch\": \"$NEXT_ALERT_EPOCH\"}" > "$STATE_FILE"
 fi
 
 # Always log the execution to the log file
@@ -500,6 +718,9 @@ log_msg "  Duration: ${execution_time} seconds"
 log_msg "  Status: ${CURRENT_STATUS}"
 log_msg "  Exit code: ${exit_code}"
 log_msg "  Notification sent: $([ "$SEND_TO_MONITOR" = true ] || [ "$SEND_TO_ALERT" = true ] && echo "Yes" || echo "No")"
+if [ "$CURRENT_STATUS" = "failure" ] && [ "$SEND_TO_ALERT" != true ]; then
+  log_msg "  Alert suppressed: unchanged failure, run ${FAILURE_RUNS}, signature ${CURRENT_FAILURE_SIGNATURE}"
+fi
 
 # If there was output, show a preview
 if [ -n "$execution_result" ]; then

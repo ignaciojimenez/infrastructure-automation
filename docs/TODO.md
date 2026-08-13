@@ -1,6 +1,6 @@
 # Infrastructure TODO — Prioritized Action List
 
-Updated: 2026-08-13 | Validated against live hosts via read_agent autonomous assessment
+Updated: 2026-08-14 | Validated against live hosts via read_agent autonomous assessment
 
 This document is the single source of truth for pending infrastructure work.
 Each item includes verified current state, concrete next steps, and acceptance criteria.
@@ -16,6 +16,208 @@ Items are ordered by risk × effort — highest-impact, most-actionable items fi
 > ~~**Blocked until L-A is merged**, because nine branches add ~1,600 lines here.~~
 > ✅ **UNBLOCKED 2026-08-10** — L-A merged all nine (`main` @ `650909f`), so the
 > ~1,600 lines have landed and this can start. Branch `docs/consolidation-2026-08`.
+
+---
+
+## ✅ L-F DEPLOYED 2026-08-14 — the flood is dead, and a dead host now reads differently from a live one
+
+Session L-F: *make a dead host detectable, and stop the alert flood that hides one.*
+Deployed fleet-wide (`deploy_monitoring.yml` to all 7 Debian hosts, `services.yml
+--tags agent` to agent-lxc), **`changed=0` on the second run of both**.
+
+### F1 — the wrapper can now stop repeating itself
+
+`scripts/common/enhanced_monitoring_wrapper` had a bare branch:
+
+```sh
+# Always notify on failures
+if [ "$CURRENT_STATUS" = "failure" ]; then
+  SEND_TO_ALERT=true
+```
+
+so the page rate was **cron's schedule**, not anything about the fault. Measured
+before the change: `ALERT: Script Failed on agent-lxc` at `:37` of every hour for
+24 hours, all one opnsense finding. On opnsense, where checks run every 1–5
+minutes, one stuck fault is worth up to **288 pages/day**.
+
+An unchanged failure is now re-alerted on a doubling delay (immediately, then
+1h, 2h, 4h … capped at 24h): ~8 pages across a four-day outage instead of ~96.
+
+🔴 **The point was never to make alerts quieter — a lobotomised check is quiet
+too.** Four properties keep it a fix, each with its own regression test:
+
+| Property | Case |
+|---|---|
+| A **changed** failure pages immediately, cooldown or not | 3 |
+| The cap is a **floor on speech** — never permanently silent | 5 |
+| Corrupt/absent state **fails open** | 6, 7 |
+| Recovery still posts after a suppressed run | 8 |
+
+**Verified live on agent-lxc against the real opnsense fault**, not just in
+tests — four consecutive runs: one page, then `Notification sent: No` ×3 with a
+stable signature `1:896182241-137`. Then a synthetic job exercised the full
+lifecycle end to end: fail → page, fail → suppressed, fail → suppressed,
+**recover → recovery notice still fired**, fail again → paged as new.
+
+### 🐛 The signature bug that only a live run could find
+
+First live attempt suppressed nothing. The sweep's own output gains a line —
+`(findings unchanged since the last sweep …)` — which by construction appears
+only from the **second** identical run onward, so the first repeat of every
+fault looked like a different fault.
+
+Fixed by marking the sweep's findings with `❌`, which the wrapper's signature
+already prefers when present, scoping it to what was *found* and leaving the
+observer's own bookkeeping out. 📌 **The unit tests all passed before this was
+found.** It took the real host.
+
+⚠️ **Not covered, stated rather than implied:** a *flapping* fault. Success
+clears the failure state, so fail→recover→fail pages every cycle. Deliberate —
+each recovery is a real state change — but it means flap sources must be fixed
+at source. The one known live case is fixed below.
+
+### F1b — the flap source: one lost packet was a push notification
+
+`check_network` was `ping -c 1 -W 2 google.com`. On 2026-08-13 at 21:45 that
+cost a page and a $0.32 Tier 2 investigation whose whole conclusion was
+"fragile check". Now: two targets of different kinds (IP literal + name),
+3 attempts each.
+
+⚠️ **`ping -W` is not portable and the difference is not cosmetic.** Both man
+pages read on the real hosts: **Linux = seconds, FreeBSD = milliseconds.** The
+old `-W 2` meant "wait 2 seconds" on the Pis and "wait **2 milliseconds**" on
+the firewall — a timeout no reply can beat. Dormant only because
+`deploy_monitoring.yml:44` excludes this script from FreeBSD; it is exactly the
+§G2 class of code that runs on no host and cannot be verified any other way.
+
+All three branches **forced on vinylstreamer and watched fire**:
+
+| Forced | Result |
+|---|---|
+| Both targets dead | `❌ Internet: unreachable - 3 attempts each to …` (~59 s — the retries are real) |
+| IP dead, name fine | `⚠️ reachable via google.com, but ICMP … blocked` — **warning, does not page** |
+| IP fine, name dead | `❌ DNS: … resolver problem, not connectivity` |
+
+The check did not go silent. It got **more specific** — the old wording sent
+you to the wrong layer.
+
+### F2 — the dead-man's switch: harden what exists, don't add a second
+
+✅ **Decided and implemented.** The Tier 1 sweep already detects per-host
+absence correctly (it had vinylstreamer right for days) and already pings
+healthchecks.io every run, so the observer's own death is already externally
+witnessed. Per-host healthchecks.io checks were **rejected**: 8 checks alert
+independently, so a site power cut pages 8 times — the flood in a different
+hat — and there is no management API key in the vault, so creating them means
+UI work.
+
+Two changes instead:
+
+1. **The ping reports its own exit status.** Both `heartbeat_backup.sh:30` and
+   the sweep's `ping_healthcheck` were `curl … || true` with stderr discarded —
+   a dead-man's switch structurally unable to say that *its own ping* failed.
+   healthchecks.io shows DOWN either way and nothing on this side recorded
+   which. Forced a failure and watched it report:
+   `heartbeat: ping FAILED (exit 6): curl: (6) Could not resolve host` — and
+   still `exit 0`, because a switch that fails the job it watches is a
+   liability. ⚠️ This ambiguity is exactly why **F3 is still unresolved**.
+2. **Fleet-wide absence is one signal.** ≥3 silent hosts in one sweep now
+   collapse into a single `FLEET-WIDE: N/M hosts silent … treat as ONE event`
+   finding that still names every host. Threshold 3 chosen against the measured
+   events (both took **six** hosts inside a 15-second window), and it is a
+   variable, not a constant. **Not a suppression** — it still fails the sweep
+   and still pages; below the threshold hosts are still named individually,
+   which has its own regression test so one dead Pi never becomes "a fleet
+   event".
+
+### F4 — opnsense: the sweep no longer calls a live host dead
+
+`opnsense: UNREACHABLE (no response as read_agent)` is also what a **powered-off
+box** looks like. Measured from agent-lxc, and the measurement **corrected the
+plan's guess in both particulars**:
+
+```
+SSH_RC=1     STDERR=[]     STDOUT=[This account is currently not available.]
+```
+
+The plan predicted rc=0 and nothing returned. So the discriminator is neither
+the exit status nor stderr — it is that the far side sent us **something that
+was not probe output**. Now reads:
+
+```
+❌ opnsense: UP but no usable shell as read_agent — SSH authenticated and the
+   host answered: This account is currently not available.
+```
+
+Live-verified on the deployed script. Auth rejection keeps its own branch and
+remains the **only** one that trips the back-off (regression-tested both ways).
+
+🔴 **Still not fixed — needs you.** The `pw usermod` stopgap was blocked by the
+sandbox classifier; the command is in the handover. Confirmed present on the
+host: `read_agent:*:2001:65534:…:/usr/sbin/nologin`.
+
+### F5 — `critical_services` audited across the whole fleet
+
+**No host in this fleet had a `critical_services` list.** Every one fell back to
+the built-in `ssh cron fail2ban`, so what each host *exists to do* was covered
+only by the generic `systemctl --failed` sweep — which sees a unit that
+**crashed** and is blind to one stopped, disabled or masked cleanly. nmbd
+happened to crash, so it was caught; a hand-stopped service would not be.
+
+🔴 **unifi-lxc was the widest gap: `system_health_check.sh` is its only
+monitoring cron** — no `check_unifi.sh` is deployed there — so nothing named
+the controller at all.
+
+⚠️ **Every name was verified `active` on its own host before being listed.**
+Naming a service that is not running turns this into a permanent false alert,
+which is worse than the gap. Two candidates were dropped on exactly that
+evidence: `samba-ad-dc` (cobra) and `mongod` (unifi-lxc, because UniFi 9.x runs
+its own bundled instance) are both enabled-but-inactive. Conversely `icecast2`
+on vinylstreamer is **not** in `systemctl list-unit-files --state=enabled` yet
+reads `active` — listing only what that command reports would have dropped the
+service the host is named after.
+
+| Host | `critical_services` |
+|---|---|
+| cobra | ssh cron fail2ban smbd **nmbd** plexmediaserver transmission-daemon avahi-daemon |
+| hifipi | ssh cron fail2ban mpd shairport-sync raspotify avahi-daemon |
+| dockassist | ssh cron fail2ban docker containerd avahi-daemon |
+| vinylstreamer | ssh cron fail2ban icecast2 phono_liquidsoap detect_audio avahi-daemon |
+| unifi-lxc | ssh cron fail2ban **unifi** nftables |
+| agent-lxc | ssh cron fail2ban **ufw** |
+| cwwk | ssh cron fail2ban pve-cluster pvedaemon pveproxy pvestatd pve-firewall |
+
+`avahi-daemon` is listed on the Pis because fleet name resolution is **mDNS
+only** (Unbound holds no fleet records) — avahi stopping removes a host from the
+namespace, which is how a live host starts looking dead. Verified post-deploy
+on cobra and vinylstreamer: all services `✅ running`, exit 0, no false alerts.
+
+### 🐛 Correction to L-D's D3 — it does *not* re-render on every run
+
+D3 states `RECOVERY.txt.j2` makes cwwk report `changed` on **every**
+`deploy_monitoring.yml` run. Measured: second run was `changed=0`.
+
+Cause: `ansible.cfg` sets `fact_caching = jsonfile` with
+`fact_caching_timeout = 3600`, so `ansible_date_time.iso8601` is **cached for an
+hour** and consecutive runs inside that window render identical content. The
+wart is real but fires roughly **once per hour**, not once per run. Still worth
+fixing; the severity in the plan is overstated.
+
+### What L-F leaves open
+
+- 🔴 **opnsense `pw usermod` stopgap** — blocked by the classifier, command in
+  the handover. Until then the sweep reports it correctly (one page, then
+  quiet) rather than incorrectly.
+- 🔴 **The stale `from="10.30.80.1"` pin** in opnsense `config.xml` still blocks
+  the laptop (which lives on 10.30.20.37). Untouched this session.
+- ⏳ **The 01:37 reminder is the last unverified assertion.** `next_alert_epoch`
+  decodes to 01:24:46, so the 00:37 sweep must be silent and the 01:37 one must
+  post `STILL FAILING`. The suppression half is confirmed; the re-statement half
+  is predicted, not yet observed on cron's own schedule.
+- **F3 (backup DOWN/UP) untouched**, but the instrument it needed now exists —
+  a failed ping is no longer indistinguishable from a dead host.
+- The `--alert-repeat-base`/`--alert-repeat-max` defaults (1h/24h) are applied
+  implicitly everywhere; no cron passes them explicitly yet.
 
 ---
 

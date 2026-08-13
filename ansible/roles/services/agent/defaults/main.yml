@@ -51,6 +51,19 @@ agent_fleet_hosts: []
 agent_ssh_backoff_base_seconds: 3600   # 1h
 agent_ssh_backoff_max_seconds: 21600   # 6h
 
+# How many hosts must go silent in one sweep before the finding is reported as
+# a single fleet-wide event instead of one per host.
+#
+# 3 of 7, chosen against the two measured power events rather than picked: both
+# took SIX hosts inside a 15-second window, so any threshold up to 6 collapses
+# them. The floor is set by what could plausibly be a coincidence — two hosts
+# failing independently in the same hour is believable, three is not, and three
+# is also the smallest count where the per-host form starts to be harder to read
+# than the collapsed one.
+#
+# Set it above the fleet size to disable collapsing entirely.
+agent_fleet_wide_threshold: 3
+
 # ============================================================
 # Phase B — OpenCode runtime and Tier 2 investigation
 # ============================================================

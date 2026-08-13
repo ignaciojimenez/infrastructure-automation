@@ -41,6 +41,24 @@ THRESHOLD_CPU_PRESSURE="${THRESHOLD_CPU_PRESSURE:-80}"
 # at the alert's.
 REBOOT_PENDING_STALE_DAYS="${REBOOT_PENDING_STALE_DAYS:-7}"
 
+# Connectivity probe. Two targets and more than one attempt, because one packet
+# is not a measurement: on 2026-08-13 at 21:45 vinylstreamer pushed
+# "Internet: unreachable" from a single lost ping, and a manual re-check five
+# minutes later found 0% loss and working DNS. One dropped packet on wifi cost
+# a push notification and a $0.32 Tier 2 investigation whose entire conclusion
+# was "fragile check".
+#
+# The two targets are deliberately of different kinds. Pinging only a NAME
+# conflates "the internet is gone" with "the resolver is gone", which are
+# different faults with different owners — Unbound on the gateway versus the
+# link itself. An IP literal answers the first question without involving DNS
+# at all.
+NETWORK_PROBE_IP="${NETWORK_PROBE_IP:-1.1.1.1}"
+NETWORK_PROBE_NAME="${NETWORK_PROBE_NAME:-google.com}"
+NETWORK_PROBE_ATTEMPTS="${NETWORK_PROBE_ATTEMPTS:-3}"
+NETWORK_PROBE_TIMEOUT="${NETWORK_PROBE_TIMEOUT:-3}"
+NETWORK_PROBE_RETRY_DELAY="${NETWORK_PROBE_RETRY_DELAY:-2}"
+
 # Optional per-host configuration, written by
 # ansible/playbooks/deploy_monitoring.yml from the inventory. Currently carries
 # CRITICAL_SERVICES; see check_services. Absent is normal and fine — every
@@ -562,18 +580,66 @@ check_pending_reboot() {
     return $issues
 }
 
+# ⚠️ `ping -W` is not portable, and the difference is not cosmetic: on Linux it
+# is SECONDS, on FreeBSD it is MILLISECONDS. Both man pages were read on the
+# real hosts (cobra and opnsense, 2026-08-13) rather than assumed. The previous
+# `-W 2` therefore meant "wait two seconds" on the Pis and "wait two
+# milliseconds" on the firewall — a timeout no reply can beat.
+#
+# Dormant rather than harmless: deploy_monitoring.yml excludes this script from
+# FreeBSD, so the broken branch runs on no host today. That is precisely the
+# class of bug the §G2 FreeBSD test target exists to catch, and it stays
+# unverifiable until that target exists.
+ping_once() {
+    if [ "$OS_TYPE" = "freebsd" ]; then
+        ping -c 1 -W "$(( NETWORK_PROBE_TIMEOUT * 1000 ))" "$1" >/dev/null 2>&1
+    else
+        ping -c 1 -W "$NETWORK_PROBE_TIMEOUT" "$1" >/dev/null 2>&1
+    fi
+}
+
+ping_retry() {
+    _target="$1"
+    _try=1
+    while [ "$_try" -le "$NETWORK_PROBE_ATTEMPTS" ]; do
+        ping_once "$_target" && return 0
+        [ "$_try" -lt "$NETWORK_PROBE_ATTEMPTS" ] && sleep "$NETWORK_PROBE_RETRY_DELAY"
+        _try=$((_try + 1))
+    done
+    return 1
+}
+
 check_network() {
     echo "=== Network Connectivity ==="
     issues=0
 
-    # Skip gateway check - many routers don't respond to ICMP
-    # Just check internet connectivity directly
+    # Skip gateway check - many routers don't respond to ICMP.
+    #
+    # Both targets are probed on every run, not short-circuited on the first
+    # success, because the interesting information is in the COMBINATION. The
+    # healthy path is two immediate replies and costs nothing; only a genuine
+    # fault pays the retry budget.
+    ip_ok=false
+    name_ok=false
+    ping_retry "$NETWORK_PROBE_IP" && ip_ok=true
+    ping_retry "$NETWORK_PROBE_NAME" && name_ok=true
 
-    # Check internet connectivity
-    if ping -c 1 -W 2 google.com >/dev/null 2>&1; then
+    if [ "$ip_ok" = true ] && [ "$name_ok" = true ]; then
         print_status "success" "Internet: reachable"
+    elif [ "$ip_ok" = true ]; then
+        # Routing is fine and the resolver is not. Naming it as such is the
+        # whole point: this used to read "Internet: unreachable (check
+        # network)", which sends you to look at the wrong layer entirely.
+        print_status "error" "DNS: ${NETWORK_PROBE_NAME} unresolvable/unreachable but ${NETWORK_PROBE_IP} answers - resolver problem, not connectivity"
+        issues=$((issues + 1))
+    elif [ "$name_ok" = true ]; then
+        # Names resolve and answer, so the internet is demonstrably up; the IP
+        # literal is simply being filtered. A warning, not a fault — reporting
+        # it as an outage would be a false alert of exactly the kind this
+        # function was rewritten to stop.
+        print_status "warning" "Internet: reachable via ${NETWORK_PROBE_NAME}, but ICMP to ${NETWORK_PROBE_IP} is blocked or dropped"
     else
-        print_status "error" "Internet: unreachable (check network)"
+        print_status "error" "Internet: unreachable - ${NETWORK_PROBE_ATTEMPTS} attempts each to ${NETWORK_PROBE_IP} and ${NETWORK_PROBE_NAME} all failed"
         issues=$((issues + 1))
     fi
     echo ""
