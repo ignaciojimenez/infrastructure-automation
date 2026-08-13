@@ -16,6 +16,18 @@ Unattended-Upgrade::Origins-Pattern {
         // Raspbian security updates
         "origin=Raspbian,codename=${distro_codename},label=Raspbian-Security";
         "origin=Raspberry Pi Foundation,codename=${distro_codename},label=Raspberry Pi Foundation-Security";
+{% if custom_origins is defined %}
+
+        // Per-host vendor repositories, set as `custom_origins` in inventory.
+        // Third-party repos publish no Debian-Security label, so the patterns
+        // above can never match them and their software would receive no
+        // automatic updates at all. Listing an origin here opts that repo in.
+        // Prefer repos whose suite pins a major version (e.g. mongodb-org/8.0,
+        // unifi-9.4) — those can only deliver patches within the pinned line.
+{% for origin in custom_origins %}
+        "{{ origin }}";
+{% endfor %}
+{% endif %}
 };
 
 // Package blacklist: packages that should *never* be automatically upgraded
