@@ -221,7 +221,7 @@ probe_linux() {
     ssh_probe "$1" > "$PROBE_OUT" <<'REMOTE'
 echo "DISK=$(df -P / | awk 'NR==2{print $5}' | tr -d '%')"
 echo "FAILED=$(sudo systemctl --failed --no-legend --no-pager 2>/dev/null | wc -l | tr -d ' ')"
-echo "FAILEDUNITS=$(sudo systemctl --failed --no-legend --no-pager 2>/dev/null | awk '{printf "%s ", $1}')"
+echo "FAILEDUNITS=$(sudo systemctl --failed --no-legend --no-pager --plain 2>/dev/null | awk '{printf "%s ", $1}')"
 echo "WRAPPER_LAST=$(sudo journalctl -u cron --no-pager -o short-unix -n 500 2>/dev/null | grep enhanced_monitoring_wrapper | tail -1 | cut -d. -f1)"
 REMOTE
 }
@@ -230,7 +230,7 @@ probe_proxmox() {
     ssh_probe "$1" > "$PROBE_OUT" <<'REMOTE'
 echo "DISK=$(df -P / | awk 'NR==2{print $5}' | tr -d '%')"
 echo "FAILED=$(sudo systemctl --failed --no-legend --no-pager 2>/dev/null | wc -l | tr -d ' ')"
-echo "FAILEDUNITS=$(sudo systemctl --failed --no-legend --no-pager 2>/dev/null | awk '{printf "%s ", $1}')"
+echo "FAILEDUNITS=$(sudo systemctl --failed --no-legend --no-pager --plain 2>/dev/null | awk '{printf "%s ", $1}')"
 echo "WRAPPER_LAST=$(sudo journalctl -u cron --no-pager -o short-unix -n 500 2>/dev/null | grep enhanced_monitoring_wrapper | tail -1 | cut -d. -f1)"
 echo "ZPOOL=$(sudo zpool list -H -o health rpool 2>/dev/null)"
 # Only guests set to start at boot are expected to be running. CT 102 is
