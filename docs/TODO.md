@@ -130,6 +130,42 @@ hood and reverts again. The one-line stopgap is `pw usermod read_agent -s /bin/s
 architectural fix (stop SSH-probing the firewall, use its API) is unchanged and still
 the recommendation.
 
+### ✅ Tier 2's first successful run, ever — 2026-08-13 20:47, $0.4259
+
+`CRON[55470] … investigate.sh` at `20:47:01`, session closed `20:49:45` — **2 m 44 s**,
+so it genuinely ran rather than exiting early. It posted to #home-alerts at 20:49:45
+with the cost in the message and a plan file at
+`~/.agent/plans/2026-08-13-opnsense-read-agent-ssh-access-broken-nologin-gate.md`.
+
+**$0.4259 lands inside the July estimate of $0.32–0.56 per investigation** — the first
+time that figure has been measured rather than projected. At 1–3 investigations a day
+with the dedup guard working, that is roughly $0.40–1.30/day worst case, and near zero
+on a quiet fleet since an unchanged fault is not re-investigated.
+
+The correctness matters more than the cost. Its verdict, reached independently:
+
+> SSH connects but returns FreeBSD's "This account is currently not available" (nologin),
+> so Tier 1 correctly flagged it as unreachable … the OPNsense VM itself is running fine
+> on `cwwk`, and downstream evidence (cross-host SSH, Cloudflare tunnel, Tado cloud health
+> checks, live HA state) all show internet, DNS, and heating control are unaffected …
+> no further SSH attempts were made against opnsense per the no-retry rule.
+
+That is the same root cause reached by hand earlier in this session, from a different
+direction, and it **respected the no-retry rule against the firewall** — the specific
+behaviour that caused the CrowdSec self-ban in August. It also correctly refused to call
+a firewall account problem an outage.
+
+⏳ **The re-billing guard is not yet proven** and its test is the *second* hour:
+`.last_investigated` did not exist before tonight, so 20:47 investigating was correct.
+At 21:47, with `last_anomaly.json` untouched, `investigate.sh` must exit in about a
+second. If it runs for minutes again, the guard is dead. Check without needing Ansible:
+
+```sh
+ssh -i ~/.ssh/read_agent_ed25519 read_agent@10.30.40.203 \
+  'sudo -n journalctl -u cron --no-pager --since "21:45" -o short'
+# PASS: session opened 21:47:01 → closed ~21:47:02, and no new :mag: post in #home-alerts
+```
+
 ### 🐛 The Slack watermark was poisoned on disk, and the deploy alone would have burned budget
 
 `~/.agent/.last_slack_ts` contained `0.000000`, which is why every hourly watch since
