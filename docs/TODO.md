@@ -208,8 +208,8 @@ Against that: `"origin=*"` means those two hosts currently auto-install **featur
 
 The handover's B1 command is `services.yml --limit dockassist` untagged. Its dry run produced `changed=9`, of which **one** was the wanted cron fix. `--tags cron` produces `changed=1` and covers B1's entire acceptance criterion (all four cron tasks carry the `cron` tag), so that is what was deployed. The other eight are pre-existing and still true of any untagged run on dockassist:
 
-1. **It upgrades Home Assistant.** `Pull Home Assistant Docker image` uses `force_source: true` against `:stable`, and Cloudflared `:latest` / Matter `:stable` likewise. A monitoring deploy would silently bump HA's version.
-2. **It recreates the `home-assistant` container every single run.** `main.yml:140` declares the volume as `…:/config`; Docker reports it back as `…/config:rw`, so `community.docker.docker_container` never matches and always recreates. Adding the explicit `:rw` to the task makes it idempotent.
+1. **It upgrades Home Assistant** (`force_source: true` on `:stable`). → tracked below.
+2. **It recreates the `home-assistant` container every single run.** → tracked below.
 3. ✅ **It would break MQTT persistence — FIXED 2026-08-13, same session.** `mqtt.yml` set `{{ mosquitto_data_dir }}/data` to `owner/group: {{ ansible_user }}` (1000). Measured live: that directory is **`1883:1883`** and holds `mosquitto.db` (`0600 1883:1883`). The broker runs as uid 1883 and autosaves by writing a temp file and renaming, which needs **directory** write — so a choco-owned `0755` data dir silently fails every persistence write. **Root cause read from the image, not guessed:** the entrypoint runs as root and does `[ -d "/mosquitto/data" ] && chown -R ${PUID}:${PGID} /mosquitto/data`, and **only that path** — which is exactly why `config` beside it is `1000` and `data` is `1883`. The container therefore wins *at container start*, so the damage window is from an Ansible run until the next restart, unbounded. `data` is now split out of the loop with `owner/group: "1883"`, mirroring the existing `passwd` task. `--tags mqtt` now reports `ok` on it.
 
 ### 🐛 Found while fixing the above — `'CHANGED' in 'UNCHANGED'` is `True`
@@ -237,6 +237,41 @@ The script's two outcomes are `CHANGED` and `UNCHANGED`, and **`CHANGED` is a su
 ### ⚠️ `read_agent` on opnsense is still broken — confirmed again, not retried
 
 `ssh opnsense-agent` → `Permission denied (publickey)`, matching the Priority 2 recurrence triaged 2026-08-11 and contradicting the handover's "verified working 2026-08-07". **Attempted exactly once and then abandoned** — repeated failed auth against the firewall is what fed CrowdSec on 2026-08-03. All opnsense work in this session went through Ansible as `choco` instead, which works fine.
+
+---
+
+## dockassist — `services.yml` is not idempotent, and a deploy can silently upgrade Home Assistant
+
+**Risk:** Medium — no data loss, but every untagged run recreates the HA container, and any run may bump HA's version with no decision and no record. Raised 2026-08-13 during L-B, **deliberately deferred** rather than fixed, because the two halves are coupled and one of them is a decision.
+
+Same class as the `changed_when` substring bug fixed in `4d9b962` — silent, unnecessary container churn on every deploy — but heavier, because this is a **recreate plus a possible version change**, not a restart.
+
+### The two halves
+
+| # | What | Kind |
+|---|---|---|
+| 1 | `Pull Home Assistant Docker image` uses `force_source: true` against `:stable` (Cloudflared `:latest` and Matter `:stable` likewise), so a deploy pulls and can upgrade HA | **decision**, not a bug |
+| 2 | `Create and start Home Assistant container` declares the volume as `…:/config`; Docker reports `…:/config:rw`, so `community.docker.docker_container` never matches and **recreates every run** | plain bug, one character |
+
+### Why they can't be split
+
+Both tasks carry `tags: [homeassistant, docker]`, so there is **no tag selection that exercises #2 without also running #1's pull.** Verifying the one-character fix therefore risks performing an HA version upgrade as a side effect. Fixing #2 alone and committing it unverified is the "written but not verified" state this repo keeps getting bitten by, so they move together or not at all.
+
+⚠️ Note #2's fix only buys idempotency **when the image has not moved** — if #1 pulls a new image, `docker_container` correctly recreates regardless. So #1 is the one that decides whether deploys are quiet.
+
+### The decision #1 needs
+
+The role **already ships a dedicated upgrade path** — an `update_ha` management script plus a `Configure Home Assistant update cron job` task. If that is the intended mechanism, then `force_source: true` inside the deploy role is redundant with it, and a monitoring or MQTT deploy being able to bump HA's version is an accident rather than a design. Dropping `force_source` (pull only when absent) would make upgrades happen solely through `update_ha`.
+
+**Not decided here** — whether a deploy should be able to upgrade HA is an operator call.
+
+### Acceptance
+
+- `services.yml --limit dockassist` (untagged) reports **`changed=0`** on a second consecutive run.
+- HA's `StartedAt` is **unchanged** across that run — the same check that proved `4d9b962`, and the only one that distinguishes "reported ok" from "did nothing".
+- Whatever is decided for #1 is written down, so the next reader knows HA upgrades are (or are not) a deploy side effect by design.
+
+**Until then:** prefer `--tags` on dockassist. `--tags cron`, `--tags mqtt` and `--tags config` are all known-clean and were used throughout L-B.
 
 ---
 
