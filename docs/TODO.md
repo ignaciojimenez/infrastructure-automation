@@ -44,7 +44,10 @@ An unchanged failure is now re-alerted on a doubling delay (immediately, then
 1h, 2h, 4h … capped at 24h): ~8 pages across a four-day outage instead of ~96.
 
 🔴 **The point was never to make alerts quieter — a lobotomised check is quiet
-too.** Four properties keep it a fix, each with its own regression test:
+too.** Four properties keep it a fix, each with its own regression test.
+**13 assertions across the two new test files fail against pre-L-F `main`**
+(7 in `wrapper_alert_dedup_test.sh`, 6 in `sweep_absence_test.sh`), so none of
+them is vacuous:
 
 | Property | Case |
 |---|---|
