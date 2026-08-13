@@ -155,16 +155,48 @@ direction, and it **respected the no-retry rule against the firewall** — the s
 behaviour that caused the CrowdSec self-ban in August. It also correctly refused to call
 a firewall account problem an outage.
 
-⏳ **The re-billing guard is not yet proven** and its test is the *second* hour:
-`.last_investigated` did not exist before tonight, so 20:47 investigating was correct.
-At 21:47, with `last_anomaly.json` untouched, `investigate.sh` must exit in about a
-second. If it runs for minutes again, the guard is dead. Check without needing Ansible:
+### ✅ The re-billing guard is proven — measured on the second hour of the same fault
+
+`.last_investigated` did not exist before tonight, so 20:47 investigating was correct
+behaviour, not a guard failure. The test is the *next* hour against an unchanged fault,
+and it passed on the clock:
+
+| Run | Cron session | Duration | Outcome |
+|---|---|---|---|
+| 20:47 (first) | `20:47:01` → `20:49:45` | **2 m 44 s** | investigated, $0.4259, one `:mag:` post |
+| 21:47 (second) | `21:47:01` → `21:47:01` | **same second** | skipped, no post, no cost |
+
+Only one `:mag: *Fleet investigation*` message exists in #home-alerts. A persistent
+fault is investigated once, not hourly — which is exactly what was re-billing before the
+dedup work, and it is now measured rather than asserted. Verified via `read_agent` and
+the cron journal, needing no Ansible:
 
 ```sh
 ssh -i ~/.ssh/read_agent_ed25519 read_agent@10.30.40.203 \
-  'sudo -n journalctl -u cron --no-pager --since "21:45" -o short'
-# PASS: session opened 21:47:01 → closed ~21:47:02, and no new :mag: post in #home-alerts
+  'sudo -n journalctl -u cron --no-pager --since "21:35" -o short'
 ```
+
+⚠️ Note what this does **not** fix: Tier 1 still alerted at 20:37 *and* 21:37 for the
+same unchanged opnsense finding. Tier 2 re-billing is dead; Slack repetition is not.
+That is F1, and it stays open.
+
+### 🆕 vinylstreamer — a false `Internet: unreachable` at 21:45, already false when checked
+
+`:x: ALERT: Script Failed on vinylstreamer` at `2026-08-13 21:45:52`, one failing check
+in an otherwise all-green report: `❌ Internet: unreachable (check network)`. Measured
+from the host five minutes later:
+
+```
+2 packets transmitted, 2 received, 0% packet loss   # ping 1.1.1.1, rtt avg 10.6 ms
+resolve OK                                          # getent hosts deb.debian.org
+```
+
+So the alert was already wrong by the time it was read. First `*/15` after the host's
+return from its four-day outage (uptime 3 h 34 m, 162 pending updates), on `wlan0`, so a
+transient association is plausible — but a single failed probe becoming a push alert with
+no retry and no dedup is F1's case again, from a third host. **Do not treat this as
+evidence vinylstreamer is unhealthy;** treat it as a sample of how noisy the current
+threshold is. Worth a retry-before-alert on the connectivity check specifically.
 
 ### 🐛 The Slack watermark was poisoned on disk, and the deploy alone would have burned budget
 
