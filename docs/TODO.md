@@ -19,6 +19,46 @@ Items are ordered by risk × effort — highest-impact, most-actionable items fi
 
 ---
 
+## 🔴 Live alert flood, triaged 2026-08-11 — three separate streams, only one covered by the pending deploy
+
+Triggered by "I'm getting Slack alerts from agent-lxc and nightly alerts too". All three verified live from the laptop; separating them matters because the planned L-B/L-C deploy fixes exactly one.
+
+**Stream 1 — hourly `Script Failed on agent-lxc` at `:37`, continuously since 2026-08-10 12:37.** The Tier 1 sweep exits 1 on three findings, all confirmed real:
+
+| Finding | Verified | Status |
+|---|---|---|
+| `opnsense: UNREACHABLE (no response as read_agent)` | `ssh opnsense-agent` → `Permission denied (publickey)` | **recurrence of Priority 2** — the handover's "verified working 2026-08-07" is stale. Fix: `ansible-playbook ansible/playbooks/system/agent_access.yml --limit opnsense` |
+| `vinylstreamer: UNREACHABLE` | `ssh vinylstreamer-agent` → connection timed out | **new, untracked.** Host-level, not a key problem — no TCP answer at all |
+| `cobra: 1 failed systemd unit(s): ●` | `systemctl --failed` on cobra → `nmbd.service` failed (Samba NMB) | real failure **plus** a parse bug, below |
+
+⚠️ **Deploying L-B/L-C does not silence this.** These are correct detections of real faults; the sweep will keep exiting 1 until the hosts are fixed. The *repetition* (24 pages/day, no dedup) is the still-open wrapper item at line ~675 — confirmed still unfixed on `main`: `enhanced_monitoring_wrapper` has a bare `# Always notify on failures / SEND_TO_ALERT=true` branch with no cooldown. The merged anomaly-dedup work fixed Tier 2 *re-billing*, not Slack volume. This is the strongest live case yet for that item.
+
+🐛 **New latent bug — `FAILEDUNITS` loses every unit name.** `fleet_health_check.sh.j2:224` and `:233` run `systemctl --failed --no-legend --no-pager | awk '{printf "%s ", $1}'`. Without `--plain`, systemd prefixes the line with `●`, so `$1` is the bullet and the unit name is discarded — every report reads `N failed systemd unit(s): ● ● …`. Reproduced verbatim on cobra: the command returns `● `. `scripts/common/system_health_check.sh:463` already gets this right (`--no-legend --plain`); the fleet sweep never got the same fix. One-word fix, but it means **ten days of sweep reports named no unit at all**, so the history is unusable for "when did nmbd break". Classic parse-yields-nothing bug — the pattern matched, the value was empty.
+
+**Stream 2 — `Slack watch could not read #home-alerts (ERR invalid_ts_oldest)`, every 6h at `:07`.** This one **is** already fixed on `main` (the poisoned `0.000000` watermark, self-healing guard — see the Slack-watch section below) and is simply **not deployed**. `services.yml --limit agent-lxc --tags agent` (handover step B8 / session L-C) clears it. Only stream covered by the pending work.
+
+**Stream 3 — nightly healthchecks.io `backup_homeassistant` / `backup_unifi` / `backup_opnsense` DOWN then UP.** Not in any plan. Exactly the three heartbeats with `backup_max_age_minutes: 1560`; the three at `10320` never alert. Pattern on 2026-08-11: DOWN 02:30, UP 04:30 — recovery lands on the first `*/2` heartbeat after the 04:00/04:15 backup crons, so **the backups themselves are succeeding**; what gaps is the ping stream overnight. Same shape on 2026-08-09 (~21:55–22:10), drifting because healthchecks derives DOWN from last-ping time.
+
+✅ **The state files are NOT the cause — measured 2026-08-12 as `choco`:**
+
+| Host | State file mtime | `last_status` |
+|---|---|---|
+| `unifi` | `2026-08-12 03:00:04` | `success` |
+| `dockassist` | `2026-08-12 04:00:23` | `success` |
+
+Both gates in `heartbeat_backup.sh` therefore pass at **every** `*/2` heartbeat: mtime is at most ~24h old against a 26h (`1560`) window, and status is `success`. A backup that runs daily can never age out of a 26h window. **So the script, whenever it actually runs, pings.**
+
+⚠️ **This rules out the freshness-window explanation and relocates the fault.** The DOWN notice's "Last Ping: Success, 1 day, 6 hours ago" (= period 1 day + grace 6h, so a genuine ~30h ping gap) can now only mean the heartbeat **did not run**, or **ran and the ping did not land**. Two consequences:
+
+1. 🔴 **All three checks went DOWN and recovered together** (UP at `04:30:03`, `04:30:04`, `04:30:04`) across three independent hosts with three independent crons. Simultaneity across hosts points at a *shared* cause — the outbound path (opnsense is the gateway, and it threw `Script Failed on OPNsense.internal` at 12:30 on 08-10, inside the gap) or healthchecks.io itself — not at per-host cron drift. Confirm before assuming: the healthchecks.io ping log shows every ping with timestamp and source IP, which discriminates "cron didn't fire" (staggered, per-host) from "path broke" (all three, same minute).
+2. 🐛 **A failed ping is silent by design.** `heartbeat_backup.sh:30` is `curl -fsS -m 10 --retry 3 "$HEALTHCHECK_URL" >/dev/null 2>&1 || true`. The `|| true` and the discarded stderr mean a dead-man's switch cannot report that its own ping failed — the only evidence is the absence healthchecks.io eventually notices, 30h later. Worth logging the curl exit status even if the script still exits 0.
+
+Still to check, in order: the healthchecks.io ping log for one of the three; then `crontab -l | grep -i heartbeat` and the rendered `MAX_AGE_MINUTES` on `unifi`/`dockassist` — the per-host `heartbeat_backup_*.sh` are role-owned, so they are in the silent-drift class that `deploy_monitoring.yml` does not sync.
+
+**Hypothesis, unverified:** the flood starting 2026-08-10 12:37 is adjacent to a one-off `Script Failed on OPNsense.internal` at 12:30 the same day, which fits the known pattern of an OPNsense firmware/config event dropping the uid≥2000 `read_agent` account. Worth confirming from `pkg query` timestamps when the firewall is reachable again.
+
+---
+
 ## unifi-lxc has never had `--tags ssh` applied — L-B will restart its sshd (measured 2026-08-08)
 
 **Risk:** Low, but it will look alarming mid-deploy if it is not expected. Found during the L-A pre-flight (A1), which is a `--check --diff` run and changed nothing.
@@ -38,11 +78,37 @@ What the diff actually is, all of it `unifi-lxc` drift against `main`:
 
 **Consequence for L-B:** the first real `--tags ssh` run touching `unifi-lxc` notifies `restart_ssh`. That is safe (`sshd -t` validates before the write, and `PermitRootLogin no` is already deployed so locking root's shell removes no access that exists), but it is an SSH restart on a live host and should not be a surprise. Nothing else in the fleet is implicated.
 
-⚠️ **Not verified:** root's *password-lock* state anywhere (needs privilege `read_agent` does not have), `agent-lxc`'s root shell, and whether the other seven hosts show the same `sshd_config`/`authorized_keys` drift — A1 scopes to `unifi-lxc` by design. To find out before deploying, without changing anything:
+~~⚠️ **Not verified:** root's *password-lock* state anywhere…~~ ✅ **ANSWERED 2026-08-13** — the fleet-wide `--check --diff` below was run. Results in the next section.
 
 ```sh
 ansible-playbook ansible/playbooks/services.yml --tags ssh --check --diff   # all hosts, read-only
 ```
+
+---
+
+## The fleet-wide SSH check, run 2026-08-13 — one row above is now WRONG
+
+All eight hosts reachable, nothing changed (`--check`). **The headline holds: `unifi-lxc` is still the only host with an `sshd_config` diff and the only one that restarts sshd.** Two things the table above got wrong or could not know:
+
+🔴 **The `authorized_keys` row is VOID — retract it, do not act on it.** It said GitHub serves **6** keys and `unifi-lxc` has 5. **GitHub now serves 5**: the `ssh-ed25519 …QpDuP` key present on 2026-08-08 has since been **removed from the account**. So `unifi-lxc` is now `ok` on that task — the gap closed because *the source changed*, not because the host did.
+
+⚠️ **The real lesson is the mechanism, not the key.** `authorized_key` runs with `exclusive: true` against a **live external URL**. A key added to GitHub lands on every host at the next run; **a key removed from GitHub is deleted from every host at the next run.** The effective access set for the whole fleet therefore changed between 2026-08-08 and 2026-08-13 with **no repo commit, no deploy and no review**. That is the documented design, but it means any `authorized_keys` finding is a snapshot of a moving target and must be re-read at deploy time rather than trusted from a previous session.
+
+### What each host actually wants
+
+| Host | changed | What |
+|---|---:|---|
+| `agent-lxc` | **0** | fully converged |
+| `cobra`, `dockassist`, `hifipi`, `vinylstreamer` | 1 each | `update_keys` shebang only — `#!/bin/bash` → `#!/bin/sh` on a one-line `curl` script. Cosmetic. |
+| `cwwk` | 3 | the shebang, plus root's and `choco`'s password lock |
+| `unifi-lxc` | 4 | `sshd_config` (**+ sshd restart**), root login, `check_ssh_security.sh` |
+| `opnsense` | 6 | `authorized_keys` reorder/comment-strip (same 5 keys — verified by comparing the base64, nothing added or removed), root + `choco` password lock, `check_ssh_security.sh`, and the `scripts_dir` migration below |
+
+**Password locks, now answered as far as it can be without root.** `Disable root user login` is `changed` on `cwwk`, `opnsense`, `unifi-lxc`. On `unifi-lxc` the shell alone explains it. On `cwwk` root's shell was *directly measured* as `/sbin/nologin` already, and on `opnsense` the task omits `shell` entirely — so on those two the only attribute left that can differ is **`password_lock`**. `Lock the user account password` (the `choco` account) is `changed` on `cwwk` and `opnsense`. ⚠️ **Deduced from the task's own field set plus a direct shell reading — not read out of `/etc/shadow`**, which needs privilege `read_agent` does not have.
+
+🛑 **A prediction elsewhere in this file is now stale and will stop L-B for no reason.** The pre-flight note says the monitoring-directory task reports `ok` on every host and that a `changed` "is a finding, not noise". **`opnsense` now reports `changed` on `/home/choco/.scripts`** — because `refactor/opnsense-scripts-dir-2026-08` merged and moved its `scripts_dir` there. **That is B6 doing its job, not drift.** `/home/choco/.logs` is `ok`; every other host is `ok` on both. Treat a `changed` on any host *other than opnsense's `.scripts`* as the finding.
+
+⚠️ **Still not verified:** the actual `/etc/shadow` state on any host, and the presence of `check_ssh_security.sh` by direct inspection — `/home/choco` is `0700`, so `read_agent` gets `Permission denied`, which reads as "absent" if stderr is discarded. The playbook's `--check` result is the authority for that file, not a shell probe.
 
 ---
 
