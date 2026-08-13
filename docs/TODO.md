@@ -19,6 +19,154 @@ Items are ordered by risk × effort — highest-impact, most-actionable items fi
 
 ---
 
+## ✅ L-C DEPLOYED 2026-08-13 — agent-lxc Tier 2 is live, and the sweep had never been redeployed since 2026-07-22
+
+`ansible-playbook ansible/playbooks/services.yml --limit agent-lxc --tags agent`.
+Five tasks changed, second run `changed=0`. The five crons are all present, including
+`Fleet anomaly investigation (Tier 2)` at `:47` — restored by the role itself, so the
+hand-saved `/root/crontab.choco.bak.20260803` was never needed and can stay as an archive.
+
+### 🐛 The deployed sweep was three weeks of drift behind the repo
+
+`~/.scripts/fleet_health_check.sh` on CT 103 was dated **2026-07-22**, 7937 bytes, with
+**zero** occurrences of `ssh_backoff` and no healthchecks URL. Everything merged after
+2026-07-26 — the SSH auth back-off written *because of* the CrowdSec self-ban, the
+snapshot dedup that stops Tier 2 re-billing, the dead-man's-switch ping — existed only
+in git. This is the role-owned-script drift class again, and it is worth stating plainly:
+**for ten days the container ran the exact code whose known failure mode had already
+caused an outage.** The fix was merged on 2026-07-26 and deployed on 2026-08-13.
+
+📌 Corollary for the next handover: "merged" is not a state this fleet has. Only
+`changed=0` on a second deploy run is.
+
+### ✅ The `●` parse bug is fixed and the fix was proven by forcing the fault
+
+`--plain` added to both `FAILEDUNITS` probes (commit on branch
+`fix/agent-tier2-deploy-and-plain-parse`). Not verified by reading the flag's
+documentation — verified by creating a transient failing unit on agent-lxc and running
+both parses against the same systemd output in the same second:
+
+```
+OLD_PARSE=[● ]
+NEW_PARSE=[claude-parse-probe.service ]
+COUNT=1                     # the count was always right; only the name was lost
+AFTER_RESET=[0]
+```
+
+`read_agent`'s sudoers already allows `systemctl --failed *`, so the extra flag needs no
+privilege change — confirmed `rc=0` on all six Linux fleet hosts before deploying.
+
+### ✅ Both invisible guards were exercised rather than assumed
+
+Neither guard shows anything when it works, which is exactly the shape of check this
+repo has been burned by. Both were forced:
+
+| Guard | How it was proven | Result |
+|---|---|---|
+| Snapshot dedup (Tier 2 re-billing) | Ran the sweep by hand twice with unchanged findings | `(findings unchanged since the last sweep — last_anomaly.json left untouched)`; mtime did not advance |
+| Auth-rejection detection | `ssh nosuchagentuser@cobra` from CT 103, real sshd stderr through the real grep | `Permission denied (publickey,gssapi-keyex,gssapi-with-mic).` → `AUTH_REJECTED=yes` |
+| Back-off state machine | Extracted the deployed functions and exercised all seven transitions | 1h → 2h → capped at 21600s; expired window resumes probing; **corrupt state file fails open (probes) rather than closed (skips)**; clear removes the file |
+
+CrowdSec on opnsense: `No active decisions`, and zero alerts referencing `10.30.40.203`.
+
+### ✅ C3 — the ping delivers, and the cron path works with the new script
+
+The ping was verified as a *value*, not as "the script has a curl in it" —
+`ping_healthcheck` swallows its exit status with `|| true`, exactly the pattern flagged
+in `heartbeat_backup.sh:30`, so a broken URL would look identical to a working one from
+inside the script. Run by hand against the URL the deployed script actually holds:
+
+```
+URL_TAIL=...dcc16a8e-0822-4774-a1cb-8e36901e0763    # matches vault_healthcheck_agent_sweep
+BODY=[OK HTTP=200] RC=0
+```
+
+The 20:37 cron run then confirmed the whole path independently of anything the container
+says about itself: `CRON[55052] … fleet_health_check.sh` at `20:37:01`, session closed
+`20:37:14` (13 s, matching the manual run), and `:x: ALERT: Script Failed on agent-lxc`
+in **#home-alerts** at `20:37:14`. Sweep runs, exits 1 on the real opnsense finding,
+wrapper alerts. ⚠️ Still to confirm on the healthchecks.io dashboard: the check moving
+from **new** to **up**, and its notification integration matching the siblings — there is
+no healthchecks *management* API key in the vault, so this cannot be checked from here.
+Worth adding a read-only one.
+
+### 🔴 F4 is fully explained — and it is two unrelated faults wearing one symptom
+
+The plan recorded `ssh opnsense-agent` → `Permission denied (publickey)` and inferred a
+missing key. Neither half of that is right, and the two paths fail for different reasons:
+
+1. **Laptop → opnsense: rejected by the `from=` pin, not a missing key.** opnsense's
+   `config.xml` holds two authorized keys for `read_agent`. The first *is* the laptop's
+   `read_agent_ed25519.pub` (`claude_agent@infrastructure`), pinned
+   `from="10.30.80.1"`. The laptop is on **10.30.20.37**, so sshd rejects it before the
+   key is ever considered. Nothing is missing; the pin is stale.
+2. **agent-lxc → opnsense: authentication SUCCEEDS.** One probe, and the answer is
+   `This account is currently not available.` — the container's key is present and
+   accepted; the account's shell is `/usr/sbin/nologin`.
+
+Live evidence: `read_agent:*:2001:65534:Autonomous agent :/home/read_agent:/usr/sbin/nologin`
+while `config.xml` says `<shell>/bin/sh</shell>` and `<priv/>` is empty.
+
+**This is the documented revert, on schedule, not a new fault.** The 2026-08-03 section
+below predicted it in as many words: the shell was set with `pw usermod`, lives only in
+`/etc/passwd`, and reverts whenever OPNsense regenerates accounts. Re-read from the
+firewall's own source to confirm nothing changed in 26.1.x:
+
+```php
+/usr/local/etc/inc/auth.inc:351
+$user_shell = $is_admin && !empty($user['shell']) ? $user['shell'] : '/usr/sbin/nologin';
+```
+
+⚠️ **New, and it matters for L-F:** the sweep reports this as
+`opnsense: UNREACHABLE (no response as read_agent)` — which is wrong in a way that costs
+diagnostic time. A nologin shell is not an auth rejection, so the back-off correctly does
+**not** engage (no CrowdSec risk from this state at all), but it is also not
+unreachability. The probe distinguishes "answered" from "did not answer" by the presence
+of a `DISK=` line, and an account with no shell produces neither. Worth a third branch:
+if SSH exits 0 and the probe returned nothing, say so.
+
+**Do not** re-run `agent_access.yml` expecting a durable fix — it uses `pw` under the
+hood and reverts again. The one-line stopgap is `pw usermod read_agent -s /bin/sh`; the
+architectural fix (stop SSH-probing the firewall, use its API) is unchanged and still
+the recommendation.
+
+### 🐛 The Slack watermark was poisoned on disk, and the deploy alone would have burned budget
+
+`~/.agent/.last_slack_ts` contained `0.000000`, which is why every hourly watch since
+2026-07-25 logged `slack fetch failed: ERR invalid_ts_oldest` — and why the failure was
+*silent*: the log reads `failure alert suppressed (cooldown active)` on almost every run,
+so the 6h cooldown converted a permanently broken watch into one alert three weeks ago.
+
+The repo already fixes the *code* (`ts_is_positive`, and the comment explaining that the
+old string compare `!= "0"` never matched `"0.000000"`), and that fix is now deployed —
+but the poisoned **value** survives a deploy, because the seeding task is `creates:`-guarded
+and the file exists. The newly-deployed script would therefore have dropped `oldest`
+entirely on the next `:07` run and polled the last 50 messages of #home-alerts — up to
+3 investigations of a two-day-old flood, at real cost.
+
+Reseeded by hand to `date +%s` (old value kept as `.last_slack_ts.bak.20260813`).
+📌 **Class of bug to remember: a code fix does not repair the state the bug wrote.**
+Anywhere a guard was added because a bad value got persisted, check the persisted value too.
+
+### 🔧 Two follow-ups this session created rather than closed
+
+1. **The sweep needs a third branch for "answered, but no shell".** It decides
+   reachability by the presence of a `DISK=` line, so `Permission denied`,
+   `This account is currently not available.`, and a dead host all collapse into
+   `UNREACHABLE (no response as read_agent)`. The first is already split out for the
+   back-off; the second is opnsense's *recurring* failure mode and is currently reported
+   as something it is not. Cheap: SSH exited 0 and the probe returned nothing → say so.
+2. **`ansible` is unusable from a background/unattended shell on this laptop.** Both
+   background collection jobs failed with `sign_and_send_pubkey: signing failed for ECDSA
+   "touchid-agent: ssh" from agent: agent refused operation` — a Touch ID prompt with
+   nobody there to tap, and the refusal persisted into foreground retries. The
+   `read_agent` key kept working throughout (passphrase-free by design), so the fallback
+   for unattended verification is `ssh -i ~/.ssh/read_agent_ed25519 read_agent@<host>`
+   plus the journal, and Slack as the independent witness. Worth remembering before
+   scheduling anything that shells out to Ansible.
+
+---
+
 ## 🔴 Live alert flood, triaged 2026-08-11 — three separate streams, only one covered by the pending deploy
 
 Triggered by "I'm getting Slack alerts from agent-lxc and nightly alerts too". All three verified live from the laptop; separating them matters because the planned L-B/L-C deploy fixes exactly one.
@@ -27,7 +175,7 @@ Triggered by "I'm getting Slack alerts from agent-lxc and nightly alerts too". A
 
 | Finding | Verified | Status |
 |---|---|---|
-| `opnsense: UNREACHABLE (no response as read_agent)` | `ssh opnsense-agent` → `Permission denied (publickey)` | **recurrence of Priority 2** — the handover's "verified working 2026-08-07" is stale. Fix: `ansible-playbook ansible/playbooks/system/agent_access.yml --limit opnsense` |
+| `opnsense: UNREACHABLE (no response as read_agent)` | `ssh opnsense-agent` → `Permission denied (publickey)` | ~~**recurrence of Priority 2** — fix: `agent_access.yml --limit opnsense`~~ ❌ **BOTH HALVES WRONG — corrected 2026-08-13 (L-C).** The laptop is rejected by a stale `from="10.30.80.1"` pin, the container authenticates *fine* and hits `/usr/sbin/nologin`, and `agent_access.yml` cannot fix either durably. See the L-C section above. |
 | `vinylstreamer: UNREACHABLE` | `ssh vinylstreamer-agent` → connection timed out | **new, untracked.** Host-level, not a key problem — no TCP answer at all |
 | `cobra: 1 failed systemd unit(s): ●` | `systemctl --failed` on cobra → `nmbd.service` failed (Samba NMB) | real failure **plus** a parse bug, below. ✅ **`nmbd` restarted and green 2026-08-13 during L-B** — cobra now exits 0. The parse bug and the boot race that caused it are both still open; see the L-B section. |
 
@@ -35,7 +183,7 @@ Triggered by "I'm getting Slack alerts from agent-lxc and nightly alerts too". A
 
 🐛 **New latent bug — `FAILEDUNITS` loses every unit name.** `fleet_health_check.sh.j2:224` and `:233` run `systemctl --failed --no-legend --no-pager | awk '{printf "%s ", $1}'`. Without `--plain`, systemd prefixes the line with `●`, so `$1` is the bullet and the unit name is discarded — every report reads `N failed systemd unit(s): ● ● …`. Reproduced verbatim on cobra: the command returns `● `. `scripts/common/system_health_check.sh:463` already gets this right (`--no-legend --plain`); the fleet sweep never got the same fix. One-word fix, but it means **ten days of sweep reports named no unit at all**, so the history is unusable for "when did nmbd break". Classic parse-yields-nothing bug — the pattern matched, the value was empty.
 
-**Stream 2 — `Slack watch could not read #home-alerts (ERR invalid_ts_oldest)`, every 6h at `:07`.** This one **is** already fixed on `main` (the poisoned `0.000000` watermark, self-healing guard — see the Slack-watch section below) and is simply **not deployed**. `services.yml --limit agent-lxc --tags agent` (handover step B8 / session L-C) clears it. Only stream covered by the pending work.
+**Stream 2 — `Slack watch could not read #home-alerts (ERR invalid_ts_oldest)`, every 6h at `:07`.** This one **is** already fixed on `main` (the poisoned `0.000000` watermark, self-healing guard — see the Slack-watch section below) and is simply **not deployed**. `services.yml --limit agent-lxc --tags agent` (handover step B8 / session L-C) clears it. Only stream covered by the pending work. ✅ **DEPLOYED 2026-08-13 — but the deploy alone was not enough:** the code fix shipped, the poisoned `0.000000` on disk did not go away with it and had to be reseeded by hand. See the L-C section above.
 
 **Stream 3 — nightly healthchecks.io `backup_homeassistant` / `backup_unifi` / `backup_opnsense` DOWN then UP.** Not in any plan. Exactly the three heartbeats with `backup_max_age_minutes: 1560`; the three at `10320` never alert. Pattern on 2026-08-11: DOWN 02:30, UP 04:30 — recovery lands on the first `*/2` heartbeat after the 04:00/04:15 backup crons, so **the backups themselves are succeeding**; what gaps is the ping stream overnight. Same shape on 2026-08-09 (~21:55–22:10), drifting because healthchecks derives DOWN from last-ping time.
 
