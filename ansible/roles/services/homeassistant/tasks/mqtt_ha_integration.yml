@@ -15,7 +15,12 @@
     MQTT_PASSWORD: "{{ vault_mqtt_password }}"
     MQTT_PORT: "{{ mosquitto_port | default(1883) }}"
   register: ha_mqtt_inject
-  changed_when: "'CHANGED' in ha_mqtt_inject.stdout"
+  # Exact match, NOT a substring test: the script's other outcome is UNCHANGED,
+  # and `'CHANGED' in 'UNCHANGED'` is True. That made this task report changed on
+  # every run and fire the Restart Home Assistant handler each time, restarting HA
+  # on any services.yml run since 2026-07-12 — while the script itself was
+  # correctly doing nothing. `no_log: true` hid the stdout that would have shown it.
+  changed_when: ha_mqtt_inject.stdout.strip() == 'CHANGED'
   no_log: true
   notify: Restart Home Assistant
   tags: [homeassistant, mqtt, ha_integration]

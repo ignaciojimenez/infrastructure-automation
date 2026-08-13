@@ -178,7 +178,23 @@ The handover's B1 command is `services.yml --limit dockassist` untagged. Its dry
 
 1. **It upgrades Home Assistant.** `Pull Home Assistant Docker image` uses `force_source: true` against `:stable`, and Cloudflared `:latest` / Matter `:stable` likewise. A monitoring deploy would silently bump HA's version.
 2. **It recreates the `home-assistant` container every single run.** `main.yml:140` declares the volume as `…:/config`; Docker reports it back as `…/config:rw`, so `community.docker.docker_container` never matches and always recreates. Adding the explicit `:rw` to the task makes it idempotent.
-3. 🔴 **It would break MQTT persistence.** `mqtt.yml:6` sets `{{ mosquitto_data_dir }}/data` to `owner/group: {{ ansible_user }}` (1000) mode `0755`. Measured live: that directory is **`1883:1883`** and holds `mosquitto.db` (`0600 1883:1883`, written the same day). The broker runs as uid 1883; chowning the directory to `choco` leaves it read-only to the broker, and mosquitto's autosave writes a temp file and renames — which needs **directory** write. The `passwd` file already has a dedicated 1883-ownership task beside it (`mqtt.yml:61`) with a comment explaining exactly this class of failure; `data` was missed. **Give `data` the same treatment.**
+3. ✅ **It would break MQTT persistence — FIXED 2026-08-13, same session.** `mqtt.yml` set `{{ mosquitto_data_dir }}/data` to `owner/group: {{ ansible_user }}` (1000). Measured live: that directory is **`1883:1883`** and holds `mosquitto.db` (`0600 1883:1883`). The broker runs as uid 1883 and autosaves by writing a temp file and renaming, which needs **directory** write — so a choco-owned `0755` data dir silently fails every persistence write. **Root cause read from the image, not guessed:** the entrypoint runs as root and does `[ -d "/mosquitto/data" ] && chown -R ${PUID}:${PGID} /mosquitto/data`, and **only that path** — which is exactly why `config` beside it is `1000` and `data` is `1883`. The container therefore wins *at container start*, so the damage window is from an Ansible run until the next restart, unbounded. `data` is now split out of the loop with `owner/group: "1883"`, mirroring the existing `passwd` task. `--tags mqtt` now reports `ok` on it.
+
+### 🐛 Found while fixing the above — `'CHANGED' in 'UNCHANGED'` is `True`
+
+`mqtt_ha_integration.yml` guarded its injection script with:
+
+```yaml
+changed_when: "'CHANGED' in ha_mqtt_inject.stdout"
+```
+
+The script's two outcomes are `CHANGED` and `UNCHANGED`, and **`CHANGED` is a substring of `UNCHANGED`** — so the test was true in both branches. The task reported `changed` on every run and fired its `notify: Restart Home Assistant` handler each time. **Every `services.yml` run on dockassist has been restarting Home Assistant since MQTT landed on 2026-07-12**, while the script itself correctly did nothing.
+
+**Proven by file mtimes, not by reading the code.** After two runs at 19:08, `core.config_entries` was still stamped `2026-08-12 11:21` and `core.config_entries.pre-mqtt.bak` `2026-07-12 19:52` — the script never wrote, so it had printed `UNCHANGED` both times while Ansible called it `changed`. Exactly one mqtt entry exists (`title localhost`, `port 1883`), so the *outcome* was always correct; only the signal was wrong.
+
+⚠️ **`no_log: true` is why nobody saw it** — it hides the stdout that would have shown `UNCHANGED` beside a green `changed`. Fixed to an exact comparison, `ha_mqtt_inject.stdout.strip() == 'CHANGED'`, and verified in both directions: `changed=0` with no handler, and HA's `StartedAt` unchanged across the confirming run.
+
+**General shape worth carrying:** a `changed_when` that substring-matches its own negative case. Anywhere a script reports status as a word, compare the whole value — this is the same "verify what the parse *yields*, not that the pattern matched" rule that the monitoring work keeps re-learning.
 
 ### 🟡 Minor — `RECOVERY.txt.j2` re-renders forever
 

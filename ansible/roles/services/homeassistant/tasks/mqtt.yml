@@ -13,7 +13,26 @@
   loop:
     - "{{ mosquitto_data_dir }}"
     - "{{ mosquitto_data_dir }}/config"
-    - "{{ mosquitto_data_dir }}/data"
+  tags: [homeassistant, mqtt]
+
+# The persistence directory is the ONE path the broker writes to, and it must be
+# owned by uid 1883 — not by the infrastructure user like everything else here.
+# The image's entrypoint enforces this itself (`chown -R ${PUID}:${PGID}
+# /mosquitto/data`, and only that path, which is why `config` beside it stays
+# choco-owned). Handing it to `{{ ansible_user }}` therefore does not merely
+# disagree with the image, it breaks the running broker: mosquitto autosaves by
+# writing a temp file and renaming, which needs *directory* write, so a 0755
+# choco-owned data dir silently fails every persistence write until something
+# restarts the container and the entrypoint chowns it back. Same reasoning as the
+# passwd-file task below.
+- name: Create the Mosquitto persistence directory owned by the broker user
+  ansible.builtin.file:
+    path: "{{ mosquitto_data_dir }}/data"
+    state: directory
+    owner: "1883"
+    group: "1883"
+    mode: '0755'
+  become: true
   tags: [homeassistant, mqtt]
 
 - name: Deploy Mosquitto configuration
