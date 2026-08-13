@@ -130,6 +130,18 @@ hood and reverts again. The one-line stopgap is `pw usermod read_agent -s /bin/s
 architectural fix (stop SSH-probing the firewall, use its API) is unchanged and still
 the recommendation.
 
+### ✅ The Slack watch works again — first successful poll in three weeks, and it earned its keep
+
+After the watermark was reseeded, the 22:07 run investigated a **new** alert (forward-
+looking, as intended), cost **$0.3173**, and wrote
+`plans/2026-08-13-vinylstreamer-transient-internet-unreachable-healt.md`. The 23:07 run
+reported `investigated 0 alert(s)` — dedup holding. `.last_slack_ts` now advances
+normally (`1786653435.642809`).
+
+That investigation is what turned up the vinylstreamer correction below. **Tier 2 paid
+for itself on its second run**: $0.74 total for the night, against a plan-level finding
+that was wrong and a three-day silent outage nobody had seen.
+
 ### ✅ Tier 2's first successful run, ever — 2026-08-13 20:47, $0.4259
 
 `CRON[55470] … investigate.sh` at `20:47:01`, session closed `20:49:45` — **2 m 44 s**,
@@ -180,6 +192,64 @@ ssh -i ~/.ssh/read_agent_ed25519 read_agent@10.30.40.203 \
 same unchanged opnsense finding. Tier 2 re-billing is dead; Slack repetition is not.
 That is F1, and it stays open.
 
+### 🔴 vinylstreamer never sat dark for four days — it was UP and BROKEN, and the check said so ~290 times
+
+Tier 2's second run pulled a thread that overturns a plan-level "fact". The
+`vinylstreamer did not come back after the power cut, sat dark four days` finding
+(2026-08-13, L-B) is **wrong**, and the method that produced it is unsound on this host.
+
+Measured from the host's own health-check logs, which cron writes every 15 minutes and
+logrotate rotates at midnight — both of which require the host to be **running**:
+
+| Day | Health-check runs | Runs reporting `Internet: unreachable` | Runs that alerted |
+|---|---|---|---|
+| Mon 10 Aug | **95** (4 per hour, 00:00–23:00, no gap) | **95 / 95** | 0 |
+| Tue 11 Aug | **97** | **97 / 97** | 0 |
+| Wed 12 Aug | **95** | **95 / 95** | 0 |
+
+Rotated logs exist for every day 6–13 Aug. **Four runs in every single hour of 10 August,
+including 00:00–12:37** — the window the rest of the fleet was down. So vinylstreamer did
+not lose power on 08-09/08-10 either; the fleet-wide event took **six** hosts, not seven.
+(It is the one host not in the cabinet, so a different circuit is a plausible reading —
+that *strengthens* the external-power conclusion while removing this host from it.)
+
+**What was actually broken:** it was alive, running its services, and off the network for
+at least three full days. `check_services` was green throughout; Icecast and Liquidsoap
+never stopped.
+
+🔴 **And it is a textbook silent check.** The failure was printed on every run —
+`❌ Internet: unreachable (check network)` — and the script still exited 0:
+
+```
+zcat system_health_check.log.2.gz | grep -c "issue(s) found"   → 0
+[2026-08-11 00:15:44]   Notification sent: No     # …and 96 more, all day
+```
+
+The deployed script version printed the failure without tallying it, so the wrapper saw
+success and stayed quiet. **Detection worked; the tally didn't.** This is the exact class
+in the standing constraints — "the error stopped" being satisfied by a lobotomy — except
+here it was never noticed because the check had *always* been silent on this branch. It
+covered a multi-day outage of a fleet host.
+
+⚠️ **The `journalctl --list-boots` method is invalid on this host.** It reported one boot
+and a journal "resuming" at 18:37, which was read as four days of silence. The host has a
+persistent journal directory (`/var/log/journal/afceff18…`), so it should retain more —
+whatever is discarding it is a separate open question, and until that is understood
+**boot history from this host cannot be used as evidence of uptime.** The health-check
+logs are the stronger source: they are written by cron and rotated by logrotate, neither
+of which runs on a powered-off Pi.
+
+📌 **Two decisions this reopens — both are yours, not mine to take:**
+1. **The smart plug.** It was bought as the recovery mechanism for "the Pi will not boot
+   after power loss". The Pi boots fine; it lost the *network* while running. A power
+   cycle may still recover a hung wifi association, so the plug is not useless — but it
+   is now a fix for a different fault than the one it was bought for, and "do not chase
+   root cause" was decided against a diagnosis that turns out to be wrong.
+2. **What actually happened at ~18:09 on 13 Aug.** Uptime and `icecast2` service start
+   both put the reboot there, and the internet check went green immediately after. That
+   is a recovery worth understanding, because it is the only known way this host has come
+   back.
+
 ### 🆕 vinylstreamer — a false `Internet: unreachable` at 21:45, already false when checked
 
 `:x: ALERT: Script Failed on vinylstreamer` at `2026-08-13 21:45:52`, one failing check
@@ -192,7 +262,7 @@ resolve OK                                          # getent hosts deb.debian.or
 ```
 
 So the alert was already wrong by the time it was read. First `*/15` after the host's
-return from its four-day outage (uptime 3 h 34 m, 162 pending updates), on `wlan0`, so a
+18:09 reboot (uptime 3 h 34 m, 162 pending updates), on `wlan0`, so a
 transient association is plausible — but a single failed probe becoming a push alert with
 no retry and no dedup is F1's case again, from a third host. **Do not treat this as
 evidence vinylstreamer is unhealthy;** treat it as a sample of how noisy the current
