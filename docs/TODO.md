@@ -1,6 +1,6 @@
 # Infrastructure TODO — Prioritized Action List
 
-Updated: 2026-08-02 | Validated against live hosts via read_agent autonomous assessment
+Updated: 2026-08-13 | Validated against live hosts via read_agent autonomous assessment
 
 This document is the single source of truth for pending infrastructure work.
 Each item includes verified current state, concrete next steps, and acceptance criteria.
@@ -29,7 +29,7 @@ Triggered by "I'm getting Slack alerts from agent-lxc and nightly alerts too". A
 |---|---|---|
 | `opnsense: UNREACHABLE (no response as read_agent)` | `ssh opnsense-agent` → `Permission denied (publickey)` | **recurrence of Priority 2** — the handover's "verified working 2026-08-07" is stale. Fix: `ansible-playbook ansible/playbooks/system/agent_access.yml --limit opnsense` |
 | `vinylstreamer: UNREACHABLE` | `ssh vinylstreamer-agent` → connection timed out | **new, untracked.** Host-level, not a key problem — no TCP answer at all |
-| `cobra: 1 failed systemd unit(s): ●` | `systemctl --failed` on cobra → `nmbd.service` failed (Samba NMB) | real failure **plus** a parse bug, below |
+| `cobra: 1 failed systemd unit(s): ●` | `systemctl --failed` on cobra → `nmbd.service` failed (Samba NMB) | real failure **plus** a parse bug, below. ✅ **`nmbd` restarted and green 2026-08-13 during L-B** — cobra now exits 0. The parse bug and the boot race that caused it are both still open; see the L-B section. |
 
 ⚠️ **Deploying L-B/L-C does not silence this.** These are correct detections of real faults; the sweep will keep exiting 1 until the hosts are fixed. The *repetition* (24 pages/day, no dedup) is the still-open wrapper item at line ~675 — confirmed still unfixed on `main`: `enhanced_monitoring_wrapper` has a bare `# Always notify on failures / SEND_TO_ALERT=true` branch with no cooldown. The merged anomaly-dedup work fixed Tier 2 *re-billing*, not Slack volume. This is the strongest live case yet for that item.
 
@@ -109,6 +109,86 @@ All eight hosts reachable, nothing changed (`--check`). **The headline holds: `u
 🛑 **A prediction elsewhere in this file is now stale and will stop L-B for no reason.** The pre-flight note says the monitoring-directory task reports `ok` on every host and that a `changed` "is a finding, not noise". **`opnsense` now reports `changed` on `/home/choco/.scripts`** — because `refactor/opnsense-scripts-dir-2026-08` merged and moved its `scripts_dir` there. **That is B6 doing its job, not drift.** `/home/choco/.logs` is `ok`; every other host is `ok` on both. Treat a `changed` on any host *other than opnsense's `.scripts`* as the finding.
 
 ⚠️ **Still not verified:** the actual `/etc/shadow` state on any host, and the presence of `check_ssh_security.sh` by direct inspection — `/home/choco` is `0700`, so `read_agent` gets `Permission denied`, which reads as "absent" if stderr is discarded. The playbook's `--check` result is the authority for that file, not a shell probe.
+
+---
+
+## ✅ L-B DEPLOYED 2026-08-13 — the monitoring sprint is live on all 8 hosts (B1–B7)
+
+Steps B1–B7 all applied from `main` and verified. **The headline: the aggregation fix is real, not a lobotomy — it caught a genuine 4-day-old failure on its first fleet run.** Two steps were deliberately narrowed after their dry runs disagreed with the plan; both are recorded below as open decisions rather than silently applied.
+
+### The proof the new exit-status aggregation works
+
+`cobra`'s `nmbd.service` (Samba NMB) had been dead since **2026-08-09 21:41** — it lost a boot race (`No local IPv4 non-loopback interfaces available`, 90 s start timeout) and stayed failed for 3 days. The evidence is a clean before/after in `~/.logs/system_health_check.log` on cobra, same host, same fault, 15 minutes apart:
+
+| Time | Script | Result |
+|---|---|---|
+| `18:30:03` | old (pre-deploy) | `Notification sent: No` |
+| `18:45:03` | new (post-deploy, **cron's own run**) | `Sending notification to Slack (ALERT)` → `Notification sent: Yes` |
+| `18:46:57` | after `systemctl restart nmbd` | `Sending notification to Slack (MONITORING)` → recovery notice, `no issues` |
+
+That satisfies B5's "force one real failure and watch `#home-alerts`" with a *real* fault rather than a synthetic one, and it exercises the alert **and** the `--notify-fixed` recovery path. `nmbd` is running again and cobra exits 0.
+
+⚠️ **Two things this exposes, neither fixed:**
+- **`cobra` defines no `critical_services`**, so `check_services` never probed `nmbd`. The *generic* `systemctl --failed` check is the only reason it was ever seen. Any service on any host that is not in an inventory `critical_services` list is covered only by that generic check.
+- **`nmbd.service` already has `Wants=`/`After=network-online.target`.** The ordering is correct; `network-online.target` simply completed before an IPv4 address existed. It succeeded on 5 of the 6 boots in the journal, so this is an **intermittent boot race that will recur**, not a misconfiguration. A `Restart=on-failure` drop-in would mask it cheaply.
+
+Also confirmed live: the `FAILEDUNITS` `●` parse bug documented above. Iterating `systemctl --failed --no-legend` on cobra yielded `Invalid unit name "●"` — the bullet *is* `$1`, exactly as predicted.
+
+### Verified, per step
+
+| Step | Result |
+|---|---|
+| **B1** dockassist crons | `changed=1` → `changed=0`; live crontab reads `--heartbeat-interval=always`; the three container-check lines showed **no diff**. Logs: 0 × `mv: cannot stat`, all three `Notification sent: No`. Scoped — see below. |
+| **B2** `adm` group | `changed` on **exactly** cwwk / unifi-lxc / agent-lxc, `ok` on the four Pis, `changed=0` on re-run. Verified *functionally*, not just by group membership: all three now `ls /var/log/unattended-upgrades` successfully and the check yields a real parsed value, `Last upgrade: 2026-08-13`. |
+| **B3–B5** monitoring | All 7 Debian hosts exit **0**. Directory task `ok` everywhere. dockassist/unifi-lxc `changed=0` on the B5 pass, confirming B3/B4 converged. `check_link_speed` live (`eth0: 1000Mb/s full` on cobra). |
+| **B6** opnsense | **13** crons under `/home/choco/.scripts`, **9** `/usr/local/bin` refs — all 9 confirmed to be `/usr/local/bin/bash`, the interpreter. All 14 referenced paths executable, `/usr/local/bin` back to `root:wheel`. |
+| **B7** cwwk | `Automatic-Reboot "False"`, **3** `Automatic-Reboot` lines not 4. Second run `changed=0` — the removed render timestamp working, which was never true before. |
+
+**B6 was verified by execution, not by inspection.** A full cron line was run end-to-end from the migrated path — `/usr/local/bin/bash …/.scripts/enhanced_monitoring_wrapper … .scripts/monitoring/check_dns_health.sh` → `exit code: 0`, `OK: DNS resolving via VPN (4/4 resolvers active)`. **B7 likewise**: `apt-config dump` was read, so the value APT *parses* was confirmed, not merely the file's contents.
+
+### 🔴 §1a's opnsense acceptance criterion cannot be met by this deploy — the script is not deployed there
+
+The handover states that post-merge opnsense "should exit 0 with those lines gone or downgraded — that is L-B's acceptance criterion". **It does not apply.** `deploy_monitoring.yml:44` excludes `system_health_check.sh` from FreeBSD by `when:`, and `:48` actively removes it (`state: absent`). Verified on the host: `/home/choco/.scripts/system_health_check.sh` → **No such file**, and `crontab -l | grep -c system_health_check` → **0**. opnsense runs the separate `check_system_health.sh`, which reports load correctly (`Load: 0.38` at 18:51 — the window where the old clock-parsing bug would have read `100%`) and exits 0.
+
+**Consequence, and it cuts both ways:**
+- ✅ The feared "opnsense pages every 15 minutes after the aggregation fix" was **structurally impossible** via this path. That gate was never real.
+- 🔴 The §1a FreeBSD fixes — `freebsd_default_services()`, `freebsd_service_state()`, `read_load_1min()` — are **dormant code that runs on no host in production.** They were measured by running the script on opnsense *by hand*. They remain unexecuted in the live fleet and will stay that way until something deploys them there. Do not count them as verified-in-production.
+
+### 🟡 OPEN DECISION — B7 deferred on `cobra` and `unifi-lxc` (drifted `50unattended-upgrades`)
+
+B7's gate says "every Debian host changes one header line; cwwk the header plus line 43; **anything else is a surprise; stop**." Five hosts matched exactly. Two did not, and the gate was obeyed:
+
+| Host | Diff | What it would do |
+|---|---|---|
+| `unifi-lxc` | **+6 / −27** | drops the `"origin=*"` catch-all and the MongoDB / GlennR / Adoptium origins |
+| `cobra` | **+37 / −41**, plus `20auto-upgrades` **+1 / −17** | drops `"origin=*"` and the Plex origin; normalises `Automatic-Reboot "true"` → `"True"` and adds `-WithUsers "false"` |
+
+Both carry a template stamped `Generated by Ansible - 2025-10-12` — the same October provenance as `unifi-lxc`'s `sshd_config` drift. The repo template is **security-only by design** (`// SECURITY UPDATES ONLY`), and the other five hosts already have it.
+
+🔑 **The trade-off, flagged rather than decided.** Third-party vendor repos do not publish a `Debian-Security` label, so converging these two means their vendor software gets **no automatic patching at all** afterwards. Measured live:
+
+- `cobra` → `repo.plex.tv` (Plex Media Server)
+- `unifi-lxc` → `www.ui.com` (UniFi), `repo.mongodb.org`, `packages.adoptium.net` (Java)
+
+Against that: `"origin=*"` means those two hosts currently auto-install **feature** upgrades unattended at 04:00 — a MongoDB or UniFi major bump landing on its own, followed by an auto-reboot, is a real availability risk on the network controller. Neither option is obviously right; it is a policy call, not drift cleanup, and it does not belong inside a monitoring deploy. **Deferred deliberately — decide, then run `--tags updates` on those two.**
+
+### 🟡 OPEN — B1 was scoped to `--tags cron`; the untagged run has three unrelated side effects
+
+The handover's B1 command is `services.yml --limit dockassist` untagged. Its dry run produced `changed=9`, of which **one** was the wanted cron fix. `--tags cron` produces `changed=1` and covers B1's entire acceptance criterion (all four cron tasks carry the `cron` tag), so that is what was deployed. The other eight are pre-existing and still true of any untagged run on dockassist:
+
+1. **It upgrades Home Assistant.** `Pull Home Assistant Docker image` uses `force_source: true` against `:stable`, and Cloudflared `:latest` / Matter `:stable` likewise. A monitoring deploy would silently bump HA's version.
+2. **It recreates the `home-assistant` container every single run.** `main.yml:140` declares the volume as `…:/config`; Docker reports it back as `…/config:rw`, so `community.docker.docker_container` never matches and always recreates. Adding the explicit `:rw` to the task makes it idempotent.
+3. 🔴 **It would break MQTT persistence.** `mqtt.yml:6` sets `{{ mosquitto_data_dir }}/data` to `owner/group: {{ ansible_user }}` (1000) mode `0755`. Measured live: that directory is **`1883:1883`** and holds `mosquitto.db` (`0600 1883:1883`, written the same day). The broker runs as uid 1883; chowning the directory to `choco` leaves it read-only to the broker, and mosquitto's autosave writes a temp file and renames — which needs **directory** write. The `passwd` file already has a dedicated 1883-ownership task beside it (`mqtt.yml:61`) with a comment explaining exactly this class of failure; `data` was missed. **Give `data` the same treatment.**
+
+### 🟡 Minor — `RECOVERY.txt.j2` re-renders forever
+
+`platform/proxmox` → `/home/choco/.scripts/RECOVERY.txt` embeds `Generated: <timestamp>`, so cwwk reports `changed` on **every** `deploy_monitoring.yml` run in perpetuity. Identical wart to the one B7 just removed from `50unattended-upgrades.j2`; same fix. Noise in a place where "a `changed` is a finding" is the working rule.
+
+(The same run legitimately added **CT 103 / agent-lxc** to `RECOVERY.txt` and `vm_ct_config.txt` — first time the recovery kit has known about the agent container.)
+
+### ⚠️ `read_agent` on opnsense is still broken — confirmed again, not retried
+
+`ssh opnsense-agent` → `Permission denied (publickey)`, matching the Priority 2 recurrence triaged 2026-08-11 and contradicting the handover's "verified working 2026-08-07". **Attempted exactly once and then abandoned** — repeated failed auth against the firewall is what fed CrowdSec on 2026-08-03. All opnsense work in this session went through Ansible as `choco` instead, which works fine.
 
 ---
 
