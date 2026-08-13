@@ -19,6 +19,292 @@ Items are ordered by risk × effort — highest-impact, most-actionable items fi
 
 ---
 
+## ✅ L-C DEPLOYED 2026-08-13 — agent-lxc Tier 2 is live, and the sweep had never been redeployed since 2026-07-22
+
+`ansible-playbook ansible/playbooks/services.yml --limit agent-lxc --tags agent`.
+Five tasks changed, second run `changed=0`. The five crons are all present, including
+`Fleet anomaly investigation (Tier 2)` at `:47` — restored by the role itself, so the
+hand-saved `/root/crontab.choco.bak.20260803` was never needed and can stay as an archive.
+
+### 🐛 The deployed sweep was three weeks of drift behind the repo
+
+`~/.scripts/fleet_health_check.sh` on CT 103 was dated **2026-07-22**, 7937 bytes, with
+**zero** occurrences of `ssh_backoff` and no healthchecks URL. Everything merged after
+2026-07-26 — the SSH auth back-off written *because of* the CrowdSec self-ban, the
+snapshot dedup that stops Tier 2 re-billing, the dead-man's-switch ping — existed only
+in git. This is the role-owned-script drift class again, and it is worth stating plainly:
+**for ten days the container ran the exact code whose known failure mode had already
+caused an outage.** The fix was merged on 2026-07-26 and deployed on 2026-08-13.
+
+📌 Corollary for the next handover: "merged" is not a state this fleet has. Only
+`changed=0` on a second deploy run is.
+
+### ✅ The `●` parse bug is fixed and the fix was proven by forcing the fault
+
+`--plain` added to both `FAILEDUNITS` probes (commit on branch
+`fix/agent-tier2-deploy-and-plain-parse`). Not verified by reading the flag's
+documentation — verified by creating a transient failing unit on agent-lxc and running
+both parses against the same systemd output in the same second:
+
+```
+OLD_PARSE=[● ]
+NEW_PARSE=[claude-parse-probe.service ]
+COUNT=1                     # the count was always right; only the name was lost
+AFTER_RESET=[0]
+```
+
+`read_agent`'s sudoers already allows `systemctl --failed *`, so the extra flag needs no
+privilege change — confirmed `rc=0` on all six Linux fleet hosts before deploying.
+
+### ✅ Both invisible guards were exercised rather than assumed
+
+Neither guard shows anything when it works, which is exactly the shape of check this
+repo has been burned by. Both were forced:
+
+| Guard | How it was proven | Result |
+|---|---|---|
+| Snapshot dedup (Tier 2 re-billing) | Ran the sweep by hand twice with unchanged findings | `(findings unchanged since the last sweep — last_anomaly.json left untouched)`; mtime did not advance |
+| Auth-rejection detection | `ssh nosuchagentuser@cobra` from CT 103, real sshd stderr through the real grep | `Permission denied (publickey,gssapi-keyex,gssapi-with-mic).` → `AUTH_REJECTED=yes` |
+| Back-off state machine | Extracted the deployed functions and exercised all seven transitions | 1h → 2h → capped at 21600s; expired window resumes probing; **corrupt state file fails open (probes) rather than closed (skips)**; clear removes the file |
+
+CrowdSec on opnsense: `No active decisions`, and zero alerts referencing `10.30.40.203`.
+
+### ✅ C3 — the ping delivers, and the cron path works with the new script
+
+The ping was verified as a *value*, not as "the script has a curl in it" —
+`ping_healthcheck` swallows its exit status with `|| true`, exactly the pattern flagged
+in `heartbeat_backup.sh:30`, so a broken URL would look identical to a working one from
+inside the script. Run by hand against the URL the deployed script actually holds:
+
+```
+URL_TAIL=...dcc16a8e-0822-4774-a1cb-8e36901e0763    # matches vault_healthcheck_agent_sweep
+BODY=[OK HTTP=200] RC=0
+```
+
+The 20:37 cron run then confirmed the whole path independently of anything the container
+says about itself: `CRON[55052] … fleet_health_check.sh` at `20:37:01`, session closed
+`20:37:14` (13 s, matching the manual run), and `:x: ALERT: Script Failed on agent-lxc`
+in **#home-alerts** at `20:37:14`. Sweep runs, exits 1 on the real opnsense finding,
+wrapper alerts. ⚠️ Still to confirm on the healthchecks.io dashboard: the check moving
+from **new** to **up**, and its notification integration matching the siblings — there is
+no healthchecks *management* API key in the vault, so this cannot be checked from here.
+Worth adding a read-only one.
+
+### 🔴 F4 is fully explained — and it is two unrelated faults wearing one symptom
+
+The plan recorded `ssh opnsense-agent` → `Permission denied (publickey)` and inferred a
+missing key. Neither half of that is right, and the two paths fail for different reasons:
+
+1. **Laptop → opnsense: rejected by the `from=` pin, not a missing key.** opnsense's
+   `config.xml` holds two authorized keys for `read_agent`. The first *is* the laptop's
+   `read_agent_ed25519.pub` (`claude_agent@infrastructure`), pinned
+   `from="10.30.80.1"`. The laptop is on **10.30.20.37**, so sshd rejects it before the
+   key is ever considered. Nothing is missing; the pin is stale.
+2. **agent-lxc → opnsense: authentication SUCCEEDS.** One probe, and the answer is
+   `This account is currently not available.` — the container's key is present and
+   accepted; the account's shell is `/usr/sbin/nologin`.
+
+Live evidence: `read_agent:*:2001:65534:Autonomous agent :/home/read_agent:/usr/sbin/nologin`
+while `config.xml` says `<shell>/bin/sh</shell>` and `<priv/>` is empty.
+
+**This is the documented revert, on schedule, not a new fault.** The 2026-08-03 section
+below predicted it in as many words: the shell was set with `pw usermod`, lives only in
+`/etc/passwd`, and reverts whenever OPNsense regenerates accounts. Re-read from the
+firewall's own source to confirm nothing changed in 26.1.x:
+
+```php
+/usr/local/etc/inc/auth.inc:351
+$user_shell = $is_admin && !empty($user['shell']) ? $user['shell'] : '/usr/sbin/nologin';
+```
+
+⚠️ **New, and it matters for L-F:** the sweep reports this as
+`opnsense: UNREACHABLE (no response as read_agent)` — which is wrong in a way that costs
+diagnostic time. A nologin shell is not an auth rejection, so the back-off correctly does
+**not** engage (no CrowdSec risk from this state at all), but it is also not
+unreachability. The probe distinguishes "answered" from "did not answer" by the presence
+of a `DISK=` line, and an account with no shell produces neither. Worth a third branch:
+if SSH exits 0 and the probe returned nothing, say so.
+
+**Do not** re-run `agent_access.yml` expecting a durable fix — it uses `pw` under the
+hood and reverts again. The one-line stopgap is `pw usermod read_agent -s /bin/sh`; the
+architectural fix (stop SSH-probing the firewall, use its API) is unchanged and still
+the recommendation.
+
+### ✅ The Slack watch works again — first successful poll in three weeks, and it earned its keep
+
+After the watermark was reseeded, the 22:07 run investigated a **new** alert (forward-
+looking, as intended), cost **$0.3173**, and wrote
+`plans/2026-08-13-vinylstreamer-transient-internet-unreachable-healt.md`. The 23:07 run
+reported `investigated 0 alert(s)` — dedup holding. `.last_slack_ts` now advances
+normally (`1786653435.642809`).
+
+That investigation is what turned up the vinylstreamer correction below. **Tier 2 paid
+for itself on its second run**: $0.74 total for the night, against a plan-level finding
+that was wrong and a three-day silent outage nobody had seen.
+
+### ✅ Tier 2's first successful run, ever — 2026-08-13 20:47, $0.4259
+
+`CRON[55470] … investigate.sh` at `20:47:01`, session closed `20:49:45` — **2 m 44 s**,
+so it genuinely ran rather than exiting early. It posted to #home-alerts at 20:49:45
+with the cost in the message and a plan file at
+`~/.agent/plans/2026-08-13-opnsense-read-agent-ssh-access-broken-nologin-gate.md`.
+
+**$0.4259 lands inside the July estimate of $0.32–0.56 per investigation** — the first
+time that figure has been measured rather than projected. At 1–3 investigations a day
+with the dedup guard working, that is roughly $0.40–1.30/day worst case, and near zero
+on a quiet fleet since an unchanged fault is not re-investigated.
+
+The correctness matters more than the cost. Its verdict, reached independently:
+
+> SSH connects but returns FreeBSD's "This account is currently not available" (nologin),
+> so Tier 1 correctly flagged it as unreachable … the OPNsense VM itself is running fine
+> on `cwwk`, and downstream evidence (cross-host SSH, Cloudflare tunnel, Tado cloud health
+> checks, live HA state) all show internet, DNS, and heating control are unaffected …
+> no further SSH attempts were made against opnsense per the no-retry rule.
+
+That is the same root cause reached by hand earlier in this session, from a different
+direction, and it **respected the no-retry rule against the firewall** — the specific
+behaviour that caused the CrowdSec self-ban in August. It also correctly refused to call
+a firewall account problem an outage.
+
+### ✅ The re-billing guard is proven — measured on the second hour of the same fault
+
+`.last_investigated` did not exist before tonight, so 20:47 investigating was correct
+behaviour, not a guard failure. The test is the *next* hour against an unchanged fault,
+and it passed on the clock:
+
+| Run | Cron session | Duration | Outcome |
+|---|---|---|---|
+| 20:47 (first) | `20:47:01` → `20:49:45` | **2 m 44 s** | investigated, $0.4259, one `:mag:` post |
+| 21:47 (second) | `21:47:01` → `21:47:01` | **same second** | skipped, no post, no cost |
+
+Only one `:mag: *Fleet investigation*` message exists in #home-alerts. A persistent
+fault is investigated once, not hourly — which is exactly what was re-billing before the
+dedup work, and it is now measured rather than asserted. Verified via `read_agent` and
+the cron journal, needing no Ansible:
+
+```sh
+ssh -i ~/.ssh/read_agent_ed25519 read_agent@10.30.40.203 \
+  'sudo -n journalctl -u cron --no-pager --since "21:35" -o short'
+```
+
+⚠️ Note what this does **not** fix: Tier 1 still alerted at 20:37 *and* 21:37 for the
+same unchanged opnsense finding. Tier 2 re-billing is dead; Slack repetition is not.
+That is F1, and it stays open.
+
+### 🔴 vinylstreamer never sat dark for four days — it was UP and BROKEN, and the check said so ~290 times
+
+Tier 2's second run pulled a thread that overturns a plan-level "fact". The
+`vinylstreamer did not come back after the power cut, sat dark four days` finding
+(2026-08-13, L-B) is **wrong**, and the method that produced it is unsound on this host.
+
+Measured from the host's own health-check logs, which cron writes every 15 minutes and
+logrotate rotates at midnight — both of which require the host to be **running**:
+
+| Day | Health-check runs | Runs reporting `Internet: unreachable` | Runs that alerted |
+|---|---|---|---|
+| Mon 10 Aug | **95** (4 per hour, 00:00–23:00, no gap) | **95 / 95** | 0 |
+| Tue 11 Aug | **97** | **97 / 97** | 0 |
+| Wed 12 Aug | **95** | **95 / 95** | 0 |
+
+Rotated logs exist for every day 6–13 Aug. **Four runs in every single hour of 10 August,
+including 00:00–12:37** — the window the rest of the fleet was down. So vinylstreamer did
+not lose power on 08-09/08-10 either; the fleet-wide event took **six** hosts, not seven.
+(It is the one host not in the cabinet, so a different circuit is a plausible reading —
+that *strengthens* the external-power conclusion while removing this host from it.)
+
+**What was actually broken:** it was alive, running its services, and off the network for
+at least three full days. `check_services` was green throughout; Icecast and Liquidsoap
+never stopped.
+
+🔴 **And it is a textbook silent check.** The failure was printed on every run —
+`❌ Internet: unreachable (check network)` — and the script still exited 0:
+
+```
+zcat system_health_check.log.2.gz | grep -c "issue(s) found"   → 0
+[2026-08-11 00:15:44]   Notification sent: No     # …and 96 more, all day
+```
+
+The deployed script version printed the failure without tallying it, so the wrapper saw
+success and stayed quiet. **Detection worked; the tally didn't.** This is the exact class
+in the standing constraints — "the error stopped" being satisfied by a lobotomy — except
+here it was never noticed because the check had *always* been silent on this branch. It
+covered a multi-day outage of a fleet host.
+
+⚠️ **The `journalctl --list-boots` method is invalid on this host.** It reported one boot
+and a journal "resuming" at 18:37, which was read as four days of silence. The host has a
+persistent journal directory (`/var/log/journal/afceff18…`), so it should retain more —
+whatever is discarding it is a separate open question, and until that is understood
+**boot history from this host cannot be used as evidence of uptime.** The health-check
+logs are the stronger source: they are written by cron and rotated by logrotate, neither
+of which runs on a powered-off Pi.
+
+📌 **Two decisions this reopens — both are yours, not mine to take:**
+1. **The smart plug.** It was bought as the recovery mechanism for "the Pi will not boot
+   after power loss". The Pi boots fine; it lost the *network* while running. A power
+   cycle may still recover a hung wifi association, so the plug is not useless — but it
+   is now a fix for a different fault than the one it was bought for, and "do not chase
+   root cause" was decided against a diagnosis that turns out to be wrong.
+2. **What actually happened at ~18:09 on 13 Aug.** Uptime and `icecast2` service start
+   both put the reboot there, and the internet check went green immediately after. That
+   is a recovery worth understanding, because it is the only known way this host has come
+   back.
+
+### 🆕 vinylstreamer — a false `Internet: unreachable` at 21:45, already false when checked
+
+`:x: ALERT: Script Failed on vinylstreamer` at `2026-08-13 21:45:52`, one failing check
+in an otherwise all-green report: `❌ Internet: unreachable (check network)`. Measured
+from the host five minutes later:
+
+```
+2 packets transmitted, 2 received, 0% packet loss   # ping 1.1.1.1, rtt avg 10.6 ms
+resolve OK                                          # getent hosts deb.debian.org
+```
+
+So the alert was already wrong by the time it was read. First `*/15` after the host's
+18:09 reboot (uptime 3 h 34 m, 162 pending updates), on `wlan0`, so a
+transient association is plausible — but a single failed probe becoming a push alert with
+no retry and no dedup is F1's case again, from a third host. **Do not treat this as
+evidence vinylstreamer is unhealthy;** treat it as a sample of how noisy the current
+threshold is. Worth a retry-before-alert on the connectivity check specifically.
+
+### 🐛 The Slack watermark was poisoned on disk, and the deploy alone would have burned budget
+
+`~/.agent/.last_slack_ts` contained `0.000000`, which is why every hourly watch since
+2026-07-25 logged `slack fetch failed: ERR invalid_ts_oldest` — and why the failure was
+*silent*: the log reads `failure alert suppressed (cooldown active)` on almost every run,
+so the 6h cooldown converted a permanently broken watch into one alert three weeks ago.
+
+The repo already fixes the *code* (`ts_is_positive`, and the comment explaining that the
+old string compare `!= "0"` never matched `"0.000000"`), and that fix is now deployed —
+but the poisoned **value** survives a deploy, because the seeding task is `creates:`-guarded
+and the file exists. The newly-deployed script would therefore have dropped `oldest`
+entirely on the next `:07` run and polled the last 50 messages of #home-alerts — up to
+3 investigations of a two-day-old flood, at real cost.
+
+Reseeded by hand to `date +%s` (old value kept as `.last_slack_ts.bak.20260813`).
+📌 **Class of bug to remember: a code fix does not repair the state the bug wrote.**
+Anywhere a guard was added because a bad value got persisted, check the persisted value too.
+
+### 🔧 Two follow-ups this session created rather than closed
+
+1. **The sweep needs a third branch for "answered, but no shell".** It decides
+   reachability by the presence of a `DISK=` line, so `Permission denied`,
+   `This account is currently not available.`, and a dead host all collapse into
+   `UNREACHABLE (no response as read_agent)`. The first is already split out for the
+   back-off; the second is opnsense's *recurring* failure mode and is currently reported
+   as something it is not. Cheap: SSH exited 0 and the probe returned nothing → say so.
+2. **`ansible` is unusable from a background/unattended shell on this laptop.** Both
+   background collection jobs failed with `sign_and_send_pubkey: signing failed for ECDSA
+   "touchid-agent: ssh" from agent: agent refused operation` — a Touch ID prompt with
+   nobody there to tap, and the refusal persisted into foreground retries. The
+   `read_agent` key kept working throughout (passphrase-free by design), so the fallback
+   for unattended verification is `ssh -i ~/.ssh/read_agent_ed25519 read_agent@<host>`
+   plus the journal, and Slack as the independent witness. Worth remembering before
+   scheduling anything that shells out to Ansible.
+
+---
+
 ## 🔴 Live alert flood, triaged 2026-08-11 — three separate streams, only one covered by the pending deploy
 
 Triggered by "I'm getting Slack alerts from agent-lxc and nightly alerts too". All three verified live from the laptop; separating them matters because the planned L-B/L-C deploy fixes exactly one.
@@ -27,7 +313,7 @@ Triggered by "I'm getting Slack alerts from agent-lxc and nightly alerts too". A
 
 | Finding | Verified | Status |
 |---|---|---|
-| `opnsense: UNREACHABLE (no response as read_agent)` | `ssh opnsense-agent` → `Permission denied (publickey)` | **recurrence of Priority 2** — the handover's "verified working 2026-08-07" is stale. Fix: `ansible-playbook ansible/playbooks/system/agent_access.yml --limit opnsense` |
+| `opnsense: UNREACHABLE (no response as read_agent)` | `ssh opnsense-agent` → `Permission denied (publickey)` | ~~**recurrence of Priority 2** — fix: `agent_access.yml --limit opnsense`~~ ❌ **BOTH HALVES WRONG — corrected 2026-08-13 (L-C).** The laptop is rejected by a stale `from="10.30.80.1"` pin, the container authenticates *fine* and hits `/usr/sbin/nologin`, and `agent_access.yml` cannot fix either durably. See the L-C section above. |
 | `vinylstreamer: UNREACHABLE` | `ssh vinylstreamer-agent` → connection timed out | **new, untracked.** Host-level, not a key problem — no TCP answer at all |
 | `cobra: 1 failed systemd unit(s): ●` | `systemctl --failed` on cobra → `nmbd.service` failed (Samba NMB) | real failure **plus** a parse bug, below. ✅ **`nmbd` restarted and green 2026-08-13 during L-B** — cobra now exits 0. The parse bug and the boot race that caused it are both still open; see the L-B section. |
 
@@ -35,7 +321,7 @@ Triggered by "I'm getting Slack alerts from agent-lxc and nightly alerts too". A
 
 🐛 **New latent bug — `FAILEDUNITS` loses every unit name.** `fleet_health_check.sh.j2:224` and `:233` run `systemctl --failed --no-legend --no-pager | awk '{printf "%s ", $1}'`. Without `--plain`, systemd prefixes the line with `●`, so `$1` is the bullet and the unit name is discarded — every report reads `N failed systemd unit(s): ● ● …`. Reproduced verbatim on cobra: the command returns `● `. `scripts/common/system_health_check.sh:463` already gets this right (`--no-legend --plain`); the fleet sweep never got the same fix. One-word fix, but it means **ten days of sweep reports named no unit at all**, so the history is unusable for "when did nmbd break". Classic parse-yields-nothing bug — the pattern matched, the value was empty.
 
-**Stream 2 — `Slack watch could not read #home-alerts (ERR invalid_ts_oldest)`, every 6h at `:07`.** This one **is** already fixed on `main` (the poisoned `0.000000` watermark, self-healing guard — see the Slack-watch section below) and is simply **not deployed**. `services.yml --limit agent-lxc --tags agent` (handover step B8 / session L-C) clears it. Only stream covered by the pending work.
+**Stream 2 — `Slack watch could not read #home-alerts (ERR invalid_ts_oldest)`, every 6h at `:07`.** This one **is** already fixed on `main` (the poisoned `0.000000` watermark, self-healing guard — see the Slack-watch section below) and is simply **not deployed**. `services.yml --limit agent-lxc --tags agent` (handover step B8 / session L-C) clears it. Only stream covered by the pending work. ✅ **DEPLOYED 2026-08-13 — but the deploy alone was not enough:** the code fix shipped, the poisoned `0.000000` on disk did not go away with it and had to be reseeded by hand. See the L-C section above.
 
 **Stream 3 — nightly healthchecks.io `backup_homeassistant` / `backup_unifi` / `backup_opnsense` DOWN then UP.** Not in any plan. Exactly the three heartbeats with `backup_max_age_minutes: 1560`; the three at `10320` never alert. Pattern on 2026-08-11: DOWN 02:30, UP 04:30 — recovery lands on the first `*/2` heartbeat after the 04:00/04:15 backup crons, so **the backups themselves are succeeding**; what gaps is the ping stream overnight. Same shape on 2026-08-09 (~21:55–22:10), drifting because healthchecks derives DOWN from last-ping time.
 
