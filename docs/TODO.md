@@ -155,9 +155,47 @@ was not probe output**. Now reads:
 Live-verified on the deployed script. Auth rejection keeps its own branch and
 remains the **only** one that trips the back-off (regression-tested both ways).
 
-🔴 **Still not fixed — needs you.** The `pw usermod` stopgap was blocked by the
-sandbox classifier; the command is in the handover. Confirmed present on the
-host: `read_agent:*:2001:65534:…:/usr/sbin/nologin`.
+🔴 **Still not fixed — and the recommended stopgap has been WITHDRAWN.**
+Confirmed on the host: `read_agent:*:2001:65534:…:/usr/sbin/nologin`.
+
+⚠️ **`pw usermod read_agent -s /bin/sh` is a policy bypass, not a repair.**
+`auth.inc:351` gives every non-admin user `/usr/sbin/nologin` *deliberately*;
+setting the shell by hand writes it only into `/etc/passwd`, outside the model
+OPNsense regenerates from. So it (a) overrides an intentional control on the
+internet SPOF, reachable with a passphrase-free key, and (b) reverts silently at
+an unpredictable time — every firmware update, user edit or config restore.
+Blast radius is bounded (read_agent's FreeBSD sudoers is read-only: `pgrep`,
+`service * status`, `pfctl -s *`, `configctl * status`, `cscli … list`), but a
+fix that un-fixes itself is the definition of error-prone.
+
+✅ **The durable answer is to stop needing the shell at all — see F4b below.**
+
+### 🆕 F4b — the durable fix: drop opnsense from the SSH sweep entirely
+
+Proposed 2026-08-14 after asking what the probe actually *buys*. `probe_freebsd`
+collects exactly two things — `DISK` and `GW` — and **opnsense already reports
+both itself, more often**:
+
+| Fact | Sweep (via SSH) | opnsense's own cron | Verdict |
+|---|---|---|---|
+| Root filesystem | hourly, threshold 85 | `check_system_health.sh` **every 30 min**, warn 85 / crit 90 | redundant |
+| Default route | hourly | `check_gateway.sh` **every 10 min** | redundant |
+| Liveness | hourly SSH from a container on the same hypervisor | `heartbeat_opnsense_wan.sh` → healthchecks.io **every 5 min** | **externally** witnessed, strictly better |
+
+So the SSH probe of the firewall buys nothing and costs: a shell that OPNsense
+keeps taking away, and the entire CrowdSec self-ban risk class (the 2026-08-03
+outage was caused by repeated SSH auth against the IPS that guards the gateway).
+Removing opnsense from `agent_fleet_hosts` deletes the dependency permanently —
+no shell, no API key, no revert, and `probe_freebsd` can go with it.
+
+📌 **The API alternative was considered and is worse here.** Verified from the
+OPNsense docs that `GET /api/diagnostics/system/system_disk` exists and API auth
+is key/secret with **no shell required** — but privilege scoping is the catch:
+restricting an API user below `page-all` is documented to 403 on diagnostics
+endpoints (opnsense/core issue #9093), and granting `page-all` would *also* hand
+read_agent a real shell through that same `auth.inc:351` line. The API route
+therefore risks costing exactly the full-admin privilege we refused to grant —
+for two numbers we already have.
 
 ### F5 — `critical_services` audited across the whole fleet
 
@@ -206,13 +244,66 @@ hour** and consecutive runs inside that window render identical content. The
 wart is real but fires roughly **once per hour**, not once per run. Still worth
 fixing; the severity in the plan is overstated.
 
+### 🌙 The first full night — measured 2026-08-14 09:57
+
+**The persisting-fault case worked exactly as designed.** 10 sweeps ran between
+00:20 and 09:37; **3 alerted**, 7 were suppressed. The ladder is visible in the
+timestamps and it doubles as specified:
+
+| Alert | Gap | Title |
+|---|---|---|
+| 00:24:46 | — | `ALERT: Script Failed` |
+| 01:37:16 | ~1 h | **`STILL FAILING`** |
+| 03:37:17 | 2 h | `STILL FAILING` |
+| 08:37:16 | 5 h | `STILL FAILING` |
+
+The 4 h step landed at 07:37:17 and the 07:37 sweep ran at ~07:37:16 — it missed
+its own window **by about one second** and waited for 08:37. Harmless, and a
+neat demonstration that the gate is a real timestamp comparison.
+
+### 🔴 …and the night produced a counter-example I did not predict
+
+`cwwk` began thermal-throttling around 02:05 and **paged 17 times between 02:05
+and 07:00**. That is not a dedup failure — it is the **flapping** case named as
+"not covered" above, biting within hours of deploy on a real fault.
+
+Confirmed rather than assumed: `#home-logging` carries a `Script Execution:
+SUCCESS` recovery notice interleaved with almost every one of those alerts
+(02:10, 03:00, 04:00, 04:15, 04:30, 04:45, 05:10, 05:20, 05:30, 05:40, 06:17,
+06:25, 06:50, 07:05). The fault genuinely cleared and genuinely returned, and a
+success legitimately resets the ladder by design.
+
+⚠️ **Dedup still helped, and the honest accounting matters:** that window holds
+~60 five-minute runs, so **~43 were suppressed and 17 alerted** — roughly 70%
+removed even in the worst case for this design.
+
+📌 **Proposed fix (not implemented — needs a decision):** carry the ladder across
+a *short* recovery. If the same signature returns within N minutes of a recovery,
+treat it as a continuation of the same episode rather than a new one. The
+recovery notice still posts — that state change is real and must not be hidden —
+but the alert ladder does not reset. Needs a value for N and a regression test
+that a genuinely-fixed-then-broken-again fault still pages promptly.
+
+🔥 **Separately and more urgently: the thermal event itself is real.** 89 °C,
+8 156 throttles in five minutes at 03:05, with a second escalation later. Tier 2
+investigated it three times overnight ($0.1148 + $0.2578 + $0.3712 + $0.2847 =
+**$1.03**) and independently reached "physical fan/airflow, no remote fix". That
+is **L-E**, and there is still no fan.
+
 ### What L-F leaves open
 
 - 🔴 **opnsense `pw usermod` stopgap** — blocked by the classifier, command in
   the handover. Until then the sweep reports it correctly (one page, then
   quiet) rather than incorrectly.
-- 🔴 **The stale `from="10.30.80.1"` pin** in opnsense `config.xml` still blocks
-  the laptop (which lives on 10.30.20.37). Untouched this session.
+- ❌ ~~**The stale `from="10.30.80.1"` pin** blocks the laptop.~~ **RETRACTED
+  2026-08-14 — the pin is CORRECT and there is no second fault.** Measured on
+  the laptop: `en0` is **`10.30.80.1`** (gateway `10.30.80.254`), and
+  `ssh -i ~/.ssh/read_agent_ed25519 read_agent@opnsense` returns
+  **`This account is currently not available.`** — the nologin shell, i.e.
+  *post-authentication*. The pin let it straight through.
+  The `10.30.20.37` sighting was Ignacio testing from another VLAN temporarily.
+  **F4 is ONE fault (the nologin shell), not two.** Nothing to change in
+  `config.xml`.
 - ⏳ **The 01:37 reminder is the last unverified assertion.** `next_alert_epoch`
   decodes to 01:24:46, so the 00:37 sweep must be silent and the 01:37 one must
   post `STILL FAILING`. The suppression half is confirmed; the re-statement half
