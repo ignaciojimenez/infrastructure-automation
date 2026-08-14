@@ -168,34 +168,65 @@ Blast radius is bounded (read_agent's FreeBSD sudoers is read-only: `pgrep`,
 `service * status`, `pfctl -s *`, `configctl * status`, `cscli … list`), but a
 fix that un-fixes itself is the definition of error-prone.
 
-✅ **The durable answer is to stop needing the shell at all — see F4b below.**
+✅ **The durable answer is to stop needing the SHELL — not to stop watching the
+firewall. See F4b below.**
 
-### 🆕 F4b — the durable fix: drop opnsense from the SSH sweep entirely
+### 🆕 F4b — monitor opnsense properly, over the API instead of a shell
 
-Proposed 2026-08-14 after asking what the probe actually *buys*. `probe_freebsd`
-collects exactly two things — `DISK` and `GW` — and **opnsense already reports
-both itself, more often**:
+> ❌ **A first draft of this item proposed dropping opnsense from the sweep
+> because its own crons already report disk and route more often. Ignacio
+> rejected it on 2026-08-14, and he was right on this file's own terms.**
+>
+> The argument for dropping was *"opnsense already reports both itself"* — which
+> is precisely the self-reporting assumption **this entire session exists to
+> attack**. `check_system_health.sh` every 30 min and `check_gateway.sh` every
+> 10 min are only worth anything while opnsense's cron and wrapper are alive to
+> run them. If either breaks, those numbers stop and **only** the WAN heartbeat
+> survives — which proves the box routes packets, not that its filesystem is
+> healthy. The sweep is the one *independent* reader of firewall state, and this
+> is the host least eligible for a monitoring blind spot.
+>
+> 📌 The general trap, worth carrying: **"host X already checks this" is not
+> redundancy when X checking it depends on X being well.** Independent
+> observation is the whole point; do not trade it away for tidiness.
 
-| Fact | Sweep (via SSH) | opnsense's own cron | Verdict |
-|---|---|---|---|
-| Root filesystem | hourly, threshold 85 | `check_system_health.sh` **every 30 min**, warn 85 / crit 90 | redundant |
-| Default route | hourly | `check_gateway.sh` **every 10 min** | redundant |
-| Liveness | hourly SSH from a container on the same hypervisor | `heartbeat_opnsense_wan.sh` → healthchecks.io **every 5 min** | **externally** witnessed, strictly better |
+So the requirement is: **an independent read of opnsense health that does not
+depend on a shell OPNsense keeps reclaiming.** That is the API.
 
-So the SSH probe of the firewall buys nothing and costs: a shell that OPNsense
-keeps taking away, and the entire CrowdSec self-ban risk class (the 2026-08-03
-outage was caused by repeated SSH auth against the IPS that guards the gateway).
-Removing opnsense from `agent_fleet_hosts` deletes the dependency permanently —
-no shell, no API key, no revert, and `probe_freebsd` can go with it.
+Verified against the OPNsense docs (not assumed):
 
-📌 **The API alternative was considered and is worse here.** Verified from the
-OPNsense docs that `GET /api/diagnostics/system/system_disk` exists and API auth
-is key/secret with **no shell required** — but privilege scoping is the catch:
-restricting an API user below `page-all` is documented to 403 on diagnostics
-endpoints (opnsense/core issue #9093), and granting `page-all` would *also* hand
-read_agent a real shell through that same `auth.inc:351` line. The API route
-therefore risks costing exactly the full-admin privilege we refused to grant —
-for two numbers we already have.
+| Need | Endpoint |
+|---|---|
+| Root filesystem usage | `GET /api/diagnostics/system/system_disk` |
+| Default route present | `GET /api/diagnostics/interface/get_routes` |
+
+API auth is a key/secret pair over HTTPS and **requires no login shell**, so
+nothing here can be reverted by an account regeneration. It also removes the last
+reason this container ever SSH-authenticates against the firewall — i.e. it
+retires the CrowdSec self-ban risk class (the 2026-08-03 outage) rather than
+merely backing off from it.
+
+🔴 **One thing to TEST before building it, because the docs do not settle it:**
+whether an API user restricted *below* `page-all` can call those two endpoints.
+opnsense/core issue #9093 reports privilege-restricted users getting 403 on
+diagnostics endpoints. Measure it on the box; do not assume either way.
+
+- **If a scoped privilege works** → strictly better than today in every respect.
+- **If only `page-all` works** → the decision is *not* the same as the one we
+  refused for the shell. That refusal was about `read_agent`, which **holds an
+  SSH key**; granting it `page-all` would hand it a real interactive shell via
+  `auth.inc:351`. A **separate, API-only user with no SSH key** cannot use the
+  shell that privilege implies — the access path is HTTPS-only and the credential
+  is independently revocable. Broad privilege, but no shell and no SSH.
+
+⚠️ **Also close this while there:** `check_wrapper_freshness` runs for `linux`
+and `proxmox` kinds only, so **nothing currently notices if opnsense's own
+monitoring stops running.** That is the exact failure the sweep exists to catch,
+and the firewall is the one host exempt from it. The API makes it answerable.
+
+**Interim, and it is fine:** the third branch shipped in L-F reports the current
+state accurately — `UP but no usable shell as read_agent` — and now pages once
+and then goes quiet. No stopgap needed on the box.
 
 ### F5 — `critical_services` audited across the whole fleet
 
@@ -261,40 +292,45 @@ The 4 h step landed at 07:37:17 and the 07:37 sweep ran at ~07:37:16 — it miss
 its own window **by about one second** and waited for 08:37. Harmless, and a
 neat demonstration that the gate is a real timestamp comparison.
 
-### 🔴 …and the night produced a counter-example I did not predict
+### 🟠 …and the night exposed the flapping gap, on a flapping fault
 
-`cwwk` began thermal-throttling around 02:05 and **paged 17 times between 02:05
-and 07:00**. That is not a dedup failure — it is the **flapping** case named as
-"not covered" above, biting within hours of deploy on a real fault.
+`cwwk` alerted **17 times between 02:05 and 07:00**. That is not a dedup failure
+— it is the **flapping** case named as "not covered" above, appearing within
+hours of deploy.
 
 Confirmed rather than assumed: `#home-logging` carries a `Script Execution:
 SUCCESS` recovery notice interleaved with almost every one of those alerts
 (02:10, 03:00, 04:00, 04:15, 04:30, 04:45, 05:10, 05:20, 05:30, 05:40, 06:17,
-06:25, 06:50, 07:05). The fault genuinely cleared and genuinely returned, and a
-success legitimately resets the ladder by design.
+06:25, 06:50, 07:05). The condition genuinely cleared and genuinely returned, and
+a success legitimately resets the ladder by design.
 
 ⚠️ **Dedup still helped, and the honest accounting matters:** that window holds
 ~60 five-minute runs, so **~43 were suppressed and 17 alerted** — roughly 70%
 removed even in the worst case for this design.
 
-📌 **Proposed fix (not implemented — needs a decision):** carry the ladder across
-a *short* recovery. If the same signature returns within N minutes of a recovery,
-treat it as a continuation of the same episode rather than a new one. The
-recovery notice still posts — that state change is real and must not be hidden —
-but the alert ladder does not reset. Needs a value for N and a regression test
-that a genuinely-fixed-then-broken-again fault still pages promptly.
+🚫 **Do NOT read anything thermal into this.** Ignacio was **testing a new fan
+system on cwwk through that night**, so every temperature, throttle count and
+recovery in that window is test-rig behaviour, not the standing state of the box.
+Tier 2 investigated it three times overnight (**$1.03**) and reached
+"physical fan/airflow" — a conclusion drawn without knowing a test was running,
+and therefore **discarded**. His own findings supersede it. The window is cited
+here **solely** as evidence about *alert flapping*, which is cause-independent:
+any fault that clears and returns behaves this way.
 
-🔥 **Separately and more urgently: the thermal event itself is real.** 89 °C,
-8 156 throttles in five minutes at 03:05, with a second escalation later. Tier 2
-investigated it three times overnight ($0.1148 + $0.2578 + $0.3712 + $0.2847 =
-**$1.03**) and independently reached "physical fan/airflow, no remote fix". That
-is **L-E**, and there is still no fan.
+📌 **Follow-up, deferred by Ignacio 2026-08-14 — "fix forward if it becomes
+annoying".** Carry the ladder across a *short* recovery: if the same signature
+returns within N minutes of a recovery, continue the existing episode instead of
+starting a new one. The recovery notice still posts — that state change is real
+and must not be hidden — but the ladder does not reset. Needs a value for N and a
+regression test that a genuinely-fixed-then-broken-again fault still pages
+promptly. **Not urgent; do not do this pre-emptively.**
 
 ### What L-F leaves open
 
-- 🔴 **opnsense `pw usermod` stopgap** — blocked by the classifier, command in
-  the handover. Until then the sweep reports it correctly (one page, then
-  quiet) rather than incorrectly.
+- ❌ ~~**opnsense `pw usermod` stopgap.**~~ **WITHDRAWN 2026-08-14** — it bypasses
+  an intentional OPNsense control and self-reverts. **Do not run it.** The real
+  work is F4b (API). Meanwhile the sweep reports the state correctly — one page,
+  then quiet — so there is nothing urgent on the box.
 - ❌ ~~**The stale `from="10.30.80.1"` pin** blocks the laptop.~~ **RETRACTED
   2026-08-14 — the pin is CORRECT and there is no second fault.** Measured on
   the laptop: `en0` is **`10.30.80.1`** (gateway `10.30.80.254`), and
