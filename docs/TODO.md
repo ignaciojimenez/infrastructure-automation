@@ -383,23 +383,51 @@ check that samples a moment and treats one sample as a measurement.
 `Internet: unreachable`, and now `check_services` during a restart. **Sampling
 races are this monitoring system's characteristic bug.**
 
-**Two fixes, and they are not alternatives:**
+**✅ BOTH FIXED AND DEPLOYED 2026-08-15.**
 
-1. **Immediate (mitigation, ~5 min):** move `system_health_check.sh` off the
-   `:00` boundary — `*/15` → `2-59/15` (02, 17, 32, 47) fleet-wide. Both
-   collisions above disappear because neither maintenance job runs at `:02`.
-   Schedule-only change, so the Ansible `cron` module updates in place and the
-   name is untouched — no duplicate-entry risk.
-2. **Durable (the class fix):** make `check_services` **retry before declaring a
-   service down**, exactly as `check_network` now does. `systemctl is-active`
-   returns non-zero during `activating`, so a restart is indistinguishable from
-   an outage on a single sample. Needs ~30 s of retry budget to cover Plex's 22 s
-   stop; against a `*/15` cron that is negligible added detection latency.
+1. **The class fix — `check_services` now re-checks before believing a service
+   is down.** `systemctl is-active` exits non-zero while a unit is `activating`,
+   so on one sample a restart and an outage are the same observation. Budget is
+   **4 × 12 s = 36 s**, chosen against Plex's ~22 s stop — deliberately not
+   3 × 12 = 24 s, which "covers" 22 s only while nothing else on the box is slow.
+   An absorbed restart is reported as a **warning**, not hidden: a service that
+   needed a retry was genuinely down a moment ago, and on a host with no
+   scheduled maintenance that is a finding of its own.
+2. **The mitigation — `*/15` → `2-59/15`** (02, 17, 32, 47), off the `:00`
+   boundary that all this fleet's maintenance lands on. Defence in depth.
 
-⚠️ **Do not do (2) alone and call it done** — verify by forcing both conditions:
-stop a service for real and watch it still alert, and restart one mid-check and
-watch the alert be absorbed. A retry that swallows a genuine outage is the
-lobotomy this file keeps warning about.
+**Proven on hifipi by forcing both directions, not by reading the diff:**
+
+| Forced condition | Result | rc |
+|---|---|---|
+| Service genuinely absent | `❌ not running (4 checks over 36s)` | **1** — still alerts |
+| Down at check start, restored at t=15 s | `⚠️ running (settled after 3 checks - restart or maintenance window?)` | **0** — absorbed |
+
+### 🐛 The trap this deploy walked into — worth more than the fix
+
+The first deploy reported `changed=2` on all seven hosts and **the cron schedule
+did not change.** Reading it back from the hosts is the only reason that was
+caught.
+
+`ansible/playbooks/tasks/deploy_monitoring.yml` — which owns the
+`System health check` cron — is imported by **`services.yml`**, *not* by the
+`deploy_monitoring.yml` playbook whose name matches it. The playbook run
+deployed the script and honestly reported `changed`, because the script really
+had changed; the schedule was simply never in scope.
+
+📌 **Two playbooks with the same name, different contents, different owners.**
+`ansible/playbooks/deploy_monitoring.yml` (playbook, syncs `scripts/common/`)
+vs `ansible/playbooks/tasks/deploy_monitoring.yml` (task file, owns the cron,
+imported by `services.yml`). Assume nothing from the filename.
+
+⚠️ And a second one on the verification itself: the first read-back used
+`read_agent`, which **cannot read choco's 0700 home**, so `grep … || echo 0`
+returned `0` for every host and looked like "the script did not deploy". A
+masked permission error, wearing the costume of a finding. Re-read as `choco`.
+
+✅ Applied via `services.yml --tags cron`, which kept dockassist's HA image
+tasks out of scope — D5's hazard avoided rather than encountered.
+Verified from the hosts: **1 entry each, `2-59/15`, no duplicate.**
 
 ### What L-F leaves open
 

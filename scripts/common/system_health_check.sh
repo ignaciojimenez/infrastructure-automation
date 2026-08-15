@@ -10,14 +10,24 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-# Detect OS type
-OS_TYPE="unknown"
-if [ -f /etc/debian_version ]; then
-    OS_TYPE="debian"
-elif [ "$(uname)" = "FreeBSD" ]; then
-    OS_TYPE="freebsd"
-elif [ -f /etc/redhat-release ]; then
-    OS_TYPE="redhat"
+# Detect OS type.
+#
+# Overridable from the environment, like every other setting below. Detection
+# keys on files that exist only on the target, so on the macOS control machine
+# it lands on "unknown" and every OS-specific check silently degrades to
+# "not configured for unknown" — which a test then passes VACUOUSLY, having
+# exercised nothing. That is not hypothetical: it is what the first run of
+# tests/unit/service_recheck_test.sh did, reporting two ✓ for a branch that had
+# never executed.
+if [ -z "${OS_TYPE:-}" ]; then
+    OS_TYPE="unknown"
+    if [ -f /etc/debian_version ]; then
+        OS_TYPE="debian"
+    elif [ "$(uname)" = "FreeBSD" ]; then
+        OS_TYPE="freebsd"
+    elif [ -f /etc/redhat-release ]; then
+        OS_TYPE="redhat"
+    fi
 fi
 
 # Configuration. Overridable from the environment or the config file below, so
@@ -58,6 +68,23 @@ NETWORK_PROBE_NAME="${NETWORK_PROBE_NAME:-google.com}"
 NETWORK_PROBE_ATTEMPTS="${NETWORK_PROBE_ATTEMPTS:-3}"
 NETWORK_PROBE_TIMEOUT="${NETWORK_PROBE_TIMEOUT:-3}"
 NETWORK_PROBE_RETRY_DELAY="${NETWORK_PROBE_RETRY_DELAY:-2}"
+
+# Re-check budget for a service that looks down — see check_services.
+#
+# 4 attempts × 12 s = 36 s of coverage, against the longest measured maintenance
+# window in this fleet: backup_plex.sh stops Plex for ~22 s. Deliberately not
+# 3 × 12 = 24 s, which "covers" 22 s only while nothing else on the box is
+# slow — one contended disk and the margin is gone. The cost of the wider
+# window is 36 s of added latency on a genuine outage, against a check that
+# runs every 15 minutes.
+#
+# ⚠️ This is the PRIMARY defence, not the cron offset. The offset lives in
+# ansible/playbooks/tasks/deploy_monitoring.yml, which is imported by
+# services.yml — NOT by the deploy_monitoring.yml playbook, whose name suggests
+# otherwise. Anything relying on the offset alone is relying on a schedule that
+# is easy to deploy and easy to believe you deployed.
+SERVICE_RECHECK_ATTEMPTS="${SERVICE_RECHECK_ATTEMPTS:-4}"
+SERVICE_RECHECK_DELAY="${SERVICE_RECHECK_DELAY:-12}"
 
 # Optional per-host configuration, written by
 # ansible/playbooks/deploy_monitoring.yml from the inventory. Currently carries
@@ -432,11 +459,52 @@ check_services() {
 
         # `systemctl is-active` answers the same for any caller, so there is no
         # unknown state to handle here.
+        #
+        # But it answers about a single INSTANT, and that is not the same
+        # question. `is-active` exits non-zero while a unit is `activating` or
+        # `deactivating`, so a service being restarted is indistinguishable from
+        # one that is down — on one sample. Scheduled maintenance in this fleet
+        # does exactly that:
+        #
+        #   cobra   backup_plex.sh:123 stops plexmediaserver for ~22 s
+        #   hifipi  restart_audio_services.sh restarts three units at once
+        #
+        # cobra alerted on 2026-08-15 04:00 for precisely this, and cost $0.40 of
+        # Tier 2 to conclude nothing was wrong. Re-checking a failing service
+        # before believing it turns "sampled the wrong instant" into "waited for
+        # the answer to settle".
+        #
+        # ⚠️ This must not become a way of not noticing outages, so it is
+        # bounded and one-directional: only a service that looks DOWN is
+        # retried, the budget is a couple of samples, and a service still down
+        # at the end still fails exactly as before. Worst case this delays a
+        # genuine detection by SERVICE_RECHECK_ATTEMPTS × SERVICE_RECHECK_DELAY
+        # against a cron that runs every 15 minutes — a rounding error.
         for svc in $services; do
-            if systemctl is-active "$svc" >/dev/null 2>&1; then
-                print_status "success" "Service $svc: running"
+            _attempt=1
+            _state=down
+            while [ "$_attempt" -le "$SERVICE_RECHECK_ATTEMPTS" ]; do
+                if systemctl is-active "$svc" >/dev/null 2>&1; then
+                    _state=up
+                    break
+                fi
+                [ "$_attempt" -lt "$SERVICE_RECHECK_ATTEMPTS" ] && \
+                    sleep "$SERVICE_RECHECK_DELAY"
+                _attempt=$((_attempt + 1))
+            done
+
+            if [ "$_state" = up ]; then
+                if [ "$_attempt" -gt 1 ]; then
+                    # Said out loud rather than silently smoothed over. A service
+                    # that needed a retry was genuinely not running a moment ago,
+                    # and if this line starts appearing on a host with no
+                    # scheduled maintenance, that is a finding in its own right.
+                    print_status "warning" "Service $svc: running (settled after ${_attempt} checks - restart or maintenance window?)"
+                else
+                    print_status "success" "Service $svc: running"
+                fi
             else
-                print_status "error" "Service $svc: not running"
+                print_status "error" "Service $svc: not running (${SERVICE_RECHECK_ATTEMPTS} checks over $(( (SERVICE_RECHECK_ATTEMPTS - 1) * SERVICE_RECHECK_DELAY ))s)"
                 issues=$((issues + 1))
             fi
         done

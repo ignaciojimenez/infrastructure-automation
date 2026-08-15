@@ -9,10 +9,39 @@
 - name: Ensure the monitoring directories exist
   ansible.builtin.import_tasks: monitoring_dirs.yml
 
+# ⚠️ `2-59/15` (02, 17, 32, 47) — deliberately OFF the :00 boundary.
+#
+# Scheduled maintenance in this fleet lands on :00, and this check samples
+# service state in a single instant. On 2026-08-15 at 04:00 cobra reported
+# `Service plexmediaserver: not running` because `backup_plex.sh:123` does
+# `systemctl stop plexmediaserver`, snapshots the config, and starts it ~22 s
+# later — and this cron sampled the gap. Nothing was wrong with Plex.
+#
+# Verified across the fleet before choosing this fix, rather than assumed: only
+# two hosts can collide, and both are on the :00 boundary.
+#
+#   cobra   `0 4 */7 * *` backup_plex  → stops plexmediaserver ~22 s
+#   hifipi  `@weekly` restart_audio    → restarts mpd/shairport-sync/raspotify
+#
+#   unifi-lxc and cwwk are clear — backup_unifi.sh and backup_proxmox_config.sh
+#   contain no `systemctl` at all, so their backups never touch service state.
+#
+# Both hosts became exposed only on 2026-08-13, when `critical_services` was
+# first declared per host: before that this check probed `ssh cron fail2ban`
+# and never looked at Plex or the audio stack. Closing that gap is what created
+# the false positive.
+#
+# The cron `name:` is unchanged on purpose — the Ansible cron module keys on it,
+# so this updates the existing entry in place. Changing the name would leave the
+# old `*/15` line behind and run the check twice.
+#
+# 📌 This is mitigation, not the fix. It moves the sample away from the known
+# maintenance windows; it does not make the check able to tell a restart from an
+# outage. That is the retry in `check_services` — see docs/TODO.md D6.
 - name: Set up monitoring cron jobs (Debian/Linux)
   ansible.builtin.cron:
     name: "System health check"
-    minute: "{{ monitoring_interval | default('*/15') }}"
+    minute: "{{ monitoring_interval | default('2-59/15') }}"
     job: >
       {{ scripts_dir }}/enhanced_monitoring_wrapper
       --heartbeat-interval=daily
