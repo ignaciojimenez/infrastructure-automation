@@ -164,8 +164,26 @@ would change **7 tasks**, including:
 - `chown -R nobody:nogroup` and `chmod -R 0777` on `/mnt/almacenNTFS`, the media
   library, via `recurse: true`
 
-A recursive chmod of the media drive as a side effect of adding a systemd
-drop-in is not a cleanup. The drop-in was deployed with two scoped ad-hoc calls
+⚠️ **Correction, measured on the drive 2026-08-16 after this was first written:
+that last one does not mangle the library, it fails.** `/mnt/almacenNTFS` is
+**exFAT** — no Unix permissions; ownership is synthesised from the mount options
+(`uid=1000,gid=1001,fmask=0113,dmask=0002`). Probed with a throwaway file:
+`chown` → `Operation not permitted`; `chmod 0777` → **exits 0 and changes
+nothing** (`-rw-rw-r--` before and after). So the real outcome is the play
+**aborting** at `Create Samba share directories`, and a `chmod` that silently
+reports success while doing nothing.
+
+📌 **That second half is its own trap** — `ansible.builtin.file` with `mode:` on a
+filesystem that cannot store modes reports `changed` forever and converges never.
+
+**Consequence: the samba role cannot converge cobra as written.**
+`group_vars/media.yml` declares `owner`/`group`/`mode`/`recurse` for a filesystem
+that cannot accept any of them. Converging that host needs those keys dropped
+from the media share first — small, and entirely optional, since Samba on cobra
+works.
+
+Either way, a first-time role apply as a side effect of adding a systemd drop-in
+is not a cleanup. The drop-in was deployed with two scoped ad-hoc calls
 (`-m file`, `-m copy`) against the role's own `files/` source plus a
 `daemon_reload`, so the repo and the host agree on content and the role is
 committed for whenever converging cobra's Samba config is its own decision.
