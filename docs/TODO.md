@@ -1,6 +1,6 @@
 # Infrastructure TODO — Prioritized Action List
 
-Updated: 2026-08-14 | Validated against live hosts via read_agent autonomous assessment
+Updated: 2026-08-16 | Validated against live hosts via read_agent autonomous assessment
 
 This document is the single source of truth for pending infrastructure work.
 Each item includes verified current state, concrete next steps, and acceptance criteria.
@@ -16,6 +16,268 @@ Items are ordered by risk × effort — highest-impact, most-actionable items fi
 > ~~**Blocked until L-A is merged**, because nine branches add ~1,600 lines here.~~
 > ✅ **UNBLOCKED 2026-08-10** — L-A merged all nine (`main` @ `650909f`), so the
 > ~1,600 lines have landed and this can start. Branch `docs/consolidation-2026-08`.
+
+---
+
+## ✅ L-D DEPLOYED 2026-08-16 — the independent tails, and one of them was diagnosed wrong
+
+Session L-D: *the small things that never get done at the end of a deploy day.*
+D1–D5 plus the `.bak` cleanups. D6 shipped separately on 2026-08-15.
+
+Everything below was applied and re-run to `changed=0`. Two items were **not**
+closed the way the plan described them, and those are the ones worth reading.
+
+### D1 — hifipi audio: closed without deploying anything
+
+The plan asked for `services.yml --limit hifipi --tags audio_playback`, expecting
+`changed=0`. **That tag was not run, deliberately** — it rebuilds Shairport Sync
+from source (`git` update, `autoreconf`, `configure`, `make -j`, `make install`,
+all `changed_when: false`), which is minutes of compile and a service restart to
+confirm two shell scripts. Stronger evidence was available for free:
+
+| Check | Result |
+|---|---|
+| `check_audio_output.sh` deployed vs repo | **byte-identical** |
+| `restart_audio_services.sh` deployed vs repo | **byte-identical** |
+| Six audio cron entries vs the role's `loop` | all six present, schedules match |
+
+Both fetched over `read_agent` with `agent_read script <name>`, which sidesteps
+choco's 0700 home. File equality is a *better* acceptance than `changed=0`,
+because `changed=0` is also what a task that silently skipped would report.
+
+📌 **The alert history is the real proof, and it separates cleanly.**
+`"Script Failed on hifipi"` in `#home-alerts`: 25, 26 (×2), 27, 28, 29, 30 July,
+1 Aug, and **2 Aug 00:00:04 and 00:00:06** — then nothing, for fourteen days. The
+*pairs* are the daily audio-output check and the weekly restart firing seconds
+apart (both are `@daily`/`@weekly`, i.e. 00:00), and 26 July and 2 Aug were both
+Sundays. So both jobs were failing and both are now clean.
+
+✅ **And the weekly one re-proved itself on cron's own schedule during this
+session**: it ran at **2026-08-16 00:00:01–00:00:04**, exit 0. That is the run
+D6 flagged as "not yet fired, due Sunday 00:00" — the `check_services` collision
+did not happen. Note what that does and does not prove: the health check ran at
+`00:02:01` (D6's `2-59/15`) and found the services already back, so the
+**schedule shift** absorbed it and the new re-check logic was never exercised.
+
+### D2 — logrotate `su`: deployed to 7 hosts, and forced to fail
+
+`baseline.yml --tags logging`, `--forks 1`. Seven Debian hosts `changed=1`,
+second run `changed=0`, opnsense correctly skipped on `os_family == "debian"`.
+
+⚠️ **A quiet deploy proves nothing here**, and by the time it ran the original
+condition was gone — `/home/choco/.logs` on agent-lxc is now `0755`, so
+logrotate would have worked with or without the directive. Forced on cobra
+instead, in `/tmp`, on a `0775` choco-owned directory:
+
+```
+### WITHOUT su
+error: skipping "/tmp/lrproof/a.log" because parent directory has insecure
+permissions (It's world writable or writable by group which is not "root")
+Set "su" directive in config file to tell logrotate which user/group should
+be used for rotation.
+rc=1
+
+### WITH su
+switching euid from 0 to 1000 and egid from 0 to 1000
+considering log /tmp/lrproof/a.log
+rc=0
+```
+
+Both directions, on a real host, with the real binary. It is a fix, not a
+lobotomy.
+
+### D3 — `RECOVERY.txt.j2`: fixed, and the timestamp moved to where it means something
+
+`Generated: {{ ansible_date_time.iso8601 }}` is gone. It was never the number a
+person wants: it recorded when Ansible last ran on the hypervisor, not when the
+USB drive was last synced — on a drive whose last successful sync could be months
+old, that reads as freshness it does not have.
+
+`usb_recovery_helper` now writes `Drive synced: <UTC>` as the first line of the
+copy it places at the USB root, at sync time. `current/MANIFEST.txt` already
+carried the same stamp; the file a person picks up now carries it too.
+
+⚠️ **Two `changed=0` runs are not the acceptance for this one** — `ansible.cfg`
+caches facts for 3600 s, so consecutive runs render an identical timestamp
+whether or not the bug is fixed. Proven with `--flush-cache`, which forces a
+fresh `ansible_date_time`:
+
+- before: deployed file held `Generated: 2026-08-15T10:09:10Z`, and today's
+  `--check --diff` reported it `changed`
+- after: apply (`changed=2`), then `changed=0`, `changed=0`, and **`changed=0`
+  with `--flush-cache`**
+
+✅ **Unexpected bonus: cwwk's thermal drift is already gone.** `check_thermal.sh`
+reported `ok` in the dry run, meaning the hand-applied `15000/40000/98/101`
+thresholds were reverted by the 2026-08-15 10:09 role run. That row of RESTORE
+ON RETURN is closed; PL2 and the `ksmtuned` row are not, and remain L-E's.
+
+### D4 — cobra's `nmbd`: masked, and the mask was forced to fire
+
+The plan's diagnosis needed one correction. The failure was not a non-zero exit:
+
+```
+Aug 09 21:40:28 cobra systemd[1]: Starting nmbd.service - Samba NMB Daemon...
+Aug 09 21:41:58 cobra systemd[1]: nmbd.service: start operation timed out. Terminating.
+Aug 09 21:41:58 cobra systemd[1]: nmbd.service: Failed with result 'timeout'.
+```
+
+It hung for the full 90 s `TimeoutStartSec` and was killed. `Restart=on-failure`
+still covers that — checked against the host's own `systemd.service(5)`, not from
+memory: *"restarted when the process exits with a non-zero exit code, is
+terminated by a signal ..., **when an operation ... times out**, and when the
+configured watchdog timeout is triggered."*
+
+Drop-in at `/etc/systemd/system/nmbd.service.d/restart-on-failure.conf`:
+
+| Directive | Value | Why |
+|---|---|---|
+| `Restart` | `on-failure` | covers the observed timeout; leaves `ExecCondition` declining (1–254) alone, so an unconfigured Samba host still will not loop |
+| `RestartSec` | `30` | one cycle is 90 s timeout + 30 s = 120 s |
+| `StartLimitIntervalSec` | `900` | **set explicitly**: the stock 10 s window cannot contain retries 120 s apart, so the default burst limit would never engage and "gives up eventually" would be an accident |
+| `StartLimitBurst` | `4` | ~8 minutes of retrying, then the unit stays failed and `critical_services` surfaces it |
+
+Forced on the live host — `kill -9` the main PID:
+
+```
+Aug 16 00:33:33 nmbd.service: Main process exited, code=killed, status=9/KILL
+Aug 16 00:33:33 nmbd.service: Failed with result 'signal'.
+Aug 16 00:34:03 nmbd.service: Scheduled restart job, restart counter is at 1.
+Aug 16 00:34:04 Started nmbd.service - Samba NMB Daemon.
+```
+
+Restarted at exactly +30 s, `NRestarts=1`. Under `Restart=no` that kill would
+have left it dead — which is what the four-day outage looked like. The
+give-up-after-4 direction is **configured and reasoned, not forced**; forcing it
+needs four consecutive 90 s start timeouts.
+
+### 🔴 D4's real finding — the samba role has never been applied to cobra
+
+`--tags samba` was **not run**, and must not be run casually. The dry run says it
+would change **7 tasks**, including:
+
+- rewriting `/etc/samba/smb.conf` — cobra's live file is **stock Debian with a
+  hand-added `[Plex_Storage]` block**, not the role's template
+- `Create Samba configuration backup` reports `changed`, and it has
+  `force: false` — i.e. `/etc/samba/smb.conf.backup` does not exist, i.e. **this
+  role has never run here**
+- `chown -R nobody:nogroup` and `chmod -R 0777` on `/mnt/almacenNTFS`, the media
+  library, via `recurse: true`
+
+A recursive chmod of the media drive as a side effect of adding a systemd
+drop-in is not a cleanup. The drop-in was deployed with two scoped ad-hoc calls
+(`-m file`, `-m copy`) against the role's own `files/` source plus a
+`daemon_reload`, so the repo and the host agree on content and the role is
+committed for whenever converging cobra's Samba config is its own decision.
+
+📌 **New trap: `--tags <role>` is not a scoped change when the role has never
+converged the host.** Tag selection limits *which tasks* run, not how much they
+do. Dry-run first on any host whose service was configured by hand.
+
+### D5 — dockassist: the diagnosis in this file was wrong, and the fix was at the other end
+
+**Both halves are now closed, and the recorded cause was mistaken.**
+
+`docs/TODO.md` said: *"declares the volume as `…:/config`; Docker reports
+`…:/config:rw`, so `community.docker.docker_container` never matches — plain
+bug, one character."* Adding `:rw` to the task **cannot** fix that, and reading
+the installed collection (community.docker **5.2.1**, the same build that was
+running when the finding was made) shows why —
+`_preprocess_volumes` in `module_utils/_module_container/base.py`:
+
+```python
+elif len(parts) == 2:
+    if not _is_volume_permissions(parts[1]):
+        host, container, mode = parts + ["rw"]   # always normalised
+values["volume_binds"] = new_binds
+```
+
+The module fills the mode in before anything is compared. The task expected
+`…:/config:rw` whether or not it said so.
+
+**The mismatch was created by the other writer.** Measured on the host:
+
+| Container | `HostConfig.Binds` | Created by |
+|---|---|---|
+| `home-assistant` | `/home/choco/homeassistant:/config` ← **no mode** | `update_ha`, `2026-07-10T01:16Z` |
+| `matter-server` | `/home/choco/matter-server:/data:rw` | Ansible |
+| `mosquitto` | `…/config:/mosquitto/config:rw`, `…/data:…:rw` | Ansible |
+
+`templates/update_ha.j2` recreates the container with `docker run -v
+"…:/config"`, and the Docker CLI stores `HostConfig.Binds` **verbatim**. So the
+one container with two writers is the one that mismatched — and `--tags mqtt`
+being "known-clean" throughout L-B, which looked like a counter-example, is
+actually the control group.
+
+Fix is one character, but in `update_ha.j2`. The task gained `:rw` too, so both
+writers agree on the page.
+
+📌 **A code fix does not repair the state the bug wrote** — the same lesson as
+L-C's poisoned Slack watermark. The container on the host still held the bad
+bind, so one recreate was still owed. It was taken deliberately, *after*
+`force_source` was dropped, so it could not also change the version.
+
+#### The `force_source` decision — taken 2026-08-16: **dropped**
+
+Removed from all three pulls (Home Assistant, Matter Server, Cloudflared). These
+are rolling tags, so `force_source: true` made every deploy a potential version
+change: a run to fix a cron could move Home Assistant, with no decision taken and
+nothing recorded but a `changed`. Upgrades now belong solely to the `update_ha`
+script and its `0 3 10 * *` cron, which the role already ships.
+
+Consequence, stated so the next reader is not surprised: **an image only moves
+when `update_ha` moves it.** Ansible's job is to have *an* image and a correct
+container, not to chase upstream.
+
+✅ **It proved itself on its first run.** Image digest across the one recreate:
+`sha256:291e4b20…` → `sha256:291e4b20…`. Identical. Under the old code that
+recreate would have pulled `:stable` first.
+
+#### Acceptance, met
+
+| Criterion | Result |
+|---|---|
+| `--tags docker` second run | `changed=0` |
+| HA `StartedAt` across that second run | `22:37:13.622374312Z` → unchanged |
+| HA `HostConfig.Binds` | now `…/config:rw` |
+| Image across the recreate | unchanged |
+| HA reachable after | `docker ps` Up, `HTTP 200` on :8123 |
+| untagged `services.yml --check` | HA container now reports **`ok`** |
+
+⚠️ The untagged run still reports 5 changed — `Create authorized key command
+script`, `Download Docker GPG key` + `Add Docker repository` (check-mode
+artifacts of `get_url`/`apt_repository`; both `ok` on a real run), and
+`Deploy Home Assistant backup freshness heartbeat`. **The "always use `--tags` on
+dockassist" warning can be relaxed but not yet retired** — the remaining
+untagged path has not been run for real.
+
+### 🧹 Cleanups — done
+
+| Host | File | Checked before deleting |
+|---|---|---|
+| hifipi | `check_audio_output.sh.bak.20260802` | pre-fix `amixer` version; fix is in `b9ddafc`/`b1da583` |
+| hifipi | `restart_audio_services.sh.bak.20260802` | same |
+| dockassist | `crontab.bak.20260802` | differs from live only by `--monitoring-name`, `2-59/15` and the prune heartbeat interval — all codified |
+
+`/root/crontab.choco.bak.20260803` on **agent-lxc** could not be checked —
+`read_agent` cannot read `/root`, and it was not in scope. Still outstanding.
+
+### ⚠️ Operational note — `ansible` needs `--forks 1` on this laptop
+
+The first `baseline.yml` run reported **5 of 8 hosts `unreachable`**. Not a
+network fault: `touchid-agent` cannot service five concurrent signature requests,
+and each refusal surfaces as `Permission denied (publickey)`. `--forks 1`
+serialises them and all eight connect. Related, and worth recognising by its
+error string — when the Mac's screen is locked the agent cannot present a
+prompt at all, and the audit log shows the Secure Enclave itself declining:
+
+```json
+{"event":"sign","label":"ssh","success":false,
+ "error":"...Code=-25308 \"unable to sign digest\"...AKSError=-536870174"}
+```
+
+That is "no authentication UI available", not a policy refusal or a rate limit.
+`read_agent` is unaffected and remains the way to measure anything while away.
 
 ---
 
@@ -962,7 +1224,24 @@ The script's two outcomes are `CHANGED` and `UNCHANGED`, and **`CHANGED` is a su
 
 ---
 
-## dockassist — `services.yml` is not idempotent, and a deploy can silently upgrade Home Assistant
+## ✅ RESOLVED 2026-08-16 (D5) — dockassist `services.yml` idempotency
+
+> **Closed in L-D. Read the L-D section at the top of this file for what
+> actually happened — half of the diagnosis below is wrong.**
+>
+> - Row #2 is **incorrect**: `:rw` on the *task* is inert. community.docker
+>   normalises the mode before comparing, so the task already expected
+>   `…/config:rw`. The mismatch was written by `templates/update_ha.j2`, which
+>   recreates the container with `docker run -v "…:/config"` — the CLI stores
+>   `HostConfig.Binds` verbatim. That is where the one character belonged.
+> - "Why they can't be split" is therefore also wrong. They were split: dropping
+>   `force_source` **first** made the one owed recreate safe, and the image
+>   digest was identical across it.
+> - Row #1's decision was taken: **`force_source` dropped** from all three pulls.
+>   Upgrades belong to `update_ha` and its cron.
+>
+> Kept below as the reasoning that produced the work, and as a record of a
+> diagnosis that survived three weeks because nobody read the module.
 
 **Risk:** Medium — no data loss, but every untagged run recreates the HA container, and any run may bump HA's version with no decision and no record. Raised 2026-08-13 during L-B, **deliberately deferred** rather than fixed, because the two halves are coupled and one of them is a decision.
 

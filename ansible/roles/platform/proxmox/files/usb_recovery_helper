@@ -174,8 +174,16 @@ log_msg "  /etc/pve/ copied"
 
 # --- Copy RECOVERY.txt ---
 
+# Stamped here rather than in the Ansible template. The template's render
+# time said only when Ansible last ran on the hypervisor; on a drive whose
+# last successful sync may be months old, that reads as freshness it does
+# not have. The sync date is the one a person holding this drive needs.
 if [ -n "$RECOVERY_TXT" ] && [ -f "$RECOVERY_TXT" ]; then
-    cp "$RECOVERY_TXT" "$MOUNT_POINT/RECOVERY.txt"
+    {
+        echo "Drive synced: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+        echo ""
+        cat "$RECOVERY_TXT"
+    } > "$MOUNT_POINT/RECOVERY.txt"
     log_msg "Copied RECOVERY.txt to USB root"
 fi
 

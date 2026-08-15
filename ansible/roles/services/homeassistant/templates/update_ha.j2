@@ -62,12 +62,20 @@ update_ha() {
     fi
     
     # Start new container
+    #
+    # `:rw` is not decoration. Two things create this container — this script
+    # and roles/services/homeassistant. docker_container always *expects*
+    # `src:dst:rw` (community.docker fills the mode in before comparing,
+    # whatever the task spells), while `docker run` stores HostConfig.Binds
+    # verbatim. Omit the mode here and every later Ansible run finds a bind it
+    # does not recognise and recreates the container — an unexplained Home
+    # Assistant restart per deploy, until the next update re-arms it.
     log_message "🚀 Starting updated Home Assistant container..."
     if docker run -d \
         --name "$CONTAINER_NAME" \
         --restart=unless-stopped \
         --privileged \
-        -v "{{ homeassistant_config_dir }}:/config" \
+        -v "{{ homeassistant_config_dir }}:/config:rw" \
         -v "/etc/localtime:/etc/localtime:ro" \
         --network=host \
         -e TZ="{{ timezone | default('Europe/Madrid') }}" \

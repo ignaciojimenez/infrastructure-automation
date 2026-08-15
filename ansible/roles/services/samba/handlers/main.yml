@@ -17,3 +17,12 @@
     name: smbd
     state: reloaded
   listen: reload samba
+
+# daemon-reload only. Restarting nmbd is not needed to pick up the drop-in and
+# would drop the browse list for no reason; the new Restart= applies from the
+# next start, which is the boot this exists for.
+- name: Reload systemd for nmbd drop-in
+  become: true
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  listen: reload systemd for nmbd drop-in

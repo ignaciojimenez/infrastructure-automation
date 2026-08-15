@@ -55,6 +55,27 @@
   when: item.path is defined
   tags: [samba, permissions]
 
+- name: Create nmbd systemd drop-in directory
+  become: true
+  ansible.builtin.file:
+    path: /etc/systemd/system/nmbd.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  tags: [samba, service]
+
+- name: Retry nmbd through the cold-boot network race
+  become: true
+  ansible.builtin.copy:
+    src: nmbd-restart-on-failure.conf
+    dest: /etc/systemd/system/nmbd.service.d/restart-on-failure.conf
+    owner: root
+    group: root
+    mode: '0644'
+  notify: reload systemd for nmbd drop-in
+  tags: [samba, service]
+
 - name: Start and enable Samba services
   become: true
   ansible.builtin.service:
