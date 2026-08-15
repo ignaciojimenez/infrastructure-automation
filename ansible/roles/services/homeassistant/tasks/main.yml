@@ -122,11 +122,21 @@
   become: true
   tags: [homeassistant, scripts]
 
+# No `force_source: true` on any of the three image pulls in this role —
+# decided 2026-08-16. These tags are rolling (`:stable`, `:latest`), so
+# force_source made every deploy a potential version change: a run to fix a
+# cron or push an MQTT setting could move Home Assistant, with no decision
+# taken and nothing recorded but a `changed`. Upgrades belong to the
+# `update_ha` script and its cron, which this role already ships, announces to
+# Slack, and can roll back. Ansible's job here is to have *an* image and a
+# correctly configured container, not to chase upstream.
+#
+# Consequence to expect: the pull no longer refreshes a rolling tag, so an
+# image only moves when update_ha moves it.
 - name: Pull Home Assistant Docker image
   community.docker.docker_image:
     name: "ghcr.io/home-assistant/home-assistant:{{ homeassistant_version | default('stable') }}"
     source: pull
-    force_source: true
   become_user: "{{ ansible_user }}"
   tags: [homeassistant, docker]
 
@@ -136,8 +146,14 @@
     image: "ghcr.io/home-assistant/home-assistant:{{ homeassistant_version | default('stable') }}"
     restart_policy: unless-stopped
     privileged: true
+    # `:rw` here changes nothing on its own — community.docker's
+    # _preprocess_volumes appends the mode before any comparison, so this task
+    # expected `…:/config:rw` even when it said `…:/config`. It is spelled out
+    # so both writers of this container agree on the page: templates/update_ha.j2
+    # recreates it with `docker run`, which stores HostConfig.Binds verbatim,
+    # and that is the end where the mismatch was actually created.
     volumes:
-      - "{{ homeassistant_config_dir | default('/home/' + ansible_user + '/homeassistant') }}:/config"
+      - "{{ homeassistant_config_dir | default('/home/' + ansible_user + '/homeassistant') }}:/config:rw"
       - "/etc/localtime:/etc/localtime:ro"
     network_mode: host
     env:
@@ -154,7 +170,6 @@
   community.docker.docker_image:
     name: cloudflare/cloudflared:latest
     source: pull
-    force_source: true
   become: true
   become_user: "{{ ansible_user }}"
   when: enable_cloudflare_tunnel | default(true)
@@ -518,7 +533,6 @@
   community.docker.docker_image:
     name: "ghcr.io/home-assistant-libs/python-matter-server:{{ matter_server_version | default('stable') }}"
     source: pull
-    force_source: true
   become_user: "{{ ansible_user }}"
   when: enable_matter_server | default(true)
   tags: [homeassistant, matter, docker]

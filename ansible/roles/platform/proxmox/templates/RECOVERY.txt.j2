@@ -1,11 +1,15 @@
 PROXMOX USB RECOVERY KIT
 ========================
-Generated: {{ ansible_date_time.iso8601 }}
 Host: {{ inventory_hostname }} ({{ ansible_host }})
 
 This drive contains vzdump snapshots for fast VM/LXC recovery.
 For full documentation, see docs/BACKUP_AND_RECOVERY.md in the
 infrastructure-automation repository.
+
+The copy of this file at the USB root carries a `Drive synced:` line
+written by usb_recovery_helper at sync time. That is the date that
+matters — see current/MANIFEST.txt for the same stamp and the file
+listing it describes.
 
 CONTENTS OF THIS DRIVE
 ----------------------
