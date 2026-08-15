@@ -275,6 +275,26 @@ hour** and consecutive runs inside that window render identical content. The
 wart is real but fires roughly **once per hour**, not once per run. Still worth
 fixing; the severity in the plan is overstated.
 
+### 📉 Two full days on — the dedup is holding, measured 2026-08-15
+
+24 h window, 2026-08-14 08:37 → 2026-08-15 08:37, read from `#home-alerts`:
+
+| Source | Alerts | Note |
+|---|---|---|
+| agent-lxc (opnsense nologin) | **3** | `STILL FAILING` at 08:37, 16:37, 08:37 |
+| cwwk | 1 | 03:05 — down from 17 the night before |
+| cobra | 1 | the new F5 false positive above |
+| **Total** | **5** | against **24/day from agent-lxc alone** pre-fix |
+
+**The ladder is textbook, across two days and without intervention:**
+`00:24 → 01:37 (1 h) → 03:37 (2 h) → 08:37 (4 h) → 16:37 (8 h) → 08:37 (16 h)`,
+next step the 24 h cap. One unresolved fault has gone from **24 pages/day to 3,
+heading to 1**, while never going silent.
+
+✅ **This also retires the pressure behind the flapping follow-up.** cwwk produced
+17 alerts on the night of the 13th→14th and **1** in the 24 h since. Deferring
+flap damping was the right call; leave it deferred.
+
 ### 🌙 The first full night — measured 2026-08-14 09:57
 
 **The persisting-fault case worked exactly as designed.** 10 sweeps ran between
@@ -324,6 +344,62 @@ starting a new one. The recovery notice still posts — that state change is rea
 and must not be hidden — but the ladder does not reset. Needs a value for N and a
 regression test that a genuinely-fixed-then-broken-again fault still pages
 promptly. **Not urgent; do not do this pre-emptively.**
+
+### 🔴 F5 is not finished — it traded a detection gap for a false-positive CLASS
+
+Surfaced 2026-08-15 by the fleet's own Tier 2, then verified by hand rather than
+taken at face value.
+
+**What happened.** cobra alerted `Script Failed` at 04:00 on 15 Aug. Tier 2
+investigated ($0.4023) and got the mechanism right: `backup_plex_config` stops
+Plex for ~22 s to snapshot its config, and `system_health_check.sh` sampled Plex
+inside that window and called it `not running`.
+
+📌 **This alert exists because of L-F.** Before F5, cobra had no
+`critical_services` list, so `check_services` fell back to `ssh cron fail2ban`
+and **never probed Plex at all**. Closing the gap is right; the false positive is
+the bill for it, and it is not yet paid.
+
+**Verified from the real crontabs — and it is a class, not an incident:**
+
+| Host | Maintenance job | Health check | Services at risk |
+|---|---|---|---|
+| cobra | `0 4 */7 * *` `backup_plex_config` (stops Plex ~22 s) | `*/15` → fires at `:00` | `plexmediaserver` |
+| hifipi | `@weekly` `restart_audio_services.sh` → `systemctl restart` ×3 | `*/15` → fires at `:00` | `mpd`, `shairport-sync`, `raspotify` |
+
+**hifipi's has not fired yet.** `@weekly` is Sunday 00:00 and the health check
+also runs at 00:00 — all three services were added to its `critical_services` on
+2026-08-13. Next window: **Sunday 00:00**.
+
+🐛 **One correction to Tier 2's write-up:** it called the backup "every 7th day".
+`0 4 */7 * *` is a *day-of-month* step — it fires on days **1, 8, 15, 22, 29**,
+so the interval resets at each month boundary (29 → 1 is three or four days, not
+seven). The alert landing on day 15 matches. The fix depends on reading the
+schedule correctly, so the distinction is not pedantic.
+
+**The family this belongs to.** Third instance of the same shape in this repo: a
+check that samples a moment and treats one sample as a measurement.
+`--monitoring-name` state collisions, vinylstreamer's single-ping
+`Internet: unreachable`, and now `check_services` during a restart. **Sampling
+races are this monitoring system's characteristic bug.**
+
+**Two fixes, and they are not alternatives:**
+
+1. **Immediate (mitigation, ~5 min):** move `system_health_check.sh` off the
+   `:00` boundary — `*/15` → `2-59/15` (02, 17, 32, 47) fleet-wide. Both
+   collisions above disappear because neither maintenance job runs at `:02`.
+   Schedule-only change, so the Ansible `cron` module updates in place and the
+   name is untouched — no duplicate-entry risk.
+2. **Durable (the class fix):** make `check_services` **retry before declaring a
+   service down**, exactly as `check_network` now does. `systemctl is-active`
+   returns non-zero during `activating`, so a restart is indistinguishable from
+   an outage on a single sample. Needs ~30 s of retry budget to cover Plex's 22 s
+   stop; against a `*/15` cron that is negligible added detection latency.
+
+⚠️ **Do not do (2) alone and call it done** — verify by forcing both conditions:
+stop a service for real and watch it still alert, and restart one mid-check and
+watch the alert be absorbed. A retry that swallows a genuine outage is the
+lobotomy this file keeps warning about.
 
 ### What L-F leaves open
 
