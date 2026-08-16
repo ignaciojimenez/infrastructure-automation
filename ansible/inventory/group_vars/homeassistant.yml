@@ -34,6 +34,45 @@ internet_speed_delay: 75
 disable_bluetooth: false  # Keep for BLE integrations
 disable_hdmi: true
 
+# ── vinylstreamer watchdog ────────────────────────────────────────────────────
+# vinylstreamer stays up but drops off wifi: NetworkManager gives up after 4
+# retries and goes silent (measured 3.6 days, 09–13 Aug 2026). The only known
+# remediation is a power cycle, which Ignacio was performing by hand from the
+# Shelly app (13 Aug 18:09, 15 Aug 11:08). This automates that step.
+#
+# HA owns the plug deliberately — the unattended agent tier must not be able to
+# hard-reset a host. See docs/TODO.md "L-I / W2".
+#
+# ⚠️ This is REMEDIATION, NOT A DIAGNOSIS. The plug hides the fault by design, so
+# the same config below makes it impossible to hide *silently*: every cycle pages
+# #home-alerts, and a rising 7-day cycle count escalates on its own. The root
+# cause is W1 in ~/.claude/plans/vinylstreamer-wifi-lockout-plan.md.
+enable_vinylstreamer_watchdog: true
+
+# IP, not hostname: fleet name resolution is mDNS-only (docs/NETWORK.md) and
+# avahi withdraws its records the moment wlan0 drops, so a name-based probe
+# conflates "host gone" with "name gone".
+vinylstreamer_ip: "10.30.100.110"
+
+# Shelly Plug S Gen3 at 10.30.100.217 ("shelly plug vinyl streamer").
+# Device settings NOT managed here (they live in the plug's own flash):
+#   initial_state: on                  ← so the plug is not a new SPOF after a cut
+#   autorecover_voltage_errors: true   ← so a mains transient cannot latch it off
+# Both verified on the device 2026-08-16.
+vinylstreamer_plug_entity: "switch.shellyplugsg3_48f6eeb67ae4"
+
+# 15 min: long enough that bgscan hiccups and a normal reboot never reach it
+# (the Pi boots in well under 2 min); short enough to beat a multi-day lockout.
+vinylstreamer_down_after_minutes: 15
+# 15 s off: a Pi PSU's capacitors will ride out a shorter cut.
+vinylstreamer_power_cycle_seconds: 15
+# At most one cycle per 6 h. A plug that reboots a Pi in a loop is a worse
+# failure than the one it fixes.
+vinylstreamer_cycle_cooldown_hours: 6
+# Anti-masking: more than this many cycles in 7 days means the plug has stopped
+# being a safety net and started being a crutch. Escalates to #home-alerts.
+vinylstreamer_cycles_7d_escalate: 3
+
 # Lights — members of the `light.all_lights` group used by automations and dashboards
 homeassistant_lights:
   - light.floor_lamp
