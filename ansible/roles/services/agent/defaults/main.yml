@@ -40,6 +40,40 @@ agent_wrapper_max_age_hours: 26
 agent_ssh_timeout: 15
 agent_fleet_hosts: []
 
+# ------------------------------------------------------------
+# opnsense — checked over its API, never over SSH
+# ------------------------------------------------------------
+# Reached by IP, with the certificate's own name supplied via curl --resolve.
+# That is not a workaround for missing DNS: it removes the firewall's resolver
+# from the path of the check that watches the firewall.
+agent_opnsense_api_ip: "10.30.40.254"
+
+# Must equal a SAN on the firewall's web certificate, or TLS verification
+# fails. OPNsense's self-signed certificate carries only DNS:OPNsense.internal.
+agent_opnsense_api_host: "OPNsense.internal"
+
+# The firewall's self-signed web certificate, pinned. Not a secret — it is the
+# public half, served to anyone who connects — so it lives in the repo rather
+# than the vault.
+#
+# ⚠️ It expires 2026-11-04. When OPNsense regenerates it, every API call here
+# fails curl exit 60 and the sweep reports a TLS finding by name. That is
+# deliberate: the alternative is -k, which would accept any certificate from
+# anything that can ARP-spoof this VLAN, on the one host that holds a firewall
+# credential. Re-pin by re-running the fetch in docs/OPNSENSE_API.md.
+agent_opnsense_api_ca_path: "{{ agent_state_dir }}/opnsense-web.crt"
+
+# 0600, primary-user-owned. Read by the sweep and fed to curl on stdin, so the
+# secret never appears in argv or the environment.
+agent_opnsense_api_creds_path: "{{ agent_state_dir }}/opnsense_api.creds"
+
+agent_opnsense_api_timeout: 15
+
+# What to look for in the firewall's system log to decide its own monitoring
+# is still running. This is cron's record of invoking the wrapper — the same
+# evidence check_wrapper_freshness reads from the journal on Linux hosts.
+agent_opnsense_log_phrase: "enhanced_monitoring_wrapper"
+
 # Back-off applied to a host that REJECTS this container's SSH key, doubling
 # from the base and capped at the max. Only failed *authentication* backs off:
 # a host that is simply down trips no IPS and is retried every sweep.

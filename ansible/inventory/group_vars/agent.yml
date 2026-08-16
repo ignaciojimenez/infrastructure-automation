@@ -35,7 +35,8 @@ enable_agent: true
 # `kind` selects which probes run, because the checks are not portable:
 #   linux    — disk, failed systemd units, monitoring-cron freshness
 #   proxmox  — linux checks plus zpool health and CT/VM run state
-#   freebsd  — disk and default route only (no systemd, no journal)
+#   opnsense — disk, default route and monitoring freshness over the HTTPS
+#              API. The only kind that never opens an SSH connection.
 agent_fleet_hosts:
   - name: cobra
     kind: linux
@@ -50,7 +51,7 @@ agent_fleet_hosts:
   - name: cwwk
     kind: proxmox
   - name: opnsense
-    kind: freebsd
+    kind: opnsense
 
 # Disk usage percentage at or above which a host is flagged.
 agent_disk_threshold: 85
