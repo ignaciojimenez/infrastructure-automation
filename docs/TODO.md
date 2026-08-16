@@ -789,6 +789,20 @@ firewall. See F4b below.**
 
 ### 🆕 F4b — monitor opnsense properly, over the API instead of a shell
 
+> ⚠️ **Routing defect, found and fixed 2026-08-17.** Everything below was correct
+> and complete, and was still **structurally hard to reach**: L-H had no section of
+> its own in the plan file, so its substance lived *here*, inside a **completed**
+> session's write-up, reachable only via a soft one-line pointer in the copy-paste
+> prompt. A session reading top-down reasonably skims a DONE section as history.
+> The plan now carries a full `## L-H` section, and the prompt states the gate and
+> both refusals inline.
+>
+> 📌 **Reusable rule: anything a future session must not do belongs in that
+> session's own section, in its prompt, and phrased as a decision already taken —
+> never as a pointer to where the reasoning lives.** A pointer survives only if the
+> reader follows it, and the two items here are both things a fresh session would
+> otherwise re-derive and re-propose, having been rejected once already.
+
 > ❌ **A first draft of this item proposed dropping opnsense from the sweep
 > because its own crons already report disk and route more often. Ignacio
 > rejected it on 2026-08-14, and he was right on this file's own terms.**
