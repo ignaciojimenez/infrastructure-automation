@@ -911,9 +911,30 @@ check_auto_upgrades() {
         
         # Note: We intentionally do NOT alert on pending update counts
         # Pending updates naturally accumulate between daily runs - this is normal
-        pending=$(apt-get --simulate upgrade 2>/dev/null | grep -c "^Inst")
-        pending=${pending:-0}
-        print_status "success" "Pending updates: $pending (informational)"
+        #
+        # ...which is exactly why this line must not be able to hurt anything.
+        # `apt-get --simulate upgrade` peaked at ~109 MB RSS (26632 pages in the
+        # kernel's own OOM dump) on vinylstreamer, which has 416 MiB total and
+        # already runs ~110 MiB into zram swap. On 2026-08-02 19:45:08 it
+        # triggered a global OOM that killed liquidsoap — the service the host
+        # exists to run — to compute a number this check explicitly never acts
+        # on. `Restart=` brought it back in 8 s, so it read as a blip.
+        #
+        # So: skip it where it cannot be afforded. Gating on MemTotal rather
+        # than a host list keeps it self-describing and needs no inventory
+        # change; vinylstreamer is the only host in the fleet under 1.8 GiB
+        # (measured 2026-08-16). This is not a silenced check — the line is
+        # informational by the comment above it, reports "success" either way,
+        # and never contributed to issues_found.
+        pending_mem_floor_kb=1048576   # 1 GiB
+        mem_total_kb=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null)
+        if [ -n "$mem_total_kb" ] && [ "$mem_total_kb" -lt "$pending_mem_floor_kb" ]; then
+            print_status "success" "Pending updates: not counted (host has $((mem_total_kb / 1024)) MiB RAM; the probe costs ~109 MB and this value is informational only)"
+        else
+            pending=$(apt-get --simulate upgrade 2>/dev/null | grep -c "^Inst")
+            pending=${pending:-0}
+            print_status "success" "Pending updates: $pending (informational)"
+        fi
     fi
     
     echo ""
