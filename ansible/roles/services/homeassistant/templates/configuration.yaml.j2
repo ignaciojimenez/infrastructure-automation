@@ -74,6 +74,21 @@ input_boolean:
   train_notified_today:
     name: Train Notification Sent Today
     icon: mdi:train
+{% if enable_vinylstreamer_watchdog | default(false) %}
+
+# Input Datetimes
+input_datetime:
+  # Rate-limit clock for the vinylstreamer power cycle. Deliberately NOT
+  # automation.last_triggered: the automation runs (and posts) on every outage,
+  # including the ones it refuses to act on, so last_triggered would advance
+  # without a cycle having happened and the rate limit would never expire.
+  # This is written only by the branch that actually cuts power.
+  vinylstreamer_last_power_cycle:
+    name: Vinylstreamer Last Power Cycle
+    has_date: true
+    has_time: true
+    icon: mdi:restart-alert
+{% endif %}
 
 # Template sensors (modern syntax)
 template:
@@ -134,6 +149,70 @@ sensor:
     type: count
     duration: "01:00:00"
     end: "{{ '{{ now() }}' }}"
+{% if enable_vinylstreamer_watchdog | default(false) %}
+  # Power cycles in the last 7 days — the anti-masking meter. The escalation
+  # automation trips on this, so an auto-recovery that starts firing weekly
+  # reports itself instead of quietly papering over a worsening radio.
+  #
+  # 🔴 Counts transitions to "off", NOT to "on", and the difference is the whole
+  # measurement. history_stats `count` counts entries into the given state from
+  # ANY state, including `unavailable`. Measured on this very plug 2026-08-16:
+  # 8 transitions to "on" in 7 days, of which 8 were `unavailable -> on` — Shelly
+  # wifi/integration blips, three of them inside six minutes — and ZERO were a
+  # power cycle. Counting "on" would have made this meter read 7 on the day it
+  # was installed and escalate on a plug that had never once been switched off.
+  # The plug is energised permanently, so an entry into "off" is a deliberate cut
+  # and nothing else: this automation, or Ignacio from the Shelly app. Both count,
+  # which is the point — the human doing it by hand is the fault recurring too.
+  # 7 days is inside the recorder's default 10-day purge window.
+  - platform: history_stats
+    name: "Vinylstreamer Plug Cycles 7d"
+    entity_id: {{ vinylstreamer_plug_entity }}
+    state: "off"
+    type: count
+    duration:
+      days: 7
+    end: "{{ '{{ now() }}' }}"
+  # Same measurement over a short window, used by the recovery message to say
+  # whether the host was brought back by a power cut or came back by itself.
+  # It cannot be `states.<plug>.last_changed`: that is reset by the Shelly's
+  # `unavailable -> on` reconnect blips (8 in 7 days, measured) AND by every HA
+  # restart — observed reading 12 s old immediately after a deploy. Either would
+  # report a self-recovery as "the plug fixed it", corrupting the one data point
+  # W1 is missing. An entry into "off" is only ever a real cut.
+  - platform: history_stats
+    name: "Vinylstreamer Plug Cuts 10m"
+    entity_id: {{ vinylstreamer_plug_entity }}
+    state: "off"
+    type: count
+    duration:
+      minutes: 10
+    end: "{{ '{{ now() }}' }}"
+{% endif %}
+{% if enable_vinylstreamer_watchdog | default(false) %}
+
+# vinylstreamer liveness — the ONLY external detection this host has. Everything
+# else about it is self-reported, and this fault takes the host off the network,
+# so the host itself can never report it (docs/TODO.md, L-I §3).
+#
+# command_line, not the `ping` integration: ping became a config-entry-only
+# integration and would live in .storage where the repo cannot manage it, and
+# it does not give us the multi-packet probe. `-c 3` matters — a single ICMP
+# sample is what produced vinylstreamer's false "Internet: unreachable" on
+# 2026-08-13. Verified in the container 2026-08-16: /bin/ping is busybox,
+# live host -> ON rc=0 in 2 s, dead host -> OFF rc=1 in 4 s.
+command_line:
+  - binary_sensor:
+      name: "Vinylstreamer Online"
+      unique_id: vinylstreamer_online
+      command: "ping -c 3 -W 2 {{ vinylstreamer_ip }} >/dev/null 2>&1 && echo ON || echo OFF"
+      payload_on: "ON"
+      payload_off: "OFF"
+      device_class: connectivity
+      scan_interval: 60
+      # 4 s measured worst case; 20 s leaves room without stacking probes.
+      command_timeout: 20
+{% endif %}
 
 # MQTT entities — Raspotify (Spotify Connect) now-playing state from hifipi.
 # shairport-sync publishes its own entities via MQTT autodiscovery; librespot

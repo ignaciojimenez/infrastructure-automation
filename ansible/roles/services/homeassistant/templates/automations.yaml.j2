@@ -648,3 +648,198 @@
       data:
         message: "{{ '{{' }} \"🔌 Amp plug cycling: switched on \" ~ states(\"sensor.amp_plug_on_count_1h\") ~ \" times in the last hour — check detect_audio on vinylstreamer for phantom starts\" {{ '}}' }}"
   mode: single
+{% if enable_vinylstreamer_watchdog | default(false) %}
+
+# ── vinylstreamer wifi-lockout watchdog ────────────────────────────────────────
+# vinylstreamer stays UP and healthy but falls off the network: NetworkManager
+# reaches `failed (reason 'no-secrets')` after 4 retries and then emits nothing
+# at all — measured silent for 3.6 days, 09–13 Aug 2026. Only a power cycle has
+# ever brought it back, and Ignacio had been doing that by hand from the Shelly
+# app. These three automations take that over.
+#
+# 🔴 READ THIS BEFORE TRUSTING IT. A power cycle is remediation, not a diagnosis,
+# and an auto-remediation that works quietly is indistinguishable from a fault
+# that went away. So the design deliberately makes it LOUD:
+#
+#   * every outage reaches #home-alerts (slack_alert), including — especially —
+#     the outages this automation decides NOT to act on;
+#   * a recovery says whether a power cycle was involved or whether the host came
+#     back on its own, because "it fixed itself" is the single most useful data
+#     point W1 is missing;
+#   * a failed power cycle is its own, louder alert;
+#   * and sensor.vinylstreamer_plug_cycles_7d meters the crutch, escalating
+#     when the plug stops being a safety net.
+#
+# The root cause stays open as W1 (NetworkManager autoconnect-retries, powersave,
+# and signal 52/100). See docs/TODO.md and the L-I plan file.
+
+- id: "vinylstreamer_offline_power_cycle"
+  alias: "Vinylstreamer - offline, power cycle the plug"
+  trigger:
+    - platform: state
+      entity_id: binary_sensor.vinylstreamer_online
+      to: "off"
+      for:
+        minutes: {{ vinylstreamer_down_after_minutes }}
+  # No `condition:` block by design. Every branch below posts, so a suppressed
+  # power cycle is still a reported outage — a silent condition would make
+  # "guard held" and "trigger broken" look identical from Slack.
+  action:
+    - choose:
+        # 1. The plug is unreachable too, so power or the network is out at the
+        #    outlet — not a vinylstreamer fault. The whole fleet has gone dark on
+        #    external power at least twice; cycling into the tail of one of those
+        #    is exactly the wrong reflex. The plug is the witness precisely
+        #    because it shares the socket and the VLAN with the host it feeds.
+        - conditions:
+            - condition: or
+              conditions:
+                - condition: state
+                  entity_id: {{ vinylstreamer_plug_entity }}
+                  state: "unavailable"
+                - condition: state
+                  entity_id: {{ vinylstreamer_plug_entity }}
+                  state: "unknown"
+          sequence:
+            - service: rest_command.slack_alert
+              data:
+                message: >-
+                  ⚠️ vinylstreamer offline {{ vinylstreamer_down_after_minutes }} min — and its plug is
+                  unreachable as well, so this looks like a site-wide power or network event
+                  rather than the wifi lockout. NOT power-cycling.
+
+        # 2. The plug is off. The host being down is already explained, and
+        #    someone switched it off on purpose. Report it; do not override it.
+        - conditions:
+            - condition: state
+              entity_id: {{ vinylstreamer_plug_entity }}
+              state: "off"
+          sequence:
+            - service: rest_command.slack_alert
+              data:
+                message: >-
+                  ⚠️ vinylstreamer offline {{ vinylstreamer_down_after_minutes }} min — its plug is
+                  switched OFF, which explains it. Assuming that was deliberate: NOT switching it
+                  back on. Turn the plug on to bring the host back.
+
+        # 3. Rate limit. A plug that reboots a Pi in a loop is a worse failure
+        #    than the one it fixes — but silence here would be the plug hiding a
+        #    fault it cannot fix, which is the failure mode this whole design is
+        #    built against. So this branch is the LOUDEST of the four.
+        - conditions:
+            - condition: template
+              value_template: "{{ '{{' }} now().timestamp() - (state_attr(\"input_datetime.vinylstreamer_last_power_cycle\", \"timestamp\") | default(0, true)) < {{ vinylstreamer_cycle_cooldown_hours * 3600 }} {{ '}}' }}"
+          sequence:
+            - service: rest_command.slack_alert
+              data:
+                message: >-
+                  🔴 vinylstreamer STILL offline, and it was already power-cycled at
+                  {{ '{{ states("input_datetime.vinylstreamer_last_power_cycle") }}' }} —
+                  inside the {{ vinylstreamer_cycle_cooldown_hours }}h cooldown, so NOT cycling again.
+                  A power cycle is not fixing this one. Needs a human.
+
+      # 4. The real thing.
+      default:
+        # Stamp the clock FIRST: if anything below fails, the rate limit must
+        # still hold, or a broken cycle becomes a reboot loop.
+        - service: input_datetime.set_datetime
+          target:
+            entity_id: input_datetime.vinylstreamer_last_power_cycle
+          data:
+            timestamp: "{{ '{{ now().timestamp() }}' }}"
+        - service: rest_command.slack_alert
+          data:
+            message: >-
+              🔌 vinylstreamer offline {{ vinylstreamer_down_after_minutes }} min — power-cycling its
+              plug ({{ vinylstreamer_power_cycle_seconds }}s off). Cycles in the 7 days before this one:
+              {{ '{{ states("sensor.vinylstreamer_plug_cycles_7d") }}' }}.
+              This is remediation, not a fix — the root cause is still open as W1.
+        - service: switch.turn_off
+          target:
+            entity_id: {{ vinylstreamer_plug_entity }}
+        - delay:
+            seconds: {{ vinylstreamer_power_cycle_seconds }}
+        - service: switch.turn_on
+          target:
+            entity_id: {{ vinylstreamer_plug_entity }}
+        # Success is announced by "back online" below, so only report the
+        # failure here — otherwise a working recovery pages twice.
+        #
+        # A flat delay-then-look, deliberately not wait_for_trigger. The probe
+        # runs once a minute and the host is only unreachable for ~105 s (15 s
+        # cut + ~90 s boot), so the sensor may never record an off->on
+        # transition at all — and wait_for_trigger waits for a transition, not
+        # a state. It would then time out on a host that had recovered fine and
+        # page a false "did NOT come back". Reading the state after a fixed
+        # settle cannot make that mistake in either direction.
+        - delay: "00:05:00"
+        - if:
+            - condition: state
+              entity_id: binary_sensor.vinylstreamer_online
+              state: "off"
+          then:
+            - service: rest_command.slack_alert
+              data:
+                message: >-
+                  🔴 vinylstreamer did NOT come back within 6 min of its power cycle. The plug did
+                  its job and the host is still gone, so this is not the wifi lockout. Needs a human.
+  mode: single
+
+- id: "vinylstreamer_back_online"
+  alias: "Vinylstreamer - back online"
+  trigger:
+    - platform: state
+      entity_id: binary_sensor.vinylstreamer_online
+      from: "off"
+      to: "on"
+  condition:
+    # Only announce outages long enough to have been reported. Mirrors the gas
+    # detector's recovery debounce: suppresses HA-restart artefacts (where the
+    # prior-state duration is ~0) and short probe blips.
+    - condition: template
+      value_template: "{{ '{{' }} trigger.from_state is not none and (trigger.to_state.last_changed - trigger.from_state.last_changed).total_seconds() >= {{ vinylstreamer_down_after_minutes * 60 }} {{ '}}' }}"
+  action:
+    # The self-recovery case is the point of this message. If vinylstreamer comes
+    # back WITHOUT a power cycle, that contradicts the "NetworkManager gives up
+    # permanently" model in W1 — and it is the measurement W1 is missing.
+    #
+    # 🔴 Judged from a count of real cuts, NOT from
+    # input_datetime.vinylstreamer_last_power_cycle and NOT from the plug's
+    # last_changed. Both were tried on 2026-08-16 and both are wrong:
+    #   * the input_datetime records only cycles *this automation* performed, so
+    #     a cycle Ignacio does by hand from the Shelly app — precisely the thing
+    #     being automated, done on 13 and 15 Aug — reads as "recovered on its
+    #     own". Observed live: the test recovery at 10:54 said exactly that.
+    #   * the plug's last_changed is reset by the Shelly's `unavailable -> on`
+    #     reconnect blips and by every HA restart — measured at 12 s old
+    #     immediately after a deploy, with no cut anywhere near it.
+    # sensor.vinylstreamer_plug_cuts_10m counts entries into "off", which only a
+    # genuine cut produces. This is the sentence that tells W1 whether the fault
+    # can clear itself, so it has to be right.
+    - service: rest_command.slack_alert
+      data:
+        message: >-
+          ✅ vinylstreamer back online after
+          {{ '{{ ((trigger.to_state.last_changed - trigger.from_state.last_changed).total_seconds() / 60) | round(0) | int }}' }}
+          min offline.
+          {{ '{{ "Recovered after a power cycle (automatic or by hand)." if states("sensor.vinylstreamer_plug_cuts_10m") | int(0) > 0 else "Recovered on its own, with NO power cycle — record this against W1." }}' }}
+  mode: single
+
+- id: "vinylstreamer_cycles_escalation"
+  alias: "Vinylstreamer - power cycles are masking a fault"
+  trigger:
+    - platform: numeric_state
+      entity_id: sensor.vinylstreamer_plug_cycles_7d
+      above: {{ vinylstreamer_cycles_7d_escalate }}
+  action:
+    - service: rest_command.slack_alert
+      data:
+        message: >-
+          🔁 vinylstreamer has needed
+          {{ '{{ states("sensor.vinylstreamer_plug_cycles_7d") }}' }}
+          power cycles in the last 7 days (threshold {{ vinylstreamer_cycles_7d_escalate }}). The plug
+          has stopped being a safety net and started being a crutch — it is now hiding a worsening
+          fault. Escalate to the root cause: W1 in docs/TODO.md (NetworkManager autoconnect-retries,
+          brcmfmac powersave, and signal 52/100).
+  mode: single
+{% endif %}
