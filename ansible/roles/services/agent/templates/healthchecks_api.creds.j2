@@ -1,0 +1,9 @@
+# healthchecks.io READ-ONLY API key — managed by Ansible.
+#
+# Read by fleet_health_check.sh and passed to curl as a config file on stdin, so
+# it never reaches argv or the environment.
+#
+# Read-only by requirement, not convenience: this container must not be able to
+# pause, resume or delete a check. A read-only key also omits `uuid`, which is
+# why the sweep matches checks by name.
+api_key={{ vault_healthchecks_readonly_api_key }}

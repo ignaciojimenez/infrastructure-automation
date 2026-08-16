@@ -178,6 +178,21 @@
     - vault_opnsense_api_secret is defined and vault_opnsense_api_secret != ''
   tags: [agent, monitoring, opnsense]
 
+# Answers "is opnsense's own monitoring still running?" from outside the fleet.
+# Gated: without it the sweep reports that freshness is UNKNOWN, which is the
+# correct thing to say rather than a silent pass.
+- name: Deploy the healthchecks.io read-only API key
+  become: true
+  ansible.builtin.template:
+    src: healthchecks_api.creds.j2
+    dest: "{{ agent_healthchecks_api_key_file }}"
+    owner: "{{ primary_user }}"
+    group: "{{ primary_user }}"
+    mode: '0600'
+  no_log: true
+  when: vault_healthchecks_readonly_api_key is defined and vault_healthchecks_readonly_api_key != ''
+  tags: [agent, monitoring, opnsense]
+
 - name: Deploy fleet health check script
   become: true
   ansible.builtin.template:

@@ -69,10 +69,30 @@ agent_opnsense_api_creds_path: "{{ agent_state_dir }}/opnsense_api.creds"
 
 agent_opnsense_api_timeout: 15
 
-# What to look for in the firewall's system log to decide its own monitoring
-# is still running. This is cron's record of invoking the wrapper — the same
-# evidence check_wrapper_freshness reads from the journal on Linux hosts.
-agent_opnsense_log_phrase: "enhanced_monitoring_wrapper"
+# ------------------------------------------------------------
+# opnsense monitoring freshness, answered from OUTSIDE the fleet
+# ------------------------------------------------------------
+# On Linux hosts this is `journalctl -u cron`, because Debian's cron syslogs
+# every CMD it runs. FreeBSD's does not, so there is no equivalent evidence on
+# the firewall to read — over the API or otherwise. healthchecks.io answers it
+# instead, which does not depend on the firewall being well enough to reply, nor
+# on this container.
+#
+# ⚠️ Must be the UNCONDITIONAL check fed by heartbeat_monitoring.sh, never the
+# WAN or DNS ones. Those ping only when the thing they check is healthy, so a
+# stale timestamp on them conflates "monitoring stopped" with "WAN is down" —
+# the two states this exists to separate.
+#
+# Matched by name because a read-only healthchecks.io key omits `uuid` and
+# exposes only `unique_key`; the name is the stable identifier available to the
+# least-privileged key that can answer the question. **Renaming the check in the
+# healthchecks.io UI breaks this** — the sweep then reports UNKNOWN, which is the
+# intended failure direction but still needs fixing here.
+agent_opnsense_monitoring_check_name: "OPNsense monitoring alive"
+
+# 0600, primary-user-owned, one `api_key=` line. Read-only key: nothing on this
+# container should be able to pause or delete a check.
+agent_healthchecks_api_key_file: "{{ agent_state_dir }}/healthchecks_api.creds"
 
 # Back-off applied to a host that REJECTS this container's SSH key, doubling
 # from the base and capped at the max. Only failed *authentication* backs off:
