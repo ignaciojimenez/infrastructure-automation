@@ -19,6 +19,171 @@ Items are ordered by risk × effort — highest-impact, most-actionable items fi
 
 ---
 
+## ✅ L-I(W2) DEPLOYED 2026-08-16 — the plug now does what Ignacio was doing by hand
+
+Session L-I, **W2 only** (W1 deliberately not started — see the open item below).
+vinylstreamer stays up and healthy but falls off wifi; NetworkManager gives up
+after 4 retries and goes silent. Only a power cycle brings it back, and Ignacio
+had been doing that himself from the Shelly app (13 Aug 18:09, 15 Aug 11:08).
+Home Assistant now owns that step. The unattended agent tier deliberately does
+**not** — a power cycle is the most destructive action available.
+
+**Before this, vinylstreamer had zero external detection of any kind.** Every
+other check it had was self-reported by the host, and this fault takes the host
+off the network, so the host can never report it. The ping sensor is monitoring,
+not just remediation.
+
+### What shipped
+
+| Piece | Entity |
+|---|---|
+| Liveness probe | `binary_sensor.vinylstreamer_online` (`command_line`, `ping -c 3 -W 2`, 60 s) |
+| Power-cycle meter (7 d) | `sensor.vinylstreamer_plug_cycles_7d` |
+| Recent-cut flag (10 min) | `sensor.vinylstreamer_plug_cuts_10m` |
+| Rate-limit clock | `input_datetime.vinylstreamer_last_power_cycle` |
+| Remediation | `automation.vinylstreamer_offline_power_cycle_the_plug` |
+| Outage report | `automation.vinylstreamer_back_online` |
+| Anti-masking escalation | `automation.vinylstreamer_power_cycles_are_masking_a_fault` |
+
+Config in `group_vars/homeassistant.yml` behind `enable_vinylstreamer_watchdog`.
+Both deploys re-ran `changed=0` (`services.yml --tags config`;
+`deploy_monitoring.yml --tags scripts` across all 7 Linux hosts).
+
+Device settings read off the plug (`10.30.100.217`, Shelly Plug S Gen3), not repo
+managed: `initial_state: on` ✅ and `autorecover_voltage_errors: true` ✅ — both
+verified, so the plug is not a new single point of failure after a site power cut.
+
+### 🔴 The plug must not be allowed to hide the fault — how that is enforced
+
+This was the explicit requirement, and "it quietly works" is exactly the failure
+mode. Four mechanisms, all exercised:
+
+1. **Every outage reaches `#home-alerts`, including the ones the automation
+   refuses to act on.** The automation has *no* `condition:` block by design —
+   all four branches post. A silent guard and a broken trigger look identical
+   from Slack; these do not.
+2. **The recovery message says whether power intervention was involved**, so a
+   self-recovery is recorded as such. That is the single data point W1 is
+   missing.
+3. **A failed cycle is its own louder alert** — "the plug did its job and the
+   host is still gone".
+4. **`sensor.vinylstreamer_plug_cycles_7d` meters the crutch** and escalates
+   above 3, naming W1 as the thing to go fix.
+
+### Acceptance — all forced on the live host, evidence in `#home-alerts`
+
+| Test | Result |
+|---|---|
+| Detection | plug off `10:36:28` → sensor `off` `10:36:43` (**15 s**) |
+| Trigger fires on its own | sensor off `10:36:43` → automation `10:51:40` — **15 min to the second** |
+| Guard: plug is off | posted *"its plug is switched OFF … NOT switching it back on"*, plug untouched |
+| Guard: rate limit | posted *"already power-cycled at 10:35:13 … NOT cycling again"*, plug untouched |
+| Real power cycle | `10:57:09` stamp → plug off `10:57:20` → on `10:57:35` (**15 s**) → host back `10:59:05` |
+| No false failure alert | 5-min settle check found it `on`; nothing posted |
+| Recovery report | fired at `10:54:38`, duration correct (18 min) |
+| Host health after the cut | boot `10:57`, `phono_liquidsoap`/`icecast2`/`detect_audio` all `active`, **0 failed units** |
+
+⚠️ **Not forced:** the *plug unreachable* branch (needs the plug itself off the
+network) and the escalation's `numeric_state` crossing — the escalation's
+**action** was forced and posted correctly, the threshold crossing was not.
+
+📌 The fleet's own Tier 2 agent independently detected this outage at `10:50`
+and spent **$0.2850** concluding vinylstreamer *"needs physical hands-on-the-Pi
+check, nothing more can be done via SSH."* That is precisely the gap W2 closes.
+
+### 🐛 Traps found, all reusable
+
+1. 🔴 **`history_stats` `type: count` counts entries into the state from *any*
+   state, including `unavailable`.** The first version counted entries into
+   `"on"` and read **7** on the day it was installed. Measured against the
+   recorder: **8 transitions to `on` in 7 days, all 8 `unavailable -> on`
+   (Shelly reconnect blips, three inside six minutes), and ZERO power cycles.**
+   The meter would have escalated on a plug that had never been switched off.
+   Fixed by counting entries into `"off"`, which only a real cut produces.
+   **Count the state that only the event you care about can produce.**
+   The amp's `sensor.amp_plug_on_count_1h` has the same shape; measured clean
+   (0 blips in 48 h on that plug) so it is latent, not live.
+2. 🔴 **`states.<entity>.last_changed` is not "when the device last did
+   something".** It is reset by every HA restart and every integration
+   reconnect — observed reading **12 s old immediately after a deploy**, with no
+   cut anywhere near it. Two successive versions of the recovery message were
+   wrong because of this before it was measured.
+3. **`wait_for_trigger` waits for a *transition*, not a state.** The host is
+   only unreachable ~105 s (15 s cut + boot) against a 60 s probe, so the sensor
+   can miss the off/on edge entirely and the wait times out on a host that
+   recovered fine — a false "did NOT come back". Replaced with a flat
+   `delay` + state check, which cannot err in either direction.
+4. **HA's `/api/history/period/<start>` defaults to a ONE-DAY window.** A 7-day
+   query silently returns the week-ago day and looks like "no history".
+   Pass `end_time` or the answer is quietly about the wrong period.
+5. **`automation.trigger` over REST blocks until the action sequence finishes.**
+   A 5-min settle delay means the HTTP call times out; the automation is fine.
+6. **Deploying HA config pages `#home-alerts`.** `--tags config` notifies
+   *Restart Home Assistant*, and the `:30` cron ran `check_tado_health.sh`
+   against an HA that was down → `❌ ALERT: Script Failed on dockassist`
+   at 10:30:06. Self-inflicted, expected, and worth knowing before diagnosing it.
+7. **`input_datetime` defaults to *today at midnight*, not the epoch.** A
+   freshly created rate-limit clock therefore reads "0–6 h ago" for anything
+   created between 00:00 and 06:00, silently arming a cooldown. It restores
+   across restarts, so the exposure is first creation only.
+8. **`docker-compose.yml.j2` declares `container_name: homeassistant`** while
+   `homeassistant_container_name` and the live container are **`home-assistant`**.
+   A `docker exec homeassistant` fails with *No such container*. Compose is not
+   the writer that created it (see D5's two-writers finding) — the names have
+   drifted apart. Not fixed here.
+
+### 📌 Measurements worth keeping
+
+- `apt-get --simulate upgrade` peak RSS: **134 MiB**, measured on hifipi
+  (higher than the 109 MB inferred from the August OOM dump).
+- vinylstreamer: **416 MiB** total, ~202 MiB available, ~117 MiB already in zram.
+  It is the only fleet host under 1.8 GiB.
+- vinylstreamer cold-boots to answering ping in **~65–90 s**.
+- **dockassist is wired** (`eth0` up, `wlan0` DOWN). The plan listed its link
+  type as unverified; W1 is a vinylstreamer-only change.
+
+### W3.1 — the health check no longer OOM-kills liquidsoap
+
+`system_health_check.sh` ran `apt-get --simulate upgrade` every 15 min purely to
+print a number the script's own comment says it never acts on. On 2026-08-02 that
+caused a global OOM that killed `liquidsoap` — the service the host exists to
+run. Now gated on `MemTotal < 1 GiB`, so it self-describes and needs no inventory
+change. **Both directions forced on the deployed script:** vinylstreamer prints
+*"not counted (host has 416 MiB RAM…)"*, hifipi still prints
+*"Pending updates: 192 (informational)"*. A fix, not a lobotomy.
+
+### 🔴 STILL OPEN — W1, the actual root cause
+
+**The plug is remediation. Nothing about the fault itself has been fixed**, and
+the whole point of the alerting above is that this stays visible. The
+investigation is already done and lives in
+`~/.claude/plans/vinylstreamer-wifi-lockout-plan.md` (§1 and §W1); it is
+scheduled as `L-I(W1)` in `~/.claude/plans/infra-CURRENT.md`.
+
+What W1 has to settle, in order:
+
+1. **`connection.autoconnect-retries=0`** on the wifi profile, so NM stops
+   giving up. ⚠️ The man page says NM retries again after a timeout; the
+   measurement shows **zero log lines for 3.6 days**. That contradiction is
+   still unexplained and is why W1 needs a forcing test, not a config change.
+2. **A connectivity watchdog** (systemd timer → `nmcli con up` → restart NM).
+   Needed regardless of (1), because it also covers the SDIO wedges in W3.2.
+3. **Decide `wifi.powersave`.** `brcmf_cfg80211_set_power_mgmt: power save
+   enabled` on every boot. Prior knowledge, *not* measured for this chip.
+4. **The real underlying problem is RF**: signal 52/100, permanently below its
+   own roam threshold, `bgscan simple:30:-65:300`, two BSSIDs flapping. Neither
+   W1 nor W2 fixes that; it is a siting/hardware question.
+
+**Forcing test for W1 must use a throwaway NM profile pointing at a nonexistent
+SSID — never `preconfigured`.** Reproducing `failed (reason 'no-secrets')` on
+demand is what turns the diagnosis from a story about logs into a fact.
+
+📌 **The week of `#home-alerts` traffic this session enables IS W1's missing
+measurement** — how often the fault actually fires, and whether it fires on the
+lockout or on something else. Let it run before starting W1.
+
+---
+
 ## ✅ L-D DEPLOYED 2026-08-16 — the independent tails, and one of them was diagnosed wrong
 
 Session L-D: *the small things that never get done at the end of a deploy day.*
