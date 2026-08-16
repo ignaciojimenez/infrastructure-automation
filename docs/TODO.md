@@ -58,16 +58,17 @@ should be re-measured, not inherited.
 
 ---
 
-## 🔨 L-H IN PROGRESS 2026-08-17 — opnsense over the API, built and lint-clean, credential outstanding
+## 🔨 L-H IN PROGRESS 2026-08-17 — opnsense over the API; ✅ gate PASSED, one verification outstanding
 
-Branch `feat/opnsense-api-sweep-2026-08-17` (`6cfa1f0`). Supersedes the design
-notes in §F4b below; that section stays as the reasoning trail.
+Branch `feat/opnsense-api-sweep-2026-08-17`. Supersedes the design notes in
+§F4b below; that section stays as the reasoning trail.
 
-**Status: the code is written, every failure path has been forced on agent-lxc,
-and the one thing left is a credential that only exists once a human clicks
-four things in the OPNsense GUI.** 🔴 **The privilege gate is therefore NOT yet
-answered** — see below for why it is still open and what the source says the
-answer should be.
+**✅ The gate is answered: scoped privileges are sufficient on OPNsense 26.1.9.
+`page-all` is not needed, so the fallback design was never reached.** Deployed
+to agent-lxc, `changed=0` on the second run, credential in the vault.
+
+🔴 **One thing is still unverified**, and it is the freshness marker actually
+reaching the log — see *Still open* at the end of this section.
 
 ### What shipped
 
@@ -90,28 +91,46 @@ the wrapper, not the wrapper's record of itself.
 
 Operator reference: **[`docs/OPNSENSE_API.md`](OPNSENSE_API.md)**.
 
-### 🔴 The gate is open, and the source predicts it passes — which is not the same as passing
+### ✅ The gate — measured, passed, and it very nearly gave a false answer
 
-opnsense/core **#9093** and **#8918** both report privilege-restricted API users
-getting 403 on diagnostics endpoints, which is what the gate exists to test.
-Reading core's own ACL definitions, the cause is **naming, not privilege depth**:
+| Endpoint | Result | Yielded |
+|---|---|---|
+| `system_disk` | **200** | `/` at **3%** (zfs), selected by mountpoint out of 12 filesystems |
+| `get_routes` | **200** | `default via 87.210.114.1 dev vlan0.300` (ETH2_WAN) |
+| `log/core/system` | **200** | rows returned; see the freshness bug below |
+| *control:* `firewall/pf_statistics/interfaces` | **403** | — |
 
-- `Core/ACL/ACL.xml` lists `api/diagnostics/system/system_disk` **literally**
-  under *Lobby: Dashboard*.
-- `Diagnostics/ACL/ACL.xml` lists `api/diagnostics/interface/get_routes*` under
-  *Diagnostics: Routing tables*.
-- `Core/ACL.php:207` rewrites a trailing `/*` into `($1.*)?`, so
-  `api/diagnostics/log/core/system/*` also grants the **flat** `POST .../system`.
+**Scoped privileges are sufficient on 26.1.9. `page-all` was never reached.**
+The control matters: without it, three 200s prove only that the credential
+works, not that the scoping is real. A 403 on an endpoint *outside* the granted
+set is what makes "scoped is sufficient" a measurement rather than a hope.
 
-So all three endpoints should work scoped, and #9093's 403 is explained: it hit
-the **camelCase** `getArp`, and the patterns were converted to snake_case in
-core `128094e1` (2025-07-08, shipped 25.7) while camelCase URLs kept working.
+🐛 **The first pass said otherwise, and the wrong conclusion was available.**
+`get_routes` returned **403** while the other two returned 200 — which is
+*exactly* the per-endpoint ACL defect opnsense/core **#9093** describes, and the
+obvious response would have been to reach for `page-all`. It was not that. The
+firewall's own log carries the disambiguating evidence:
 
-⚠️ **This does not close the gate.** Those two issues exist precisely because the
-ACL-to-endpoint mapping has been wrong in shipped versions, and the firmware on
-this box has not been read. **The gate is a 403-or-200 on the real firewall.**
-Both answers remain pre-decided: scoped works → ship as built; only `page-all`
-works → still ship, as the same API-only user with no SSH key.
+```
+2026-08-17T01:28:12 [opnsense] pluginctl: plugins_configure user_changed (1,sweep_api)
+```
+
+The privilege simply had not been saved yet. The tell was available before the
+log: **both `get_routes` and the legacy camelCase `getRoutes` were 403.** A
+naming defect would have let the snake_case form through — #9093's entire shape
+is that one form works and the other does not.
+
+📌 **Reusable, and it nearly cost real privilege here: "a known upstream bug
+matches my symptom" is a hypothesis, not a diagnosis.** Acting on it would have
+granted broad rights to a firewall account to work around a missing tickbox. The
+cheap discriminator was to try the *other* URL form before believing the issue.
+
+📌 The source reading held up: `Core/ACL/ACL.xml` lists
+`api/diagnostics/system/system_disk` literally under *Lobby: Dashboard*,
+`Diagnostics/ACL/ACL.xml` lists `get_routes*` under *Diagnostics: Routing
+tables*, and `Core/ACL.php:207` rewrites a trailing `/*` into `($1.*)?` — which
+is why `api/diagnostics/log/core/system/*` grants the **flat** `POST .../system`.
+snake_case landed in core `128094e1` (2025-07-08, 25.7); this box runs 26.1.9.
 
 ### 🐛 Four measurements that each became a guard in the code
 
@@ -182,16 +201,54 @@ the model, but hand-writing `config.xml` on the internet SPOF is a worse trade
 than four clicks, once. The secret is stored `crypt($secret,'$6$')` and is
 downloadable exactly once (`Auth/FieldTypes/ApiKeyField.php`).
 
-### Still to do on this branch
+### 🐛 The freshness check needed a change on the FIREWALL, not just in the sweep
 
-1. Create `sweep_api` + key, put it in the vault (see `docs/OPNSENSE_API.md`).
-2. **Answer the gate**: 200 or 403 on all three endpoints, scoped.
-3. Confirm the parses *yield values* — `used_pct` for `/`, `destination == "default"`,
-   and **that cron's wrapper invocations actually reach the `core/system` log at
-   all**. That last one is the least certain link in the design; if OPNsense does
-   not route user-crontab cron lines there, the freshness check needs a different
-   marker and the finding it emits will say so rather than passing silently.
-4. Deploy, run a clean sweep, confirm `changed=0` on a second run.
+The design assumed the log API could read cron's own record of invoking the
+wrapper — the same evidence `check_wrapper_freshness` reads from the journal on
+Linux. **It cannot. FreeBSD's cron does not log job executions at all.**
+
+Searched the firewall's entire system log for `cron`: five hits, every one of
+them the *service* starting at boot, months apart (2026-07-31, 2026-08-10).
+Nothing about jobs, ever. Debian's cron syslogs every `CMD` it runs; FreeBSD's
+does not, and the Linux implementation quietly depends on that difference.
+
+📌 **This is the link that was flagged as least certain at design time and it is
+the one that broke.** It also failed in the right direction: the deployed sweep
+reported `❌ opnsense: no monitoring run found in the firewall's system log
+(searched for 'enhanced_monitoring_wrapper')` rather than finding nothing and
+calling it healthy. A check that cannot see its evidence must say so.
+
+**Fix:** the wrapper announces itself instead of depending on cron to do it —
+`logger -t monitoring "enhanced_monitoring_wrapper running <name>"` in
+`scripts/common/enhanced_monitoring_wrapper`, guarded to `uname -s = FreeBSD`.
+
+- It lands in `core/system` because that scope is the **catch-all** for anything
+  no program-specific filter claims — OPNsense's own
+  `service/templates/OPNsense/Syslog/local/README` states this, and no filter
+  claims this tag. `core/cron` exists as a scope but returns **403**: no ACL
+  entry covers it, so reading it would require `page-all`.
+- 📌 The marker is **stronger evidence than the Linux side has**: it proves the
+  wrapper *reached that line*, not merely that cron tried to start something.
+- Guarded to FreeBSD deliberately. Linux hosts already have a better answer, and
+  a second source of truth that can disagree with the journal is a liability,
+  not redundancy.
+
+### 🔴 Still open — the one thing not yet verified
+
+**The `logger` line has not been observed arriving in `core/system`.** The
+reasoning is source-backed (catch-all destination, no competing filter) but
+*reasoned, not measured*, and this section exists because the last reasoned link
+in this design turned out to be wrong. Do not mark L-H done until:
+
+1. `logger -t monitoring "L-H probe"` is run on opnsense and the sweep's own log
+   query finds it.
+2. The wrapper is deployed to opnsense (`deploy_monitoring.yml`), and after one
+   cron cycle the freshness finding **disappears** — the fix confirmed by the
+   check going quiet for the right reason, having first been seen firing.
+3. ⚠️ Per the standing constraint, **opnsense goes last in any fleet deploy.**
+
+Until then the sweep pages once per run about opnsense freshness. That is
+correct behaviour reporting a real gap, not a false alert.
 
 ### 🧹 Noted while there, not acted on
 

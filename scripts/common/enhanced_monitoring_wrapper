@@ -392,6 +392,35 @@ if [ -z "$STATE_FILE" ]; then
   STATE_FILE="$STATE_DIR/${STATE_NAME}.json"
 fi
 
+# Announce the run to syslog, on FreeBSD only.
+#
+# Every Linux host in this fleet has its monitoring freshness checked by the
+# agent-lxc sweep reading `journalctl -u cron` — Debian's cron syslogs every
+# CMD it runs, so cron's own record answers "did this host's monitoring
+# actually run recently?".
+#
+# FreeBSD's cron does not. Measured on opnsense 2026-08-17: the only cron
+# lines in its whole system log are the service starting at boot, months
+# apart. So the firewall — the one host that cannot be checked over SSH, and
+# the one least eligible for a monitoring blind spot — left no trace a remote
+# observer could read back, and check_wrapper_freshness simply skipped it.
+#
+# So the wrapper says so itself rather than depending on cron to say it. That
+# is strictly better evidence than the Linux side has: it means the wrapper
+# reached this line, not merely that cron tried to start something.
+#
+# Lands in OPNsense's `core/system` log, which is the catch-all destination
+# for anything no program-specific filter claims (its own
+# service/templates/OPNsense/Syslog/local/README says so, and there is no
+# filter for this tag). The sweep reads it back over the API.
+#
+# Guarded so it stays a no-op everywhere else: Linux hosts already have a
+# better answer, and this must never become a second source of truth that can
+# disagree with the journal.
+if [ "$(uname -s)" = "FreeBSD" ] && command -v logger >/dev/null 2>&1; then
+  logger -t monitoring "enhanced_monitoring_wrapper running ${STATE_NAME}"
+fi
+
 # Ensure state directory exists
 mkdir -p "$(dirname "$STATE_FILE")"
 

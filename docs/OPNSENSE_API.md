@@ -56,15 +56,33 @@ Those mappings are read out of OPNsense's own ACL definitions, not inferred:
 `src/opnsense/mvc/app/models/OPNsense/Core/ACL/ACL.xml` and
 `.../Diagnostics/ACL/ACL.xml` in `opnsense/core`.
 
-### Why the third row exists
+### Why the third row exists, and why it needed a change on the firewall too
 
 `check_wrapper_freshness` reads the systemd journal, so it ran for the `linux`
 and `proxmox` kinds only. Nothing in this fleet noticed if the **firewall's**
 own monitoring stopped running — the exact failure the sweep exists to catch,
-unwatched on the host least eligible for a blind spot. The log API answers the
-same question the journal does: it is cron's record that it invoked the
-wrapper, so a wrapper broken outright still shows, and a cron that never fired
-does not.
+unwatched on the host least eligible for a blind spot.
+
+🐛 **The obvious implementation does not work, and only measurement showed it.**
+On Linux the evidence is cron's own syslog record of every `CMD` it runs.
+**FreeBSD's cron does not log job executions at all.** Searched the firewall's
+entire system log for `cron` on 2026-08-17: five hits, all of them the *service*
+starting at boot, months apart. Nothing about jobs.
+
+So the wrapper announces itself instead of relying on cron to do it —
+`logger -t monitoring "enhanced_monitoring_wrapper running <name>"`, guarded to
+FreeBSD in `scripts/common/enhanced_monitoring_wrapper` so it is a no-op on
+every Linux host (which already have a better answer, and must not acquire a
+second source of truth that can disagree with the journal).
+
+📌 That marker is **stronger evidence than the Linux side has**: it proves the
+wrapper reached that line, not merely that cron tried to start something.
+
+It lands in `core/system` because that scope is the **catch-all** for anything
+no program-specific filter claims — stated by OPNsense's own
+`service/templates/OPNsense/Syslog/local/README`, and there is no filter for
+this tag. `core/cron` exists as a scope name but returns 403: no ACL entry
+covers it, so it would require `page-all`.
 
 ### The snake_case trap
 
@@ -125,15 +143,35 @@ ansible-vault edit ansible/inventory/group_vars/all/vault.yml
 ansible-playbook ansible/playbooks/services.yml --limit agent-lxc --tags opnsense
 ```
 
+### ✅ The privilege gate, measured on OPNsense 26.1.9 (2026-08-17)
+
+**Scoped privileges are sufficient. `page-all` is not needed.** All three
+endpoints return 200 for a user holding only the four privileges above, and a
+control endpoint outside them (`api/diagnostics/firewall/pf_statistics/…`)
+returns 403 — so the 200s are the privileges working, not the check being
+toothless.
+
+⚠️ **Read the 403s carefully if you re-run this.** A first pass showed
+`get_routes` 403 while the other two returned 200, which looks exactly like the
+per-endpoint ACL defect #9093 describes. It was not. The firewall's own log
+carries the disambiguating evidence:
+
+```
+2026-08-17T01:28:12 [opnsense] pluginctl: plugins_configure user_changed (1,sweep_api)
+```
+
+The privilege had not been saved yet at the time of the first measurement. Both
+`get_routes` **and** the legacy `getRoutes` were 403 in that pass, which was the
+tell — a naming defect would have let the snake_case form through.
+
+📌 **Worth keeping: on this box a 403 means the privilege is absent, full stop.**
+It is not evidence of #9093, and adding `page-all` to "work around" it would
+have quietly granted broad rights to fix a missing tickbox.
+
 ### If broad privilege turns out to be the only option
 
-🔴 **Not yet measured on this firmware.** The three scoped privileges above are
-what OPNsense's ACL definitions say should work, read from source — but #9093
-and #8918 exist precisely because that mapping has been wrong in shipped
-versions, so it is settled by a 403-or-200 on the real box, not by this table.
-The result goes in `docs/TODO.md` §L-H when it is taken.
-
-Should only `page-all` work, the answer is still to build
+Not the case here, but if a future firmware regresses: the answer is still to
+build
 this, as **a separate API-only user with no SSH key**. That is not the decision
 refused for the shell: that refusal was about `read_agent`, which *holds* an SSH
 key, so granting it `page-all` would hand it a real interactive shell via
