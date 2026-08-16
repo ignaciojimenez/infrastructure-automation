@@ -409,16 +409,35 @@ fi
 # is strictly better evidence than the Linux side has: it means the wrapper
 # reached this line, not merely that cron tried to start something.
 #
-# Lands in OPNsense's `core/system` log, which is the catch-all destination
-# for anything no program-specific filter claims (its own
-# service/templates/OPNsense/Syslog/local/README says so, and there is no
-# filter for this tag). The sweep reads it back over the API.
+# Lands in OPNsense's `core/system` log, the catch-all destination for anything
+# no program-specific filter claims. Its generated filter is:
+#
+#   filter f_local_system { not filter(<every local filter>) and level(notice..emerg) };
+#
+# ⚠️ Both halves of that are traps, and both are why this line looks the way it
+# does rather than being a plain `logger -t monitoring`.
+#
+# 1. THE TAG MUST NOT CONTAIN ANY OTHER FILTER'S PROGRAM NAME. syslog-ng
+#    matches `program()` as an UNANCHORED REGEX, and OPNsense ships
+#    `filter f_local_monit { program("monit"); }`. So the obvious tag
+#    `monitoring` contains `monit`, gets claimed by that filter, and is written
+#    to /var/log/monit/ instead — where the sweep cannot read it, because the
+#    monit log scope needs a privilege this account does not hold. Measured:
+#    `logger -t monitoring` produced nothing in core/system.
+#    Other patterns that would swallow a plausible tag: `api`, `kernel`,
+#    `firewall`, `pkg`. Full list comes from
+#    service/templates/OPNsense/Syslog/local/*.conf — check a new tag against
+#    it before changing this.
+#
+# 2. THE PRIORITY MUST BE >= notice. logger(1)'s default is user.notice, which
+#    scrapes in, but that is a default worth not depending on for the only
+#    evidence the firewall's monitoring produces. Stated explicitly.
 #
 # Guarded so it stays a no-op everywhere else: Linux hosts already have a
 # better answer, and this must never become a second source of truth that can
 # disagree with the journal.
 if [ "$(uname -s)" = "FreeBSD" ] && command -v logger >/dev/null 2>&1; then
-  logger -t monitoring "enhanced_monitoring_wrapper running ${STATE_NAME}"
+  logger -p daemon.notice -t infra_wrapper "enhanced_monitoring_wrapper running ${STATE_NAME}"
 fi
 
 # Ensure state directory exists
