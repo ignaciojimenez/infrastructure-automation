@@ -233,7 +233,7 @@ calling it healthy. A check that cannot see its evidence must say so.
   a second source of truth that can disagree with the journal is a liability,
   not redundancy.
 
-### 🔴 STILL OPEN — the freshness marker does not arrive, and two theories are already dead
+### 🔴 STILL OPEN — the marker is WRITTEN but the API will not return it
 
 **The opnsense freshness check does not work yet, and this is the honest state
 of it.** Disk and default route are live and correct; only this row is open.
@@ -251,7 +251,8 @@ What is **measured**, not reasoned:
 So the local syslog socket *is* being read — other daemons' messages arrive —
 but nothing from `logger(1)` in a shell does.
 
-🐛 **Two theories were formed from source and both were killed by measurement:**
+🐛 **Two theories were formed from source and both were killed by measurement**
+(and a third measurement then killed the framing of both — see below):
 
 1. *"`core/system` is the catch-all, so an unclaimed tag lands there."* It is the
    catch-all (`Syslog/local/README`), and the message still did not arrive.
@@ -267,23 +268,60 @@ mechanisms, it does not report state.** Every claim here that came from reading
 prediction happened to be right, which made the two that followed feel safer
 than they were.
 
-**Best surviving hypothesis, explicitly UNVERIFIED:** the source is declared
-`unix-dgram("/var/run/log" flags(syslog-protocol))`, i.e. syslog-ng is told to
-expect **RFC5424**, while FreeBSD's `logger(1)` emits legacy **RFC3164**. That
-would explain why libc `syslog(3)` daemons arrive and a shell `logger` does not.
-⚠️ It does not obviously explain why `sudo` arrives, so treat it as a lead, not
-an answer.
+### 🔬 Localised: syslog delivery is FINE, the API's log *search* is the problem
+
+```
+ssh opnsense "sudo grep -rl 'LH probe' /var/log/"
+  → /var/log/system/system_20260817.log
+```
+
+**That is exactly the file `core/system` serves.** So the message is delivered,
+filtered correctly, and written to the right place. syslog-ng, the tag, the
+priority and the destination filter are all doing the right thing — every theory
+above was chasing a problem that does not exist.
+
+The failure is one layer up: **`POST /api/diagnostics/log/core/system` does not
+return the line, while returning other lines from the same file in the same
+minute.**
+
+| Query | Result |
+|---|---|
+| `rc.routing_configure` | 3 rows, newest **01:42:58** |
+| `20-recover` | 3 rows, newest **01:42:58** |
+| unfiltered | newest **01:42:58**, wall clock 01:43:02 — no lag |
+| `infra_wrapper` | **0 rows** |
+
+⚠️ **A false positive nearly closed this out.** `searchPhrase=probe` and
+`searchPhrase=LH probe` each returned 1 row — which reads like success. It was
+**sudo's audit record of the `grep -rl 'LH probe'` command itself**, timestamped
+01:42:17. The search phrase matched the command line that went looking for the
+marker, not the marker. 📌 *When a probe's own name appears in the output, check
+you are not reading your own footprint.*
+
+So the remaining question is narrow: **why does OPNsense's log parser skip a
+`logger(1)` line that sits in the file it is parsing?** The parsers are in
+`src/opnsense/scripts/syslog/logformats/syslog.py` — `SysLogFormat.match()`
+requires a `HH:MM:SS` at `line[7:15]` and derives `process_name` from the text
+before the first `:` after `line[16:]`. A stock RFC3164 line satisfies both, so
+**the file's actual bytes are the next thing to look at, and nothing should be
+concluded before then.**
 
 ### The one command that settles it
 
 ```sh
-ssh opnsense "sudo grep -rl 'LH probe' /var/log/ 2>/dev/null || echo 'nowhere in /var/log'"
+ssh opnsense "sudo grep -m2 'LH probe' /var/log/system/system_20260817.log | cat -v; \
+              echo '--- a line the API DOES return ---'; \
+              sudo grep -m1 'rc.routing_configure' /var/log/system/system_20260817.log | cat -v"
 ```
 
-- **Names a file** → the message is being written, just not where the sweep
-  reads. Retarget the search scope, or retag to land in `system`.
-- **`nowhere`** → syslog-ng is dropping it at ingest, and the RFC5424 lead is
-  the thing to chase (`logger -h /var/run/log` or a small `syslog(3)` caller).
+Diff the two shapes. Whatever the marker line is missing — the timestamp
+position, the hostname field, a `tag[pid]:` — is the whole bug, and the fix is
+to emit it in the shape the parser already handles.
+
+📌 **Worth weighing before spending more on it:** this check now depends on
+OPNsense's log-search parser accepting our line format, which is a fragile
+contract to rest a monitoring signal on. If the raw-line diff does not give an
+obvious fix, prefer a different signal over bending this one.
 
 ### Until it is settled
 
