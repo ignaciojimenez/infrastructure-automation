@@ -58,6 +58,100 @@ should be re-measured, not inherited.
 
 ---
 
+## ✅ L-E DEPLOYED 2026-08-16 — the last drift row is codified, and the tuner stopped lying
+
+Branch `feat/codify-ksm-drift-2026-08`. The RESTORE ON RETURN table is now **fully
+closed**: `ksmtuned` was the one row that survived both reboots and Ansible runs,
+and it is the one row that is now in the repo.
+
+### What shipped
+
+| Change | Where | State on cwwk |
+|---|---|---|
+| `proxmox_disable_ksm: true` | `platform/proxmox/defaults/main.yml` | ksmtuned **masked** |
+| Converge `/sys/kernel/mm/ksm/run` | `platform/proxmox/tasks/main.yml` | `run=0` (task correctly **skipped** — already 0) |
+| `cwwk_power_tuning.sh` fails loudly | role template | unit `active`, `Result=success`, and **logging for the first time** |
+
+### 🐛 Disabling ksmtuned is not the same as turning KSM off
+
+`ksmtuned.service` on Debian/PVE has **no `ExecStop`** (read off the unit file on
+the host). So stopping the daemon leaves `/sys/kernel/mm/ksm/run` at whatever it
+was last set to — a host where KSM was running keeps scanning after the daemon is
+gone. The 2026-08-02 hand-fix happened to end at `run=0` only because the reboot
+default is 0. **The role therefore converges the kernel attribute too, not just
+the unit.** `run=0` (stop scanning, keep merged pages) rather than `run=2`, because
+unmerging is a *memory* operation — a spike on a host with ~6 GiB free — and the
+thermal fix does not need it.
+
+📌 **Masked, not disabled.** `UnitFilePreset=enabled` was confirmed live, so
+`disabled` is precisely the state a rebuild or a preset refresh undoes — which was
+the whole reason this row could not self-heal. The mask is a symlink to `/dev/null`;
+`proxmox_disable_ksm: false` converges it back the other way (the task sets
+`state`/`enabled`/`masked` from the one variable, so it is not a one-way door).
+
+### 🔴 The `|| true` was the smaller half of the silence
+
+`cwwk_power_tuning.sh` had **three** silent paths, not the one recorded:
+`|| true` on each write, *and* the `[ -w "$f" ] || continue` guards, which skipped
+the work entirely and never reported it. The guards were the dominant path.
+
+**Forced both directions on the real host, under dash, against real sysfs** —
+by running the script as `read_agent`, whose writes sysfs genuinely rejects:
+
+| Script | Condition | Result |
+|---|---|---|
+| **old** (`git show HEAD:`) | PL1 19 W + governor `performance`, unprivileged | **no output at all, `rc=0`** |
+| **new** | identical condition | 9 × `ERROR: … write rejected (still X, wanted Y)`, `rc=1` |
+| **new** | real values, unprivileged | `already 20000000`, `8/8 cores`, `rc=0` |
+
+State was verified unchanged after all three (`20000000` / `powersave`), so the
+rejection test cost nothing. `shellcheck -s sh` clean.
+
+📌 **The readback is logged as `before -> after`, not as a final value.** The
+firmware defaults can coincide with the targets, so "the value is right" does not
+prove the script applied it — that ambiguity cost real time on 2026-08-01 chasing a
+suspected BIOS lock. Distinguishing *already correct* from *applied* from
+*rejected* is the point of the rewrite.
+
+### 🐛 The old script never logged anything, on any boot
+
+`journalctl -u cwwk-power-tuning.service` across every retained boot
+(2026-07-05, 07-13, 07-31, 08-10) holds **only** systemd's own `Starting` /
+`Finished` lines. There is no record of what any past boot actually applied, and
+there could not have been. The 19:42:52 run is the first with content.
+📌 **A oneshot that exits 0 and prints nothing is indistinguishable from a oneshot
+that did nothing** — and this one reported `Result=success` for six weeks while
+being structurally incapable of reporting anything else.
+
+⚠️ **`journalctl` as `read_agent` returned `-- No entries --`, not an error.**
+It is not in `adm`/`systemd-journal`, and the hint line is easy to read past. Same
+masked-permission trap as D6's read-back of choco's `0700` home. Use `sudo -n`.
+
+### Verification
+
+- Check mode: `changed=3` (script, ksmtuned, handler); `Stop KSM scanning` skipped.
+- Real run: same 3, then `ksmtuned` `LoadState=masked`, `run=0`, `pages_sharing=0`,
+  RAPL `20000000`/`35000000`, `systemctl --failed` empty.
+- ⚠️ **Entry point corrected.** This file's own recorded restore command
+  (`ansible-playbook ansible/playbooks/platform/proxmox.yml --limit proxmox`) is
+  wrong twice: the inventory host is **`cwwk`**, and that playbook only sets ZFS ARC —
+  it does **not** include the `platform/proxmox` role. The role runs from
+  **`deploy_monitoring.yml`** (`--tags proxmox`). Same class as D6's
+  `tasks/deploy_monitoring.yml` vs `deploy_monitoring.yml` mix-up: **the file named
+  after the thing is not always the file that does the thing.**
+
+### Open
+
+- 🔴 **Second run not yet confirmed `changed=0`** — the handler restarts the unit
+  whenever the template changes, so the deploy above legitimately reports 3. The
+  idempotency check is one more `--tags proxmox` run.
+- The failed-unit chain (`script rc=1` → unit `failed` → `systemctl --failed` →
+  `check_failed_units` at `system_health_check.sh:549`) is proven at both ends —
+  the script's `rc=1` on real sysfs, and the parse the health check performs — but
+  the middle link is **still pending a live probe** (blocked on Touch ID).
+
+---
+
 ## ✅ L-I(W2) DEPLOYED 2026-08-16 — the plug now does what Ignacio was doing by hand
 
 Session L-I, **W2 only** (W1 deliberately not started — see the open item below).
@@ -2066,7 +2160,7 @@ Temporary changes were applied by hand on cwwk on 2026-08-01 while away. **All w
 | RAPL PL2 | **20W** (repo/firmware default 35W) | `constraint_1` = **35W** | ✅ **restored by the 08-10 reboot** |
 | `check_thermal.sh` thresholds | **15000 / 40000 / 98 / 101** (repo: 20 / 500 / 85 / 95) | repo values | ✅ closed by L-D's role run |
 | Thermal cron schedule | `*/5` — already back to the repo value | `*/2` sampler + repo check | ✅ |
-| **`ksmtuned` disabled** | `disabled` / `inactive (dead)` | `run=0`, `inactive` | 🔴 **STILL DRIFTED — the only one left** |
+| **`ksmtuned` disabled** | `disabled` / `inactive (dead)` | `masked`, `run=0` | ✅ **CODIFIED 2026-08-16 (L-E)** — `proxmox_disable_ksm` |
 
 📌 **The two RAPL rows closed themselves, and that is the lesson.** Fitting the fan
 required a power-down; the reboot reset both constraints. Nobody decided that — it
@@ -2075,27 +2169,44 @@ reboot" is drift you will not notice being repaired, which means you also cannot
 tell when it came back.** Re-read the values; do not infer them from the last
 recorded action.
 
-🔴 **`ksmtuned` is now the whole of L-E.** It is the one row that survives reboots
-*and* Ansible runs (see below), and it is worth ~3 °C — so leaving it uncodified
-while the vent-sizing work proceeds means a rebuilt or re-converged cwwk silently
-comes back with KSM **on**, invalidating any before/after hole measurement. **Codify
-it before the holes are drilled.**
+✅ ~~**`ksmtuned` is now the whole of L-E.**~~ **CLOSED 2026-08-16 — the table is
+fully closed.** It was the one row that survived reboots *and* Ansible runs, and it
+is worth ~3 °C, so leaving it uncodified while the vent-sizing work proceeds would
+have let a rebuilt or re-converged cwwk silently come back with KSM **on**,
+invalidating the before/after hole measurement. Now `proxmox_disable_ksm` in
+`platform/proxmox`, and the unit is **masked** rather than disabled. **Settled
+before the holes are drilled**, as intended. See the L-E write-up at the top.
 
 📌 **The threshold row is no longer just drift — 2026-08-07 measured what it costs.** At `*/5`, `THROTTLE_CRIT=40000` sat exactly on the delta produced by one pegged core, oscillating CRIT/WARN every run; and `TEMP_WARN=98` kept a real 94–96°C event out of the alert text entirely. Restoring the repo values is the right move, but do it **with** the wrapper dedup in Next Steps — the repo's `THROTTLE_WARN=20` on a fanless box will page constantly on its own. See the 2026-08-07 event section above.
 
-⚠️ **`ksmtuned` is a different class of drift and will NOT self-heal.** Disabled by hand on 2026-08-02. Unlike the rows above it **survives reboots *and* Ansible runs**, because the repo contains no KSM references at all (`grep -ri ksm ansible/ scripts/` → nothing). The systemd `preset: enabled` means a **rebuilt cwwk would come back with KSM on**, silently diverging from the running host. Either codify the disable in the `platform/proxmox` role (a `proxmox_disable_ksm` toggle, matching the variables-over-groups convention) or consciously re-enable it. Do not leave it as invisible drift.
+⚠️ ~~**`ksmtuned` is a different class of drift and will NOT self-heal.**~~ ✅ **DONE 2026-08-16 (L-E).** Disabled by hand on 2026-08-02; unlike the rows above it **survived reboots *and* Ansible runs**, because the repo contained no KSM references at all. `UnitFilePreset=enabled` was then confirmed live, so a **rebuilt cwwk would indeed have come back with KSM on**. Codified as `proxmox_disable_ksm` in the `platform/proxmox` role, and the unit is **masked** — `disabled` is exactly the state a preset refresh undoes. 🐛 **And disabling the daemon was never sufficient on its own:** `ksmtuned.service` has **no `ExecStop`**, so a stopped daemon leaves `/sys/kernel/mm/ksm/run` wherever it was; the role converges the kernel attribute separately. Full write-up at the top of this file.
+
+❌ **The command block that was here was wrong twice** (corrected 2026-08-16 by
+running it): the inventory host is **`cwwk`**, not `proxmox`, and
+`playbooks/platform/proxmox.yml` only sets ZFS ARC — it does **not** include the
+`platform/proxmox` role. The role is applied from `deploy_monitoring.yml:115`.
+📌 Same class as D6's trap: **the file named after the thing is not the file that
+does the thing.**
 
 ```bash
 # restore everything to the repo's source of truth
-ansible-playbook ansible/playbooks/platform/proxmox.yml --limit proxmox --check --diff   # inspect first
-ansible-playbook ansible/playbooks/platform/proxmox.yml --limit proxmox
+ansible-playbook ansible/playbooks/deploy_monitoring.yml --limit cwwk --tags proxmox \
+  --forks 1 --flush-cache --check --diff     # inspect first
+ansible-playbook ansible/playbooks/deploy_monitoring.yml --limit cwwk --tags proxmox \
+  --forks 1 --flush-cache
 ```
+
+⚠️ `--flush-cache` matters: `ansible.cfg` caches facts for 3600 s, so without it a
+second run inside the hour is not evidence of idempotency. `--forks 1` avoids
+`touchid-agent` refusing concurrent signature requests.
 
 **Then verify** — an Ansible run alone does *not* reset PL2, because `cwwk_power_tuning.sh` only manages PL1:
 
 ```bash
 ssh cwwk-agent "grep . /sys/class/powercap/intel-rapl:0/constraint_[01]_power_limit_uw"   # expect 20000000 / 35000000
 ssh cwwk-agent "sudo -n /usr/bin/crontab -l -u choco | grep proxmox_thermal"              # expect a single */5 line, no duplicate
+ssh cwwk-agent "systemctl is-enabled ksmtuned; cat /sys/kernel/mm/ksm/run"                # expect masked / 0
+ssh cwwk-agent "sudo -n journalctl -u cwwk-power-tuning.service -n 5 --no-pager"          # expect before -> after lines
 ```
 
 If PL2 still reads `20000000`, reboot cwwk or write `35000000` back by hand. Also confirm the thermal cron did not duplicate (the `cron` module keys on its `#Ansible:` marker — see the rename gotcha in `CLAUDE.md`).
@@ -2164,7 +2275,7 @@ If a controller is used anyway (noise), it must be wired **fail-safe: fan ON whe
   ```
 
   **Known limitation to resolve before deploying:** the cooldown keys on *failure*, not severity — a WARNING→CRITICAL escalation is suppressed inside the window. Either make it severity-aware (reset the marker when `exit_code` rises) or keep the window short enough that the worst-case delay is acceptable.
-- **`cwwk_power_tuning.sh` fails silently (robustness, small):** both RAPL writes are wrapped in `|| true` and the unit still exits `0/SUCCESS`, so a rejected cap would be invisible — and because the BIOS defaults may coincide with the target values, reading the value back does **not** prove the script applied it. This cost real time on 2026-08-01 chasing a suspected BIOS lock. *(RAPL is confirmed **not** locked — `rdmsr -f 63:63 0x610` = 0, and both constraints are writable as root; the earlier failures were running on the wrong host and then as the wrong user.)* Fix: drop `|| true`, verify each write by reading the value back, and log/exit non-zero on mismatch so the unit goes `failed` and surfaces in `systemctl --failed`.
+- ✅ **DONE 2026-08-16 (L-E)** — and the diagnosis below understated it: there were **three** silent paths, not one. The `[ -w "$f" ] || continue` guards skipped the work entirely without reporting, which was the *dominant* path — proven by running the old script unprivileged against real sysfs, where it produced **no output and `rc=0`** while the rewrite produced 9 errors and `rc=1`. It also **never logged anything on any boot**, so no past boot has a record of what it applied. ~~**`cwwk_power_tuning.sh` fails silently (robustness, small):** both RAPL writes are wrapped in `|| true` and the unit still exits `0/SUCCESS`, so a rejected cap would be invisible~~ — and because the BIOS defaults may coincide with the target values, reading the value back does **not** prove the script applied it. This cost real time on 2026-08-01 chasing a suspected BIOS lock. *(RAPL is confirmed **not** locked — `rdmsr -f 63:63 0x610` = 0, and both constraints are writable as root; the earlier failures were running on the wrong host and then as the wrong user.)* Fix: drop `|| true`, verify each write by reading the value back, and log/exit non-zero on mismatch so the unit goes `failed` and surfaces in `systemctl --failed`.
 - **Consider a PL2 (burst) Ansible variable:** `proxmox_rapl_pl1_watts` exists but PL2 is deliberately left at the firmware default (35W). The 94°C spikes are burst-driven, so PL2 is the effective lever under degraded airflow. Consider `proxmox_rapl_pl2_watts` for a documented degraded-airflow mode. Note `constraint_0_max_power_uw` reads 15W — the chip's rated ceiling — so the current PL1 of 20W is actually *above* spec.
 - **Validate under load:** `stress-ng` comparison at 35W vs 20W to quantify the temp drop (brief router-core load — schedule for a quiet window).
 - **Live-fire the alert:** trigger a synthetic throttle delta and confirm the #home-alerts message + recovery end-to-end.
