@@ -233,7 +233,7 @@ calling it healthy. A check that cannot see its evidence must say so.
   a second source of truth that can disagree with the journal is a liability,
   not redundancy.
 
-### 🔴 STILL OPEN — the marker is WRITTEN but the API will not return it
+### 🔴 STILL OPEN — and the previous diagnosis in this section was WRONG
 
 **The opnsense freshness check does not work yet, and this is the honest state
 of it.** Disk and default route are live and correct; only this row is open.
@@ -268,73 +268,85 @@ mechanisms, it does not report state.** Every claim here that came from reading
 prediction happened to be right, which made the two that followed feel safer
 than they were.
 
-### 🔬 Localised: syslog delivery is FINE, the API's log *search* is the problem
+### ❌ RETRACTED — "the marker is written, the API drops it" was my own footprint
+
+An earlier revision of this section concluded that syslog delivery was fine and
+the log-search API was at fault. **That was wrong, and it was wrong for the
+reason this same section had just warned about.**
 
 ```
 ssh opnsense "sudo grep -rl 'LH probe' /var/log/"
-  → /var/log/system/system_20260817.log
+  → /var/log/system/system_20260817.log        ← read as "the marker is there"
 ```
 
-**That is exactly the file `core/system` serves.** So the message is delivered,
-filtered correctly, and written to the right place. syslog-ng, the tag, the
-priority and the destination filter are all doing the right thing — every theory
-above was chasing a problem that does not exist.
+The file matched because **sudo audit-logs the grep command**, and that command
+contains the string `LH probe`. Grepping the file directly shows only this:
 
-The failure is one layer up: **`POST /api/diagnostics/log/core/system` does not
-return the line, while returning other lines from the same file in the same
-minute.**
+```
+<85>1 2026-08-17T01:42:17+02:00 OPNsense.internal sudo 69338 - [meta sequenceId="1"]
+    choco : PWD=/home/choco ; USER=root ; COMMAND=/usr/bin/grep -rl 'LH probe' /var/log/
+<85>1 2026-08-17T01:47:05+02:00 OPNsense.internal sudo 12567 - [meta sequenceId="1"]
+    choco : PWD=/home/choco ; USER=root ; COMMAND=/usr/bin/grep -m2 'LH probe' /var/log/...
+```
 
-| Query | Result |
+**Two sudo records of the searches. No `logger` output at all.** The markers are
+not in the system log; they never were.
+
+📌 **The trap fired twice in ten minutes, and the second time it was already
+written down.** The first was `searchPhrase=probe` returning a row (sudo's audit
+of the grep). The second was `grep -rl` naming the file (sudo's audit of the
+grep). **A search whose own invocation is logged will find itself.** Neutralise
+it by searching for a token the search command does not contain — e.g. log a
+UUID and grep for a *different* fragment of it — or by reading the file's tail
+rather than matching on the probe string.
+
+### What is actually established
+
+| | |
 |---|---|
-| `rc.routing_configure` | 3 rows, newest **01:42:58** |
-| `20-recover` | 3 rows, newest **01:42:58** |
-| unfiltered | newest **01:42:58**, wall clock 01:43:02 — no lag |
-| `infra_wrapper` | **0 rows** |
+| FreeBSD cron logs no job executions | ✅ measured |
+| `logger` markers reach `core/system` | ❌ **no — not the API, not the file** |
+| `sudo`/`dhclient`/`kernel`/`opnsense` reach it | ✅ measured, continuously |
+| `core/cron`, `core/monit` | 403, would need `page-all` |
+| System log is **RFC5424** on disk | ✅ seen above (`<85>1 … [meta sequenceId]`) |
 
-⚠️ **A false positive nearly closed this out.** `searchPhrase=probe` and
-`searchPhrase=LH probe` each returned 1 row — which reads like success. It was
-**sudo's audit record of the `grep -rl 'LH probe'` command itself**, timestamped
-01:42:17. The search phrase matched the command line that went looking for the
-marker, not the marker. 📌 *When a probe's own name appears in the output, check
-you are not reading your own footprint.*
+The `unix-dgram("/var/run/log" flags(syslog-protocol))` lead is therefore back
+and is the best remaining explanation — syslog-ng told to expect RFC5424 while
+`logger(1)` emits RFC3164. ⚠️ **It still does not explain why `sudo` arrives**,
+since sudo also logs via libc `syslog(3)`. Unexplained, and not to be written up
+as understood.
 
-So the remaining question is narrow: **why does OPNsense's log parser skip a
-`logger(1)` line that sits in the file it is parsing?** The parsers are in
-`src/opnsense/scripts/syslog/logformats/syslog.py` — `SysLogFormat.match()`
-requires a `HH:MM:SS` at `line[7:15]` and derives `process_name` from the text
-before the first `:` after `line[16:]`. A stock RFC3164 line satisfies both, so
-**the file's actual bytes are the next thing to look at, and nothing should be
-concluded before then.**
+### 🛑 Recommendation: stop bending this one, change the signal
 
-### The one command that settles it
+Three sessions-worth of theories have died here, and the approach now rests on
+OPNsense's syslog ingest *and* its log-search parser both accepting a line shape
+we do not control. **That is too fragile a contract for a monitoring signal**,
+independent of whether one more round of debugging would land it.
 
-```sh
-ssh opnsense "sudo grep -m2 'LH probe' /var/log/system/system_20260817.log | cat -v; \
-              echo '--- a line the API DOES return ---'; \
-              sudo grep -m1 'rc.routing_configure' /var/log/system/system_20260817.log | cat -v"
-```
+**Preferred alternative for the next session: read healthchecks.io instead.**
+opnsense's own monitoring already pings it (`vault_healthcheck_opnsense_wan`,
+`vault_healthcheck_opnsense_dns`), healthchecks.io exposes a read API returning
+`last_ping` per check, and the fleet already depends on the service. That gives
+a genuinely *independent* answer to "did the firewall's monitoring run?" —
+independent of the firewall entirely, which is stronger than any log on the box
+— for one vault token and no change to opnsense at all.
 
-Diff the two shapes. Whatever the marker line is missing — the timestamp
-position, the hostname field, a `tag[pid]:` — is the whole bug, and the fix is
-to emit it in the shape the parser already handles.
+⚠️ Weigh against it: it adds an external dependency to the sweep, and a
+healthchecks.io outage would need to read as "unknown", never as "the firewall's
+monitoring is dead". Decide that before building it.
 
-📌 **Worth weighing before spending more on it:** this check now depends on
-OPNsense's log-search parser accepting our line format, which is a fragile
-contract to rest a monitoring signal on. If the raw-line diff does not give an
-obvious fix, prefer a different signal over bending this one.
+Meanwhile the `logger` line stays on the branch, unverified and undeployed.
 
 ### Until it is settled
 
-⚠️ **Do not deploy `deploy_monitoring.yml`.** The `logger` line is on the branch
-but unverified, and there is no value in pushing a marker to seven hosts before
-knowing it works anywhere.
+⚠️ **Do not deploy `deploy_monitoring.yml`.** The `logger` line does nothing
+useful on opnsense and is unverified everywhere else.
 
 The sweep meanwhile reports `❌ opnsense: no monitoring run found in the
 firewall's system log`. **Leave it.** It is true — nothing currently proves the
 firewall's monitoring ran — and it is the exact gap L-H exists to expose.
 Suppressing it to make the sweep read clean would be the lobotomy this repo
-keeps warning about. Expect **one** page, not one per run: the wording is
-constant, so L-F's repeat suppression collapses it after the first.
+keeps warning about. Expect **one** page, not one per run.
 
 ### 🧹 Noted while there, not acted on
 
