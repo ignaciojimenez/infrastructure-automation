@@ -233,25 +233,70 @@ calling it healthy. A check that cannot see its evidence must say so.
   a second source of truth that can disagree with the journal is a liability,
   not redundancy.
 
-### 🔴 Still open — the one thing not yet verified
+### 🔴 STILL OPEN — the freshness marker does not arrive, and two theories are already dead
 
-**The `logger` line has not been observed arriving in `core/system`.** The
-reasoning is source-backed (catch-all destination, no competing filter) but
-*reasoned, not measured*, and this section exists because the last reasoned link
-in this design turned out to be wrong. Do not mark L-H done until:
+**The opnsense freshness check does not work yet, and this is the honest state
+of it.** Disk and default route are live and correct; only this row is open.
 
-1. `logger -t monitoring "L-H probe"` is run on opnsense and the sweep's own log
-   query finds it.
-2. The wrapper is deployed to opnsense (`deploy_monitoring.yml`), and after one
-   cron cycle the freshness finding **disappears** — the fix confirmed by the
-   check going quiet for the right reason, having first been seen firing.
-3. ⚠️ Per the standing constraint, **opnsense goes last in any fleet deploy.**
+What is **measured**, not reasoned:
 
-Until then the sweep reports opnsense freshness as a finding. Expect **one**
-page, not one per run — the finding's wording is constant, so L-F's repeat
-suppression collapses it after the first. The finding set for opnsense has
-changed shape (freshness, replacing *"UP but no usable shell as read_agent"*),
-so that one new page is the signature changing and is correct.
+| Probe | Result |
+|---|---|
+| `logger -t monitoring 'L-H probe'` | **absent** from `core/system` |
+| `logger -t infra_wrapper 'LH probe A'` (default priority) | **absent** |
+| `logger -p daemon.notice -t monitoring 'LH probe B'` | **absent** |
+| `core/cron`, `core/monit` | **403** — no ACL entry, would need `page-all` |
+| `sudo`, `dhclient`, `kernel`, `opnsense`, `configctl` messages | **present** in `core/system` |
+
+So the local syslog socket *is* being read — other daemons' messages arrive —
+but nothing from `logger(1)` in a shell does.
+
+🐛 **Two theories were formed from source and both were killed by measurement:**
+
+1. *"`core/system` is the catch-all, so an unclaimed tag lands there."* It is the
+   catch-all (`Syslog/local/README`), and the message still did not arrive.
+2. *"The tag `monitoring` is swallowed by `filter f_local_monit { program("monit"); }`,
+   because syslog-ng matches `program()` as an unanchored regex."* That filter and
+   that matching behaviour are both real, and every `program()` pattern was
+   extracted and checked mechanically — but a provably non-colliding tag
+   (`infra_wrapper`) did not arrive either.
+
+📌 **The standing lesson, earned three times in one session: source explains
+mechanisms, it does not report state.** Every claim here that came from reading
+`opnsense/core` was *plausible and wrong* until the box was asked. The gate
+prediction happened to be right, which made the two that followed feel safer
+than they were.
+
+**Best surviving hypothesis, explicitly UNVERIFIED:** the source is declared
+`unix-dgram("/var/run/log" flags(syslog-protocol))`, i.e. syslog-ng is told to
+expect **RFC5424**, while FreeBSD's `logger(1)` emits legacy **RFC3164**. That
+would explain why libc `syslog(3)` daemons arrive and a shell `logger` does not.
+⚠️ It does not obviously explain why `sudo` arrives, so treat it as a lead, not
+an answer.
+
+### The one command that settles it
+
+```sh
+ssh opnsense "sudo grep -rl 'LH probe' /var/log/ 2>/dev/null || echo 'nowhere in /var/log'"
+```
+
+- **Names a file** → the message is being written, just not where the sweep
+  reads. Retarget the search scope, or retag to land in `system`.
+- **`nowhere`** → syslog-ng is dropping it at ingest, and the RFC5424 lead is
+  the thing to chase (`logger -h /var/run/log` or a small `syslog(3)` caller).
+
+### Until it is settled
+
+⚠️ **Do not deploy `deploy_monitoring.yml`.** The `logger` line is on the branch
+but unverified, and there is no value in pushing a marker to seven hosts before
+knowing it works anywhere.
+
+The sweep meanwhile reports `❌ opnsense: no monitoring run found in the
+firewall's system log`. **Leave it.** It is true — nothing currently proves the
+firewall's monitoring ran — and it is the exact gap L-H exists to expose.
+Suppressing it to make the sweep read clean would be the lobotomy this repo
+keeps warning about. Expect **one** page, not one per run: the wording is
+constant, so L-F's repeat suppression collapses it after the first.
 
 ### 🧹 Noted while there, not acted on
 

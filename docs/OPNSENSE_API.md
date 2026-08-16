@@ -69,20 +69,32 @@ On Linux the evidence is cron's own syslog record of every `CMD` it runs.
 entire system log for `cron` on 2026-08-17: five hits, all of them the *service*
 starting at boot, months apart. Nothing about jobs.
 
-So the wrapper announces itself instead of relying on cron to do it —
-`logger -t monitoring "enhanced_monitoring_wrapper running <name>"`, guarded to
-FreeBSD in `scripts/common/enhanced_monitoring_wrapper` so it is a no-op on
-every Linux host (which already have a better answer, and must not acquire a
-second source of truth that can disagree with the journal).
+The intended fix is for the wrapper to announce itself instead of relying on
+cron — `logger -p daemon.notice -t infra_wrapper "…"`, guarded to FreeBSD in
+`scripts/common/enhanced_monitoring_wrapper` so it is a no-op on every Linux
+host. That marker would be **stronger evidence than the Linux side has**: it
+proves the wrapper reached that line, not merely that cron tried to start
+something.
 
-📌 That marker is **stronger evidence than the Linux side has**: it proves the
-wrapper reached that line, not merely that cron tried to start something.
+🔴 **It does not work yet, and this row of the table is not live.** Three probes
+were sent from a shell on the firewall — two tags, one with an explicit
+priority — and **none arrived in `core/system`**, while `sudo`, `dhclient`,
+`kernel` and `opnsense` messages arrive there continuously. `core/cron` and
+`core/monit` both return 403 (no ACL entry covers them).
 
-It lands in `core/system` because that scope is the **catch-all** for anything
-no program-specific filter claims — stated by OPNsense's own
-`service/templates/OPNsense/Syslog/local/README`, and there is no filter for
-this tag. `core/cron` exists as a scope name but returns 403: no ACL entry
-covers it, so it would require `page-all`.
+Two source-derived theories were formed and both were killed by measurement:
+that the catch-all destination would take an unclaimed tag, and that the tag
+`monitoring` was being swallowed by `filter f_local_monit { program("monit"); }`
+via syslog-ng's unanchored `program()` matching. Both mechanisms are real; a
+provably non-colliding tag still did not arrive.
+
+**Unverified lead:** the source is `unix-dgram("/var/run/log" flags(syslog-protocol))`
+— syslog-ng expecting RFC5424 while FreeBSD's `logger(1)` emits RFC3164. It does
+not obviously explain why `sudo` arrives, so it is a lead, not an answer.
+See `docs/TODO.md` §L-H for the command that settles it.
+
+📌 **The lesson, earned three times in one session: source explains mechanisms,
+it does not report state.**
 
 ### The snake_case trap
 
