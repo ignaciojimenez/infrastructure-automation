@@ -58,6 +58,150 @@ should be re-measured, not inherited.
 
 ---
 
+## 🔨 L-H IN PROGRESS 2026-08-17 — opnsense over the API, built and lint-clean, credential outstanding
+
+Branch `feat/opnsense-api-sweep-2026-08-17` (`6cfa1f0`). Supersedes the design
+notes in §F4b below; that section stays as the reasoning trail.
+
+**Status: the code is written, every failure path has been forced on agent-lxc,
+and the one thing left is a credential that only exists once a human clicks
+four things in the OPNsense GUI.** 🔴 **The privilege gate is therefore NOT yet
+answered** — see below for why it is still open and what the source says the
+answer should be.
+
+### What shipped
+
+`opnsense` becomes its own sweep kind, read over HTTPS and never over SSH. It
+leaves the SSH machinery — back-off, auth-rejection, the "answered but no usable
+shell" third branch — completely untouched, because none of it applies to a host
+nothing SSHes into any more.
+
+| Check | Endpoint | Privilege carrying it |
+|---|---|---|
+| Root filesystem usage | `GET /api/diagnostics/system/system_disk` | *Lobby: Dashboard* |
+| Default route present | `GET /api/diagnostics/interface/get_routes` | *Diagnostics: Routing tables* |
+| **Its own monitoring still runs** | `POST /api/diagnostics/log/core/system` | *Diagnostics: Logs: System* |
+
+The third row closes the "also close this while there" item: `check_wrapper_freshness`
+reads the systemd journal, so it ran for `linux` and `proxmox` only and **nothing
+in this fleet noticed if the firewall's own monitoring stopped**. The log API
+answers the same question the journal does — cron's own record that it invoked
+the wrapper, not the wrapper's record of itself.
+
+Operator reference: **[`docs/OPNSENSE_API.md`](OPNSENSE_API.md)**.
+
+### 🔴 The gate is open, and the source predicts it passes — which is not the same as passing
+
+opnsense/core **#9093** and **#8918** both report privilege-restricted API users
+getting 403 on diagnostics endpoints, which is what the gate exists to test.
+Reading core's own ACL definitions, the cause is **naming, not privilege depth**:
+
+- `Core/ACL/ACL.xml` lists `api/diagnostics/system/system_disk` **literally**
+  under *Lobby: Dashboard*.
+- `Diagnostics/ACL/ACL.xml` lists `api/diagnostics/interface/get_routes*` under
+  *Diagnostics: Routing tables*.
+- `Core/ACL.php:207` rewrites a trailing `/*` into `($1.*)?`, so
+  `api/diagnostics/log/core/system/*` also grants the **flat** `POST .../system`.
+
+So all three endpoints should work scoped, and #9093's 403 is explained: it hit
+the **camelCase** `getArp`, and the patterns were converted to snake_case in
+core `128094e1` (2025-07-08, shipped 25.7) while camelCase URLs kept working.
+
+⚠️ **This does not close the gate.** Those two issues exist precisely because the
+ACL-to-endpoint mapping has been wrong in shipped versions, and the firmware on
+this box has not been read. **The gate is a 403-or-200 on the real firewall.**
+Both answers remain pre-decided: scoped works → ship as built; only `page-all`
+works → still ship, as the same API-only user with no SSH key.
+
+### 🐛 Four measurements that each became a guard in the code
+
+Taken against this firewall on 2026-08-17. Every one contradicts a reasonable
+assumption, and the code would be wrong without it.
+
+| Measured | Consequence |
+|---|---|
+| **No credential → HTTP 302**, an HTML redirect to the login page | OPNsense does **not** answer unauthenticated API calls with 401 (core#5749). `--location` is therefore *forbidden*: with `-L` the redirect returns **200 + an HTML login form**, so a revoked credential reads as healthy. |
+| **Wrong key/secret → HTTP 401 with a body that is valid JSON** | "The body parses as JSON" is not a sufficient check either. Only **200 AND JSON** rejects both cases. |
+| **Wrong `--cacert` → curl exit 60; unreadable one → exit 77** | Lets a certificate problem be reported as a certificate problem, by name, instead of collapsing into "host down". |
+| **Cert SAN is `DNS:OPNsense.internal` only** | `--resolve` supplies the name so TLS verifies against the real certificate, while the connection still goes to `10.30.40.254`. |
+
+📌 **The last one has a second payoff worth keeping.** Because the check reaches
+the firewall by IP, **it does not depend on the firewall's own resolver.** Unbound
+runs *on* the gateway, so "the whole fleet stopped resolving" and "the firewall is
+unwell" are frequently the same event — and the sweep now keeps reading opnsense
+through exactly that event, where before it skipped every host including this one.
+
+### Acceptance — all four failure paths forced on agent-lxc and watched fire
+
+Per the standing rule that a check which has never failed has never been tested.
+Run on CT 103 under `dash`, against the live firewall:
+
+| Forced condition | Reported as |
+|---|---|
+| Credentials file absent | `❌ opnsense: API credentials file … is missing or unreadable` |
+| Credentials present but wrong | `❌ opnsense: HTTP 401 … rejected (revoked, regenerated, or the account is disabled)` |
+| Pinned certificate no longer matches | `❌ opnsense: TLS verification failed (curl exit 60) …` |
+| Firewall not there at all | `❌ opnsense: UNREACHABLE — no response at all` (3s), **not** three API findings |
+
+🐛 **Found by running it, not by reading it:** the first three each fired *three
+times*, once per endpoint, because one broken connection breaks all three calls.
+Now collapsed to one finding — the same "one signal, not N" rule the fleet-wide
+silence collapse already applies. **403 is deliberately excluded from that
+collapse**: privileges are per-endpoint, so "disk reads but routes are forbidden"
+is a true and useful distinction, and it is the exact thing the gate is about.
+
+🐛 Also found: the shared unreachable message said *"no response at all **as
+read_agent**"*. opnsense reaches that line and is never contacted as that user.
+
+### 🔒 Security decisions, stated rather than assumed
+
+- **TLS is verified, not waved through.** `-k` would accept any certificate from
+  anything able to ARP-spoof VLAN 40, on the one host holding a firewall
+  credential. The self-signed cert is pinned in the repo (public half — not a
+  secret, so not vault material).
+- **The secret never reaches argv.** Fed to `curl` as a config file on stdin
+  (`curl -K -`); `/proc/*/cmdline` is world-readable on the container. Deployed
+  `0600`, `no_log: true`.
+- **The account has no SSH key and no shell** — that is the whole distinction
+  from the refused `read_agent` change, which *holds* a key.
+- ⚠️ *System: Deny config write* (`user-config-readonly`) is added as defence in
+  depth. It is enforced in `write_config()` at `src/etc/inc/config.inc:206`, but
+  that check keys off `$_SESSION['Username']` and **it is NOT verified here that
+  it applies on the API-key path.** The control that actually bounds this account
+  is the privilege list: none of the three grants a write endpoint.
+- 🔴 **The pinned certificate expires 2026-11-04.** OPNsense will replace it, every
+  call will fail `curl` exit 60, and the sweep will page with the file to re-pin
+  named in the finding. Re-pin command is in `docs/OPNSENSE_API.md`.
+
+### 📌 There is no CLI for the one manual step, and that was checked
+
+OPNsense core ships **no command to create a user or mint an API key** — verified
+against the source tree (`src/opnsense/scripts/system/`, `mvc/script/`), not
+assumed. Users are fully MVC (`OPNsense\Auth\User`), so a PHP script could drive
+the model, but hand-writing `config.xml` on the internet SPOF is a worse trade
+than four clicks, once. The secret is stored `crypt($secret,'$6$')` and is
+downloadable exactly once (`Auth/FieldTypes/ApiKeyField.php`).
+
+### Still to do on this branch
+
+1. Create `sweep_api` + key, put it in the vault (see `docs/OPNSENSE_API.md`).
+2. **Answer the gate**: 200 or 403 on all three endpoints, scoped.
+3. Confirm the parses *yield values* — `used_pct` for `/`, `destination == "default"`,
+   and **that cron's wrapper invocations actually reach the `core/system` log at
+   all**. That last one is the least certain link in the design; if OPNsense does
+   not route user-crontab cron lines there, the freshness check needs a different
+   marker and the finding it emits will say so rather than passing silently.
+4. Deploy, run a clean sweep, confirm `changed=0` on a second run.
+
+### 🧹 Noted while there, not acted on
+
+`agent_access.yml` is `hosts: all`, so `read_agent` still exists on opnsense with
+its key trusted — now used by nothing. Removing it would fully retire the SSH
+path to the firewall, but it is a change to the SPOF that this session did not
+ask for. Worth its own small item.
+
+---
+
 ## ✅ L-E DEPLOYED 2026-08-16 — the last drift row is codified, and the tuner stopped lying
 
 Branch `feat/codify-ksm-drift-2026-08`. The RESTORE ON RETURN table is now **fully
