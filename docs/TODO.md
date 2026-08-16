@@ -247,8 +247,11 @@ in this design turned out to be wrong. Do not mark L-H done until:
    check going quiet for the right reason, having first been seen firing.
 3. ⚠️ Per the standing constraint, **opnsense goes last in any fleet deploy.**
 
-Until then the sweep pages once per run about opnsense freshness. That is
-correct behaviour reporting a real gap, not a false alert.
+Until then the sweep reports opnsense freshness as a finding. Expect **one**
+page, not one per run — the finding's wording is constant, so L-F's repeat
+suppression collapses it after the first. The finding set for opnsense has
+changed shape (freshness, replacing *"UP but no usable shell as read_agent"*),
+so that one new page is the signature changing and is correct.
 
 ### 🧹 Noted while there, not acted on
 
