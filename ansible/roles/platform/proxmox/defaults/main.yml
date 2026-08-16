@@ -9,6 +9,15 @@ enable_proxmox_power_tuning: true
 proxmox_rapl_pl1_watts: 20        # sustained (long-term) package power cap; PL2 burst left at firmware default
 proxmox_cpu_governor: powersave   # intel_pstate dynamic mode; still boosts to max under load
 
+# KSM (Kernel Samepage Merging) -- kept off on cwwk. It is a continuous all-core
+# background scan worth ~3 C of package temperature on this cooling-marginal box,
+# and it pays nothing back: general_profit measured NEGATIVE (~192 MiB of rmap
+# overhead against ~208 KiB actually shared), because cwwk runs one large FreeBSD
+# VM plus LXCs that already share the host kernel -- there is almost nothing to
+# merge. Set false to hand KSM back to ksmtuned if guest topology ever becomes
+# many near-identical VMs. See docs/ARCHITECTURE_DECISIONS.md.
+proxmox_disable_ksm: true
+
 # Journald: explicit persistence + size cap (see docs/ARCHITECTURE_DECISIONS.md).
 # 4G matches systemd's implicit ceiling and keeps ~3 months of forensic history
 # at the observed ~1.2G/month; cwwk is the host where journal forensics matter most.

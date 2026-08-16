@@ -12,29 +12,104 @@
 # on 2026-06-30). Capping sustained power keeps degraded airflow in graceful-throttle
 # territory. At a 1 Gbps WAN this has no routing/WireGuard throughput impact.
 # See docs/ARCHITECTURE_DECISIONS.md.
+#
+# Every write is read back and every failure is reported. A silent success here is
+# worthless: the firmware defaults can coincide with the targets, so "the value is
+# right" does not prove this script did anything -- hence the before -> after log.
+# On any failure the script exits non-zero, the oneshot unit goes `failed`, and
+# system_health_check.sh surfaces it via `systemctl --failed`.
 
 set -eu
 
 PL1_WATTS={{ proxmox_rapl_pl1_watts }}
 GOVERNOR={{ proxmox_cpu_governor }}
 
+rc=0
+fail() {
+    echo "ERROR: $*" >&2
+    rc=1
+}
+
+# Write a value to a sysfs attribute and prove it took. Distinguishes the three
+# outcomes that `echo x > f || true` collapsed into one: already correct, applied,
+# and rejected (write refused, or accepted then silently clamped by the driver).
+# Returns 0 on already-correct/applied, 1 on failure.
+apply() {
+    _f=$1
+    _want=$2
+    _label=$3
+
+    if [ ! -e "$_f" ]; then
+        fail "$_label: $_f does not exist"
+        return 1
+    fi
+    if ! _before=$(cat "$_f" 2>/dev/null); then
+        fail "$_label: cannot read $_f"
+        return 1
+    fi
+    if [ "$_before" = "$_want" ]; then
+        echo "$_label: already $_want"
+        return 0
+    fi
+    if ! (echo "$_want" > "$_f") 2>/dev/null; then
+        fail "$_label: write rejected (still $_before, wanted $_want)"
+        return 1
+    fi
+    if ! _after=$(cat "$_f" 2>/dev/null); then
+        fail "$_label: cannot read back $_f"
+        return 1
+    fi
+    if [ "$_after" != "$_want" ]; then
+        fail "$_label: readback $_after != $_want (was $_before)"
+        return 1
+    fi
+    echo "$_label: $_before -> $_after"
+    return 0
+}
+
 # --- RAPL PL1 (long_term, constraint_0) cap on every package domain ---
 # PL2 (short_term, constraint_1) is left at the firmware default so brief bursts
 # still turbo.
 pl1_uw=$(( PL1_WATTS * 1000000 ))
+packages=0
+pl1_ok=0
 for d in /sys/class/powercap/intel-rapl:*; do
     [ -e "$d/name" ] || continue
     case "$(cat "$d/name" 2>/dev/null)" in
         package-*) ;;
         *) continue ;;
     esac
-    if [ -w "$d/constraint_0_power_limit_uw" ]; then
-        echo "$pl1_uw" > "$d/constraint_0_power_limit_uw" || true
+    packages=$(( packages + 1 ))
+    # `if apply`, never `apply || true` -- a discarded exit status is the bug
+    # this script was rewritten to remove.
+    if apply "$d/constraint_0_power_limit_uw" "$pl1_uw" "PL1 $(basename "$d")"; then
+        pl1_ok=$(( pl1_ok + 1 ))
     fi
 done
+# No package domain at all means the RAPL cap -- the whole point of this unit --
+# is not in effect. That is a finding, not a no-op.
+if [ "$packages" -eq 0 ]; then
+    fail "PL1: no intel-rapl package domain found"
+else
+    echo "PL1: ${PL1_WATTS}W on $pl1_ok/$packages package domain(s)"
+fi
 
 # --- CPU frequency governor on every core ---
+# Summarised rather than logged per-core: 8 identical lines buries a single
+# failing core, which is the case worth seeing.
+cores=0
+gov_ok=0
 for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
-    [ -w "$g" ] || continue
-    echo "$GOVERNOR" > "$g" || true
+    [ -e "$g" ] || continue
+    cores=$(( cores + 1 ))
+    if apply "$g" "$GOVERNOR" "governor $(echo "$g" | cut -d/ -f6)" >/dev/null; then
+        gov_ok=$(( gov_ok + 1 ))
+    fi
 done
+if [ "$cores" -eq 0 ]; then
+    fail "governor: no cpufreq interface found"
+else
+    echo "governor: $GOVERNOR on $gov_ok/$cores cores"
+fi
+
+exit "$rc"

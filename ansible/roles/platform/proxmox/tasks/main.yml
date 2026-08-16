@@ -428,6 +428,45 @@
     - enable_proxmox_power_tuning | default(true)
     - not ansible_check_mode
 
+# --- Thermal headroom: KSM ---
+# KSM's scan is continuous background CPU across every core, which on a
+# cooling-marginal box holds the package a few degrees higher (~3 C measured here
+# on 2026-08-02) -- enough to cross the TCC trip point, because throttling is a
+# threshold effect. It also has negative general_profit on this guest topology.
+# Masked rather than merely disabled: the unit ships preset: enabled, so
+# `disabled` is exactly the state a rebuild or a preset refresh undoes.
+
+- name: Set ksmtuned state (KSM control daemon)
+  ansible.builtin.systemd:
+    name: ksmtuned.service
+    state: "{{ 'stopped' if (proxmox_disable_ksm | default(true)) else 'started' }}"
+    enabled: "{{ not (proxmox_disable_ksm | default(true)) }}"
+    masked: "{{ proxmox_disable_ksm | default(true) }}"
+  become: true
+
+# ksmtuned has no ExecStop, so stopping the daemon leaves /sys/kernel/mm/ksm/run
+# at whatever it was last set to. Converge the kernel state too, or a host where
+# KSM was running keeps scanning after the daemon is gone.
+- name: Read current KSM run state
+  ansible.builtin.slurp:
+    src: /sys/kernel/mm/ksm/run
+  register: proxmox_ksm_run
+  become: true
+  failed_when: false
+  when: proxmox_disable_ksm | default(true)
+
+# `run=0` stops the scan and keeps already-merged pages; `run=2` would also
+# unmerge, which is a memory operation (a spike on a host with ~6 GiB free) and
+# is not what the thermal fix needs. Merged pages are released as guests touch them.
+- name: Stop KSM scanning
+  ansible.builtin.shell: echo 0 > /sys/kernel/mm/ksm/run
+  become: true
+  changed_when: true
+  when:
+    - proxmox_disable_ksm | default(true)
+    - proxmox_ksm_run.content is defined
+    - (proxmox_ksm_run.content | b64decode | trim) != '0'
+
 # --- Journald size cap ---
 # cwwk already persists its journal (that's what made the THERMTRIP forensics
 # possible) but only up to systemd's implicit min(10% fs, 4G) default. Make the
