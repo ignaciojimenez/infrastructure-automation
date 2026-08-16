@@ -140,15 +140,53 @@ masked-permission trap as D6's read-back of choco's `0700` home. Use `sudo -n`.
   `tasks/deploy_monitoring.yml` vs `deploy_monitoring.yml` mix-up: **the file named
   after the thing is not always the file that does the thing.**
 
-### Open
+### Verification completed
 
-- 🔴 **Second run not yet confirmed `changed=0`** — the handler restarts the unit
-  whenever the template changes, so the deploy above legitimately reports 3. The
-  idempotency check is one more `--tags proxmox` run.
-- The failed-unit chain (`script rc=1` → unit `failed` → `systemctl --failed` →
-  `check_failed_units` at `system_health_check.sh:549`) is proven at both ends —
-  the script's `rc=1` on real sysfs, and the parse the health check performs — but
-  the middle link is **still pending a live probe** (blocked on Touch ID).
+- ✅ **Idempotency: `changed=0`** on a second `--tags proxmox --flush-cache` run,
+  `ksmtuned` task `ok`, no handler fired. The first deploy's `changed=3` was the
+  template + ksmtuned + the handler's unit restart, all legitimate.
+- ✅ **Convergence proven by byte-comparison, which is stronger.** The deployed
+  `/usr/local/bin/cwwk_power_tuning.sh` hashes identical to the rendered template
+  (`b7a0fc72…`). `changed=0` is also what a silently-skipped task reports; a
+  matching hash is not.
+- ✅ **The failed-unit chain is closed end to end.** A oneshot exiting 1 goes
+  `failed` and appears in exactly the parse `check_failed_units` performs at
+  `system_health_check.sh:549`.
+
+### 🔴 Self-inflicted: 3 spurious pages to #home-alerts, 2026-08-16
+
+**Own this one.** A `pkill -f ansible` used to clear a wedged background job also
+killed the ControlMaster processes *and* interrupted a probe that had **already
+reached cwwk** — leaving `claude-pt-probe.service` sitting in `systemctl --failed`
+from **19:43 until ~23:40**. The killed process was the half that would have cleaned
+up after itself.
+
+| Measured on the host | |
+|---|---|
+| Health-check runs with the fault present | **17** |
+| Alerts actually sent to `#home-alerts` | **3** (19:47, 20:47, 22:47) |
+| Suppressed | **14** |
+| Recovery | **00:02:04 on cron's own run** — `success`, failure fields cleared, notice sent, exit 0 |
+
+📌 **Two things this accidentally proved, and they are worth more than the probe
+that caused it.** First, the *real* health check caught a *real* failed unit and
+paged through the *real* wrapper — a stronger end-to-end proof of the chain than
+the synthetic test being attempted. Second, **L-F's full lifecycle ran unassisted
+on live traffic**: 17 runs damped to 3 pages on the 1 h → 2 h → 4 h ladder, then
+**recovery detected and announced on cron's own 00:02 run**, state reset to
+`success` with every failure field cleared. Fail → page → suppress → recover →
+notify, end to end, without anyone driving it.
+
+⚠️ **Reusable trap: `pkill -f ansible` is never the right way to clear a stalled
+run.** The pattern matches the `ssh` ControlMasters (their argv carries the
+control path), so it destroys the warm connections that were the only thing still
+working — after which every new connection needs a fresh signature and lands in
+`touchid-agent`'s sticky-refusal state. Kill by explicit PID, or let the job fail
+and continue over `-agent`.
+
+⚠️ **And a probe that mutates host state must clean up in a trap, not on the happy
+path.** `systemd-run` + `reset-failed` as sequential lines means any interruption
+between them leaves a failed unit that the fleet's own monitoring will page about.
 
 ---
 
