@@ -19,6 +19,45 @@ Items are ordered by risk × effort — highest-impact, most-actionable items fi
 
 ---
 
+## ❌ CORRECTION 2026-08-16 — the fan IS fitted, and the open problem is vent sizing
+
+**Several statements in this file said cwwk has no fan. They are stale and are
+marked inline where they appear.** Corrected against Ignacio's own five-day test
+campaign (the "cwwk Cabinet Fan — Vent Sizing Handover" artifact) and re-measured
+on the live host.
+
+- ✅ **Fan fitted 2026-08-10**: Noctua **NF-A12x25 G2 LS-PWM**, USB→12 V step-up,
+  manual governor at max (~10.5 V **assumed, never metered**). Divider-cut gap
+  sealed 2026-08-13. ⚠️ **Airflow is a ceiling, not a lever** — Ignacio has ruled
+  out running it harder; acoustics are a deliberate constraint.
+- 🔴 **The fan alone is not sufficient. Door position dominates everything.**
+
+  | Door | Windows | pkg avg | Peak | Throttles/hr |
+  |---|---|---|---|---|
+  | **resting** + sealed | 4 | **50–57 °C** | 81 °C | **~0** |
+  | **fully closed** + sealed | 2 | 65–66 °C | **94 °C** | 340 → **2,030** |
+
+  Same nightly `pve-daily-update.timer` job peaked **94 °C closed vs 81 °C
+  resting — 13 °C on door position alone**, and 94 °C is 1 °C under CRIT.
+- 📌 **The live project is drilling front-bottom intake vents** so the door can run
+  fully closed and still match the resting-door baseline. The only proven intake
+  path today is the resting-door gap, ~7 mm × 49 cm ≈ **34.3 cm²** (eyeballed).
+- ✅ **Live state 2026-08-16**: pkg **52–54 °C**, `throttle_delta=0` on every
+  sample, up 6 days. Healthy, consistent with the door at resting.
+- 🔴 **Blocked on three measurements only Ignacio can take**: actual power draw of
+  cwwk + the Zyxel switch (**the biggest unknown — every heat figure so far is a
+  55–110 W assumption**), exact usable panel dimensions, and hole-count/aesthetic
+  limits.
+
+📌 **Why this correction was needed at all.** The claim "there is still no fan" was
+true when written on 2026-08-07 and was carried forward as a standing condition
+into the plan, the session router and memory — where it silently became the reason
+L-E was "gated". **A dated observation reused as current state is the same bug
+class as a monitoring check that samples once.** Anything describing hardware
+should be re-measured, not inherited.
+
+---
+
 ## ✅ L-I(W2) DEPLOYED 2026-08-16 — the plug now does what Ignacio was doing by hand
 
 Session L-I, **W2 only** (W1 deliberately not started — see the open item below).
@@ -1852,7 +1891,7 @@ All as code in the `platform/proxmox` role (toggle `enable_proxmox_power_tuning`
 
 ### 2026-08-07 — THIRD thermal event, and the first one the fan did not cause
 
-**There is still no fan** — the Noctua + mechanical controller bought 2026-08-02 is not yet fitted, so cwwk has been running passively since 2026-07-31. That is the standing condition, not the news. The news is that **a single runaway process on a guest was enough to hold the box at ~95°C for ten hours**, and nothing in the fleet's monitoring could see it.
+~~**There is still no fan**~~ ❌ **STALE — the fan was fitted 2026-08-10 and tested for five days.** True when written (2026-08-07); the passive-running condition below describes 2026-07-31 → 2026-08-10 only. See the fan/vent correction at the top of this file. That was the standing condition then, not the news. The news is that **a single runaway process on a guest was enough to hold the box at ~95°C for ten hours**, and nothing in the fleet's monitoring could see it.
 
 **Sequence (measured, `thermal-history.log` + `procstat`):**
 
@@ -1879,7 +1918,7 @@ GNU grep 3.11 (Linux)  : grep -r over /dev      → exit 2   (skips devices alre
 **What this says about the thermal picture — it does *not* overturn the fan conclusion:**
 
 - Prior peak-load samples already touched 89–95°C (load 13.77 → 95°C, 2026-08-06 03:04). The box reaches that temperature transiently under bursts *and* under one permanently-pegged core; the difference today was **sustained vs transient**, not a new cooling fault.
-- Steady-state with one core pegged, fanless, is therefore **~95°C**. That is the number to plan against, and it is 10°C from Tjmax.
+- Steady-state with one core pegged, **fanless**, is therefore **~95°C**, 10°C from Tjmax. ⚠️ **Historical — this is the pre-2026-08-10 baseline.** With the fan and the door at resting position the box now idles **52–57°C with zero throttling**; the number to plan against today is the **94°C closed-door** peak under `pve-daily-update`, which is a *door-position* figure, not a fanless one.
 - ⚠️ **Idle has settled at 74°C**, against 67–69°C on 2026-08-04→06. **Unverified** whether that is residual soak from a ten-hour heat load or a genuine ambient rise — re-read `thermal-history.log` before drawing anything from it.
 
 **The drifted thresholds are now demonstrated, not theoretical.** At ~16,000 events per 2 min the `*/5` check computes a ~40,000 delta — landing exactly on the hand-applied `THROTTLE_CRIT=40000` and oscillating CRIT/WARN on nearly every run. That is the Slack spam. Temps of 94–96°C stayed *below* the hand-applied `TEMP_WARN=98`, so the alerts never mentioned temperature at all and pointed at "check fan/airflow" for ten hours while the cause was a stuck process one VM away. **This is a concrete argument for what to restore the thresholds to (see RESTORE ON RETURN below), and for the wrapper dedup work in Next Steps.**
@@ -1938,7 +1977,7 @@ Against repo `TEMP_WARN=85` and Tjmax 105°C, ~70°C is unremarkable — and the
 
 1. **The runaway-process check stops being a nice-to-have and becomes the fan's prerequisite.** It is the replacement detector. Fitting the fan without it is a net *loss* of coverage on the host that takes the internet down.
 2. **Commissioning the fan must include proving detection survived it.** Per the standing rule — force the condition and watch it fire. On the cooled box, deliberately peg one core (`timeout 300 sh -c 'while :; do :; done'`) and confirm an alert reaches #home-alerts. **"Temps look fine now" is not acceptance**; it is exactly the observation a silenced detector produces.
-3. **L-E should follow the fan, not precede it.** The threshold restore reads differently on each side of it: on a fanless box the repo's `THROTTLE_WARN=20` pages constantly (see RESTORE ON RETURN), but **on a properly cooled box those repo values become correctly calibrated again** — 20 throttle events on a box that measured zero across three days is a real signal. Restore them *after* the fan and the wrapper-dedup dependency largely evaporates.
+3. ~~**L-E should follow the fan, not precede it.**~~ ✅ **SATISFIED 2026-08-16 — the fan is in, and the reasoning held.** The prediction was that repo thresholds become correctly calibrated on a cooled box; measured live, the resting-door configuration produces `throttle_delta=0` on every sample, so `THROTTLE_WARN=20` is now a real signal rather than constant noise. The threshold row restored itself via L-D's role run and no flood followed.
 4. **Re-baseline once cooled.** The RECURRENCE table's fan-OK figures predate this year's ambient and the KSM change. Take a fresh idle + pegged-core reading after commissioning so the next comparison has a true reference.
 
 #### ✅ ANSWERED 2026-08-08 — the `choco` false failures are real, and the merge already fixes all of them
@@ -2017,17 +2056,30 @@ Three items, in the order they earn their keep:
 2. **`--devices=skip` on BSD-side recursive greps** — `scripts/services/opnsense/*` and `scripts/services/agent/investigate.sh.j2`. Belt-and-braces; on its own it only fixes the one shape that already bit us, and GNU grep needs nothing.
 3. **A runaway-process check.** 🔴 **Listed third but it is the one that matters most — it is the fan's prerequisite**, per the masking section above. Everything before it prevents *this* incident; only this one detects the *next* one, and after the fan nothing else will. Alert on a single process sustaining ~100% of one core across N consecutive samples. Reuse the `check_thermal.sh` counter-delta idiom (sample process CPU-time, alert on sustained growth) rather than a single-sample threshold. **Place it where the process runs, not on the hypervisor** — a pegged core on the firewall is nearly always wrong, whereas `kvm` at 109% on cwwk is sometimes legitimate. Host scope is an open decision; it touches `system_health_check.sh`, which reaches all eight hosts.
 
-### ⚠️ RESTORE ON RETURN — manual drift on cwwk (do this FIRST when home)
+### ✅ RESTORE ON RETURN — four of five rows CLOSED, measured 2026-08-16
 
-Temporary changes were applied by hand on cwwk on 2026-08-01 while away. **All are un-codified drift.** Ansible restores most of it, but do it deliberately rather than discovering it later:
+Temporary changes were applied by hand on cwwk on 2026-08-01 while away. **All were un-codified drift.** State below re-read off the live host on 2026-08-16 (`up 6 days`, i.e. booted 2026-08-10 when the fan went in):
 
-| Change | Current (drifted) state | Restored by |
-|---|---|---|
-| RAPL PL1 | **15W** (repo says 20W) | Reboot, or the `Restart cwwk power tuning` handler |
-| RAPL PL2 | **20W** (repo/firmware default 35W) | Reboot only — the script does not manage PL2 |
-| `check_thermal.sh` thresholds | **15000 / 40000 / 98 / 101** (repo: 20 / 500 / 85 / 95) | Any `platform/proxmox` run |
-| Thermal cron schedule | `*/5` — already back to the repo value | n/a |
-| **`ksmtuned` disabled** | `disabled` / `inactive (dead)` | ⚠️ **NOTHING — see below** |
+| Change | Recorded drifted state | Live 2026-08-16 | Status |
+|---|---|---|---|
+| RAPL PL1 | **15W** (repo says 20W) | `constraint_0` = **20W** | ✅ **restored by the 08-10 reboot** |
+| RAPL PL2 | **20W** (repo/firmware default 35W) | `constraint_1` = **35W** | ✅ **restored by the 08-10 reboot** |
+| `check_thermal.sh` thresholds | **15000 / 40000 / 98 / 101** (repo: 20 / 500 / 85 / 95) | repo values | ✅ closed by L-D's role run |
+| Thermal cron schedule | `*/5` — already back to the repo value | `*/2` sampler + repo check | ✅ |
+| **`ksmtuned` disabled** | `disabled` / `inactive (dead)` | `run=0`, `inactive` | 🔴 **STILL DRIFTED — the only one left** |
+
+📌 **The two RAPL rows closed themselves, and that is the lesson.** Fitting the fan
+required a power-down; the reboot reset both constraints. Nobody decided that — it
+was a side effect of unrelated physical work. **Drift whose only remedy is "a
+reboot" is drift you will not notice being repaired, which means you also cannot
+tell when it came back.** Re-read the values; do not infer them from the last
+recorded action.
+
+🔴 **`ksmtuned` is now the whole of L-E.** It is the one row that survives reboots
+*and* Ansible runs (see below), and it is worth ~3 °C — so leaving it uncodified
+while the vent-sizing work proceeds means a rebuilt or re-converged cwwk silently
+comes back with KSM **on**, invalidating any before/after hole measurement. **Codify
+it before the holes are drilled.**
 
 📌 **The threshold row is no longer just drift — 2026-08-07 measured what it costs.** At `*/5`, `THROTTLE_CRIT=40000` sat exactly on the delta produced by one pegged core, oscillating CRIT/WARN every run; and `TEMP_WARN=98` kept a real 94–96°C event out of the alert text entirely. Restoring the repo values is the right move, but do it **with** the wrapper dedup in Next Steps — the repo's `THROTTLE_WARN=20` on a fanless box will page constantly on its own. See the 2026-08-07 event section above.
 
