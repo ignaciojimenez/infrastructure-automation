@@ -50,7 +50,7 @@ SSH.
 |---|---|---|
 | Root filesystem usage | `GET /api/diagnostics/system/system_disk` | `page-system-login-logout` — *Lobby: Dashboard* |
 | Default route present | `GET /api/diagnostics/interface/get_routes` | `page-diagnostics-routingtables` — *Diagnostics: Routing tables* |
-| Its own monitoring still runs | `POST /api/diagnostics/log/core/system` | `page-diagnostics-logs-system` — *Diagnostics: Logs: System* |
+| 🔴 Its own monitoring still runs — **NOT LIVE, see below** | `POST /api/diagnostics/log/core/system` | `page-diagnostics-logs-system` — *Diagnostics: Logs: System* |
 
 Those mappings are read out of OPNsense's own ACL definitions, not inferred:
 `src/opnsense/mvc/app/models/OPNsense/Core/ACL/ACL.xml` and
