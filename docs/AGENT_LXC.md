@@ -112,9 +112,11 @@ effort. The model is a per-agent variable (`agent_monitor_model` in `group_vars/
   alerted (it sweeps hourly; alerting would flood the channel and mask the laptop key's alerts).
 - **opnsense is the exception, and holds a second credential.** The firewall is read over its
   HTTPS API with a scoped, API-only key/secret — no SSH key, no shell, independently revocable,
-  TLS pinned to the firewall's own certificate. Nothing here SSHes into the gateway, which is
-  what retires the CrowdSec self-ban that caused the 2026-08-03 outage. Full reference:
-  [`OPNSENSE_API.md`](OPNSENSE_API.md).
+  and TLS pinned to the firewall's **public key** (not its certificate, which would couple an
+  alert to that certificate's expiry date). Nothing here SSHes into the gateway, which is what
+  retires the CrowdSec self-ban that caused the 2026-08-03 outage. Its monitoring freshness is
+  read from healthchecks.io rather than from the box, because FreeBSD's cron logs no job
+  executions. Full reference: [`OPNSENSE_API.md`](OPNSENSE_API.md).
 
 **Retirement is one line:** remove the container's entry from `agent_access_keys`
 (`roles/agent_access/defaults/main.yml`), re-run `agent_access.yml`, and the key is dead
