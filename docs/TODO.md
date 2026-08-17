@@ -715,6 +715,28 @@ change. **Both directions forced on the deployed script:** vinylstreamer prints
 *"not counted (host has 416 MiB RAM…)"*, hifipi still prints
 *"Pending updates: 192 (informational)"*. A fix, not a lobotomy.
 
+### 🔴 The reassess counter is contaminated — checked 2026-08-17
+
+`#home-alerts` on 2026-08-16 shows the plug firing and the escalation notice
+tripping: *"vinylstreamer has needed 2 power cycles in the last 7 days
+(threshold 3) … it is now hiding a worsening fault."*
+
+⚠️ **Those were W2's own forced acceptance tests**, including a deliberate
+plug-off (*"its plug is switched OFF, which explains it"*). The 7-day counter
+cannot distinguish a forced cycle from a real one. **Exclude 2026-08-16 when
+judging the reassess gate.**
+
+📌 **One genuine W1 signal did emerge, and it contradicts the standing model:**
+*"vinylstreamer back online after 18 min offline. Recovered on its own, with NO
+power cycle — record this against W1."* W1's premise is that NetworkManager
+gives up after 4 retries and stays down **for days**. An 18-minute self-recovery
+is a different fault shape. **Do not open W1 assuming the old model.**
+
+📉 **No plug events since.** Between 2026-08-16 and 2026-08-17 12:00 the week's
+measurement holds ~zero clean samples. If that holds to 2026-08-23, the honest
+reading is *"the fault did not recur in this window"* — not *"the plug fixed
+it"*, and not *"W1 is urgent"*.
+
 ### 🔴 STILL OPEN — W1, the actual root cause
 
 **The plug is remediation. Nothing about the fault itself has been fixed**, and
