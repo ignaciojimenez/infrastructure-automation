@@ -2,7 +2,9 @@
 # fleet_health_check.sh — Tier 1 fleet sweep (managed by Ansible)
 #
 # One SSH round-trip per host as read_agent, checking what that account can
-# actually see. Exits non-zero on any finding, which makes the surrounding
+# actually see — except opnsense, which is read over its HTTPS API because a
+# shell there is not something OPNsense lets a non-admin account keep. Exits
+# non-zero on any finding, which makes the surrounding
 # enhanced_monitoring_wrapper post to #home-alerts.
 #
 # On a finding it also writes a machine-readable snapshot to
@@ -23,6 +25,47 @@ AGENT_DIR="{{ agent_state_dir }}"
 ANOMALY_FILE="$AGENT_DIR/last_anomaly.json"
 BACKOFF_DIR="$AGENT_DIR/ssh_backoff"
 
+# ── OPNsense, which is read over its API and not over a shell ──────────────
+#
+# The firewall is the one host this container never SSHes into. OPNsense
+# rewrites every non-admin account's shell to /usr/sbin/nologin whenever it
+# regenerates users from config.xml (auth.inc:351), so a shell for read_agent
+# is not a thing that can be granted once — it is reclaimed on the firmware's
+# own schedule, and it was, twice. The API needs no login shell at all, so
+# there is nothing left for an account regeneration to take away.
+#
+# It also retires a risk class rather than backing off from it: the 2026-08-03
+# outage happened because failed SSH auth against the gateway reads to
+# CrowdSec as a brute-force, and the gateway then banned this container off
+# its own network. Nothing below ever authenticates over SSH to opnsense.
+OPNSENSE_API_HOST="{{ agent_opnsense_api_host }}"
+OPNSENSE_API_IP="{{ agent_opnsense_api_ip }}"
+OPNSENSE_API_CA="{{ agent_opnsense_api_ca_path }}"
+OPNSENSE_API_CREDS="{{ agent_opnsense_api_creds_path }}"
+OPNSENSE_API_TIMEOUT={{ agent_opnsense_api_timeout }}
+
+# ── opnsense monitoring freshness, read from healthchecks.io ───────────────
+#
+# NOT read from the firewall, and that is deliberate rather than a fallback.
+#
+# On every Linux host this question is answered by `journalctl -u cron`, because
+# Debian's cron syslogs every CMD it runs. FreeBSD's does not — measured on this
+# firewall 2026-08-17, its entire system log held five cron lines, all of them
+# the service starting at boot, months apart. So there is no equivalent evidence
+# on the box to read, over the API or otherwise.
+#
+# healthchecks.io answers it from outside instead, which is strictly stronger:
+# it does not depend on the firewall being well enough to answer, and it does not
+# depend on this container either.
+#
+# ⚠️ It reads the "monitoring alive" check, NOT the WAN or DNS ones. Those two
+# ping only when the thing they check is healthy, so a stale timestamp on them
+# means "WAN down" OR "monitoring stopped" — the exact two states this is here to
+# separate. heartbeat_monitoring.sh on opnsense pings unconditionally for that
+# reason.
+HEALTHCHECKS_API_KEY_FILE="{{ agent_healthchecks_api_key_file }}"
+HEALTHCHECKS_CHECK_NAME="{{ agent_opnsense_monitoring_check_name }}"
+
 # name:kind pairs, from group_vars/agent.yml
 FLEET="{% for h in agent_fleet_hosts %}{{ h.name }}:{{ h.kind }} {% endfor %}"
 
@@ -31,10 +74,11 @@ mkdir -p "$AGENT_DIR" "$BACKOFF_DIR"
 FINDINGS=$(mktemp)
 PROBE_OUT=$(mktemp)
 SSH_ERR=$(mktemp)
+API_OUT=$(mktemp)
 # In AGENT_DIR rather than /tmp, so replacing the snapshot below is a
 # same-filesystem rename and never leaves a half-written file for Tier 2.
 SNAPSHOT=$(mktemp "$AGENT_DIR/.anomaly.XXXXXX")
-trap 'rm -f "$FINDINGS" "$PROBE_OUT" "$SSH_ERR" "$SNAPSHOT"' EXIT INT TERM
+trap 'rm -f "$FINDINGS" "$PROBE_OUT" "$SSH_ERR" "$API_OUT" "$SNAPSHOT"' EXIT INT TERM
 
 # ⚠️ Appends to a FILE, and that is load-bearing rather than incidental.
 #
@@ -266,11 +310,317 @@ done
 REMOTE
 }
 
-probe_freebsd() {
-    ssh_probe "$1" > "$PROBE_OUT" <<'REMOTE'
-echo "DISK=$(df -P / | awk 'NR==2{print $5}' | tr -d '%')"
-echo "GW=$(netstat -rn -f inet | awk '$1=="default"{print $2; exit}')"
-REMOTE
+# ============================================================
+# OPNsense over its API
+#
+# Not a probe_* function, because it does not go through ssh_probe and must
+# not go through the SSH-shaped failure handling in the sweep loop below:
+# there is no back-off to apply (nothing authenticates over SSH here) and no
+# "answered but no usable shell" state to distinguish (there is no shell).
+# ============================================================
+
+# Set by api_call for its caller. API_FAIL classifies the failure so the sweep
+# can tell "the firewall is not there" (which is a fleet-wide signal, and is
+# collapsed with the other silent hosts) apart from "the firewall answered and
+# refused us" (which is a credential problem and must never look like an
+# outage). L-F's whole lesson: the detection worked, the wording hid what it
+# found.
+API_ERR=''
+API_FAIL=''
+
+api_call() {
+    # api_call <method> <path> [extra curl args...] — body lands in $API_OUT.
+    #
+    # Returns 0 ONLY for: verified TLS, HTTP 200, and a body that parses as
+    # JSON. Every one of those three is load-bearing; see below.
+    _method=$1
+    _path=$2
+    shift 2
+    API_ERR=''
+    API_FAIL=''
+    : > "$API_OUT"
+
+    if ! command -v jq >/dev/null 2>&1; then
+        API_ERR="jq is not installed on this container, so API responses cannot be parsed"
+        API_FAIL=local
+        return 1
+    fi
+    if [ ! -r "$OPNSENSE_API_CREDS" ]; then
+        API_ERR="API credentials file $OPNSENSE_API_CREDS is missing or unreadable"
+        API_FAIL=local
+        return 1
+    fi
+    _key=$(sed -n 's/^key=//p' "$OPNSENSE_API_CREDS" | head -1)
+    _secret=$(sed -n 's/^secret=//p' "$OPNSENSE_API_CREDS" | head -1)
+    if [ -z "$_key" ] || [ -z "$_secret" ]; then
+        API_ERR="API credentials file $OPNSENSE_API_CREDS holds no key/secret pair"
+        API_FAIL=local
+        return 1
+    fi
+
+    # ⚠️ The credential is fed to curl as a config file on STDIN, never as an
+    # argument. Every process on this container can read /proc/*/cmdline, and
+    # `-u key:secret` would put a firewall credential there for the lifetime
+    # of the call.
+    #
+    # ⚠️ --location is deliberately absent, and that is a correctness
+    # requirement rather than tidiness. Measured against this firewall
+    # 2026-08-17:
+    #
+    #   no credential at all  → 302, an HTML redirect to the login page
+    #   wrong key/secret      → 401, {"status":401,"message":"Authentication Failed"}
+    #
+    # So with -L the 302 is followed and comes back 200 with an HTML login
+    # form — a revoked credential reading as a healthy response. And because
+    # the 401 body is itself valid JSON, "the body parses as JSON" does not
+    # catch that case either. Only requiring 200 AND JSON catches both.
+    #
+    # TLS is fully verified against the firewall's own self-signed certificate
+    # rather than waved through with -k. The SAN is OPNsense.internal and the
+    # host is reached by IP, so --resolve supplies the name that makes the
+    # certificate match — which also means this check does not depend on DNS,
+    # on a firewall whose own resolver is one of the things it is watching.
+    _rc=0
+    API_HTTP=$(printf 'user = "%s:%s"\n' "$_key" "$_secret" | \
+        curl -K - \
+             -s -o "$API_OUT" -w '%{http_code}' \
+             -X "$_method" \
+             --cacert "$OPNSENSE_API_CA" \
+             --resolve "${OPNSENSE_API_HOST}:443:${OPNSENSE_API_IP}" \
+             --max-time "$OPNSENSE_API_TIMEOUT" \
+             "$@" \
+             "https://${OPNSENSE_API_HOST}/${_path}" 2>/dev/null) || _rc=$?
+
+    if [ "$_rc" -ne 0 ]; then
+        # curl exit codes, verified against this firewall on 2026-08-17 rather
+        # than quoted from the manual: a wrong --cacert gives 60, an
+        # unreadable one gives 77.
+        case "$_rc" in
+            35|51|58|59|60|77|83)
+                API_ERR="TLS verification failed (curl exit ${_rc}) — the firewall's web certificate no longer matches ${OPNSENSE_API_CA}. It is self-signed and gets replaced on regeneration or expiry, so this is a certificate to re-pin, not necessarily an attack."
+                API_FAIL=tls
+                ;;
+            6|7|28)
+                API_ERR="no answer from ${OPNSENSE_API_IP}:443 (curl exit ${_rc})"
+                API_FAIL=unreachable
+                ;;
+            *)
+                API_ERR="curl exit ${_rc} talking to the OPNsense API"
+                API_FAIL=other
+                ;;
+        esac
+        return 1
+    fi
+
+    case "$API_HTTP" in
+        200) ;;
+        302)
+            API_ERR="HTTP 302 on ${_path} — the API redirected to the login page, which is how OPNsense answers a call carrying no usable credential at all"
+            API_FAIL=auth
+            return 1 ;;
+        401)
+            API_ERR="HTTP 401 on ${_path} — the API user's key/secret was rejected (revoked, regenerated, or the account is disabled)"
+            API_FAIL=auth
+            return 1 ;;
+        403)
+            API_ERR="HTTP 403 on ${_path} — authenticated but not authorised. The API user is missing the privilege whose ACL pattern covers this endpoint."
+            API_FAIL=priv
+            return 1 ;;
+        *)
+            API_ERR="HTTP ${API_HTTP} on ${_path}"
+            API_FAIL=other
+            return 1 ;;
+    esac
+
+    if ! jq -e . "$API_OUT" >/dev/null 2>&1; then
+        API_ERR="HTTP 200 on ${_path} but the body is not JSON: $(head -c 120 "$API_OUT" | tr -d '\n')"
+        API_FAIL=other
+        return 1
+    fi
+    return 0
+}
+
+# Is the last api_call failure a property of the CONNECTION rather than of the
+# endpoint it was aimed at? No credential, a rejected credential and a
+# certificate that no longer matches all fail every call identically, so
+# reporting them once per endpoint prints one fact three times — the alert
+# flood wearing a different hat, which is the same reason the fleet-wide
+# collapse further down exists.
+#
+# 403 is deliberately NOT in this set. Privileges in OPNsense are per-endpoint
+# ACL patterns, so "disk reads fine but routes are forbidden" is a true and
+# useful thing to be told, and collapsing it would hide exactly the failure
+# this design was gated on.
+api_fatal() {
+    case "$API_FAIL" in
+        local|auth|tls) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# Reads the "monitoring alive" check from healthchecks.io.
+#
+# ⚠️ The three outcomes are deliberately three, not two. Getting this wrong is
+# the whole risk of sourcing a fleet signal from a third party:
+#
+#   check is down / stale  → the FIREWALL's monitoring stopped. A real finding.
+#   we cannot ask          → UNKNOWN. Also a finding, worded so nobody reads it
+#                            as the firewall being unwell.
+#   check is up            → silence.
+#
+# A healthchecks.io outage, an expired key or a renamed check must never render
+# as "opnsense monitoring is dead". That would page about the firewall because a
+# third-party web service blipped — the same class of lie as a silent check, just
+# in the other direction.
+check_opnsense_monitoring_alive() {
+    _host=$1
+    _unknown="monitoring freshness UNKNOWN — could not reach healthchecks.io (this says nothing about the firewall itself)"
+
+    if ! command -v jq >/dev/null 2>&1; then
+        note "$_host" "$_unknown: jq is not installed on this container"
+        return 0
+    fi
+    if [ ! -r "$HEALTHCHECKS_API_KEY_FILE" ]; then
+        note "$_host" "$_unknown: API key file $HEALTHCHECKS_API_KEY_FILE is missing or unreadable"
+        return 0
+    fi
+    _hc_key=$(sed -n 's/^api_key=//p' "$HEALTHCHECKS_API_KEY_FILE" | head -1)
+    if [ -z "$_hc_key" ]; then
+        note "$_host" "$_unknown: API key file holds no api_key= line"
+        return 0
+    fi
+
+    # Key on stdin as a curl config file, never argv — /proc/*/cmdline is
+    # world-readable on this container.
+    #
+    # The whole check list is fetched and matched by NAME rather than fetching
+    # one check by uuid: a read-only healthchecks.io key omits uuid entirely and
+    # exposes only unique_key, so name is the stable identifier available to the
+    # least-privileged key that can answer this. Read-only is the right key here
+    # — nothing should be able to pause or delete checks from this container.
+    _hc_rc=0
+    _hc_http=$(printf 'header = "X-Api-Key: %s"\n' "$_hc_key" | \
+        curl -K - -s -o "$API_OUT" -w '%{http_code}' \
+             --max-time "$OPNSENSE_API_TIMEOUT" \
+             "https://healthchecks.io/api/v3/checks/" 2>/dev/null) || _hc_rc=$?
+
+    if [ "$_hc_rc" -ne 0 ]; then
+        note "$_host" "$_unknown: curl exit ${_hc_rc}"
+        return 0
+    fi
+    if [ "$_hc_http" != "200" ]; then
+        note "$_host" "$_unknown: HTTP ${_hc_http} from the healthchecks.io API"
+        return 0
+    fi
+    if ! jq -e . "$API_OUT" >/dev/null 2>&1; then
+        note "$_host" "$_unknown: the API returned a non-JSON body"
+        return 0
+    fi
+
+    # `// empty` rather than a default, so a renamed or deleted check falls into
+    # the UNKNOWN branch below instead of quietly evaluating as healthy.
+    _hc_status=$(jq -r --arg n "$HEALTHCHECKS_CHECK_NAME" \
+        'first(.checks[]? | select(.name == $n) | .status) // empty' "$API_OUT" 2>/dev/null)
+    _hc_last=$(jq -r --arg n "$HEALTHCHECKS_CHECK_NAME" \
+        'first(.checks[]? | select(.name == $n) | .last_ping) // empty' "$API_OUT" 2>/dev/null)
+
+    if [ -z "$_hc_status" ]; then
+        note "$_host" "$_unknown: no check named '${HEALTHCHECKS_CHECK_NAME}' exists in the account (renamed, deleted, or the key cannot see it)"
+        return 0
+    fi
+
+    # `down` is healthchecks.io's own verdict against the period+grace configured
+    # there, and it is trusted rather than recomputed. `grace` is deliberately NOT
+    # a finding: it means one period was missed, which on a */5 heartbeat is a
+    # dropped packet far more often than a dead cron.
+    if [ "$_hc_status" = "down" ]; then
+        note "$_host" "monitoring has STOPPED running — healthchecks.io reports '${HEALTHCHECKS_CHECK_NAME}' down (last ping ${_hc_last:-never})"
+        return 0
+    fi
+
+    # Independent age check on top of the status, because the two can disagree:
+    # the check's period/grace live in healthchecks.io's UI where this repo cannot
+    # see them, so a period widened by hand there would silently widen this check
+    # too. This bounds it from our side against the same threshold every other
+    # host uses.
+    if [ -n "$_hc_last" ]; then
+        if _hc_epoch=$(date -d "$_hc_last" +%s 2>/dev/null) && is_number "$_hc_epoch"; then
+            _hc_age=$(( ( $(date +%s) - _hc_epoch ) / 3600 ))
+            [ "$_hc_age" -ge "$WRAPPER_MAX_AGE_HOURS" ] && \
+                note "$_host" "monitoring last ran ${_hc_age}h ago (max ${WRAPPER_MAX_AGE_HOURS}h) — healthchecks.io still reports '${_hc_status}', so its period/grace is wider than this fleet's threshold"
+        else
+            note "$_host" "$_unknown: could not parse last_ping '${_hc_last}'"
+        fi
+    else
+        note "$_host" "monitoring has NEVER pinged '${HEALTHCHECKS_CHECK_NAME}' — the check exists but the firewall has not reached it"
+    fi
+    return 0
+}
+
+check_opnsense() {
+    # check_opnsense <host> — the whole firewall check, API-only.
+    #
+    # Returns 0 if the firewall answered at all (whatever it said), 1 if it is
+    # not there. The caller uses that to decide whether this host joins the
+    # fleet-wide silence collapse.
+    _host=$1
+
+    # ── Root filesystem ──
+    #
+    # Covered by the "Lobby: Dashboard" privilege (page-system-login-logout),
+    # whose ACL lists api/diagnostics/system/system_disk literally.
+    if api_call GET "api/diagnostics/system/system_disk"; then
+        # The response is {"devices":[{...,"mountpoint":"/","used_pct":N}]}.
+        # Selecting on mountpoint rather than taking the first device matters:
+        # OPNsense returns every ufs/zfs/tmpfs filesystem, and on this box / is
+        # not first. `// empty` keeps a shape change from yielding "null",
+        # which is_number would then report as unreadable rather than healthy.
+        disk=$(jq -r 'first(.devices[]? | select(.mountpoint == "/") | .used_pct) // empty' \
+               "$API_OUT" 2>/dev/null | tr -d '% ')
+        if is_number "$disk"; then
+            [ "$disk" -ge "$DISK_THRESHOLD" ] && \
+                note "$_host" "disk usage ${disk}% (threshold ${DISK_THRESHOLD}%)"
+        else
+            note "$_host" "disk usage unreadable — the API answered but no / filesystem with a numeric used_pct was in it"
+        fi
+    else
+        [ "$API_FAIL" = unreachable ] && return 1
+        if api_fatal; then
+            note "$_host" "$API_ERR"
+            return 0
+        fi
+        note "$_host" "disk usage unreadable over the API: $API_ERR"
+    fi
+
+    # ── Default route ──
+    #
+    # Covered by "Diagnostics: Routing tables" (page-diagnostics-routingtables),
+    # whose ACL pattern is api/diagnostics/interface/get_routes*.
+    #
+    # This asks the firewall whether it still has a way out, which is the one
+    # question its own monitoring cannot answer credibly: those crons only run
+    # while the box is well, and the WAN heartbeat only proves packets move,
+    # not that the routing table is intact.
+    if api_call GET "api/diagnostics/interface/get_routes"; then
+        gw=$(jq -r 'first(.[]? | select(.destination == "default") | .gateway) // empty' \
+             "$API_OUT" 2>/dev/null)
+        [ -z "$gw" ] && note "$_host" "no default route in the firewall's routing table"
+    else
+        [ "$API_FAIL" = unreachable ] && return 1
+        if api_fatal; then
+            note "$_host" "$API_ERR"
+            return 0
+        fi
+        note "$_host" "default route unreadable over the API: $API_ERR"
+    fi
+
+    # ── Its own monitoring's freshness ──
+    #
+    # Answered from healthchecks.io, not from the firewall. See the block at the
+    # top of this file for why there is nothing on the box to read.
+    check_opnsense_monitoring_alive "$_host"
+
+    return 0
 }
 
 # ============================================================
@@ -285,7 +635,7 @@ for entry in $FLEET; do total=$((total + 1)); done
 # the decision below can see HOW MANY there are. See the collapse block after
 # the loop for why that matters.
 SILENT=$(mktemp)
-trap 'rm -f "$FINDINGS" "$PROBE_OUT" "$SSH_ERR" "$SNAPSHOT" "$SILENT"' EXIT INT TERM
+trap 'rm -f "$FINDINGS" "$PROBE_OUT" "$SSH_ERR" "$API_OUT" "$SNAPSHOT" "$SILENT"' EXIT INT TERM
 
 # Resolver pre-check.
 #
@@ -301,13 +651,42 @@ dns_probe="${FLEET%%:*}"
 if getent hosts "$dns_probe" >/dev/null 2>&1; then
     fleet_to_check="$FLEET"
 else
-    note "resolver" "cannot resolve '${dns_probe}' — fleet names resolve as <host>.local via Unbound on the gateway. Per-host checks skipped: without DNS they would all report false failures."
+    # The SSH probes all need a name and would report false failures without
+    # one. opnsense does not: its check reaches the firewall by IP and
+    # supplies the certificate's name with curl --resolve, so it is kept in
+    # the sweep here rather than skipped with the rest.
+    #
+    # That is the useful case, not an edge case. Unbound runs ON the gateway,
+    # so "the whole fleet stopped resolving" and "the firewall is unwell" are
+    # very often the same event — and this is the moment you most want an
+    # independent read of the firewall rather than a sweep that has gone
+    # quiet about it.
     fleet_to_check=""
+    for entry in $FLEET; do
+        [ "${entry##*:}" = opnsense ] && fleet_to_check="$fleet_to_check $entry"
+    done
+    note "resolver" "cannot resolve '${dns_probe}' — fleet names resolve as <host>.local via Unbound on the gateway. SSH-based per-host checks skipped: without DNS they would all report false failures. opnsense is still checked, over its API by IP."
 fi
 
 for entry in $fleet_to_check; do
     host="${entry%%:*}"
     kind="${entry##*:}"
+
+    # opnsense is read over HTTPS and leaves the SSH machinery below entirely
+    # alone — no probe, no back-off, no auth-rejection branch, because nothing
+    # here authenticates over SSH to the firewall.
+    #
+    # A firewall that does not answer at all still joins $SILENT, so a site
+    # power cut is still collapsed into one event rather than reported as six
+    # hosts plus a separate firewall fault.
+    if [ "$kind" = opnsense ]; then
+        if check_opnsense "$host"; then
+            reachable=$((reachable + 1))
+        else
+            echo "$host" >> "$SILENT"
+        fi
+        continue
+    fi
 
     # A host in back-off is reported, not contacted.
     if backoff_active "$host"; then
@@ -380,10 +759,6 @@ for entry in $fleet_to_check; do
             note "$host" "$guest is set onboot but not running"
         done
     fi
-
-    if [ "$kind" = freebsd ] && [ -z "$(field GW)" ]; then
-        note "$host" "no default route"
-    fi
 done
 
 # ============================================================
@@ -416,7 +791,12 @@ if [ "$silent_count" -ge "$FLEET_WIDE_THRESHOLD" ]; then
 elif [ "$silent_count" -gt 0 ]; then
     while read -r silent_host; do
         [ -n "$silent_host" ] || continue
-        note "$silent_host" "UNREACHABLE — no response at all as read_agent (host down, or off the network)"
+        # Deliberately not "as read_agent" any more: opnsense reaches this
+        # line too and is never contacted as that user. A credential problem
+        # never lands here on either path — SSH rejections go to the
+        # auth-rejected branch and API rejections are named by HTTP status —
+        # so silence really does mean silence, whatever the transport was.
+        note "$silent_host" "UNREACHABLE — no response at all (host down, or off the network)"
     done < "$SILENT"
 fi
 

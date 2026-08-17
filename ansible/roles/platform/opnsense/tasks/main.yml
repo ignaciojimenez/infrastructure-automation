@@ -85,6 +85,19 @@
   become: true
   when: vault_healthcheck_opnsense_dns is defined
 
+# Asserts only that cron still runs monitoring scripts on this host — nothing
+# about whether the firewall is well. It is the one heartbeat here that pings
+# unconditionally; see the header of the script for why that is load-bearing.
+- name: Deploy OPNsense monitoring-alive heartbeat script
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/../../scripts/services/opnsense/heartbeat_monitoring.sh"
+    dest: "{{ scripts_dir }}/monitoring/heartbeat_monitoring.sh"
+    owner: "{{ infrastructure_user }}"
+    group: wheel
+    mode: '0755'
+  become: true
+  when: vault_healthcheck_opnsense_monitoring is defined
+
 - name: Install required packages
   community.general.pkgng:
     name:
@@ -211,6 +224,19 @@
   become: true
   become_user: "{{ infrastructure_user }}"
   when: vault_healthcheck_opnsense_dns is defined
+
+# */5 matches the other two, so a missed period is unambiguous rather than a
+# scheduling difference to reason about.
+- name: Configure OPNsense healthchecks.io monitoring-alive heartbeat
+  ansible.builtin.cron:
+    name: "Healthchecks.io - OPNsense monitoring alive"
+    minute: "*/5"
+    user: "{{ infrastructure_user }}"
+    job: "{{ scripts_dir }}/monitoring/heartbeat_monitoring.sh"
+    state: present
+  become: true
+  become_user: "{{ infrastructure_user }}"
+  when: vault_healthcheck_opnsense_monitoring is defined
 
 # --- Legacy cron cleanup ---
 # Remove manual cron entries that predate Ansible management

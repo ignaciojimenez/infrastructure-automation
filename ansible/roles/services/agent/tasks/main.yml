@@ -140,6 +140,59 @@
     mode: '0755'
   tags: [agent, monitoring, scripts]
 
+# ============================================================
+# opnsense API credential and pinned certificate
+#
+# The firewall is the one host the sweep does not SSH into, so it is the one
+# host that needs a credential deployed rather than a key trusted. Both files
+# land next to the sweep's other state and are deployed unconditionally: the
+# script reports a finding when either is missing, which is what should happen
+# if a deploy half-lands, and is much better than a check that quietly stops
+# checking.
+# ============================================================
+
+- name: Pin the OPNsense web certificate
+  become: true
+  ansible.builtin.copy:
+    src: opnsense-web.crt
+    dest: "{{ agent_opnsense_api_ca_path }}"
+    owner: "{{ primary_user }}"
+    group: "{{ infrastructure_group }}"
+    mode: '0644'
+  tags: [agent, monitoring, opnsense]
+
+# 0600 and no_log: the secret half of a firewall credential. It is written as
+# a file rather than passed to the sweep because the script feeds it to curl
+# on stdin — never argv, which is world-readable via /proc.
+- name: Deploy the OPNsense API credential
+  become: true
+  ansible.builtin.template:
+    src: opnsense_api.creds.j2
+    dest: "{{ agent_opnsense_api_creds_path }}"
+    owner: "{{ primary_user }}"
+    group: "{{ primary_user }}"
+    mode: '0600'
+  no_log: true
+  when:
+    - vault_opnsense_api_key is defined and vault_opnsense_api_key != ''
+    - vault_opnsense_api_secret is defined and vault_opnsense_api_secret != ''
+  tags: [agent, monitoring, opnsense]
+
+# Answers "is opnsense's own monitoring still running?" from outside the fleet.
+# Gated: without it the sweep reports that freshness is UNKNOWN, which is the
+# correct thing to say rather than a silent pass.
+- name: Deploy the healthchecks.io read-only API key
+  become: true
+  ansible.builtin.template:
+    src: healthchecks_api.creds.j2
+    dest: "{{ agent_healthchecks_api_key_file }}"
+    owner: "{{ primary_user }}"
+    group: "{{ primary_user }}"
+    mode: '0600'
+  no_log: true
+  when: vault_healthchecks_readonly_api_key is defined and vault_healthchecks_readonly_api_key != ''
+  tags: [agent, monitoring, opnsense]
+
 - name: Deploy fleet health check script
   become: true
   ansible.builtin.template:

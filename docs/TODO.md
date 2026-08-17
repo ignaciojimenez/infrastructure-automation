@@ -58,6 +58,323 @@ should be re-measured, not inherited.
 
 ---
 
+## ✅ L-H DONE 2026-08-17 — opnsense is read over its API, and its monitoring is watched from outside the fleet
+
+Branch `feat/opnsense-api-sweep-2026-08-17`. Supersedes the design notes in
+§F4b below; that section stays as the reasoning trail.
+
+**✅ The gate is answered: scoped privileges are sufficient on OPNsense 26.1.9.
+`page-all` is not needed, so the fallback design was never reached.** Deployed
+to agent-lxc and to opnsense, `changed=0` on the second run of both.
+
+✅ **All three rows are live and were each forced to fail before being believed.**
+The firewall's own monitoring is now watched by an unconditional heartbeat read
+back from healthchecks.io — the freshness row that two earlier designs could not
+close.
+
+### What shipped
+
+`opnsense` becomes its own sweep kind, read over HTTPS and never over SSH. It
+leaves the SSH machinery — back-off, auth-rejection, the "answered but no usable
+shell" third branch — completely untouched, because none of it applies to a host
+nothing SSHes into any more.
+
+| Check | Endpoint | Privilege carrying it |
+|---|---|---|
+| Root filesystem usage | `GET /api/diagnostics/system/system_disk` | *Lobby: Dashboard* |
+| Default route present | `GET /api/diagnostics/interface/get_routes` | *Diagnostics: Routing tables* |
+| **Its own monitoring still runs** | `POST /api/diagnostics/log/core/system` | *Diagnostics: Logs: System* |
+
+The third row closes the "also close this while there" item: `check_wrapper_freshness`
+reads the systemd journal, so it ran for `linux` and `proxmox` only and **nothing
+in this fleet noticed if the firewall's own monitoring stopped**. The log API
+answers the same question the journal does — cron's own record that it invoked
+the wrapper, not the wrapper's record of itself.
+
+Operator reference: **[`docs/OPNSENSE_API.md`](OPNSENSE_API.md)**.
+
+### ✅ The gate — measured, passed, and it very nearly gave a false answer
+
+| Endpoint | Result | Yielded |
+|---|---|---|
+| `system_disk` | **200** | `/` at **3%** (zfs), selected by mountpoint out of 12 filesystems |
+| `get_routes` | **200** | `default via 87.210.114.1 dev vlan0.300` (ETH2_WAN) |
+| `log/core/system` | **200** | rows returned; see the freshness bug below |
+| *control:* `firewall/pf_statistics/interfaces` | **403** | — |
+
+**Scoped privileges are sufficient on 26.1.9. `page-all` was never reached.**
+The control matters: without it, three 200s prove only that the credential
+works, not that the scoping is real. A 403 on an endpoint *outside* the granted
+set is what makes "scoped is sufficient" a measurement rather than a hope.
+
+🐛 **The first pass said otherwise, and the wrong conclusion was available.**
+`get_routes` returned **403** while the other two returned 200 — which is
+*exactly* the per-endpoint ACL defect opnsense/core **#9093** describes, and the
+obvious response would have been to reach for `page-all`. It was not that. The
+firewall's own log carries the disambiguating evidence:
+
+```
+2026-08-17T01:28:12 [opnsense] pluginctl: plugins_configure user_changed (1,sweep_api)
+```
+
+The privilege simply had not been saved yet. The tell was available before the
+log: **both `get_routes` and the legacy camelCase `getRoutes` were 403.** A
+naming defect would have let the snake_case form through — #9093's entire shape
+is that one form works and the other does not.
+
+📌 **Reusable, and it nearly cost real privilege here: "a known upstream bug
+matches my symptom" is a hypothesis, not a diagnosis.** Acting on it would have
+granted broad rights to a firewall account to work around a missing tickbox. The
+cheap discriminator was to try the *other* URL form before believing the issue.
+
+📌 The source reading held up: `Core/ACL/ACL.xml` lists
+`api/diagnostics/system/system_disk` literally under *Lobby: Dashboard*,
+`Diagnostics/ACL/ACL.xml` lists `get_routes*` under *Diagnostics: Routing
+tables*, and `Core/ACL.php:207` rewrites a trailing `/*` into `($1.*)?` — which
+is why `api/diagnostics/log/core/system/*` grants the **flat** `POST .../system`.
+snake_case landed in core `128094e1` (2025-07-08, 25.7); this box runs 26.1.9.
+
+### 🐛 Four measurements that each became a guard in the code
+
+Taken against this firewall on 2026-08-17. Every one contradicts a reasonable
+assumption, and the code would be wrong without it.
+
+| Measured | Consequence |
+|---|---|
+| **No credential → HTTP 302**, an HTML redirect to the login page | OPNsense does **not** answer unauthenticated API calls with 401 (core#5749). `--location` is therefore *forbidden*: with `-L` the redirect returns **200 + an HTML login form**, so a revoked credential reads as healthy. |
+| **Wrong key/secret → HTTP 401 with a body that is valid JSON** | "The body parses as JSON" is not a sufficient check either. Only **200 AND JSON** rejects both cases. |
+| **Wrong `--cacert` → curl exit 60; unreadable one → exit 77** | Lets a certificate problem be reported as a certificate problem, by name, instead of collapsing into "host down". |
+| **Cert SAN is `DNS:OPNsense.internal` only** | `--resolve` supplies the name so TLS verifies against the real certificate, while the connection still goes to `10.30.40.254`. |
+
+📌 **The last one has a second payoff worth keeping.** Because the check reaches
+the firewall by IP, **it does not depend on the firewall's own resolver.** Unbound
+runs *on* the gateway, so "the whole fleet stopped resolving" and "the firewall is
+unwell" are frequently the same event — and the sweep now keeps reading opnsense
+through exactly that event, where before it skipped every host including this one.
+
+### Acceptance — all four failure paths forced on agent-lxc and watched fire
+
+Per the standing rule that a check which has never failed has never been tested.
+Run on CT 103 under `dash`, against the live firewall:
+
+| Forced condition | Reported as |
+|---|---|
+| Credentials file absent | `❌ opnsense: API credentials file … is missing or unreadable` |
+| Credentials present but wrong | `❌ opnsense: HTTP 401 … rejected (revoked, regenerated, or the account is disabled)` |
+| Pinned certificate no longer matches | `❌ opnsense: TLS verification failed (curl exit 60) …` |
+| Firewall not there at all | `❌ opnsense: UNREACHABLE — no response at all` (3s), **not** three API findings |
+
+🐛 **Found by running it, not by reading it:** the first three each fired *three
+times*, once per endpoint, because one broken connection breaks all three calls.
+Now collapsed to one finding — the same "one signal, not N" rule the fleet-wide
+silence collapse already applies. **403 is deliberately excluded from that
+collapse**: privileges are per-endpoint, so "disk reads but routes are forbidden"
+is a true and useful distinction, and it is the exact thing the gate is about.
+
+🐛 Also found: the shared unreachable message said *"no response at all **as
+read_agent**"*. opnsense reaches that line and is never contacted as that user.
+
+### 🔒 Security decisions, stated rather than assumed
+
+- **TLS is verified, not waved through.** `-k` would accept any certificate from
+  anything able to ARP-spoof VLAN 40, on the one host holding a firewall
+  credential. The self-signed cert is pinned in the repo (public half — not a
+  secret, so not vault material).
+- **The secret never reaches argv.** Fed to `curl` as a config file on stdin
+  (`curl -K -`); `/proc/*/cmdline` is world-readable on the container. Deployed
+  `0600`, `no_log: true`.
+- **The account has no SSH key and no shell** — that is the whole distinction
+  from the refused `read_agent` change, which *holds* a key.
+- ⚠️ *System: Deny config write* (`user-config-readonly`) is added as defence in
+  depth. It is enforced in `write_config()` at `src/etc/inc/config.inc:206`, but
+  that check keys off `$_SESSION['Username']` and **it is NOT verified here that
+  it applies on the API-key path.** The control that actually bounds this account
+  is the privilege list: none of the three grants a write endpoint.
+- 🔴 **The pinned certificate expires 2026-11-04.** OPNsense will replace it, every
+  call will fail `curl` exit 60, and the sweep will page with the file to re-pin
+  named in the finding. Re-pin command is in `docs/OPNSENSE_API.md`.
+
+### 📌 There is no CLI for the one manual step, and that was checked
+
+OPNsense core ships **no command to create a user or mint an API key** — verified
+against the source tree (`src/opnsense/scripts/system/`, `mvc/script/`), not
+assumed. Users are fully MVC (`OPNsense\Auth\User`), so a PHP script could drive
+the model, but hand-writing `config.xml` on the internet SPOF is a worse trade
+than four clicks, once. The secret is stored `crypt($secret,'$6$')` and is
+downloadable exactly once (`Auth/FieldTypes/ApiKeyField.php`).
+
+### 🐛 The freshness check needed a change on the FIREWALL, not just in the sweep
+
+The design assumed the log API could read cron's own record of invoking the
+wrapper — the same evidence `check_wrapper_freshness` reads from the journal on
+Linux. **It cannot. FreeBSD's cron does not log job executions at all.**
+
+Searched the firewall's entire system log for `cron`: five hits, every one of
+them the *service* starting at boot, months apart (2026-07-31, 2026-08-10).
+Nothing about jobs, ever. Debian's cron syslogs every `CMD` it runs; FreeBSD's
+does not, and the Linux implementation quietly depends on that difference.
+
+📌 **This is the link that was flagged as least certain at design time and it is
+the one that broke.** It also failed in the right direction: the deployed sweep
+reported `❌ opnsense: no monitoring run found in the firewall's system log
+(searched for 'enhanced_monitoring_wrapper')` rather than finding nothing and
+calling it healthy. A check that cannot see its evidence must say so.
+
+**Fix:** the wrapper announces itself instead of depending on cron to do it —
+`logger -t monitoring "enhanced_monitoring_wrapper running <name>"` in
+`scripts/common/enhanced_monitoring_wrapper`, guarded to `uname -s = FreeBSD`.
+
+- It lands in `core/system` because that scope is the **catch-all** for anything
+  no program-specific filter claims — OPNsense's own
+  `service/templates/OPNsense/Syslog/local/README` states this, and no filter
+  claims this tag. `core/cron` exists as a scope but returns **403**: no ACL
+  entry covers it, so reading it would require `page-all`.
+- 📌 The marker is **stronger evidence than the Linux side has**: it proves the
+  wrapper *reached that line*, not merely that cron tried to start something.
+- Guarded to FreeBSD deliberately. Linux hosts already have a better answer, and
+  a second source of truth that can disagree with the journal is a liability,
+  not redundancy.
+
+### 🔴 STILL OPEN — and the previous diagnosis in this section was WRONG
+
+**The opnsense freshness check does not work yet, and this is the honest state
+of it.** Disk and default route are live and correct; only this row is open.
+
+What is **measured**, not reasoned:
+
+| Probe | Result |
+|---|---|
+| `logger -t monitoring 'L-H probe'` | **absent** from `core/system` |
+| `logger -t infra_wrapper 'LH probe A'` (default priority) | **absent** |
+| `logger -p daemon.notice -t monitoring 'LH probe B'` | **absent** |
+| `core/cron`, `core/monit` | **403** — no ACL entry, would need `page-all` |
+| `sudo`, `dhclient`, `kernel`, `opnsense`, `configctl` messages | **present** in `core/system` |
+
+So the local syslog socket *is* being read — other daemons' messages arrive —
+but nothing from `logger(1)` in a shell does.
+
+🐛 **Two theories were formed from source and both were killed by measurement**
+(and a third measurement then killed the framing of both — see below):
+
+1. *"`core/system` is the catch-all, so an unclaimed tag lands there."* It is the
+   catch-all (`Syslog/local/README`), and the message still did not arrive.
+2. *"The tag `monitoring` is swallowed by `filter f_local_monit { program("monit"); }`,
+   because syslog-ng matches `program()` as an unanchored regex."* That filter and
+   that matching behaviour are both real, and every `program()` pattern was
+   extracted and checked mechanically — but a provably non-colliding tag
+   (`infra_wrapper`) did not arrive either.
+
+📌 **The standing lesson, earned three times in one session: source explains
+mechanisms, it does not report state.** Every claim here that came from reading
+`opnsense/core` was *plausible and wrong* until the box was asked. The gate
+prediction happened to be right, which made the two that followed feel safer
+than they were.
+
+### 🐛 Freshness took three designs, and the first two failed for different reasons
+
+**Design 1 — read cron's own log over the API.** Dead: **FreeBSD's cron does not
+log job executions.** The firewall's entire system log held five cron lines, all
+of them the *service* starting at boot, months apart. Debian's cron syslogs every
+`CMD`, and the Linux implementation silently depended on that.
+
+**Design 2 — have the wrapper emit its own `logger` marker.** Dead: the marker
+never reached the system log, with any tag or priority, while
+`sudo`/`dhclient`/`kernel` messages arrived continuously. Never explained. Two
+theories from reading `opnsense/core` (the catch-all destination; a
+`program("monit")` unanchored-regex collision) were both real mechanisms and
+both wrong here. **The `logger` line has been removed from
+`enhanced_monitoring_wrapper` rather than left in as dead code on seven hosts.**
+
+❌ **A diagnosis was published on that and had to be retracted.**
+`sudo grep -rl 'LH probe' /var/log/` named the system log, which was read as *"the
+marker is written, the API drops it"*. The file matched because **sudo
+audit-logs the grep command, and that command contains the search string.** The
+same trap had produced a false positive ten minutes earlier via
+`searchPhrase=probe`. 📌 **A search whose own invocation is logged will find
+itself** — make the needle and the search string different.
+
+**Design 3 — ask healthchecks.io, from outside the fleet. This is what shipped.**
+
+### ✅ Why it had to be a NEW heartbeat, not the two that already existed
+
+The obvious move was to read `last_ping` on `opnsense-wan-connectivity` or
+`opnsense_dns`. **Both are conditional**: `heartbeat_opnsense_wan.sh` pings only
+when the default gateway answers, `heartbeat_dns.sh` only when Unbound resolves.
+
+📌 **A ping gated on the checked thing being healthy cannot answer "did
+monitoring run?"** — a stale timestamp then means *"WAN is down"* OR *"cron
+stopped"* OR *"the script broke"*, which are exactly the states that must be told
+apart. Same conflation the sweep's own dead-man's switch already warns about, and
+it would have shipped as a check that reports the firewall dead every time the
+WAN blips.
+
+So opnsense gained `heartbeat_monitoring.sh`, which **pings unconditionally and
+checks nothing**, because anything it checked would become a reason not to ping.
+It asserts one narrow thing: cron is alive here and still executing monitoring
+scripts. `*/5`, check `"OPNsense monitoring alive"` (period 5m, grace 15m).
+
+The sweep reads it back with a **read-only** healthchecks.io key — verified
+read-only by the API omitting `uuid` and returning `unique_key`. Nothing on the
+container can pause or delete a check. Matched by **name**, because that is the
+only stable identifier a read-only key exposes.
+
+⚠️ **Coupling worth knowing:** renaming the check in the healthchecks.io UI
+breaks the match. The sweep then reports UNKNOWN — the right failure direction,
+but `agent_opnsense_monitoring_check_name` must be updated to match.
+
+### ✅ Acceptance — every branch forced and watched fire
+
+Nothing here was believed because it went green. Run on agent-lxc under `dash`
+against the live firewall:
+
+| Forced condition | Reported as |
+|---|---|
+| Healthy (all three rows) | `Fleet OK — no findings`, exit 0 |
+| Threshold forced to 0h | `❌ monitoring last ran 0h ago (max 0h) — healthchecks.io still reports 'up', so its period/grace is wider than this fleet's threshold` |
+| Check renamed in the UI | `❌ monitoring freshness UNKNOWN … no check named '…' exists` |
+| healthchecks key absent | `❌ … UNKNOWN — could not reach healthchecks.io (this says nothing about the firewall itself)` |
+| healthchecks key invalid | `❌ … UNKNOWN … HTTP 401 from the healthchecks.io API` |
+| opnsense credential absent / wrong | `❌ API credentials file … missing` / `❌ HTTP 401 …` |
+| Pinned cert mismatched | `❌ TLS verification failed (curl exit 60) …` |
+| Firewall unreachable | `❌ UNREACHABLE — no response at all` (3s) |
+
+📌 **Three outcomes for freshness, deliberately not two.** down/stale is a real
+finding; *"we could not ask"* is UNKNOWN, worded to disclaim any statement about
+the firewall; up is silence. **A healthchecks.io outage must never render as
+"opnsense monitoring is dead"** — that is the same class of lie as a silent
+check, pointed the other way.
+
+### 🐛 Deploying it found 500 lines of undeployed drift on the firewall
+
+`--check` predicted **5 changes; only 2 were this session's**. The other three
+were L-F's monitoring work that had never reached opnsense:
+
+| Task | Diff |
+|---|---|
+| Deploy all common scripts | **+260/−13** |
+| Common wrapper (Bash for OPNsense) | **+231/−10** — `--alert-repeat-base`/`--alert-repeat-max` |
+| OPNsense backup freshness heartbeat | **+29/−3** — the `\|\| true` fix |
+
+**opnsense was running a pre-L-F wrapper**, so its own monitoring jobs had **no
+repeat suppression at all** while every other host had it since 2026-08-14.
+Exactly the documented "role-owned service scripts drift silently" class — the
+same shape as hifipi alerting four months after the repo fix. Deployed with
+Ignacio's approval; `changed=0` on re-run.
+
+⚠️ **Unexplained, and left unexplained rather than guessed:** the real run
+reported `changed=4` where `--check` predicted 5, and `ok=32` → `ok=31` between
+runs. Convergence is confirmed by `changed=0` on the second run, which is the
+state that matters, but the check-mode count was not reconciled task by task.
+
+### 🧹 Noted while there, not acted on### 🧹 Noted while there, not acted on
+
+`agent_access.yml` is `hosts: all`, so `read_agent` still exists on opnsense with
+its key trusted — now used by nothing. Removing it would fully retire the SSH
+path to the firewall, but it is a change to the SPOF that this session did not
+ask for. Worth its own small item.
+
+---
+
 ## ✅ L-E DEPLOYED 2026-08-16 — the last drift row is codified, and the tuner stopped lying
 
 Branch `feat/codify-ksm-drift-2026-08`. The RESTORE ON RETURN table is now **fully

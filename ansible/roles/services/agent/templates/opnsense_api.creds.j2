@@ -1,0 +1,9 @@
+# OPNsense API credential for the Tier 1 fleet sweep — managed by Ansible.
+#
+# Read by fleet_health_check.sh and passed to curl as a config file on stdin,
+# so the secret never reaches argv or the environment.
+#
+# The key/secret pair authorises read-only diagnostics only. Its privileges are
+# listed in docs/OPNSENSE_API.md; the account holds no SSH key and no shell.
+key={{ vault_opnsense_api_key }}
+secret={{ vault_opnsense_api_secret }}
