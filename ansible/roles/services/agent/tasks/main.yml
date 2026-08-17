@@ -151,6 +151,16 @@
 # checking.
 # ============================================================
 
+# The pinned CERTIFICATE was replaced by a pinned public key on 2026-08-17.
+# Ansible does not remove a file just because the task that created it is gone,
+# so it is removed explicitly rather than left to puzzle the next reader.
+- name: Remove the superseded pinned certificate
+  become: true
+  ansible.builtin.file:
+    path: "{{ agent_state_dir }}/opnsense-web.crt"
+    state: absent
+  tags: [agent, monitoring, opnsense]
+
 # 0600 and no_log: the secret half of a firewall credential. It is written as
 # a file rather than passed to the sweep because the script feeds it to curl
 # on stdin — never argv, which is world-readable via /proc.
