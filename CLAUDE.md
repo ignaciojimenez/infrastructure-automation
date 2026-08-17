@@ -13,8 +13,9 @@ Personal infrastructure-as-code repository managing a home network of Raspberry 
 | `hifipi` | `hifipi` | RPi | audio_playback | MPD, Shairport, Raspotify |
 | `vinylstreamer` | `vinylstreamer` | RPi | audio_streaming | Icecast, Liquidsoap |
 | `opnsense` | `opnsense` | FreeBSD VM | firewall | Unbound DNS, Mullvad WireGuard, CrowdSec |
-| `proxmox` | `cwwk` | Debian | hypervisor | CWWK host for VMs and LXCs |
+| `cwwk` | `cwwk` | Debian | hypervisor | CWWK host for VMs and LXCs |
 | `unifi-lxc` | `unifi` | LXC | network_controller | UniFi Network Application |
+| `agent-lxc` | `10.30.40.203` | LXC | agent | CT 103 — fleet sweep + investigation; see [AGENT_LXC.md](docs/AGENT_LXC.md) |
 
 ## Key Conventions
 
@@ -69,9 +70,9 @@ ansible-playbook ansible/playbooks/deploy_monitoring.yml
 
 ## SSH Access
 
-All hosts are reachable via SSH (key-based auth). Use the **SSH Hostname** from the table above (not the inventory key). Two hosts differ:
-- `proxmox` → `ssh cwwk`
-- `unifi-lxc` → `ssh unifi`
+All hosts are reachable via SSH (key-based auth). Use the **SSH Hostname** from the table above (not the inventory key). Names resolve by mDNS — there are no per-host aliases in `~/.ssh/config`. Two hosts differ from their inventory key:
+- `unifi-lxc` → `ssh unifi` (set as `ansible_host` in the inventory)
+- `agent-lxc` → `ssh 10.30.40.203` (IP-pinned; no mDNS name)
 
 **Autonomous / unattended SSH** (Claude Code, scripts, agents): always use the `-agent` hostname suffix. This uses the passphrase-free `read_agent_ed25519` key as the `read_agent` user — no Secretive/biometric prompt required.
 - `ssh cwwk-agent "command"` — not `ssh cwwk "command"`
