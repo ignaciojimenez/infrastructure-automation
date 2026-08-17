@@ -176,10 +176,12 @@ read_agent**"*. opnsense reaches that line and is never contacted as that user.
 
 ### 🔒 Security decisions, stated rather than assumed
 
-- **TLS is verified, not waved through.** `-k` would accept any certificate from
-  anything able to ARP-spoof VLAN 40, on the one host holding a firewall
-  credential. The self-signed cert is pinned in the repo (public half — not a
-  secret, so not vault material).
+- **TLS is pinned, not waved through.** Bare `-k` would accept any certificate
+  from anything able to ARP-spoof VLAN 40, on the one host holding a firewall
+  credential. The firewall's **public key** is pinned instead (`--pinnedpubkey`,
+  enforced even alongside `-k`), so only the real firewall's key is accepted —
+  without coupling an alert to the certificate's expiry date. See *RESOLVED*
+  below for the measurement.
 - **The secret never reaches argv.** Fed to `curl` as a config file on stdin
   (`curl -K -`); `/proc/*/cmdline` is world-readable on the container. Deployed
   `0600`, `no_log: true`.
@@ -190,9 +192,10 @@ read_agent**"*. opnsense reaches that line and is never contacted as that user.
   that check keys off `$_SESSION['Username']` and **it is NOT verified here that
   it applies on the API-key path.** The control that actually bounds this account
   is the privilege list: none of the three grants a write endpoint.
-- 🔴 **The pinned certificate expires 2026-11-04.** OPNsense will replace it, every
-  call will fail `curl` exit 60, and the sweep will page with the file to re-pin
-  named in the finding. Re-pin command is in `docs/OPNSENSE_API.md`.
+- ✅ **The certificate cannot generate an alert.** The **public key** is pinned,
+  not the certificate, so expiry is a non-event. See *RESOLVED* below. The only
+  TLS finding left is `curl` exit 90 — the key changed, which expiry cannot
+  cause.
 
 ### 📌 There is no CLI for the one manual step, and that was checked
 
@@ -397,23 +400,46 @@ already pushed the next repeat past 11:37, so silence and success were
 indistinguishable from `#home-alerts` alone. Confirmation required a *positive*
 success signal.
 
-### ⚠️ The pinned certificate: OPNsense will NOT renew it
+### ✅ RESOLVED — the certificate can no longer generate an alert at all
 
-Checked rather than assumed: OPNsense does **not** auto-renew its self-signed web
-GUI certificate (opnsense/core **#4567** and **#7385** are open feature requests
-for exactly this). It expires on **2026-11-04**.
+The first design pinned the firewall's **certificate** via `--cacert`, which
+guaranteed a page on **2026-11-04**: OPNsense serves a self-signed certificate
+and does **not** auto-renew it (opnsense/core **#4567**, **#7385** are open
+feature requests for exactly that).
 
-📌 **That expiry lands regardless of the pinning.** Browsers and any other API
-client break on it too; the pin does not create the problem, it makes it
-*visible* — and `-k` would have hidden an expired certificate entirely, since
-curl accepts one silently when verification is off.
+🛑 **Ignacio's position, and it is now settled: certificate lifecycle is the
+software's problem, and the fleet should not be monitoring it or warning about
+it.** A pre-warning was proposed and **declined** — do not re-propose it. The
+requirement is that this produces **no failed-connection alerts from agent-lxc**
+on account of the certificate.
 
-**Recommended, not built:** have the sweep read the pinned cert's own `notAfter`
-locally — no extra network call, and verification passing already proves the
-served cert *is* the pinned one — and warn ~21 days ahead. That turns a surprise
-page into a scheduled two-minute job. Alternative if it recurs: issue the GUI
-cert from an internal CA in OPNsense's Trust manager and pin the CA, so leaf
-renewals stop breaking the pin.
+**Now pins the PUBLIC KEY instead** (`-k --pinnedpubkey`), which has no expiry
+cliff. Measured against a purpose-built expired certificate rather than reasoned:
+
+| Setup | Result |
+|---|---|
+| expired cert + **correct** pin | **200, exit 0** |
+| expired cert + **wrong** pin | **exit 90** |
+| expired cert + `--cacert` | **exit 60** ← what the old design would have done |
+
+📌 **`-k` here is not "skip TLS".** The pin is enforced on top of it: an attacker
+on VLAN 40 still cannot present a different key. What is given up is chain,
+hostname and **date** validation — and the date is the only one that was ever
+going to fire, on a schedule that says nothing about the firewall.
+
+The remaining failure mode is a genuine one and is worded to say so: **curl exit
+90 means the key changed**, which expiry cannot cause. Forced live and watched
+fire.
+
+📌 **Reusable: pin the key, not the certificate, whenever the endpoint is
+self-signed and long-lived.** Certificate pinning couples an alert to a
+*calendar*; key pinning couples it to an *event*. Only the second is worth
+paging for.
+
+⚠️ Also dropped: the committed `opnsense-web.crt` and its deploy task, plus
+`agent_opnsense_api_host` and the `--resolve` trick that existed only to make the
+certificate's SAN match. Reaching the IP directly keeps the firewall's resolver
+out of the path.
 
 ### 🧹 Noted while there, not acted on
 

@@ -48,20 +48,27 @@ agent_fleet_hosts: []
 # from the path of the check that watches the firewall.
 agent_opnsense_api_ip: "10.30.40.254"
 
-# Must equal a SAN on the firewall's web certificate, or TLS verification
-# fails. OPNsense's self-signed certificate carries only DNS:OPNsense.internal.
-agent_opnsense_api_host: "OPNsense.internal"
-
-# The firewall's self-signed web certificate, pinned. Not a secret — it is the
-# public half, served to anyone who connects — so it lives in the repo rather
-# than the vault.
+# The firewall's web-certificate PUBLIC KEY, pinned.
 #
-# ⚠️ It expires 2026-11-04. When OPNsense regenerates it, every API call here
-# fails curl exit 60 and the sweep reports a TLS finding by name. That is
-# deliberate: the alternative is -k, which would accept any certificate from
-# anything that can ARP-spoof this VLAN, on the one host that holds a firewall
-# credential. Re-pin by re-running the fetch in docs/OPNSENSE_API.md.
-agent_opnsense_api_ca_path: "{{ agent_state_dir }}/opnsense-web.crt"
+# ⚠️ Deliberately the key and not the certificate. OPNsense serves a self-signed
+# certificate and does NOT auto-renew it (opnsense/core#4567 and #7385 are open
+# feature requests for exactly that), so pinning the certificate guarantees a
+# page on its expiry date — an alert about a calendar rather than about the
+# firewall, and Ignacio's explicit position is that certificate lifecycle is the
+# software's problem, not something to monitor.
+#
+# Key pinning has no expiry cliff. Verified 2026-08-17 against a purpose-built
+# expired certificate: `-k --pinnedpubkey` with the right key succeeds, with the
+# wrong key fails curl exit 90, while `--cacert` fails exit 60 on the same cert.
+# So this still refuses a substituted certificate — the only property worth
+# having on a LAN path we do not otherwise trust — without ever firing on a date.
+#
+# Regenerate (only if OPNsense is made to reissue the certificate):
+#   echo | openssl s_client -connect 10.30.40.254:443 2>/dev/null \
+#     | openssl x509 -pubkey -noout \
+#     | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary \
+#     | openssl base64
+agent_opnsense_api_pubkey_pin: "sha256//eX/oOnHGacY+Z41pCAhi2/cxAREZHgcqW5ODY4yisJA="
 
 # 0600, primary-user-owned. Read by the sweep and fed to curl on stdin, so the
 # secret never appears in argv or the environment.

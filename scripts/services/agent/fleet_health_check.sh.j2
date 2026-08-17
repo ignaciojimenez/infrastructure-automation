@@ -38,9 +38,8 @@ BACKOFF_DIR="$AGENT_DIR/ssh_backoff"
 # outage happened because failed SSH auth against the gateway reads to
 # CrowdSec as a brute-force, and the gateway then banned this container off
 # its own network. Nothing below ever authenticates over SSH to opnsense.
-OPNSENSE_API_HOST="{{ agent_opnsense_api_host }}"
 OPNSENSE_API_IP="{{ agent_opnsense_api_ip }}"
-OPNSENSE_API_CA="{{ agent_opnsense_api_ca_path }}"
+OPNSENSE_API_PUBKEY_PIN="{{ agent_opnsense_api_pubkey_pin }}"
 OPNSENSE_API_CREDS="{{ agent_opnsense_api_creds_path }}"
 OPNSENSE_API_TIMEOUT={{ agent_opnsense_api_timeout }}
 
@@ -375,29 +374,47 @@ api_call() {
     # the 401 body is itself valid JSON, "the body parses as JSON" does not
     # catch that case either. Only requiring 200 AND JSON catches both.
     #
-    # TLS is fully verified against the firewall's own self-signed certificate
-    # rather than waved through with -k. The SAN is OPNsense.internal and the
-    # host is reached by IP, so --resolve supplies the name that makes the
-    # certificate match — which also means this check does not depend on DNS,
-    # on a firewall whose own resolver is one of the things it is watching.
+    # TLS: the firewall's PUBLIC KEY is pinned, and chain/hostname/expiry
+    # validation is deliberately off.
+    #
+    # ⚠️ `-k` here is not "skip TLS". Pinning is enforced on top of it, and curl
+    # rejects a mismatch outright — measured 2026-08-17 against a purpose-built
+    # expired certificate:
+    #
+    #   expired cert + correct pin  -> 200, exit 0
+    #   expired cert + wrong pin    -> exit 90
+    #   expired cert + --cacert     -> exit 60
+    #
+    # The third line is why this changed. The firewall serves a self-signed
+    # certificate that OPNsense does NOT auto-renew (opnsense/core#4567, #7385),
+    # so full chain validation guarantees a page on its expiry date — an alert
+    # about a calendar, not about the firewall. Pinning the key removes that
+    # cliff entirely while still refusing a substituted certificate, which is
+    # the only property worth having on a LAN path we do not otherwise trust.
+    #
+    # Reached by IP, so this check never depends on the firewall's own resolver
+    # — Unbound runs on the box being watched.
     _rc=0
     API_HTTP=$(printf 'user = "%s:%s"\n' "$_key" "$_secret" | \
         curl -K - \
              -s -o "$API_OUT" -w '%{http_code}' \
              -X "$_method" \
-             --cacert "$OPNSENSE_API_CA" \
-             --resolve "${OPNSENSE_API_HOST}:443:${OPNSENSE_API_IP}" \
+             -k --pinnedpubkey "$OPNSENSE_API_PUBKEY_PIN" \
              --max-time "$OPNSENSE_API_TIMEOUT" \
              "$@" \
-             "https://${OPNSENSE_API_HOST}/${_path}" 2>/dev/null) || _rc=$?
+             "https://${OPNSENSE_API_IP}/${_path}" 2>/dev/null) || _rc=$?
 
     if [ "$_rc" -ne 0 ]; then
         # curl exit codes, verified against this firewall on 2026-08-17 rather
         # than quoted from the manual: a wrong --cacert gives 60, an
         # unreadable one gives 77.
         case "$_rc" in
-            35|51|58|59|60|77|83)
-                API_ERR="TLS verification failed (curl exit ${_rc}) — the firewall's web certificate no longer matches ${OPNSENSE_API_CA}. It is self-signed and gets replaced on regeneration or expiry, so this is a certificate to re-pin, not necessarily an attack."
+            90)
+                API_ERR="the firewall is presenting a DIFFERENT public key than the one pinned (curl exit 90). Expiry alone cannot cause this — the key changed, so either OPNsense regenerated its web certificate or something is answering in its place. Re-pin from the console after confirming which."
+                API_FAIL=tls
+                ;;
+            35|51|58|59|83)
+                API_ERR="TLS handshake failed (curl exit ${_rc}) before the pin could be checked"
                 API_FAIL=tls
                 ;;
             6|7|28)
