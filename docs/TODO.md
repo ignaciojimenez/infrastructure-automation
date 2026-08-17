@@ -58,17 +58,19 @@ should be re-measured, not inherited.
 
 ---
 
-## 🔨 L-H IN PROGRESS 2026-08-17 — opnsense over the API; ✅ gate PASSED, one verification outstanding
+## ✅ L-H DONE 2026-08-17 — opnsense is read over its API, and its monitoring is watched from outside the fleet
 
 Branch `feat/opnsense-api-sweep-2026-08-17`. Supersedes the design notes in
 §F4b below; that section stays as the reasoning trail.
 
 **✅ The gate is answered: scoped privileges are sufficient on OPNsense 26.1.9.
 `page-all` is not needed, so the fallback design was never reached.** Deployed
-to agent-lxc, `changed=0` on the second run, credential in the vault.
+to agent-lxc and to opnsense, `changed=0` on the second run of both.
 
-🔴 **One thing is still unverified**, and it is the freshness marker actually
-reaching the log — see *Still open* at the end of this section.
+✅ **All three rows are live and were each forced to fail before being believed.**
+The firewall's own monitoring is now watched by an unconditional heartbeat read
+back from healthchecks.io — the freshness row that two earlier designs could not
+close.
 
 ### What shipped
 
@@ -268,87 +270,103 @@ mechanisms, it does not report state.** Every claim here that came from reading
 prediction happened to be right, which made the two that followed feel safer
 than they were.
 
-### ❌ RETRACTED — "the marker is written, the API drops it" was my own footprint
+### 🐛 Freshness took three designs, and the first two failed for different reasons
 
-An earlier revision of this section concluded that syslog delivery was fine and
-the log-search API was at fault. **That was wrong, and it was wrong for the
-reason this same section had just warned about.**
+**Design 1 — read cron's own log over the API.** Dead: **FreeBSD's cron does not
+log job executions.** The firewall's entire system log held five cron lines, all
+of them the *service* starting at boot, months apart. Debian's cron syslogs every
+`CMD`, and the Linux implementation silently depended on that.
 
-```
-ssh opnsense "sudo grep -rl 'LH probe' /var/log/"
-  → /var/log/system/system_20260817.log        ← read as "the marker is there"
-```
+**Design 2 — have the wrapper emit its own `logger` marker.** Dead: the marker
+never reached the system log, with any tag or priority, while
+`sudo`/`dhclient`/`kernel` messages arrived continuously. Never explained. Two
+theories from reading `opnsense/core` (the catch-all destination; a
+`program("monit")` unanchored-regex collision) were both real mechanisms and
+both wrong here. **The `logger` line has been removed from
+`enhanced_monitoring_wrapper` rather than left in as dead code on seven hosts.**
 
-The file matched because **sudo audit-logs the grep command**, and that command
-contains the string `LH probe`. Grepping the file directly shows only this:
+❌ **A diagnosis was published on that and had to be retracted.**
+`sudo grep -rl 'LH probe' /var/log/` named the system log, which was read as *"the
+marker is written, the API drops it"*. The file matched because **sudo
+audit-logs the grep command, and that command contains the search string.** The
+same trap had produced a false positive ten minutes earlier via
+`searchPhrase=probe`. 📌 **A search whose own invocation is logged will find
+itself** — make the needle and the search string different.
 
-```
-<85>1 2026-08-17T01:42:17+02:00 OPNsense.internal sudo 69338 - [meta sequenceId="1"]
-    choco : PWD=/home/choco ; USER=root ; COMMAND=/usr/bin/grep -rl 'LH probe' /var/log/
-<85>1 2026-08-17T01:47:05+02:00 OPNsense.internal sudo 12567 - [meta sequenceId="1"]
-    choco : PWD=/home/choco ; USER=root ; COMMAND=/usr/bin/grep -m2 'LH probe' /var/log/...
-```
+**Design 3 — ask healthchecks.io, from outside the fleet. This is what shipped.**
 
-**Two sudo records of the searches. No `logger` output at all.** The markers are
-not in the system log; they never were.
+### ✅ Why it had to be a NEW heartbeat, not the two that already existed
 
-📌 **The trap fired twice in ten minutes, and the second time it was already
-written down.** The first was `searchPhrase=probe` returning a row (sudo's audit
-of the grep). The second was `grep -rl` naming the file (sudo's audit of the
-grep). **A search whose own invocation is logged will find itself.** Neutralise
-it by searching for a token the search command does not contain — e.g. log a
-UUID and grep for a *different* fragment of it — or by reading the file's tail
-rather than matching on the probe string.
+The obvious move was to read `last_ping` on `opnsense-wan-connectivity` or
+`opnsense_dns`. **Both are conditional**: `heartbeat_opnsense_wan.sh` pings only
+when the default gateway answers, `heartbeat_dns.sh` only when Unbound resolves.
 
-### What is actually established
+📌 **A ping gated on the checked thing being healthy cannot answer "did
+monitoring run?"** — a stale timestamp then means *"WAN is down"* OR *"cron
+stopped"* OR *"the script broke"*, which are exactly the states that must be told
+apart. Same conflation the sweep's own dead-man's switch already warns about, and
+it would have shipped as a check that reports the firewall dead every time the
+WAN blips.
 
-| | |
+So opnsense gained `heartbeat_monitoring.sh`, which **pings unconditionally and
+checks nothing**, because anything it checked would become a reason not to ping.
+It asserts one narrow thing: cron is alive here and still executing monitoring
+scripts. `*/5`, check `"OPNsense monitoring alive"` (period 5m, grace 15m).
+
+The sweep reads it back with a **read-only** healthchecks.io key — verified
+read-only by the API omitting `uuid` and returning `unique_key`. Nothing on the
+container can pause or delete a check. Matched by **name**, because that is the
+only stable identifier a read-only key exposes.
+
+⚠️ **Coupling worth knowing:** renaming the check in the healthchecks.io UI
+breaks the match. The sweep then reports UNKNOWN — the right failure direction,
+but `agent_opnsense_monitoring_check_name` must be updated to match.
+
+### ✅ Acceptance — every branch forced and watched fire
+
+Nothing here was believed because it went green. Run on agent-lxc under `dash`
+against the live firewall:
+
+| Forced condition | Reported as |
 |---|---|
-| FreeBSD cron logs no job executions | ✅ measured |
-| `logger` markers reach `core/system` | ❌ **no — not the API, not the file** |
-| `sudo`/`dhclient`/`kernel`/`opnsense` reach it | ✅ measured, continuously |
-| `core/cron`, `core/monit` | 403, would need `page-all` |
-| System log is **RFC5424** on disk | ✅ seen above (`<85>1 … [meta sequenceId]`) |
+| Healthy (all three rows) | `Fleet OK — no findings`, exit 0 |
+| Threshold forced to 0h | `❌ monitoring last ran 0h ago (max 0h) — healthchecks.io still reports 'up', so its period/grace is wider than this fleet's threshold` |
+| Check renamed in the UI | `❌ monitoring freshness UNKNOWN … no check named '…' exists` |
+| healthchecks key absent | `❌ … UNKNOWN — could not reach healthchecks.io (this says nothing about the firewall itself)` |
+| healthchecks key invalid | `❌ … UNKNOWN … HTTP 401 from the healthchecks.io API` |
+| opnsense credential absent / wrong | `❌ API credentials file … missing` / `❌ HTTP 401 …` |
+| Pinned cert mismatched | `❌ TLS verification failed (curl exit 60) …` |
+| Firewall unreachable | `❌ UNREACHABLE — no response at all` (3s) |
 
-The `unix-dgram("/var/run/log" flags(syslog-protocol))` lead is therefore back
-and is the best remaining explanation — syslog-ng told to expect RFC5424 while
-`logger(1)` emits RFC3164. ⚠️ **It still does not explain why `sudo` arrives**,
-since sudo also logs via libc `syslog(3)`. Unexplained, and not to be written up
-as understood.
+📌 **Three outcomes for freshness, deliberately not two.** down/stale is a real
+finding; *"we could not ask"* is UNKNOWN, worded to disclaim any statement about
+the firewall; up is silence. **A healthchecks.io outage must never render as
+"opnsense monitoring is dead"** — that is the same class of lie as a silent
+check, pointed the other way.
 
-### 🛑 Recommendation: stop bending this one, change the signal
+### 🐛 Deploying it found 500 lines of undeployed drift on the firewall
 
-Three sessions-worth of theories have died here, and the approach now rests on
-OPNsense's syslog ingest *and* its log-search parser both accepting a line shape
-we do not control. **That is too fragile a contract for a monitoring signal**,
-independent of whether one more round of debugging would land it.
+`--check` predicted **5 changes; only 2 were this session's**. The other three
+were L-F's monitoring work that had never reached opnsense:
 
-**Preferred alternative for the next session: read healthchecks.io instead.**
-opnsense's own monitoring already pings it (`vault_healthcheck_opnsense_wan`,
-`vault_healthcheck_opnsense_dns`), healthchecks.io exposes a read API returning
-`last_ping` per check, and the fleet already depends on the service. That gives
-a genuinely *independent* answer to "did the firewall's monitoring run?" —
-independent of the firewall entirely, which is stronger than any log on the box
-— for one vault token and no change to opnsense at all.
+| Task | Diff |
+|---|---|
+| Deploy all common scripts | **+260/−13** |
+| Common wrapper (Bash for OPNsense) | **+231/−10** — `--alert-repeat-base`/`--alert-repeat-max` |
+| OPNsense backup freshness heartbeat | **+29/−3** — the `\|\| true` fix |
 
-⚠️ Weigh against it: it adds an external dependency to the sweep, and a
-healthchecks.io outage would need to read as "unknown", never as "the firewall's
-monitoring is dead". Decide that before building it.
+**opnsense was running a pre-L-F wrapper**, so its own monitoring jobs had **no
+repeat suppression at all** while every other host had it since 2026-08-14.
+Exactly the documented "role-owned service scripts drift silently" class — the
+same shape as hifipi alerting four months after the repo fix. Deployed with
+Ignacio's approval; `changed=0` on re-run.
 
-Meanwhile the `logger` line stays on the branch, unverified and undeployed.
+⚠️ **Unexplained, and left unexplained rather than guessed:** the real run
+reported `changed=4` where `--check` predicted 5, and `ok=32` → `ok=31` between
+runs. Convergence is confirmed by `changed=0` on the second run, which is the
+state that matters, but the check-mode count was not reconciled task by task.
 
-### Until it is settled
-
-⚠️ **Do not deploy `deploy_monitoring.yml`.** The `logger` line does nothing
-useful on opnsense and is unverified everywhere else.
-
-The sweep meanwhile reports `❌ opnsense: no monitoring run found in the
-firewall's system log`. **Leave it.** It is true — nothing currently proves the
-firewall's monitoring ran — and it is the exact gap L-H exists to expose.
-Suppressing it to make the sweep read clean would be the lobotomy this repo
-keeps warning about. Expect **one** page, not one per run.
-
-### 🧹 Noted while there, not acted on
+### 🧹 Noted while there, not acted on### 🧹 Noted while there, not acted on
 
 `agent_access.yml` is `hosts: all`, so `read_agent` still exists on opnsense with
 its key trusted — now used by nothing. Removing it would fully retire the SSH
