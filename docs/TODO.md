@@ -366,7 +366,56 @@ reported `changed=4` where `--check` predicted 5, and `ok=32` → `ok=31` betwee
 runs. Convergence is confirmed by `changed=0` on the second run, which is the
 state that matters, but the check-mode count was not reconciled task by task.
 
-### 🧹 Noted while there, not acted on### 🧹 Noted while there, not acted on
+### 🐛 Two corrections earned by watching the real cron run, not the test runs
+
+**1. "Expect one page, not one per run" was WRONG, and it was stated twice.**
+`enhanced_monitoring_wrapper`'s repeat suppression **backs off; it does not go
+silent** — base 1h, doubling, capped at 24h. The in-progress freshness finding
+paged **five times**: 01:37, 02:37, 04:37, 06:37, 10:37.
+📌 **Suppression is not silence.** A backed-off alert still wakes someone at
+04:37; "it dedups" is not a licence to leave a known-failing check on a cron.
+
+**2. Leaving a half-finished check deployed overnight cost real money and real
+noise.** It triggered **three Tier 2 investigations (~$0.68)** and **3 SSH
+attempts against opnsense** — the exact CrowdSec-adjacent behaviour L-H exists
+to retire. 📌 **A check with an automated investigator behind it is not free to
+leave broken.** Either finish it or leave it undeployed; "it reports the truth"
+is necessary but not sufficient when something else acts on the report.
+
+📌 **Tier 2 independently reached the same diagnosis, overnight, for $0.23**,
+before this session did: *"opnsense is FreeBSD with no journalctl/systemd, so a
+journal-style search there will always come up empty regardless of whether
+monitoring ran."* The fleet's own investigator is a usable second opinion.
+
+### ✅ Verified on the deployed cron, not just the test copy
+
+The 11:37 run posted `✅ Script Execution: SUCCESS` to `#home-logging` at
+11:37:15, matching the sweep's healthchecks ping at 09:37:14 UTC.
+
+⚠️ **The absence of an alert would have proved nothing** — the repeat backoff had
+already pushed the next repeat past 11:37, so silence and success were
+indistinguishable from `#home-alerts` alone. Confirmation required a *positive*
+success signal.
+
+### ⚠️ The pinned certificate: OPNsense will NOT renew it
+
+Checked rather than assumed: OPNsense does **not** auto-renew its self-signed web
+GUI certificate (opnsense/core **#4567** and **#7385** are open feature requests
+for exactly this). It expires on **2026-11-04**.
+
+📌 **That expiry lands regardless of the pinning.** Browsers and any other API
+client break on it too; the pin does not create the problem, it makes it
+*visible* — and `-k` would have hidden an expired certificate entirely, since
+curl accepts one silently when verification is off.
+
+**Recommended, not built:** have the sweep read the pinned cert's own `notAfter`
+locally — no extra network call, and verification passing already proves the
+served cert *is* the pinned one — and warn ~21 days ahead. That turns a surprise
+page into a scheduled two-minute job. Alternative if it recurs: issue the GUI
+cert from an internal CA in OPNsense's Trust manager and pin the CA, so leaf
+renewals stop breaking the pin.
+
+### 🧹 Noted while there, not acted on
 
 `agent_access.yml` is `hosts: all`, so `read_agent` still exists on opnsense with
 its key trusted — now used by nothing. Removing it would fully retire the SSH
