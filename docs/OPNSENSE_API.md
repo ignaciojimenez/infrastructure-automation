@@ -192,35 +192,45 @@ the path is HTTPS-only and the credential is independently revocable.
 
 ---
 
-## TLS is verified, not waved through
-
-The firewall serves a self-signed certificate. The sweep pins it rather than
-passing `-k`:
+## TLS: the public key is pinned, the certificate is not
 
 ```sh
-curl --cacert <pinned cert> --resolve OPNsense.internal:443:10.30.40.254 \
-     https://OPNsense.internal/api/...
+curl -k --pinnedpubkey "sha256//<key>" https://10.30.40.254/api/...
 ```
 
-`--resolve` supplies the name the certificate actually carries — its only SAN is
-`DNS:OPNsense.internal` — while the connection still goes to the IP. That has a
-second payoff: **the check that watches the firewall does not depend on the
-firewall's resolver.** When Unbound is down the rest of the sweep is skipped
-(names would all fail), and opnsense is still checked.
+⚠️ **`-k` here does not mean "skip TLS".** Pinning is enforced on top of it and
+curl refuses a mismatch outright. Measured 2026-08-17 against a purpose-built
+expired certificate:
 
-`-k` was rejected: it accepts any certificate from anything that can ARP-spoof
-VLAN 40, on the one host holding a firewall credential.
+| Setup | Result |
+|---|---|
+| expired cert + **correct** pin | **200, exit 0** |
+| expired cert + **wrong** pin | **exit 90** |
+| expired cert + `--cacert` | **exit 60** |
 
-🔴 **The pinned certificate expires 2026-11-04.** When OPNsense replaces it,
-every API call fails `curl` exit 60 and the sweep reports a TLS finding that
-names the file to re-pin. Re-pin with:
+**The third row is why this is not `--cacert`.** OPNsense serves a self-signed
+certificate and does **not** auto-renew it — `opnsense/core` **#4567** and
+**#7385** are open feature requests for exactly that — so full chain validation
+guarantees a page on the certificate's expiry date. That is an alert about a
+calendar, not about the firewall, and certificate lifecycle is the software's
+job rather than something this fleet should monitor.
+
+Key pinning has no expiry cliff and still refuses a substituted certificate,
+which is the only property worth having on a LAN path we do not otherwise trust.
+An attacker on VLAN 40 cannot present a different key; only the real firewall's
+key is accepted.
+
+Reached by IP, so the check never depends on the firewall's own resolver —
+Unbound runs on the box being watched.
+
+**Re-pin** only if OPNsense is made to reissue the certificate:
 
 ```sh
-openssl s_client -connect 10.30.40.254:443 -servername OPNsense.internal </dev/null 2>/dev/null \
-  | openssl x509 > ansible/roles/services/agent/files/opnsense-web.crt
+echo | openssl s_client -connect 10.30.40.254:443 2>/dev/null \
+  | openssl x509 -pubkey -noout \
+  | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary \
+  | openssl base64
 ```
-
----
 
 ## Reading a failure
 
@@ -232,8 +242,7 @@ taken from a manual.
 | `HTTP 302` | The call carried **no usable credential at all**. OPNsense answers unauthenticated API calls with a redirect to the login page, not a 401. |
 | `HTTP 401` | Key/secret **rejected** — revoked, regenerated, or the account is disabled. Body is `{"status":401,"message":"Authentication Failed"}`. |
 | `HTTP 403` | Authenticated, **not authorised**. A privilege is missing, or a camelCase URL crept in. Reported per endpoint, never collapsed — "disk reads but routes are forbidden" is a real distinction. |
-| `curl exit 60` | TLS verification failed: the served certificate no longer matches the pinned one. |
-| `curl exit 77` | The pinned certificate file is missing or unreadable on the container. |
+| `curl exit 90` | The firewall is presenting a **different public key** than the one pinned. Expiry cannot cause this — the key changed, so either OPNsense reissued the certificate or something is answering in its place. |
 | `curl exit 6/7/28` | No answer. Treated as **host down**, so it joins the fleet-wide silence collapse rather than reading as a firewall fault. |
 
 ⚠️ **Two traps encoded in the client, both load-bearing:**

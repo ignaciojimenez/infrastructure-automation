@@ -151,16 +151,6 @@
 # checking.
 # ============================================================
 
-- name: Pin the OPNsense web certificate
-  become: true
-  ansible.builtin.copy:
-    src: opnsense-web.crt
-    dest: "{{ agent_opnsense_api_ca_path }}"
-    owner: "{{ primary_user }}"
-    group: "{{ infrastructure_group }}"
-    mode: '0644'
-  tags: [agent, monitoring, opnsense]
-
 # 0600 and no_log: the secret half of a firewall credential. It is written as
 # a file rather than passed to the sweep because the script feeds it to curl
 # on stdin — never argv, which is world-readable via /proc.
