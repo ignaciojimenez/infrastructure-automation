@@ -10,6 +10,7 @@ Updated: 2026-08-18
 | **Open work** | this file |
 | **Finished work + why** | [`archive/DONE.md`](archive/DONE.md) |
 | **How the system is built** | [`ARCHITECTURE_DECISIONS.md`](ARCHITECTURE_DECISIONS.md) |
+| **What the test environment is for** | [`TESTING_GOALS.md`](TESTING_GOALS.md) — read before any test work |
 | **Full narrative of past sessions** | git history |
 | **Phone-first router, with copy-paste prompts** | [Infra — What to work on](https://claude.ai/code/artifact/092808db-2dba-4759-8146-e4d42e9d1c30) |
 
@@ -104,31 +105,73 @@ Verify with --check --diff BEFORE applying: the diff must not touch
 changed=0 on a second run, and that Plex still reads the share.
 ```
 
-**3. The test rig is green — one narrower gap left in it**
-The rig was finished on 2026-08-18: **10/10 on CT 199**, cases arrange as root
-and exercise as `$INFRA_USER`. See [`archive/DONE.md`](archive/DONE.md) for the
-decisions; do not re-derive them.
+**3. The test environment does not yet do the thing it was built for**
+✅ Goals are now written down: **[`TESTING_GOALS.md`](TESTING_GOALS.md) — read it
+first.** The rig merged on 2026-08-18 (`5d2563c`, 10/10 green) serves **goal 4**,
+monitoring-script regression. **Goal 1 — running real playbooks against a host
+that is created and destroyed — is ~70% built and is the actual gap.**
 
-**What is still open:** `wrapper_state_collision` is the one case that has never
-dropped privilege. It has no `run_uut` call — it invokes
-`enhanced_monitoring_wrapper` directly and arranges via `/etc/hosts` — so it was
-out of scope for a `run_uut` → `run_uut_as` conversion. The wrapper *does* run as
-the infrastructure user under cron on every fleet host, and its state and log
-directories are that user's, so a root-only exercise is the same blind spot,
-just narrower.
+📌 The plumbing already exists and is better than it looks: `test_hosts.yml` is a
+real inventory connecting as the infra user over sudo, `provision_test_container.sh`
+creates *and* destroys, and CT 198 covers Debian 12 for the Pis. **Do not rebuild
+any of that.**
 
-*State:* known, not started. *Effort:* small. *Needs:* a laptop, and **CT 199
-started first** (`ssh cwwk 'sudo pct start 199'`).
+*State:* assessed, planned below. *Effort:* 3a small, 3b medium, 3c small.
+*Needs:* a laptop, and CT 199 started (`ssh cwwk 'sudo pct start 199'`).
+
+**3a. Run `bootstrap.yml` and a full `site.yml` against a container — never done**
+The playbook goal 1 most exists for is the one least tested. Highest value here,
+and it is pure verification: no new code until it fails.
 
 ```
-Make tests/cases/wrapper_state_collision.sh exercise the wrapper as the
-unprivileged user, the way the rest of the suite already does. Read
-tests/README.md "Who the suite runs as" first — ARRANGE stays root, only the
-EXERCISE drops privilege. The case has no run_uut call, so this is real work:
-the wrapper is invoked directly and $WORK/logs_dir must be somewhere that user
-can write. Acceptance: still green, AND still red if you break the wrapper's
-state-file locking — force that, do not assume it.
+Run the playbooks that have never been tested against a container. Read
+docs/TESTING_GOALS.md goal 1 first — the inventory and provisioning already
+exist, do not rebuild them.
+
+Start CT 199 (ssh cwwk "sudo pct start 199"). Then, against
+ansible/inventory/test_hosts.yml ONLY — never the fleet inventory:
+(1) bootstrap.yml against a TEST_CT_BARE=1 container with -e ansible_user=root,
+which is the only state where its user-creation branch runs at all;
+(2) a full site.yml against a normal (non-bare) CT 199.
+
+Expect failures — that is the point, this has never been done. For each one,
+record whether it is a real playbook bug or a rig artefact, and fix only the
+real ones. Finish with changed=0 on a second run of each, which is the actual
+proof. Destroy and recreate the container between the two, and stop it when
+done.
 ```
+
+**3b. One command: create → converge → verify → destroy**
+Today it is a manual sequence, which is why it does not get run.
+
+```
+Give the test environment a single entry point that creates a container,
+converges it with a chosen playbook, verifies, and destroys it — so that
+testing a change is one command and therefore actually happens. Read
+docs/TESTING_GOALS.md and docs/ARCHITECTURE_DECISIONS.md "Test Environments"
+first; the standing rules there (two inventories, infra-user-over-sudo, the
+provisioning script taking no dependency on Ansible) are settled, not up for
+redesign.
+
+Reuse tests/provision_test_container.sh and ansible/inventory/test_hosts.yml —
+this is a driver, not a rewrite. Do 3a first: it tells you what actually breaks.
+Must destroy the container even when the converge step fails, and must refuse to
+run against anything not named like a test container.
+```
+
+**3c. `sandbox.sh --create`, so a fresh box does not need a laptop tap**
+Small, and it is the last thing standing between goal 2 and "done".
+
+**Not doing (decided 2026-08-18, option (a)):** agent-lxc gets no
+`pct create/destroy/exec` and no Linux-reachable vault. The agent proposes; a
+human runs the ephemeral test. **Reassess after 3b exists** — see
+[`TESTING_GOALS.md`](TESTING_GOALS.md) goal 3 for why the vault half is the
+expensive half.
+
+**Also open, narrower:** `wrapper_state_collision` is the one case that never
+drops privilege — it has no `run_uut` call, so it was out of scope for a
+mechanical conversion. The wrapper does run as the infrastructure user under cron
+on every fleet host.
 
 **4. `W1` — vinylstreamer's wifi lockout root cause**
 The plug (W2) is remediation; the fault is untouched. Investigation exists at

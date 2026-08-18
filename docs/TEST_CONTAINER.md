@@ -18,9 +18,19 @@ Forcing those conditions on a production host is unacceptable — filling
 check is meant to catch. So they get forced here instead, on a container that
 is deleted afterwards.
 
-**CT 199 is disposable by design.** It is deliberately *not* in the Ansible
-inventory, not hardened, not monitored, and not set to start on boot. Nothing
-should ever depend on it existing.
+**CT 199 is disposable by design.** It is not hardened, not monitored, and not
+set to start on boot. Nothing should ever depend on it existing.
+
+⚠️ **It IS in an Ansible inventory — just not the fleet's.** This paragraph used
+to say the opposite, which was wrong and actively harmful: an agent that read it
+first concluded playbook testing was out of scope and stopped. The rig is
+described in [`ansible/inventory/test_hosts.yml`](../ansible/inventory/test_hosts.yml),
+a **separate** inventory that never mentions a fleet host, and running playbooks
+against it is a first-class use of this container — see
+[§6b](#6b-running-playbooks-against-it) and [TESTING_GOALS.md](TESTING_GOALS.md).
+What must never happen is CT 199 appearing in `ansible/inventory/hosts.yml`, or a
+fleet host appearing in `test_hosts.yml` — `is_test_environment` unlocks
+behaviour that must not reach production.
 
 ## Design choices
 
