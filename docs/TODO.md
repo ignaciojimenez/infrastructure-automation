@@ -49,7 +49,7 @@ running*. Surfaced 2026-08-15 by the fleet's own Tier 2, then verified by hand.
 cobra never probed Plex at all. The false positive is the bill for real coverage
 and it is not yet paid.
 
-*State:* diagnosed, not fixed. *Effort:* small.
+*State:* diagnosed, not fixed. *Effort:* small. *Needs:* a laptop (Ansible deploy).
 *Options:* have the health check tolerate a short flap for services under backup,
 or have the backup mask the check for its window. **The second is safer** — the
 first weakens a check for every service, not just this one.
@@ -64,18 +64,38 @@ failure afterwards to prove the check still fires. docs/archive/DONE.md
 
 ### 🟠 P2 — known risk, not currently biting
 
-**2. cobra's Samba role cannot converge as written — and running it would be destructive**
-`group_vars/media.yml` declares `owner`/`group`/`mode`/`recurse` for
-`/mnt/almacenNTFS`, an **exFAT** mount that can store none of them. Worse,
-`--tags samba` has *never run on cobra*: the dry run rewrites a hand-built
-`smb.conf` and does `chmod -R 0777` on the media library.
+**2. cobra's Samba is hand-built and the role cannot converge as written**
+`--tags samba` has **never run on cobra**. Its live `smb.conf` is stock Debian
+with a hand-added `[Plex_Storage]` block, and `group_vars/media.yml` declares
+`owner`/`group`/`mode`/`recurse` for `/mnt/almacenNTFS` — an **exFAT** mount that
+can store none of them. Running it today rewrites the config and does
+`chmod -R 0777` on the media library.
 
-🛑 **Do not run `--tags samba` on cobra casually.** 📌 The tell that a role has
-never converged: its `force: false` backup task reports `changed`.
+✅ **DECIDED 2026-08-18 (Ignacio): nothing is managed by hand.** So the fix is to
+make the role able to converge, not to leave cobra out of it:
 
-*State:* needs a decision from Ignacio — adopt the role's config (and lose the
-hand-tuned `[Plex_Storage]` block), or drop the role's ownership declarations and
-manage cobra's Samba by hand. *Not actionable until that is answered.*
+1. **Bring the `[Plex_Storage]` block into the role's template**, parameterised
+   from inventory. It is the only reason the live file differs.
+2. **Drop `owner`/`group`/`mode`/`recurse` from `group_vars/media.yml`** — not as
+   a concession, but because exFAT physically cannot store them. Permissions come
+   from the mount options (`uid=`/`gid=`/`umask=`), which is where they belong.
+3. That also removes the `chmod -R 0777` hazard, since it came from `recurse`.
+
+🛑 **Do not run `--tags samba` on cobra until 1 and 2 are done.** 📌 The tell that
+a role has never converged: its `force: false` backup task reports `changed`.
+
+*State:* decided, not built. *Effort:* small–medium. *Needs:* a laptop (Ansible).
+
+```
+Make cobra's Samba converge from the repo — nothing hand-managed. Read
+docs/TODO.md item 2. Bring the hand-added [Plex_Storage] block into the
+samba role's template (parameterised from inventory), and remove
+owner/group/mode/recurse from group_vars/media.yml because /mnt/almacenNTFS
+is exFAT and cannot store them — permissions come from mount options.
+Verify with --check --diff BEFORE applying: the diff must not touch
+/mnt/almacenNTFS and must not chmod anything. Then apply and confirm
+changed=0 on a second run, and that Plex still reads the share.
+```
 
 **3. `L-G` — the test rig connects as root, so it is blind to permission faults**
 Proven: same script, same container, same minute — `❌ Upgrade log not found` as
@@ -85,6 +105,7 @@ that later cost real incidents.
 
 *State:* rig is built and merged; this is a change to how it connects.
 *Effort:* medium (touches every test case). *Gated on:* nothing.
+*Needs:* a laptop (git + Ansible), plus CT 199 started on cwwk — `pct start 199` works from the phone.
 
 ```
 Make the test rig load-bearing. Read the L-G section of
@@ -105,6 +126,7 @@ sample is an **18-minute unassisted recovery**. That contradiction must be
 resolved before configuring anything.
 
 *State:* time-gated to ~2026-08-23, then re-judge on real traffic.
+*Needs:* nothing until then — **reading `#home-alerts` on the phone IS the task.**
 
 ### 🟢 P3 — improvements, no urgency
 
@@ -127,6 +149,42 @@ suppression. Deliberately deferred: *"fix forward if annoying."*
 power draw of cwwk + the Zyxel switch (**the biggest unknown — every heat figure
 to date rests on a 55–110 W assumption**), usable panel dimensions, and
 hole-count limits. Handover artifact: *"cwwk Cabinet Fan — Vent Sizing Handover."*
+
+---
+
+## 🧹 Next cleanup pass — the prompt is ready
+
+The section below is ~1,850 lines of legacy. One more pass empties it.
+
+```
+Second triage pass on docs/TODO.md. Everything below the "NOT yet triaged"
+divider predates the 2026-08-17 cleanup and is a mix of resolved,
+superseded and still-open — it has never been reviewed item by item.
+
+Work down it section by section. For each one, decide: (a) genuinely open
+-> promote into "What to work on next" at the top, with a state line, a
+Needs: tag (phone or laptop) and a paste-ready prompt if it has already
+been investigated; (b) finished -> distil ONE entry into
+docs/archive/DONE.md as "decided X because otherwise Z", no diary; (c)
+superseded or stale -> delete, git has it.
+
+⚠️ Read this first, it is the bug that made the cleanup necessary: open
+items were nested INSIDE completed write-ups, so archiving a finished
+section silently archived live work. Before removing any section, list its
+### subsections and check none is still open.
+
+Known stale, do not spend time re-deriving: "opnsense read_agent is
+broken" and "Priority 2 read_agent on OPNsense" are both moot — L-H moved
+the firewall to its API. "Priority 4 SMART" is done. "unifi-lxc --tags
+ssh" was done by L-B.
+
+Do NOT re-plan the queue or invent a new scheme. The structure is settled:
+TODO.md = open work, archive/DONE.md = finished + why,
+ARCHITECTURE_DECISIONS.md = standing rules, git = narrative. Finish by
+updating the dashboard so its cards match the new top section.
+
+Target: under 10 open items, and the divider gone.
+```
 
 ---
 
