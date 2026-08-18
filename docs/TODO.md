@@ -48,27 +48,14 @@ needs a decision from Ignacio says so and does not pretend to be actionable.
 
 ### 🔴 P1 — actively producing false alerts
 
-**1. cobra pages `Script Failed` at 04:00 most nights (F5's false-positive class)**
-`backup_plex_config` stops Plex for ~22 s to snapshot its config, and
-`system_health_check.sh` samples Plex inside that window and calls it *not
-running*. Surfaced 2026-08-15 by the fleet's own Tier 2, then verified by hand.
+**Nothing here right now.** Item 1 — cobra's 04:00 `Service plexmediaserver: not
+running` — was fixed and verified on 2026-08-18; see
+[`archive/DONE.md`](archive/DONE.md).
 
-📌 **This alert exists because the gap was closed.** Before `critical_services`,
-cobra never probed Plex at all. The false positive is the bill for real coverage
-and it is not yet paid.
-
-*State:* diagnosed, not fixed. *Effort:* small. *Needs:* a laptop (Ansible deploy).
-*Options:* have the health check tolerate a short flap for services under backup,
-or have the backup mask the check for its window. **The second is safer** — the
-first weakens a check for every service, not just this one.
-
-```
-Fix cobra's 04:00 false alert. backup_plex_config stops Plex ~22s and
-system_health_check.sh samples inside that window. Do NOT weaken the check
-globally — suppress for the backup's window only, and force the real
-failure afterwards to prove the check still fires. docs/archive/DONE.md
-2026-08-14 explains why this alert exists at all.
-```
+📌 **Numbering is deliberately not compacted.** Several prompts below and in
+git history say "read docs/TODO.md item 2" or "item 3a"; renumbering on every
+close would silently repoint them. Numbers are addresses, not ranks — the
+headings say what is urgent.
 
 ### 🟠 P2 — known risk, not currently biting
 
@@ -103,6 +90,35 @@ is exFAT and cannot store them — permissions come from mount options.
 Verify with --check --diff BEFORE applying: the diff must not touch
 /mnt/almacenNTFS and must not chmod anything. Then apply and confirm
 changed=0 on a second run, and that Plex still reads the share.
+```
+
+**4. cobra's Plex repo was migrated by hand, so `--tags plex` fails on it**
+Found 2026-08-18 while deploying the maintenance-window fix. A `--check` run of
+`services.yml --limit cobra --tags plex` **fails** at *Set Plex keyring
+permissions*: `/etc/apt/keyrings/plexmediaserver.v2.gpg` does not exist. cobra's
+live `plex.list` reads `signed-by=/usr/share/keyrings/plexmediaserver.v2.gpg` —
+the v1.43 repo migration was done by hand, in the *legacy* keyring directory,
+and the role's version of it has never run there.
+
+⚠️ It also still has `/usr/share/keyrings/PlexSign.key`, which the role deletes.
+So a real `--tags plex` run would remove the legacy key, rewrite the repo, and
+re-run the apt setup on the host that serves the media library.
+
+**Same class as item 2** — hand-built state the role cannot converge onto — and
+the same decision applies: nothing is managed by hand. The deploy that surfaced
+this was scoped around it with `--skip-tags repository,packages,service`, which
+is a workaround, not the fix.
+
+*State:* diagnosed, not fixed. *Effort:* small. *Needs:* a laptop (Ansible).
+
+```
+Make cobra's Plex repo converge from the role. Read docs/TODO.md item 4.
+Its plex.list points at /usr/share/keyrings/plexmediaserver.v2.gpg (hand-made)
+while the role manages /etc/apt/keyrings/plexmediaserver.v2.gpg, so
+--tags plex fails on "Set Plex keyring permissions". Verify with --check
+--diff first, then apply, then confirm: changed=0 on a second run, `apt-get
+update` clean with no NO_PUBKEY, plexmediaserver still active, and the
+installed version unchanged (state: present must not upgrade it).
 ```
 
 **3. The test environment does not yet do the thing it was built for**

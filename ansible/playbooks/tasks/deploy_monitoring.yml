@@ -13,7 +13,7 @@
 #
 # Scheduled maintenance in this fleet lands on :00, and this check samples
 # service state in a single instant. On 2026-08-15 at 04:00 cobra reported
-# `Service plexmediaserver: not running` because `backup_plex.sh:123` does
+# `Service plexmediaserver: not running` because `backup_plex_config` does
 # `systemctl stop plexmediaserver`, snapshots the config, and starts it ~22 s
 # later — and this cron sampled the gap. Nothing was wrong with Plex.
 #

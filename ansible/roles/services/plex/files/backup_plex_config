@@ -96,6 +96,59 @@ elif [ "$silent_mode" == "true" ] && [ -z "$recipient" ]; then
   exit 1
 fi
 
+# ----------------------------------------------------------------------------
+# Announced maintenance window
+#
+# This script stops Plex for ~22 s. On 2026-08-15 at 04:00 that made
+# system_health_check.sh page `Service plexmediaserver: not running` — it
+# sampled the gap, and `systemctl is-active` cannot tell a scheduled stop from
+# an outage on one sample. The fix is for the job doing the stopping to say so,
+# scoped to the one service it stops and to the time it needs.
+#
+# ⚠️ The window must never outlive the stop. Two independent guarantees:
+#   - it is torn down in an EXIT trap, so `set -e`, a failed tar, or a kill all
+#     close it;
+#   - it carries a deadline, so even SIGKILL only suppresses until then, and
+#     the health check then reports an EXPIRED window — which is the real
+#     fault (a backup that stopped Plex and died) rather than the symptom.
+#
+# MAINTENANCE_WINDOW_SECONDS is sized for the stop, not for the whole script:
+# only the interval between `systemctl stop` and `systemctl start` is covered,
+# and the upload afterwards runs with Plex already back up. 300 s is ~13× the
+# measured 22 s, wide enough for a contended disk and short enough that a dead
+# backup is visible on the following health check 15 minutes later.
+MAINTENANCE_DIR="${MAINTENANCE_DIR:-${HOME:-/nonexistent}/.maintenance}"
+MAINTENANCE_MARKER="${MAINTENANCE_DIR}/plexmediaserver"
+MAINTENANCE_WINDOW_SECONDS="${MAINTENANCE_WINDOW_SECONDS:-300}"
+
+open_maintenance_window() {
+  mkdir -p "${MAINTENANCE_DIR}" && chmod 700 "${MAINTENANCE_DIR}" || {
+    log_msg "${YELLOW}Warning: could not create ${MAINTENANCE_DIR} - the health check may alert during this backup${NC}"
+    return 0
+  }
+  # Written to a temp file and moved into place: a reader that catches a
+  # partial write sees no window rather than a half-parsed deadline. The health
+  # check fails closed on garbage, so a torn marker would alert — correctly,
+  # but for the wrong reason.
+  printf '%s backup_plex_config pid=%s started %s\n' \
+    "$(( $(date +%s) + MAINTENANCE_WINDOW_SECONDS ))" \
+    "$$" "$(date '+%Y-%m-%d %H:%M:%S')" > "${MAINTENANCE_MARKER}.tmp" &&
+    mv "${MAINTENANCE_MARKER}.tmp" "${MAINTENANCE_MARKER}" || {
+      log_msg "${YELLOW}Warning: could not write ${MAINTENANCE_MARKER}${NC}"
+      return 0
+    }
+  log_msg "Announced maintenance window for plexmediaserver (${MAINTENANCE_WINDOW_SECONDS}s)"
+}
+
+close_maintenance_window() {
+  rm -f "${MAINTENANCE_MARKER}" "${MAINTENANCE_MARKER}.tmp"
+}
+
+# Fires on every exit path, including the `exit 1`s below and any signal that
+# runs traps. Registered before the window is ever opened, so there is no
+# instant in which one exists without a way out.
+trap close_maintenance_window EXIT
+
 # Setup backup paths
 HOSTNAME=$(hostname)
 BACKUP_DIR="/tmp/plex_config_backup_$(date +%Y%m%d_%H%M%S)"
@@ -120,6 +173,7 @@ mkdir -p "${BACKUP_DIR}" || {
 
 # Stop Plex to ensure consistent backup
 log_msg "Stopping Plex Media Server for consistent backup"
+open_maintenance_window
 sudo systemctl stop plexmediaserver || {
   log_msg "${YELLOW}Warning: Failed to stop Plex Media Server${NC}"
   # Continue anyway, but backup might not be consistent
@@ -182,6 +236,12 @@ sudo systemctl start plexmediaserver || {
   log_msg "${YELLOW}Warning: Failed to restart Plex Media Server${NC}"
   # Continue anyway, but alert the user
 }
+
+# Closed here rather than left to the EXIT trap: the rest of this script
+# encrypts and uploads an archive, which can take minutes, and Plex is already
+# back. Holding the window open across the upload would suppress a genuine
+# failure of the restart above for as long as R2 takes to answer.
+close_maintenance_window
 
 # Clean up temp directory
 log_msg "Cleaning up temporary directory"
