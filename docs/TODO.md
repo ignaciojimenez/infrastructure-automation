@@ -104,22 +104,40 @@ Verify with --check --diff BEFORE applying: the diff must not touch
 changed=0 on a second run, and that Plex still reads the share.
 ```
 
-**3. `L-G` — the test rig connects as root, so it is blind to permission faults**
-Proven: same script, same container, same minute — `❌ Upgrade log not found` as
-`choco`, `✅ Last upgrade` as root. Every fault depending on file ownership is
-**structurally invisible to the whole suite** — the exact class of the `adm` bug
-that later cost real incidents.
+**3. The test rig — red on `main`, and G1's framing is out of date**
+Measured 2026-08-18 by actually running it against CT 199 (first run in a while):
 
-*State:* rig is built and merged; this is a change to how it connects.
-*Effort:* medium (touches every test case). *Gated on:* nothing.
-*Needs:* a laptop (git + Ansible), plus CT 199 started on cwwk — `pct start 199` works from the phone.
+| Finding | Detail |
+|---|---|
+| 🔴 **The suite is red on `main`** | 3 of 10 cases failed *as root*. A suite nobody runs is not load-bearing, whatever user it connects as. |
+| ✅ **2 of those 3 were the container being STOPPED for 9 days** | `❌ No upgrades for 9 days — ACTION REQUIRED` fired and poisoned every case asserting exit 0. Refreshing the upgrade timestamp turned both green. |
+| 🐛 **`health_no_internet` is a stale test, not a bug** | It blocks only `google.com` in `/etc/hosts`, but the check now probes a name **and** a raw IP, so it correctly reports a *resolver* problem. The check got smarter; the case was never updated. |
+| ❌ **G1's prescription is backwards** | The plan says "the runner connects as the infrastructure user and cases escalate with `sudo`". Cases genuinely need **root to arrange** faults (stop cron, move logs, chown). Running the whole suite unprivileged gives **8/10 `PRECONDITION FAILED`** — it cannot even set up. Only the **exercise** step should drop privilege. |
+| ✅ **The helper already exists** | `run_uut_as` is in `tests/lib/harness.sh`, well documented, and already used by the two ownership-dependent cases. The blind spot is real but **narrower than "the whole suite"**. |
+| ✅ **Already fixed** | `UUT_ROOT` was hardcoded to root-owned `/opt/uut`, so an unprivileged run could not even stage. Now per-user. |
+
+📌 **The best find is a near-miss.** Before the timestamp refresh,
+`health_no_internet` *satisfied* `assert_exit_nonzero` — because an **unrelated**
+check had failed. It was caught only because it also asserts on output.
+**Asserting on exit status alone lets a case pass for the wrong reason.**
+
+*State:* diagnosed in detail, partly fixed. *Effort:* small now the shape is known.
+*Needs:* a laptop, and **CT 199 started and refreshed first** (`pct start 199`, then
+let unattended-upgrades run) or every elapsed-time check fires and poisons the run.
 
 ```
-Make the test rig load-bearing. Read the L-G section of
-~/.claude/plans/infra-CURRENT.md. Priority is G1: the runner connects as
-root and is therefore blind to every permission fault. Switch it to the
-infrastructure user with per-case sudo escalation. Run the suite against
-main too — a case that does not fail there proves nothing.
+Finish the test rig. Read docs/TODO.md item 3 — the diagnosis is done, do not
+re-derive it. Three things: (1) fix health_no_internet, which is a stale test —
+it blocks only the hostname but the check probes a name AND a raw IP, so
+arrange both or assert the resolver-problem wording instead. (2) Convert the
+remaining cases' EXERCISE step from run_uut to run_uut_as "$INFRA_USER",
+keeping the runner connecting as root so cases can still arrange faults — the
+helper already exists in tests/lib/harness.sh. (3) Make the runner refresh the
+container's upgrade timestamp during staging, or elapsed-time checks fire after
+any idle period and poison unrelated cases.
+
+Acceptance: 10/10 green as root, AND at least one case demonstrably red when
+run unprivileged but green as root — that difference IS the blind spot closing.
 ```
 
 **4. `W1` — vinylstreamer's wifi lockout root cause**
