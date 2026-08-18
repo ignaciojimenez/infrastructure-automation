@@ -11,6 +11,13 @@ Updated: 2026-08-17
 | **Finished work + why** | [`archive/DONE.md`](archive/DONE.md) |
 | **How the system is built** | [`ARCHITECTURE_DECISIONS.md`](ARCHITECTURE_DECISIONS.md) |
 | **Full narrative of past sessions** | git history |
+| **Phone-first router, with copy-paste prompts** | [Infra — What to work on](https://claude.ai/code/artifact/092808db-2dba-4759-8146-e4d42e9d1c30) |
+
+> 📌 **The dashboard is a render of this file's *What to work on next* section**, and
+> exists for two things only: starting work from the phone without a session, and
+> handing over ready prompts so a session does not spend tokens rediscovering
+> context. **If you change the items below, update the dashboard** — nothing in the
+> repo surfaces it, so it goes stale silently.
 
 > **Network layer:** see [NETWORK.md](NETWORK.md) — topology, VLANs, VPN and DNS,
 > plus thirteen findings from deriving it on 2026-08-07/08 that are not yet
