@@ -10,16 +10,32 @@
 #   . "$(dirname "$0")/../lib/harness.sh"
 #   describe "disk above threshold is reported as a failure"
 #   cleanup() { rm -f /var/tmp/ballast; }
-#   arrange  ... make the condition true ...
-#   run_uut scripts/common/system_health_check.sh
+#   arrange  ... make the condition true, as root ...
+#   run_uut_as "$INFRA_USER" scripts/common/system_health_check.sh
 #   assert_exit_nonzero
 #   assert_output_contains "Disk /"
 #   finish
+#
+# ARRANGE as root, EXERCISE as $INFRA_USER. run_uut (root exercise) is kept for
+# the rare case that is genuinely about root's view, and for A/B-ing a case
+# against the two users; it is not the default.
 
 set -u
 
 # UUT_ROOT is where the repo's scripts were staged on the target.
 UUT_ROOT="${UUT_ROOT:-/opt/uut}"
+
+# The unprivileged account the fleet's cron actually runs the checks as.
+#
+# Resolved on the target rather than hardcoded: the rig's account is created by
+# tests/provision_test_container.sh and the fleet's by bootstrap, and both land
+# on uid 1000. The runner exports it, so this fallback only matters when a case
+# is run by hand on the target.
+#
+# Every case's EXERCISE step goes through run_uut_as "$INFRA_USER". The ARRANGE
+# steps still run as root, because stopping cron, moving logs and chowning
+# directories is what arranging a fault means — see run_uut_as.
+INFRA_USER="${INFRA_USER:-$(awk -F: '$3 == 1000 { print $1; exit }' /etc/passwd)}"
 
 _case_name=""
 _failures=0
@@ -102,7 +118,7 @@ run_uut_as() {
         return 1
     fi
 
-    if ! id "$_as_user" >/dev/null 2>&1; then
+    if [ -z "$_as_user" ] || ! id "$_as_user" >/dev/null 2>&1; then
         _fail "cannot run as '$_as_user': no such user on this target"
         return 1
     fi
@@ -111,7 +127,18 @@ run_uut_as() {
     # traverse to the script and the case fails for the wrong reason.
     chmod -R a+rX "$UUT_ROOT"
 
-    _uut_output=$(su -s /bin/sh "$_as_user" -c "sh $_uut_path $*" 2>&1)
+    # `su` to yourself demands a password when you are not root, so a suite
+    # already running as the target user would hang or fail here for a reason
+    # that has nothing to do with what the case tests. Exec directly instead:
+    # the privilege being dropped to is the privilege already held.
+    if [ "$(id -un)" = "$_as_user" ]; then
+        _uut_output=$(sh "$_uut_path" "$@" 2>&1)
+    else
+        # Plain `su`, not `su -`: the case's exported tunables (THRESHOLD_*,
+        # NETWORK_PROBE_*) must reach the script, and a login shell would
+        # discard them. Verified on the rig — an exported variable survives.
+        _uut_output=$(su -s /bin/sh "$_as_user" -c "sh $_uut_path $*" 2>&1)
+    fi
     _uut_status=$?
 
     note "ran as $_as_user, exit status: $_uut_status"

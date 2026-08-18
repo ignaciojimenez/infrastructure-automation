@@ -15,7 +15,7 @@ cleanup() {
 systemctl stop cron >/dev/null 2>&1
 assert_precondition "cron is stopped" sh -c '! systemctl is-active --quiet cron'
 
-run_uut scripts/common/system_health_check.sh
+run_uut_as "$INFRA_USER" scripts/common/system_health_check.sh
 
 assert_exit_nonzero
 assert_output_contains "Service cron: not running"

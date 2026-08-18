@@ -4,9 +4,20 @@ Behavioural tests for the monitoring scripts, run against a **disposable Debian
 LXC** — never against a fleet host.
 
 ```sh
+ssh cwwk 'sudo pct start 199'                       # the rig is onboot 0
 tests/run_tests.sh --target 10.30.40.205            # all cases
 tests/run_tests.sh --target 10.30.40.205 --case disk --verbose
+ssh cwwk 'sudo pct stop 199'                        # leave it stopped
 ```
+
+**Start the container first — it is `onboot 0` on purpose**, so it sits stopped
+between sessions and its clock-driven state goes stale. The runner refreshes the
+one that matters (`unattended-upgrades`' last-run entry) during staging, by
+running it for real in dry-run. Without that, `check_auto_upgrades` fails at
+7 days and hands a non-zero exit to every case on the box — cases asserting
+exit 0 go red, and cases asserting failure go **green for the wrong reason**.
+That is not theoretical: it was 2 of the 3 red cases on 2026-08-18, and a third
+was passing its exit assertion on the borrowed failure.
 
 Create the target with:
 
@@ -18,14 +29,18 @@ and destroy it with the same script and `-- --destroy`. See
 [docs/TEST_CONTAINER.md](../docs/TEST_CONTAINER.md) for what each setting is
 for. The runner refuses to run against a host that is not named `testlxc`.
 
-## ⚠️ What this suite cannot see
+## Who the suite runs as
 
-It connects as **root**, because the cases fill disks and stop services. The
-fleet's checks run as the infrastructure user under cron. So any fault that only
-appears to an unprivileged user is invisible to every case here.
+**It connects as root and exercises the scripts as the infrastructure user.**
+The split is the point, and both halves are load-bearing:
 
-That is not hypothetical. On 2026-08-04, on CT 199, the same script in the same
-minute:
+| Step | User | Why |
+|---|---|---|
+| **ARRANGE** | `root` | The cases fill disks, stop cron, move root-owned logs, chown directories. Running the whole suite unprivileged was tried on 2026-08-18: **8 of 10 cases hit `PRECONDITION FAILED`** — it cannot set up the faults it claims to test. |
+| **EXERCISE** | `$INFRA_USER` (uid 1000) | The fleet's checks run as that user under cron. A root-only exercise is structurally blind to every permission-dependent fault. |
+
+The blind spot was not hypothetical. On 2026-08-04, on CT 199, the same script
+in the same minute:
 
 ```
 as choco : ❌ Upgrade log not found - unattended-upgrades may not be configured
@@ -33,11 +48,34 @@ as root  : ✅ Last upgrade: 2026-08-04
 ```
 
 `/var/log/unattended-upgrades/` is `root:adm 0750` and the infrastructure user is
-not in `adm` on three of seven fleet hosts. A real bug, and this suite reports
-green on it.
+not in `adm` on three of seven fleet hosts. A real bug the suite reported green
+on. It now has two cases of its own (`health_upgrade_log_unreadable`,
+`health_upgrade_log_missing`).
 
-When a check reads a file it does not own, verify with
-`tests/sandbox.sh --run <script>`, which connects as the infrastructure user.
+The mechanism is `run_uut_as "$INFRA_USER"` in `tests/lib/harness.sh`;
+`INFRA_USER` is resolved on the target by the runner and overridable.
+
+### Proving the split still has teeth
+
+The value of the split is only real while a permission fault can actually turn
+a case red. To re-verify after changing the harness, inject one and A/B the
+same case on the exercise user alone:
+
+```sh
+# a config file the cron user cannot read — invisible to root
+ssh root@10.30.40.205 chmod 0600 /etc/apt/apt.conf.d/20auto-upgrades
+
+tests/run_tests.sh --target 10.30.40.205 --case health_baseline
+#   → FAIL: "❌ Unattended upgrades not enabled in config"
+
+INFRA_USER=root tests/run_tests.sh --target 10.30.40.205 --case health_baseline
+#   → PASS — root reads it fine, and sees nothing wrong
+
+ssh root@10.30.40.205 chmod 0644 /etc/apt/apt.conf.d/20auto-upgrades
+```
+
+Measured 2026-08-18, exactly as shown. If both legs agree, the exercise step is
+no longer dropping privilege and the suite is back to being blind.
 
 ## Trying something by hand
 

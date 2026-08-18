@@ -10,15 +10,25 @@
 #
 # See docs/TEST_CONTAINER.md for how to create the target.
 #
-# ⚠️ KNOWN BLIND SPOT: this connects as root, because the cases fill disks and
-# stop services. The fleet's checks run as the infrastructure user under cron,
-# so anything that fails only for an unprivileged user is invisible here.
-# Demonstrated 2026-08-04 on CT 199: check_auto_upgrades prints "Upgrade log not
-# found" as `choco` and "Last upgrade: <date>" as root, same script, same host,
-# same minute — /var/log/unattended-upgrades is root:adm 0750 and the user is
-# not in adm. That is a real fleet bug on 3 of 7 hosts and this suite cannot see
-# it. Use `tests/sandbox.sh --run <script>` (which connects as the
-# infrastructure user) whenever a check touches a file it does not own.
+# PRIVILEGE SPLIT: this connects as ROOT and every case EXERCISES as the
+# unprivileged infrastructure user.
+#
+# Both halves are load-bearing and neither is negotiable:
+#
+#   ARRANGE as root — the cases fill disks, stop cron, move root-owned logs and
+#   chown directories. Running the suite unprivileged end to end was tried on
+#   2026-08-18 and gives 8 of 10 PRECONDITION FAILED: it cannot set up the
+#   faults it claims to test, which proves nothing about anything.
+#
+#   EXERCISE as $INFRA_USER — the fleet's checks run as that user under cron, so
+#   a root-only exercise is structurally blind to every permission-dependent
+#   fault. Demonstrated 2026-08-04 on CT 199: check_auto_upgrades prints
+#   "Upgrade log not found" as `choco` and "Last upgrade: <date>" as root, same
+#   script, same host, same minute — /var/log/unattended-upgrades is root:adm
+#   0750 and the user is not in adm. That was a real bug on 3 of 7 hosts and the
+#   suite could not see it.
+#
+# The split is implemented by run_uut_as in tests/lib/harness.sh, not here.
 
 set -u
 
@@ -95,6 +105,17 @@ esac
 
 printf 'Target: %s (%s)\n' "$remote_hostname" "$TARGET"
 
+# The account every case exercises the scripts as — see run_uut_as. Resolved on
+# the target (uid 1000) rather than assumed, and overridable for a rig whose
+# infrastructure user is named something else.
+INFRA_USER="${INFRA_USER:-$($SSH "awk -F: '\$3 == 1000 { print \$1; exit }' /etc/passwd")}"
+if [ -z "$INFRA_USER" ]; then
+    printf 'error: no uid-1000 user on %s — cases cannot drop privilege to exercise\n' "$remote_hostname" >&2
+    printf '       set INFRA_USER=<name>, or see docs/TEST_CONTAINER.md\n' >&2
+    exit 1
+fi
+printf 'Cases arrange as root and exercise as: %s\n' "$INFRA_USER"
+
 # ------------------------------------------------------------------
 # Stage the repo under test. tar over ssh rather than rsync — a fresh
 # Debian container has tar, and may not have rsync.
@@ -103,6 +124,31 @@ printf 'Staging scripts to %s:%s ... ' "$remote_hostname" "$UUT_ROOT"
 $SSH "rm -rf $UUT_ROOT && mkdir -p $UUT_ROOT" || exit 1
 tar -C "$REPO_ROOT" -cf - scripts tests | $SSH "tar -C $UUT_ROOT -xf -" || exit 1
 printf 'done\n'
+
+# ------------------------------------------------------------------
+# Refresh the container's unattended-upgrades timestamp.
+#
+# The rig is `onboot 0` and sits stopped between sessions, so its last upgrade
+# entry is as old as the gap. check_auto_upgrades fails the whole run at 7 days
+# ("No upgrades for N days - ACTION REQUIRED"), which poisons every case that
+# asserts exit 0 — and, worse, hands a non-zero exit to cases asserting failure
+# so they pass for a reason that has nothing to do with what they test. On
+# 2026-08-18 that was 2 of the 3 red cases, and a third passed its exit
+# assertion on this borrowed failure.
+#
+# Refreshed by running unattended-upgrades for real in dry-run rather than by
+# appending a line to the log: it writes the same entry through the same code
+# path the fleet uses, so nothing here is a test-only fiction. Measured at 0.7s
+# on CT 199.
+#
+# Best effort on purpose. A target without the package is a legitimate rig, and
+# health_baseline arranges its own log entry regardless.
+printf 'Refreshing unattended-upgrades timestamp ... '
+if $SSH 'command -v unattended-upgrade >/dev/null 2>&1 && unattended-upgrade --dry-run >/dev/null 2>&1'; then
+    printf 'done\n'
+else
+    printf 'skipped (not available or failed) — elapsed-time checks may fire\n'
+fi
 
 # ------------------------------------------------------------------
 # Run the cases
@@ -123,7 +169,7 @@ for case_file in "$REPO_ROOT"/tests/cases/*.sh; do
     fi
 
     total=$((total + 1))
-    if $SSH "UUT_ROOT=$UUT_ROOT VERBOSE=$VERBOSE sh $UUT_ROOT/tests/cases/$case_name.sh"; then
+    if $SSH "UUT_ROOT=$UUT_ROOT VERBOSE=$VERBOSE INFRA_USER=$INFRA_USER sh $UUT_ROOT/tests/cases/$case_name.sh"; then
         :
     else
         failed=$((failed + 1))

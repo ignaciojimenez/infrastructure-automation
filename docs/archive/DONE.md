@@ -17,6 +17,62 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ---
 
+## 2026-08-18 — the test rig is green, and no longer root-blind
+
+**Decided:** cases **ARRANGE as root and EXERCISE as `$INFRA_USER`** (the
+`run_uut_as` split), **because** the two halves answer different questions and
+neither survives being collapsed into the other. Arranging a fault means
+stopping cron, filling disks, moving root-owned logs and chowning directories —
+running the suite unprivileged end to end was tried and gives **8 of 10
+`PRECONDITION FAILED`**, proving nothing about anything. But the fleet's checks
+run as the infrastructure user under cron, so a root-only exercise cannot see a
+permission fault at all.
+
+**Refused, do not reopen:** G1's prescription that "the runner connects as the
+infrastructure user and cases escalate with `sudo`". It is backwards, it was
+measured to be backwards, and the runner stays connecting as root.
+
+**The split is demonstrated, not asserted.** `chmod 0600
+/etc/apt/apt.conf.d/20auto-upgrades` is a fault only an unprivileged reader
+sees. Same case file, same fault: `--case health_baseline` FAILS as `choco` and
+PASSES with `INFRA_USER=root`. The A/B is in `tests/README.md` as the way to
+re-verify — **if both legs ever agree, the exercise step stopped dropping
+privilege and the suite is blind again.**
+
+**Decided:** `health_no_internet` exercises **both** branches of `check_network`
+— `/etc/hosts` for the name (→ *resolver problem*) plus a **`/32` blackhole
+route** for the probe IP (→ *genuine outage*) — **because** the case had gone
+stale: it blocked only the name and asserted `Internet: unreachable`, while the
+script had been rewritten to probe a name *and* an IP literal precisely to tell
+those two faults apart. **The check was right and the test was wrong**, which is
+the dangerous direction: the reflex is to "fix" the script until the old
+assertion passes, undoing a real improvement. A `/32` blackhole is used rather
+than dropping the default route because the latter severs the SSH session, so
+`cleanup` never runs and the container is left unreachable.
+
+**Decided:** the case **parses `NETWORK_PROBE_IP`/`_NAME` out of the script**
+and asserts what the parse *yielded*, **because** a case that hardcodes
+`1.1.1.1` keeps testing `1.1.1.1` long after the script has moved on, and
+reports green while covering nothing.
+
+**Decided:** the runner refreshes the rig's upgrade timestamp during staging by
+running `unattended-upgrade --dry-run` for real (0.7 s), **because** CT 199 is
+`onboot 0` and sits stopped between sessions — at 7 days `check_auto_upgrades`
+fails and hands a non-zero exit to every case on the box. Chosen over appending
+a line to the log so the entry comes through the same code path the fleet uses.
+
+**Decided:** `health_disk_full`'s cleanup waits (bounded 30 s) for the space to
+come back, **because** rpool frees asynchronously and the *next* case was still
+reading `Disk /: 89%` and satisfying `assert_exit_nonzero` on that leftover.
+
+📌 **Asserting on exit status alone lets a case pass for the wrong reason.** It
+happened twice in this work — once on a stale-upgrade failure, once on leftover
+ballast — and both times only a wording assertion caught it. Every case now
+asserts on wording as well as status.
+
+**Still open:** `wrapper_state_collision` has never dropped privilege — see
+[`TODO.md`](../TODO.md) item 3.
+
 ## 2026-08-17 — opnsense is read over its API, not a shell (L-H)
 
 **Decided:** the fleet sweep checks the firewall over HTTPS with a scoped,
