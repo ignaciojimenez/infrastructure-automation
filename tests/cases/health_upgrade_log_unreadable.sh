@@ -14,7 +14,6 @@
 
 . "$(dirname "$0")/../lib/harness.sh"
 
-TEST_USER="${TEST_USER:-$(awk -F: '$3 == 1000 { print $1; exit }' /etc/passwd)}"
 LOG_DIR=/var/log/unattended-upgrades
 LOG_FILE="$LOG_DIR/unattended-upgrades.log"
 
@@ -28,7 +27,7 @@ was_in_adm=no
 cleanup() {
     chown root:adm "$LOG_DIR" 2>/dev/null || true
     chmod 0750 "$LOG_DIR" 2>/dev/null || true
-    [ "$was_in_adm" = yes ] && gpasswd -a "$TEST_USER" adm >/dev/null 2>&1
+    [ "$was_in_adm" = yes ] && gpasswd -a "$INFRA_USER" adm >/dev/null 2>&1
     return 0
 }
 
@@ -38,18 +37,18 @@ cleanup() {
 chown root:adm "$LOG_DIR"
 chmod 0750 "$LOG_DIR"
 
-assert_precondition "a test user exists" test -n "$TEST_USER"
+assert_precondition "a test user exists" test -n "$INFRA_USER"
 
-if id -nG "$TEST_USER" | tr ' ' '\n' | grep -qx adm; then
+if id -nG "$INFRA_USER" | tr ' ' '\n' | grep -qx adm; then
     was_in_adm=yes
-    gpasswd -d "$TEST_USER" adm >/dev/null 2>&1
+    gpasswd -d "$INFRA_USER" adm >/dev/null 2>&1
 fi
-assert_precondition "$TEST_USER is not in adm" \
-    sh -c "! id -nG '$TEST_USER' | tr ' ' '\n' | grep -qx adm"
-assert_precondition "the log exists and is unreadable to $TEST_USER" \
-    sh -c "[ -f '$LOG_FILE' ] && ! su -s /bin/sh '$TEST_USER' -c '[ -r \"$LOG_FILE\" ]'"
+assert_precondition "$INFRA_USER is not in adm" \
+    sh -c "! id -nG '$INFRA_USER' | tr ' ' '\n' | grep -qx adm"
+assert_precondition "the log exists and is unreadable to $INFRA_USER" \
+    sh -c "[ -f '$LOG_FILE' ] && ! su -s /bin/sh '$INFRA_USER' -c '[ -r \"$LOG_FILE\" ]'"
 
-run_uut_as "$TEST_USER" scripts/common/system_health_check.sh
+run_uut_as "$INFRA_USER" scripts/common/system_health_check.sh
 
 assert_exit_zero
 assert_output_contains "cannot verify freshness"

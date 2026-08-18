@@ -37,7 +37,7 @@ assert_precondition "cgroup CPU pressure is readable" test -r "$PRESSURE_FILE"
 # cannot fail is not a check. It was established by sampling the container and
 # cwwk in the same second — see docs/TODO.md.
 
-run_uut scripts/common/system_health_check.sh
+run_uut_as "$INFRA_USER" scripts/common/system_health_check.sh
 
 assert_exit_zero
 assert_output_contains "CPU pressure"
@@ -53,7 +53,7 @@ THRESHOLD_CPU_PRESSURE=$(( ${current%%.*} - 1 ))
 export THRESHOLD_CPU_PRESSURE
 note "forcing failure: measured ${current}% against threshold ${THRESHOLD_CPU_PRESSURE}%"
 
-run_uut scripts/common/system_health_check.sh
+run_uut_as "$INFRA_USER" scripts/common/system_health_check.sh
 
 assert_exit_nonzero
 assert_output_contains "stalled waiting for CPU"

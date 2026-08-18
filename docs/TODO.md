@@ -3,7 +3,7 @@
 **Improvements and fixes waiting to be worked on.** Start at *What to work on
 next*; the first item you can act on is the right one.
 
-Updated: 2026-08-17
+Updated: 2026-08-18
 
 | Where a thing lives | |
 |---|---|
@@ -104,22 +104,30 @@ Verify with --check --diff BEFORE applying: the diff must not touch
 changed=0 on a second run, and that Plex still reads the share.
 ```
 
-**3. `L-G` — the test rig connects as root, so it is blind to permission faults**
-Proven: same script, same container, same minute — `❌ Upgrade log not found` as
-`choco`, `✅ Last upgrade` as root. Every fault depending on file ownership is
-**structurally invisible to the whole suite** — the exact class of the `adm` bug
-that later cost real incidents.
+**3. The test rig is green — one narrower gap left in it**
+The rig was finished on 2026-08-18: **10/10 on CT 199**, cases arrange as root
+and exercise as `$INFRA_USER`. See [`archive/DONE.md`](archive/DONE.md) for the
+decisions; do not re-derive them.
 
-*State:* rig is built and merged; this is a change to how it connects.
-*Effort:* medium (touches every test case). *Gated on:* nothing.
-*Needs:* a laptop (git + Ansible), plus CT 199 started on cwwk — `pct start 199` works from the phone.
+**What is still open:** `wrapper_state_collision` is the one case that has never
+dropped privilege. It has no `run_uut` call — it invokes
+`enhanced_monitoring_wrapper` directly and arranges via `/etc/hosts` — so it was
+out of scope for a `run_uut` → `run_uut_as` conversion. The wrapper *does* run as
+the infrastructure user under cron on every fleet host, and its state and log
+directories are that user's, so a root-only exercise is the same blind spot,
+just narrower.
+
+*State:* known, not started. *Effort:* small. *Needs:* a laptop, and **CT 199
+started first** (`ssh cwwk 'sudo pct start 199'`).
 
 ```
-Make the test rig load-bearing. Read the L-G section of
-~/.claude/plans/infra-CURRENT.md. Priority is G1: the runner connects as
-root and is therefore blind to every permission fault. Switch it to the
-infrastructure user with per-case sudo escalation. Run the suite against
-main too — a case that does not fail there proves nothing.
+Make tests/cases/wrapper_state_collision.sh exercise the wrapper as the
+unprivileged user, the way the rest of the suite already does. Read
+tests/README.md "Who the suite runs as" first — ARRANGE stays root, only the
+EXERCISE drops privilege. The case has no run_uut call, so this is real work:
+the wrapper is invoked directly and $WORK/logs_dir must be somewhere that user
+can write. Acceptance: still green, AND still red if you break the wrapper's
+state-file locking — force that, do not assume it.
 ```
 
 **4. `W1` — vinylstreamer's wifi lockout root cause**

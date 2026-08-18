@@ -33,7 +33,7 @@ assert_precondition "cron is running" systemctl is-active --quiet cron
 # shellcheck disable=SC2016  # deliberately unexpanded — evaluated by the inner shell
 assert_precondition "no failed units" sh -c '[ "$(systemctl list-units --failed --no-legend | wc -l)" -eq 0 ]'
 
-run_uut scripts/common/system_health_check.sh
+run_uut_as "$INFRA_USER" scripts/common/system_health_check.sh
 
 assert_exit_zero
 assert_output_contains "System Health Check"

@@ -41,7 +41,7 @@ assert_precondition "no reboot is already pending on the rig" \
 # ------------------------------------------------------------------
 # Baseline: no flag at all
 # ------------------------------------------------------------------
-run_uut scripts/common/system_health_check.sh
+run_uut_as "$INFRA_USER" scripts/common/system_health_check.sh
 assert_output_contains "No reboot pending"
 
 # ------------------------------------------------------------------
@@ -50,7 +50,7 @@ assert_output_contains "No reboot pending"
 : > "$FLAG"
 printf 'linux-image-amd64\nlibc6\n' > "$PKGS"
 
-run_uut scripts/common/system_health_check.sh
+run_uut_as "$INFRA_USER" scripts/common/system_health_check.sh
 assert_output_contains "Reboot pending"
 # The package list is the difference between "reboot sometime" and "you are
 # running an unpatched kernel". If it is dropped the check still passes its
@@ -68,7 +68,7 @@ touch -d '8 days ago' "$FLAG"
 assert_precondition "the flag really is backdated past the threshold" \
     sh -c "[ $(( ( $(date +%s) - $(stat -c %Y $FLAG) ) / 86400 )) -ge 7 ]"
 
-run_uut scripts/common/system_health_check.sh
+run_uut_as "$INFRA_USER" scripts/common/system_health_check.sh
 assert_output_contains "Reboot pending for 8 days"
 assert_output_contains "ACTION REQUIRED"
 assert_exit_nonzero

@@ -33,7 +33,7 @@ systemctl start "$UNIT" >/dev/null 2>&1
 assert_precondition "the unit is in a failed state" \
     sh -c "systemctl list-units --failed --no-legend | grep -q $UNIT"
 
-run_uut scripts/common/system_health_check.sh
+run_uut_as "$INFRA_USER" scripts/common/system_health_check.sh
 
 assert_exit_nonzero
 assert_output_contains "failed unit"

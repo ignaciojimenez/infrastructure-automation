@@ -23,8 +23,23 @@ MAX_FILL_MB=4096
 
 describe "disk above threshold fails the check"
 
+# Removing the ballast is not the same as the space coming back. rpool is ZFS
+# and frees asynchronously: measured 2026-08-18, the next case still saw
+# "Disk /: 89% (above 85%)" and passed its assert_exit_nonzero on THIS case's
+# leftover instead of on the fault it was arranging. Wait for the reclaim, so
+# the contamination cannot happen at all rather than usually not happening.
 cleanup() {
     rm -f "$BALLAST"
+    sync
+    _waited=0
+    while [ "$_waited" -lt 30 ]; do
+        _now=$(df -P / | awk 'NR==2 {gsub(/%/,"",$5); print $5}')
+        [ "$_now" -le 85 ] && break
+        sleep 1
+        _waited=$((_waited + 1))
+    done
+    note "disk back to ${_now}% after ${_waited}s"
+    return 0
 }
 
 # Work out how much to write to push / just past 85%.
@@ -51,7 +66,7 @@ _usage=$(df -P / | awk 'NR==2 {gsub(/%/,"",$5); print $5}')
 note "root filesystem now at ${_usage}%"
 assert_precondition "root filesystem is above 85%" sh -c "[ ${_usage} -gt 85 ]"
 
-run_uut scripts/common/system_health_check.sh
+run_uut_as "$INFRA_USER" scripts/common/system_health_check.sh
 
 assert_exit_nonzero
 assert_output_contains "above 85%"
