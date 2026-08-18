@@ -29,7 +29,18 @@ CASE_FILTER=""
 VERBOSE=0
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/read_agent_ed25519}"
 SSH_USER="${SSH_USER:-root}"
-UUT_ROOT=/opt/uut
+
+# Staging root, per connecting user.
+#
+# ⚠️ Was a hardcoded /opt/uut, which only root can create. That made running as
+# an unprivileged user impossible at the FIRST step — the suite could not even
+# stage, let alone reveal a permission fault. Found 2026-08-18 by trying it:
+# `rm: cannot remove '/opt/uut/tests': Permission denied`.
+#
+# Per-user rather than one shared path, so a root run and a user run cannot
+# leave each other's root-owned leftovers behind and produce a confusing
+# second failure.
+UUT_ROOT="${UUT_ROOT:-/tmp/uut-$SSH_USER}"
 
 usage() {
     cat <<'EOF'
