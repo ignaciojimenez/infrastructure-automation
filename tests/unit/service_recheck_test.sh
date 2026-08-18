@@ -10,7 +10,7 @@
 #
 # The bug this pins (2026-08-15): cobra alerted
 # `Service plexmediaserver: not running` at 04:00. Nothing was wrong.
-# `backup_plex.sh:123` does `systemctl stop plexmediaserver`, snapshots the
+# `backup_plex_config` does `systemctl stop plexmediaserver`, snapshots the
 # config and starts it ~22 s later, and the `*/15` health check sampled that
 # gap. `systemctl is-active` exits non-zero while a unit is `activating`, so on
 # ONE sample a restart and an outage are the same observation.
@@ -75,6 +75,10 @@ export OS_TYPE=debian
 export CRITICAL_SERVICES="testsvc"
 export SERVICE_RECHECK_ATTEMPTS=3 SERVICE_RECHECK_DELAY=0
 export HEALTH_CHECK_CONF=/nonexistent
+# Pinned so the laptop's real home cannot influence the result: an unset
+# MAINTENANCE_DIR defaults to $HOME/.maintenance, and a stray marker there
+# would quietly change what these cases prove.
+export MAINTENANCE_DIR="$WORK/no-windows"
 
 run_case() {
     # run_case <fail_samples>

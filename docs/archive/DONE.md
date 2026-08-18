@@ -17,6 +17,54 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ---
 
+## 2026-08-18 — the job that stops a service announces it (cobra's 04:00 alert)
+
+**Decided:** the job doing the stopping declares a **maintenance window** —
+`~/.maintenance/<unit>`, holding an expiry epoch and a reason — and
+`system_health_check.sh` downgrades that one unit from ❌ to ⚠️ while the window
+is open, **because** the alternative on the table was making the check tolerate
+a flap, which weakens it for every service on all seven hosts to fix one known
+22-second stop on one.
+
+**The distinction that makes it safe:** a retry *guesses* that a down service is
+coming back, so it must stay small enough not to hide an outage. A window is a
+*statement* by the job that stopped it, so it can be believed outright — but only
+for the unit it names, and only until it expires.
+
+**Decided:** an **expired** window is a louder error than no window at all
+(`EXPIRED maintenance window, the job that stopped it never restarted it`),
+**because** the failure it exposes — a backup killed between `stop` and `start`,
+leaving the service down indefinitely — is worse than the false positive the
+window exists to remove. Same reason a corrupt or truncated marker reads as *no
+window*: this fails closed.
+
+🔴 **Suppression is not silence.** A suppressed service still prints a line
+naming the job that opened the window; what it stops costing is the exit status.
+
+**Also decided:** `check_plex.sh` honours the same window. It runs `0 * * * *`
+and the backup runs `0 4 */7 * *` — the same minute, with no ordering between
+them — so its self-heal could `systemctl restart` Plex *while the backup was
+copying `Preferences.xml`*, putting a torn config in the archive and hiding it
+behind the backup's own `start`. Unfired, but only by luck of scheduling.
+
+**Proven by forcing all three states on cobra**, not by reasoning about them:
+during a real `backup_plex_config` run the check printed ⚠️ and exited **0**;
+with Plex genuinely stopped and no marker it printed ❌ `(4 checks over 36s)` and
+exited **1**; with an expired marker it printed the EXPIRED error and exited
+**1**. 15 laptop assertions (6 of which fail against `main`) and a container case
+green on CT 199 under `dash`.
+
+🐛 **`scripts/services/media/backup_plex.sh` was deleted**: a byte-identical,
+**unreferenced** copy of the file the role actually deploys
+(`roles/services/plex/files/backup_plex_config`) — and every comment in the repo
+cited the copy that does not run. Editing it would have changed nothing on cobra.
+
+📌 **The mitigations from 2026-08-15 (D6) are kept, not replaced**: the 36 s
+re-check and the `2-59/15` cron offset still cover *unannounced* restarts, which
+is hifipi's weekly audio-stack case. This adds the announced kind.
+
+---
+
 ## 2026-08-18 — the test rig is green, and no longer root-blind
 
 **Decided:** cases **ARRANGE as root and EXERCISE as `$INFRA_USER`** (the

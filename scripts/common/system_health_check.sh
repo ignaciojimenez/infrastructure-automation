@@ -72,7 +72,7 @@ NETWORK_PROBE_RETRY_DELAY="${NETWORK_PROBE_RETRY_DELAY:-2}"
 # Re-check budget for a service that looks down — see check_services.
 #
 # 4 attempts × 12 s = 36 s of coverage, against the longest measured maintenance
-# window in this fleet: backup_plex.sh stops Plex for ~22 s. Deliberately not
+# window in this fleet: backup_plex_config stops Plex for ~22 s. Deliberately not
 # 3 × 12 = 24 s, which "covers" 22 s only while nothing else on the box is
 # slow — one contended disk and the margin is gone. The cost of the wider
 # window is 36 s of added latency on a genuine outage, against a check that
@@ -85,6 +85,36 @@ NETWORK_PROBE_RETRY_DELAY="${NETWORK_PROBE_RETRY_DELAY:-2}"
 # is easy to deploy and easy to believe you deployed.
 SERVICE_RECHECK_ATTEMPTS="${SERVICE_RECHECK_ATTEMPTS:-4}"
 SERVICE_RECHECK_DELAY="${SERVICE_RECHECK_DELAY:-12}"
+
+# Announced maintenance windows — see read_maintenance_window and check_services.
+#
+# A job that must stop a service says so, for that service, for a bounded time.
+# This is the opposite trade to the retry above: the retry GUESSES that a down
+# service is coming back and so has to stay small enough not to hide an outage,
+# while a window is a statement by the job doing the stopping, and so may be
+# believed outright — but only for the service it names, and only until it
+# expires.
+#
+# Concretely: `backup_plex_config` on cobra stops plexmediaserver for ~22 s at
+# 04:00 every 7th day, and on 2026-08-15 this check sampled that gap and paged
+# `Service plexmediaserver: not running`. Nothing was wrong.
+#
+# ⚠️ Three properties keep this from becoming a mute button:
+#   1. It is per service. A window for plexmediaserver says nothing about smbd.
+#   2. It expires. A backup that dies between `stop` and `start` leaves the
+#      service down and the window rotting; past the deadline this check goes
+#      back to erroring, and says the window expired — which is a worse fault
+#      than the one it was hiding, not a quieter one.
+#   3. It never silences. A suppressed service still prints a line; it just
+#      prints a ⚠️ that costs no exit status instead of a ❌ that does.
+#
+# A marker is `<expiry-epoch> <free text>` in a file named after the unit.
+# Anything else — no file, unparseable first field, a name with a slash in it —
+# reads as "no window", so a corrupt or truncated marker fails CLOSED.
+#
+# The directory lives in the monitoring user's own home (0700), so writing a
+# marker needs the same privileges as editing the check itself.
+MAINTENANCE_DIR="${MAINTENANCE_DIR:-${HOME:-/nonexistent}/.maintenance}"
 
 # Optional per-host configuration, written by
 # ansible/playbooks/deploy_monitoring.yml from the inventory. Currently carries
@@ -442,6 +472,55 @@ freebsd_service_state() {
     fi
 }
 
+# Read the maintenance window declared for one service, if any.
+#
+# Sets two globals rather than echoing, because the caller needs both the
+# verdict and the text, and a second call would re-read a file that can change
+# between them — a window can expire mid-check, and then the line printed and
+# the exit status charged would disagree about which case this was.
+#
+#   MAINTENANCE_STATE  active | stale | none
+#   MAINTENANCE_NOTE   free text from the marker, or why it was unusable
+MAINTENANCE_STATE=none
+MAINTENANCE_NOTE=""
+read_maintenance_window() {
+    _svc="$1"
+    MAINTENANCE_STATE=none
+    MAINTENANCE_NOTE=""
+
+    # The unit name becomes a path component. Nothing in this fleet declares a
+    # service with a slash in it, so refusing them costs nothing and keeps
+    # `$MAINTENANCE_DIR/$_svc` from ever pointing outside the directory.
+    case "$_svc" in
+        ''|*/*|.|..) return 0 ;;
+    esac
+
+    _marker="$MAINTENANCE_DIR/$_svc"
+    [ -r "$_marker" ] || return 0
+
+    _line=$(head -n 1 "$_marker" 2>/dev/null)
+    _deadline=${_line%% *}
+    _note=${_line#* }
+    [ "$_note" = "$_line" ] && _note=""
+
+    # A half-written marker parses as garbage, and garbage must not suppress.
+    case "$_deadline" in
+        ''|*[!0-9]*)
+            MAINTENANCE_NOTE="unreadable maintenance marker $_marker"
+            return 0
+            ;;
+    esac
+
+    MAINTENANCE_NOTE=${_note:-no reason recorded}
+    if [ "$(date +%s)" -le "$_deadline" ]; then
+        MAINTENANCE_STATE=active
+    else
+        MAINTENANCE_STATE=stale
+        MAINTENANCE_NOTE="$MAINTENANCE_NOTE; window expired $(date -d "@$_deadline" '+%H:%M:%S' 2>/dev/null || echo "at epoch $_deadline")"
+    fi
+    return 0
+}
+
 check_services() {
     echo "=== Critical Services ==="
     issues=0
@@ -466,7 +545,7 @@ check_services() {
         # one that is down — on one sample. Scheduled maintenance in this fleet
         # does exactly that:
         #
-        #   cobra   backup_plex.sh:123 stops plexmediaserver for ~22 s
+        #   cobra   backup_plex_config stops plexmediaserver for ~22 s
         #   hifipi  restart_audio_services.sh restarts three units at once
         #
         # cobra alerted on 2026-08-15 04:00 for precisely this, and cost $0.40 of
@@ -488,6 +567,18 @@ check_services() {
                     _state=up
                     break
                 fi
+
+                # Consulted only once the service already looks down, and on
+                # every failed sample rather than once up front, so a window
+                # that opens mid-loop is still seen. A service that is UP never
+                # reaches this line, so a live window cannot turn a healthy
+                # service into a warning.
+                read_maintenance_window "$svc"
+                if [ "$MAINTENANCE_STATE" = active ]; then
+                    _state=maintenance
+                    break
+                fi
+
                 [ "$_attempt" -lt "$SERVICE_RECHECK_ATTEMPTS" ] && \
                     sleep "$SERVICE_RECHECK_DELAY"
                 _attempt=$((_attempt + 1))
@@ -503,8 +594,31 @@ check_services() {
                 else
                     print_status "success" "Service $svc: running"
                 fi
+            elif [ "$_state" = maintenance ]; then
+                # Still printed, and still says the service is down — what the
+                # window buys is the exit status, not the reader's attention.
+                print_status "warning" "Service $svc: not running (announced maintenance window - $MAINTENANCE_NOTE)"
             else
-                print_status "error" "Service $svc: not running (${SERVICE_RECHECK_ATTEMPTS} checks over $(( (SERVICE_RECHECK_ATTEMPTS - 1) * SERVICE_RECHECK_DELAY ))s)"
+                # $MAINTENANCE_STATE is whatever the last read left, which for a
+                # service still down at the end of the loop is `stale` or `none`.
+                # A stale window is worth saying out loud: it means the job that
+                # opened it never closed it, so something died holding a service
+                # down — a fault the old code could only report as a plain
+                # outage, and which no window will suppress again.
+                if [ "$MAINTENANCE_STATE" = stale ]; then
+                    print_status "error" "Service $svc: not running - EXPIRED maintenance window, the job that stopped it never restarted it ($MAINTENANCE_NOTE)"
+                else
+                    # A marker too corrupt to parse is named rather than
+                    # dropped: it failed closed, which is right, but a reader
+                    # who is told only "not running" would go looking for the
+                    # wrong fault.
+                    _why=$(( (SERVICE_RECHECK_ATTEMPTS - 1) * SERVICE_RECHECK_DELAY ))
+                    if [ -n "$MAINTENANCE_NOTE" ]; then
+                        print_status "error" "Service $svc: not running (${SERVICE_RECHECK_ATTEMPTS} checks over ${_why}s; $MAINTENANCE_NOTE)"
+                    else
+                        print_status "error" "Service $svc: not running (${SERVICE_RECHECK_ATTEMPTS} checks over ${_why}s)"
+                    fi
+                fi
                 issues=$((issues + 1))
             fi
         done

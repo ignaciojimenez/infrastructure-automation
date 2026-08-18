@@ -166,6 +166,20 @@ assert_exit_nonzero() {
     fi
 }
 
+# Compare against a status captured earlier, for a case whose claim is "this
+# changed nothing". On a host that carries an unrelated issue — a container with
+# no unattended-upgrades, say — `assert_exit_zero` would fail for a reason the
+# case is not about, and a case that only ever asserts non-zero cannot tell a
+# suppression from a crash.
+assert_exit_equals() {
+    if [ "$_uut_status" = "$1" ]; then
+        _pass "exited $_uut_status, same as the baseline run"
+    else
+        _fail "expected exit $1 (the baseline), got $_uut_status"
+        _dump_output
+    fi
+}
+
 assert_output_contains() {
     if printf '%s' "$_uut_output" | grep -qF -- "$1"; then
         _pass "output contains: $1"
