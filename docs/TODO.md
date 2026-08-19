@@ -307,33 +307,43 @@ hole-count limits. Handover artifact: *"cwwk Cabinet Fan — Vent Sizing Handove
 The section below is ~1,850 lines of legacy. One more pass empties it.
 
 ```
-Second triage pass on docs/TODO.md. Everything below the "NOT yet triaged"
-divider predates the 2026-08-17 cleanup and is a mix of resolved,
-superseded and still-open — it has never been reviewed item by item.
+Second triage pass on docs/TODO.md — empty everything below the "⚠️ Below here is NOT yet triaged" divider. Read this whole prompt first; it carries the context so you do not have to re-derive it.
 
-Work down it section by section. For each one, decide: (a) genuinely open
--> promote into "What to work on next" at the top, with a state line, a
-Needs: tag (phone or laptop) and a paste-ready prompt if it has already
-been investigated; (b) finished -> distil ONE entry into
-docs/archive/DONE.md as "decided X because otherwise Z", no diary; (c)
-superseded or stale -> delete, git has it.
+WHAT YOU ARE DOING
+docs/TODO.md is ~2,256 lines. Only the top ~270 — the "What to work on next" section — has been triaged. Below the divider sit ~1,950 lines in 109 subsections that predate the 2026-08-17 cleanup and have never been reviewed item by item. They are a mix of resolved, superseded and still-open. One pass empties it.
 
-⚠️ Read this first, it is the bug that made the cleanup necessary: open
-items were nested INSIDE completed write-ups, so archiving a finished
-section silently archived live work. Before removing any section, list its
-### subsections and check none is still open.
+THE STRUCTURE IS SETTLED — DO NOT REDESIGN IT
+- docs/TODO.md = open work only
+- docs/archive/DONE.md = finished work distilled to "decided X because otherwise Z", one entry per item, not a diary
+- docs/ARCHITECTURE_DECISIONS.md = standing rules, consulted before designing something new
+- git history = the full narrative (measurements, forced-failure tables, retractions). Nothing needs preserving in a doc just because it is interesting.
 
-Known stale, do not spend time re-deriving: "opnsense read_agent is
-broken" and "Priority 2 read_agent on OPNsense" are both moot — L-H moved
-the firewall to its API. "Priority 4 SMART" is done. "unifi-lxc --tags
-ssh" was done by L-B.
+FOR EACH SUBSECTION, DECIDE ONE OF THREE
+(a) genuinely open -> promote into "What to work on next" under the right priority band, with a state line, an effort estimate, a phone-or-laptop tag, and a paste-ready prompt if it has already been investigated
+(b) finished -> distil ONE entry into docs/archive/DONE.md, then delete it here
+(c) superseded or stale -> delete, git has it
 
-Do NOT re-plan the queue or invent a new scheme. The structure is settled:
-TODO.md = open work, archive/DONE.md = finished + why,
-ARCHITECTURE_DECISIONS.md = standing rules, git = narrative. Finish by
-updating the dashboard so its cards match the new top section.
+FOUR TRAPS, ALL OF WHICH HAVE ALREADY BITTEN
 
-Target: under 10 open items, and the divider gone.
+1. Open items were nested INSIDE completed write-ups. This is the bug that made the cleanup necessary — archiving a finished section silently archived live work (W1, cobra's Samba, F5's false-positive class). Before removing any section, list its ### subsections and check each one individually. Never judge a section by its heading.
+
+2. "FIXED IN CODE (not deployed)" is OPEN work, not finished work. There are 7 such notes below the divider. A fix merged but never pushed to a host reads as done and is not. Do NOT trust the document's own claim about deployment state — verify against the fleet: compare the deployed file's md5 against the repo's, or run the relevant playbook with --check --diff and look for changed=0. At least one of the seven is stale (the monitoring_dirs one shipped since), so expect to be wrong in both directions.
+
+3. Triage classifies; it does not fix. If you find an undeployed fix, promote it as an open item — do not deploy it mid-pass. This session ends with a clean TODO, not with fleet changes.
+
+4. Numbers are addresses, not ranks. Prompts and commit messages reference "item 2", "item 3a". Do not renumber on close.
+
+KNOWN STALE — DO NOT SPEND TOKENS RE-DERIVING
+- "opnsense read_agent is broken" and "Priority 2 read_agent on OPNsense" — both moot, the firewall moved to its API
+- "Priority 4 SMART" — done
+- "unifi-lxc --tags ssh" — done
+
+DELIVERABLES — ALL THREE, BUDGET FOR THEM
+1. docs/TODO.md — divider gone, target under 10 open items in "What to work on next"
+2. docs/archive/DONE.md — one distilled entry per finished item
+3. The dashboard, republished. It is Ignacio's ONLY entry point for picking up work and nothing in the repo links it, so it goes stale silently. It renders the "What to work on next" section. OPEN ITEMS ONLY — a closed item is removed, never struck through and never moved to a "recently fixed" section; he asked for that explicitly on 2026-08-19. Update it by WebFetching https://claude.ai/code/artifact/092808db-2dba-4759-8146-e4d42e9d1c30 (curl gets the SPA shell or a 403), extracting <title> through </body> from the HTML the tool saves locally, editing that, then republishing with url: set to the same URL and favicon 🛠️. Its counts row must sum to the cards below it.
+
+Work on a branch and finish with a signed merge (git ms). An unfinished triage with all three deliverables in step beats a complete one that leaves the dashboard stale.
 ```
 
 ---
