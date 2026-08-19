@@ -105,6 +105,24 @@ This is already flagged in memory as *"cwwk = internet SPOF"* and has bitten
 twice via fan-loss overheating (2026-06-30, 2026-07-31). It is a network fact as
 much as a hardware one, which is why it is repeated here.
 
+### When only OPNsense is down, go wired
+
+OPNsense does the VLAN and Wi-Fi routing, so a **wireless** laptop loses `cwwk`
+the moment the firewall is down — and with it `qm rollback 100`, the rollback for
+OPNsense itself.
+
+Wired does not depend on it. `cwwk` attaches to the managed switch over a 10G DAC
+and the switch taps back into a `cwwk` ethernet port, so a laptop on a VLAN 40
+port sits in `cwwk`'s L2 domain and needs no router at all.
+
+Verified end to end 2026-08-19 with Wi-Fi off: with `cwwk` down the switch
+configuration was still reachable, and with the OPNsense VM down Proxmox was
+still reachable.
+
+📌 **Do firewall maintenance from the wired path.** This is the case above's
+escape hatch — it does not help if `cwwk` itself is down, which still needs a
+console.
+
 ---
 
 ## VPN
