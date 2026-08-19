@@ -46,24 +46,20 @@ Each item says what it is, what state it is in, and what the next action is.
 **Anything already investigated carries a ready-to-paste prompt.** Anything that
 needs a decision from Ignacio says so and does not pretend to be actionable.
 
+🔴 **Open work only — a closed item is *removed* from this section, not struck
+through in place.** This section and the dashboard that renders it are a
+pick-up queue: everything on them is something to start. A "✅ done" entry left
+here is something to read past, every time, forever. The write-up goes to
+[`archive/DONE.md`](archive/DONE.md) and the narrative stays in git.
+
 ### 🔴 P1 — actively producing false alerts
 
-**Nothing here right now.** Item 1 — cobra's 04:00 `Service plexmediaserver: not
-running` — was fixed and verified on 2026-08-18, and item 1b — cwwk's VFIO false
-positive — on 2026-08-19; both in [`archive/DONE.md`](archive/DONE.md).
+**Nothing here right now.**
 
 📌 **Numbering is deliberately not compacted.** Several prompts below and in
 git history say "read docs/TODO.md item 2" or "item 3a"; renumbering on every
 close would silently repoint them. Numbers are addresses, not ranks — the
 headings say what is urgent.
-
-**1b. ~~cwwk pages `Script Failed` on every OPNsense VM restart~~ ✅ FIXED + DEPLOYED
-2026-08-19.** `check_kernel_errors.sh` now filters `vfio-pci <BDF>: reset(ting|
-done)` out of the matches *after* the `VFIO` pattern matches, so the pattern
-itself still catches real passthrough faults. Deployed to cwwk, second run
-`changed=0`. Forced-failure evidence and the one residual (a once-per-host-boot
-VFIO banner, which dedups correctly) are in
-[`archive/DONE.md`](archive/DONE.md).
 
 ### 🟠 P2 — known risk, not currently biting
 
