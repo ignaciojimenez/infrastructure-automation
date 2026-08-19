@@ -124,6 +124,7 @@ tests/unit/slack_watermark_test.sh
 tests/unit/ssh_backoff_test.sh
 tests/unit/anomaly_dedup_test.sh
 tests/unit/sweep_healthcheck_test.sh
+tests/unit/kernel_vfio_benign_test.sh
 ```
 
 ## What this suite is for

@@ -3,7 +3,7 @@
 **Improvements and fixes waiting to be worked on.** Start at *What to work on
 next*; the first item you can act on is the right one.
 
-Updated: 2026-08-18
+Updated: 2026-08-19
 
 | Where a thing lives | |
 |---|---|
@@ -49,34 +49,21 @@ needs a decision from Ignacio says so and does not pretend to be actionable.
 ### 🔴 P1 — actively producing false alerts
 
 **Nothing here right now.** Item 1 — cobra's 04:00 `Service plexmediaserver: not
-running` — was fixed and verified on 2026-08-18; see
-[`archive/DONE.md`](archive/DONE.md).
+running` — was fixed and verified on 2026-08-18, and item 1b — cwwk's VFIO false
+positive — on 2026-08-19; both in [`archive/DONE.md`](archive/DONE.md).
 
 📌 **Numbering is deliberately not compacted.** Several prompts below and in
 git history say "read docs/TODO.md item 2" or "item 3a"; renumbering on every
 close would silently repoint them. Numbers are addresses, not ranks — the
 headings say what is urgent.
 
-**1b. cwwk pages `Script Failed` on every OPNsense VM restart (benign VFIO resets)**
-`check_kernel_errors.sh` greps `dmesg -T | tail -500` with `grep -i` for the
-warning pattern `VFIO`. When the OPNsense VM restarts, its passthrough NICs
-emit `vfio-pci 0000:0X:00.0: resetting` / `reset done`. `dmesg -T` timestamps
-make every line a fresh md5 signature, so the seen-before dedup never catches
-them, and the check exits WARNING.
-
-**Verified end to end 2026-08-19**, not inferred: OPNsense 26.1.9→26.1.11
-upgrade rebooted VM 100 at 11:10:04 CEST, the reset lines are in cwwk's dmesg,
-and `:x: ALERT: Script Failed on cwwk` landed at 11:30:01 — the next `*/30` run.
-
-📌 **This has now cost real money twice.** The same alert on 2026-08-17 was sent
-to Tier 2, which spent **$0.2980** concluding it was benign. It will fire again
-on the 26.7 upgrade and on every future VM restart.
-
-*State:* diagnosed, not fixed. *Effort:* small. *Needs:* a laptop (Ansible deploy).
-*Fix:* exclude the specific benign form — `vfio-pci .*: reset(ting| done)` —
-rather than dropping the `VFIO` pattern, which would also blind the check to real
-passthrough faults. Force a synthetic VFIO-shaped line afterwards and watch it
-still fire.
+**1b. ~~cwwk pages `Script Failed` on every OPNsense VM restart~~ ✅ FIXED + DEPLOYED
+2026-08-19.** `check_kernel_errors.sh` now filters `vfio-pci <BDF>: reset(ting|
+done)` out of the matches *after* the `VFIO` pattern matches, so the pattern
+itself still catches real passthrough faults. Deployed to cwwk, second run
+`changed=0`. Forced-failure evidence and the one residual (a once-per-host-boot
+VFIO banner, which dedups correctly) are in
+[`archive/DONE.md`](archive/DONE.md).
 
 ### 🟠 P2 — known risk, not currently biting
 
