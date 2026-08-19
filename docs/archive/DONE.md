@@ -65,6 +65,28 @@ been scope creep bought with a real loss of coverage.
 
 ---
 
+## 2026-08-19 — hifipi's amixer alerts: the fix sat in git for four months
+
+**Closed** (fix hand-applied 2026-08-02, verified 2026-08-19: zero `Script
+Failed on hifipi` in `#home-alerts` across two Sunday cycles). The March commit
+fixing the alert was never deployed, **because** the audio scripts are deployed
+only by the `audio_playback` role — `deploy_monitoring.yml` syncs
+`scripts/common/` alone, while its name (and `CLAUDE.md`) promise more. That
+drift class is now TODO item 10's checksum blank; the wording fix is item 12.
+
+**It was three bugs, not one**, and redeploying the old fix alone would not have
+silenced it: the control names (`Master`/`Digital` never existed on this DAC),
+an unprivileged `alsactl store` under `set -e`, and a volume parse whose guard
+could never pass — `grep 'Left:|Mono:'` matches the empty `Mono:` header too, so
+`VOLUME` was multi-line and the threshold **never evaluated**. A DAC at 10%
+would have been reported "configured correctly".
+
+📌 **On any `Script Failed` alert, diff the deployed script against the repo
+before diagnosing its logic.** A Tier 2 investigation correctly root-caused this
+and still recommended writing a patch that had existed for four months.
+
+---
+
 ## 2026-08-18 — the job that stops a service announces it (cobra's 04:00 alert)
 
 **Decided:** the job doing the stopping declares a **maintenance window** —
@@ -306,8 +328,76 @@ carry them forward as verified.
 
 ---
 
+## 2026-08-13 — `system_health_check.sh` could never fail, and now can
+
+Every check printed its ❌ and the script exited 0 — on every host, every 15
+minutes, since forever, because nothing aggregated the counts and a script's
+status is that of its last `echo`. **Decided:** per-check counted returns summed
+into a real `exit`, **because** the wrapper keys purely on exit status — a check
+that reports only by printing contributes nothing (a rule that already had to be
+re-applied to `check_link_speed`).
+
+**Six false-failure classes were fixed before arming it**, each one a page-every-
+15-minutes the moment aggregation landed: the FreeBSD load parse returned the
+clock (`12:27AM` → "200%"); containers divided the *host's* load by their own
+core count (replaced with cgroup CPU pressure, calibrated at 80% `avg300`); ZFS
+ARC counted as used memory (cwwk read 82% for a true 52%); the upgrade log was
+unreadable to a user bootstrap never put in `adm`; service names were hardcoded
+per OS (now inventory-driven with an rc-script probe); and a pending-reboot check
+was added so `auto_reboot: false` on cwwk trades an unannounced reboot for a
+7-day-graded to-do, not an unnoticed unpatched kernel.
+
+📌 **"The error stopped" is satisfied by both a fix and a lobotomy.** Every one
+of these was closed by forcing the failure and watching it fire, in both
+directions — a test that does not fail against `main` proves nothing.
+
+---
+
+## 2026-08-13 — three cron jobs, one state file (the #home-logging flood)
+
+dockassist's three `check_container.sh` jobs shared one wrapper state file —
+the state name derives from the script *basename* — so three same-second writers
+trampled it, the daily-heartbeat dedup never persisted, and 92% of
+`#home-logging` was three duplicated messages. **Decided:** distinct
+`--monitoring-name` per job, documented as **required** whenever two jobs on a
+host wrap the same script, **because** the flag read as cosmetic — an API
+footgun, not operator error (adoption was 0–5 jobs per host).
+
+Wrapper hardened in the same change: `mktemp` for the state temp file (disarms
+the race fleet-wide), unrecognised `--heartbeat-interval` values are **fatal**
+instead of silently disabling heartbeats, and `never` is first-class. An absent
+flag still defaults to `daily` — silence is the one signal monitoring must never
+default to.
+
+---
+
 ## Smaller closed items
 
+- **2026-08-19 — cwwk memory trim considered and dropped.** OPNsense's VM is
+  allocated 12 GB and uses ~3.5 GB, but the host has headroom and shrinking it
+  costs a firewall restart (= internet outage). Revisit only if cwwk actually
+  runs short; do not re-propose on the numbers alone.
+- **2026-08-13 — unifi-lxc `--tags ssh` applied.** It was the one host the SSH
+  role had not reached since Oct 2025 — the only sshd_config diff and root-shell
+  outlier in the fleet.
+- **2026-08-10 — cabinet fan fitted** (Noctua NF-A12x25 G2, mechanical switch
+  that survives a power cut — the old fan's soft-latch reset-to-off caused both
+  outages). Door position dominates: 94 °C closed vs 81 °C resting on the same
+  load. Vent sizing continues as TODO item 8; runaway-process detection the fan
+  silenced is item 9.
+- **2026-08-06 — Tier 1 backs off a host that rejects auth**, reporting the
+  finding without connecting, because retrying hourly is what got the observer
+  CrowdSec-banned by its own gateway. Scoped to rejected auth only — a host that
+  is merely down keeps being probed.
+- **2026-08-01 — Zyxel XGS1250-12 telemetry: none obtainable.** No SNMP
+  (confirmed by Zyxel staff), no temperature readout; the overheat downshift
+  applies only to 10G *copper* ports and this link is an SFP+ DAC. An external
+  probe (TODO item 13) is the only route — do not re-derive.
+- **2026-07-13 — bathroom Tado radiator flapping.** Batteries swapped + `for:`
+  20 min + a global 6h cooldown, validated against 10 days of recorder history
+  (healthy devices' blips are all <5 min; only the degraded head produced
+  10–102 min outages). Per-entity timers rejected as overengineered for
+  monitoring-only entities.
 - **2026-08-16 — dockassist `services.yml` idempotency (D5).** The recorded
   one-character fix was **inert**; the real cause was two writers on one
   container (`docker run` stores binds verbatim, `community.docker` normalises to
