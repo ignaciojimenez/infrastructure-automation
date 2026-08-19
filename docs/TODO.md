@@ -3,7 +3,7 @@
 **Improvements and fixes waiting to be worked on.** Start at *What to work on
 next*; the first item you can act on is the right one.
 
-Updated: 2026-08-18
+Updated: 2026-08-19
 
 | Where a thing lives | |
 |---|---|
