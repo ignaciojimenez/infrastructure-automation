@@ -14,7 +14,9 @@ issues=()
 warnings=()
 
 # State file to track seen errors
-STATE_DIR="/var/log/monitoring-state"
+# STATE_DIR is overridable so the check can be exercised from a test harness
+# without root; production never sets it.
+STATE_DIR="${KERNEL_ERRORS_STATE_DIR:-/var/log/monitoring-state}"
 STATE_FILE="$STATE_DIR/kernel_errors_seen.txt"
 
 # Create state directory if it doesn't exist
@@ -45,6 +47,23 @@ WARNING_PATTERNS=(
     "hung task"
 )
 
+# Lines that match a pattern above but are not faults.
+#
+# Filtered out *after* the pattern match on purpose: the patterns stay broad so
+# the check still sees real problems. Dropping "VFIO" from WARNING_PATTERNS
+# would also blind it to genuine passthrough faults.
+#
+# vfio-pci reset lines: every start/stop of the OPNsense VM resets its two
+# passthrough NICs. `dmesg -T` renders a fresh timestamp on every line, so each
+# one hashes to a new md5 and the seen-before dedup below never suppresses
+# them — cwwk paged "Script Failed" on every VM restart.
+#
+# Anchored at end-of-line deliberately. A reset that *fails* carries extra text
+# ("Failed to reset device", "reset failed") and must still alert.
+BENIGN_PATTERNS=(
+    "vfio-pci [0-9a-fA-F:.]+: reset(ting| done)[[:space:]]*$"
+)
+
 # Function to check dmesg for patterns
 check_dmesg() {
     local pattern=$1
@@ -54,6 +73,13 @@ check_dmesg() {
     # Get recent kernel messages (last 500 lines to keep it manageable)
     # Use sudo since dmesg requires privileges
     matches=$(sudo dmesg -T 2>/dev/null | tail -500 | grep -i "$pattern" || true)
+
+    # Drop known-benign lines before dedup and reporting
+    local benign
+    for benign in "${BENIGN_PATTERNS[@]}"; do
+        [ -n "$matches" ] || break
+        matches=$(printf '%s\n' "$matches" | grep -Ev "$benign" || true)
+    done
     
     if [ -n "$matches" ]; then
         # Check each match to see if we've already reported it

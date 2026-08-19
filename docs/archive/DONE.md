@@ -17,6 +17,54 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ---
 
+## 2026-08-19 — exclude the benign line, never the pattern (cwwk's VFIO false positive)
+
+**Decided:** `check_kernel_errors.sh` filters known-benign lines out of the
+matches **after** the pattern matches, rather than narrowing the pattern,
+**because** the obvious fix — dropping `VFIO` from `WARNING_PATTERNS` — also
+makes the check permanently incapable of reporting a passthrough fault. Both
+fixes make the alert stop. Only one of them still has a check afterwards.
+
+The benign form, anchored at end-of-line:
+`vfio-pci [0-9a-fA-F:.]+: reset(ting| done)[[:space:]]*$`. The anchor is the
+whole safety margin — a reset that *fails* carries extra text (`Failed to reset
+device`, `resetting failed`, `reset done, device unusable`) and still alerts.
+
+**Why it paged at all:** every OPNsense VM start/stop resets its two passthrough
+NICs. The check dedups by md5 of the matched line, but `dmesg -T` renders a
+fresh wall-clock timestamp on each, so every restart produced 24 never-before-
+seen signatures. The dedup was working exactly as written and could never have
+caught these.
+
+**Proven by forcing the failure on cwwk**, against real `dmesg` and a copy of
+the real state file, through the *deployed* script as the cron user:
+
+| injected line | exit |
+|---|---|
+| *(none — the 24 reset lines that paged that evening)* | `0` OK |
+| `vfio-pci 0000:03:00.0: Failed to reset device` | `1` WARNING |
+| `vfio-pci 0000:01:00.0: resetting failed` | `1` WARNING |
+| `vfio-pci 0000:03:00.0: DMAR: DMA fault addr 0xdeadbeef` | `1` WARNING |
+| `vfio-pci 0000:01:00.0: reset done` *(benign)* | `0` OK |
+
+A laptop unit test pins the same thing without a host or a container —
+`tests/unit/kernel_vfio_benign_test.sh`, 8 assertions. It was confirmed to
+**fail against the pre-fix script** before being trusted; a green test that was
+never seen red proves nothing.
+
+🔴 **The fixture lied and the host told the truth.** The hand-built laptop
+fixture held only reset lines, so it went green while cwwk still exited `1`:
+real `dmesg` also carries `VFIO - User Level meta-driver version: 0.3` and
+`vfio-pci <BDF>: enabling device (0002 -> 0003)`. **Left unexcluded on
+purpose** — unlike the resets they are logged once per module load, so their
+timestamps are stable, their md5s dedup correctly, and they were already in
+cwwk's state file. They cost one alert per *host* reboot, not per VM restart,
+which is the thing that was actually wrong. Deliberately not chased: the whole
+VFIO buffer is four distinct line forms, and excluding the other two would have
+been scope creep bought with a real loss of coverage.
+
+---
+
 ## 2026-08-18 — the job that stops a service announces it (cobra's 04:00 alert)
 
 **Decided:** the job doing the stopping declares a **maintenance window** —
