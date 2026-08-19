@@ -78,6 +78,8 @@ rather than dropping the `VFIO` pattern, which would also blind the check to rea
 passthrough faults. Force a synthetic VFIO-shaped line afterwards and watch it
 still fire.
 
+### 🟠 P2 — known risk, not currently biting
+
 **1c. The speedtest dependency is hand-installed, and two hosts run different tools under the same name**
 `internet_speed_monitor` needs Ookla's `speedtest`, and **nothing in this repo
 installs it.** It was put on dockassist by hand. Rebuild that host and the monitor
@@ -93,7 +95,6 @@ program* on each host — Ookla 1.2.0.84 on dockassist, Debian's Python
 *State:* diagnosed 2026-08-19, nothing changed yet. *Effort:* small.
 *Needs:* a laptop (Ansible deploy). Worth doing whether or not item 1d happens.
 
-### 🟠 P2 — known risk, not currently biting
 
 **1d. Monitor the VPN path's speed, not just the direct one**
 Today only the **non-VPN** path is measured (dockassist, VLAN 100). VLAN 40 egresses
