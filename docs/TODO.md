@@ -78,7 +78,78 @@ rather than dropping the `VFIO` pattern, which would also blind the check to rea
 passthrough faults. Force a synthetic VFIO-shaped line afterwards and watch it
 still fire.
 
+**1c. The speedtest dependency is hand-installed, and two hosts run different tools under the same name**
+`internet_speed_monitor` needs Ookla's `speedtest`, and **nothing in this repo
+installs it.** It was put on dockassist by hand. Rebuild that host and the monitor
+exits 2 with "Speedtest command failed or not available" — the check goes quiet
+without ever alerting.
+
+🐛 **Worse than missing: it is ambiguous.** `speedtest` resolves to a *different
+program* on each host — Ookla 1.2.0.84 on dockassist, Debian's Python
+`speedtest-cli` 2.1.3 on agent-lxc (the `speedtest-cli` package ships
+`/usr/bin/speedtest` too). Both print plausible Mbps. Any script calling
+`speedtest` gets a different methodology depending where it lands.
+
+*State:* diagnosed 2026-08-19, nothing changed yet. *Effort:* small.
+*Needs:* a laptop (Ansible deploy). Worth doing whether or not item 1d happens.
+
 ### 🟠 P2 — known risk, not currently biting
+
+**1d. Monitor the VPN path's speed, not just the direct one**
+Today only the **non-VPN** path is measured (dockassist, VLAN 100). VLAN 40 egresses
+through Mullvad and is unmeasured, so a degrading tunnel would be invisible.
+
+**Baseline measured 2026-08-19:** VPN **886/906 Mbps** vs direct **943/940** — the
+tunnel delivers **94% of line rate**, so nothing is wrong today. That 94% is the
+number to alert against.
+
+📌 **Alert on the RATIO, not an absolute.** An absolute floor fires every time the
+ISP has a bad evening and says nothing about the VPN; the ratio isolates
+VPN-specific degradation.
+
+⚠️ **Three things that will silently invalidate this if missed:**
+1. **Pin `--server-id` on both paths.** `internet_speed_monitor` does not pass it
+   today. Ookla picks the server nearest the *egress*, so the VPN path would choose
+   relative to the Mullvad exit and the direct path relative to Odido — comparing
+   two different tests and calling the difference "VPN slowness".
+2. **Run the two tests sequentially, never concurrently.** Concurrent tests through
+   one gateway measure each other. This is not theoretical: on 2026-08-19 an agent's
+   parallel downloads produced the 250 Mbps reading that started the whole
+   investigation.
+3. **Prove the VPN-side host can saturate before building on it.** Still **unproven**
+   for agent-lxc — the validation run failed on the wrong binary (see 1c). A host
+   that cannot reach ~900 measures its own NIC, not the tunnel.
+
+**Not opnsense**, for three independent reasons: it performs the WireGuard crypto so
+the test competes with what it measures; it is the internet SPOF; and its own traffic
+does not follow the per-VLAN policy routes clients use, so it would measure a path
+nobody takes.
+
+**Cost to weigh:** ~1.25 GB and a fully saturated line per test, deployed as
+`--tests=5` every 6h (~25 GB/day, ~26 min/day saturated). A second path doubles it —
+prefer `--tests=3` twice daily across both.
+
+```
+Build VPN-vs-direct speed monitoring. Read TODO items 1c and 1d first — they
+carry every verified fact, do not re-derive them.
+
+Order, each step gating the next:
+1. Ansible task installing Ookla's speedtest, gated on enable_internet_speed_check.
+   Repo: packagecloud.io/ookla/speedtest-cli/debian/ <codename> main, keyring
+   /etc/apt/keyrings/ookla_speedtest-cli-archive-keyring.gpg, package `speedtest`.
+   A trixie suite EXISTS (queried directly) — do not pin bookworm. Purge Debian's
+   `speedtest-cli` first; both claim /usr/bin/speedtest. Run --check --diff against
+   dockassist first: it already has the right binary, so it must come back clean.
+2. Add --server-id to internet_speed_monitor. Pin 52365 (Odido Amsterdam) — that is
+   what it already auto-selects, so history stays comparable.
+3. THEN validate agent-lxc can saturate: speedtest --server-id=52365. Want ~880-900.
+   If it cannot, pick another VLAN 40 host — do not ship a monitor that measures a
+   container's NIC.
+4. THEN the ratio check: both paths sequentially, alert when VPN/direct drops below
+   ~75% for two consecutive runs, plus a loose absolute floor.
+```
+
+
 
 **2. cobra's Samba is hand-built and the role cannot converge as written**
 `--tags samba` has **never run on cobra**. Its live `smb.conf` is stock Debian
