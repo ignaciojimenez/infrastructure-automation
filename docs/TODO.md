@@ -12,7 +12,7 @@ Updated: 2026-08-18
 | **How the system is built** | [`ARCHITECTURE_DECISIONS.md`](ARCHITECTURE_DECISIONS.md) |
 | **What the test environment is for** | [`TESTING_GOALS.md`](TESTING_GOALS.md) — read before any test work |
 | **Full narrative of past sessions** | git history |
-| **Phone-first router, with copy-paste prompts** | [Infra — What to work on](https://claude.ai/code/artifact/092808db-2dba-4759-8146-e4d42e9d1c30) |
+| **Phone-first router, with copy-paste prompts** | the *Infra — What to work on* artifact — link is printed at session start by `.claude/session-start-dashboard.sh` (kept out of this public repo) |
 
 > 📌 **The dashboard is a render of this file's *What to work on next* section**, and
 > exists for two things only: starting work from the phone without a session, and
