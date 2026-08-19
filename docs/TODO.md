@@ -52,6 +52,19 @@ pick-up queue: everything on them is something to start. A "✅ done" entry left
 here is something to read past, every time, forever. The write-up goes to
 [`archive/DONE.md`](archive/DONE.md) and the narrative stays in git.
 
+📌 **The queue order is explicit.** Items appear below in *address* order
+(numbers never move), but the order to work them is this, and the dashboard
+renders it:
+
+> **№1** 1c → **№2** 1d → **№3** 2 → **№4** 4 (plex) → **№5** 9 → **№6** 3a/3b
+> → **№7** W1 *(unlocks ~23 Aug)* → **№8** 12 → **№9** 5 → **№10** 10 →
+> **№11** 11 → **№12** 6 → **№13** 7 → **№14–16** 8/13/14 *(presence-gated —
+> whenever he is at the cabinet, not ranked)*
+
+📌 **Every item carries a paste-ready prompt** — including blocked ones, which
+carry *fill-in* prompts that take the physical measurement or decision as
+input. An item without a prompt is an item that has not been triaged properly.
+
 ### 🔴 P1 — actively producing false alerts
 
 **Nothing here right now.**
@@ -77,6 +90,18 @@ program* on each host — Ookla 1.2.0.84 on dockassist, Debian's Python
 
 *State:* diagnosed 2026-08-19, nothing changed yet. *Effort:* small.
 *Needs:* a laptop (Ansible deploy). Worth doing whether or not item 1d happens.
+
+```
+Fix the speedtest dependency without building the VPN monitor yet. Read
+docs/TODO.md item 1c — the verified facts are there, do not re-derive them.
+Write the Ansible task installing Ookla's speedtest (repo
+packagecloud.io/ookla/speedtest-cli/debian/ <codename> main, keyring
+/etc/apt/keyrings/ookla_speedtest-cli-archive-keyring.gpg, package
+`speedtest`), gated on enable_internet_speed_check; purge Debian's
+`speedtest-cli` first — both ship /usr/bin/speedtest. --check --diff against
+dockassist must come back clean (it already has the right binary). Then apply
+to agent-lxc and verify `speedtest --version` reports Ookla there.
+```
 
 
 **1d. Monitor the VPN path's speed, not just the direct one**
@@ -278,6 +303,17 @@ resolved before configuring anything.
 *State:* time-gated to ~2026-08-23, then re-judge on real traffic.
 *Needs:* nothing until then — **reading `#home-alerts` on the phone IS the task.**
 
+```
+The W1 gate has passed (~2026-08-23) and a week of plug traffic is in
+#home-alerts. Resolve vinylstreamer's wifi lockout root cause. Read
+~/.claude/plans/vinylstreamer-wifi-lockout-plan.md and docs/TODO.md item 4
+(W1) first. Step 1 is the contradiction: the standing model says
+NetworkManager gives up for days, but the one clean sample recovered
+unassisted in 18 minutes — use the alert history to decide which is true,
+excluding 2026-08-16 (W2's own acceptance tests). Only then configure
+anything, and only the asked-for change: verify on vinylstreamer alone, stop.
+```
+
 **9. Runaway-process detection — the fan removed the only thing that caught the last one**
 On 2026-08-07 a single pegged core (a `grep -r` reading a chroot's `/dev/random`
 forever on the OPNsense guest) held cwwk at ~95 °C for **ten hours**. The only
@@ -322,14 +358,43 @@ permits, so a read-only account can read the alerting credentials. Move to an
 env file (`0600`) sourced by `enhanced_monitoring_wrapper`; rotate the two
 webhooks as part of it. Needs a coordinated fleet redeploy.
 
+```
+Move the healthchecks.io and Slack tokens out of cron command lines. Read
+docs/TODO.md item 5. Pattern: /etc/monitoring/tokens.env (0600, from vault)
+sourced by enhanced_monitoring_wrapper, with a positional-arg fallback so the
+rollout does not have to be atomic; then strip the token args from every cron
+task across roles and redeploy the fleet. Rotate both webhooks at the end —
+they have been exposed in diffs and cron mail for months. Verify: crontab -l
+on every host shows no tokens, and one forced failure still reaches
+#home-alerts.
+```
+
 **6. FreeBSD monitoring code runs on no host.** `deploy_monitoring.yml` excludes
 `system_health_check.sh` from FreeBSD and actively removes it, so
 `freebsd_default_services()`, `freebsd_service_state()` and `read_load_1min()` are
 dormant. Either give them a FreeBSD test target (stock FreeBSD 14.3, not
 OPNsense — no official image exists) or delete them.
 
+```
+Close the FreeBSD dead-code question. Read docs/TODO.md item 6 and the L-B
+entry in docs/archive/DONE.md. deploy_monitoring.yml excludes
+system_health_check.sh from FreeBSD, so freebsd_default_services(),
+freebsd_service_state() and read_load_1min() run on no host. Recommendation:
+delete them (git has them) unless a stock FreeBSD 14.3 test VM is being built
+in the same session — dormant "verified" code is not a third option.
+```
+
 **7. Flap damping.** A fault that alternates pass/fail defeats repeat
 suppression. Deliberately deferred: *"fix forward if annoying."*
+
+```
+Add flap damping to enhanced_monitoring_wrapper. Read docs/TODO.md item 7 and
+the L-F entry in docs/archive/DONE.md first — repeat suppression (1h→24h
+doubling) exists and is deployed; the gap is a fault that alternates
+pass/fail, which resets the backoff every cycle. Damp on transitions per
+window, not consecutive failures. Then force a flapping fault on CT 199 and
+watch the paging rate drop while a steady fault still pages.
+```
 
 **10. Coverage audit — enumerate what nothing watches at all**
 Raised 2026-08-07: *"I don't know if I'll know I need to do anything on those
@@ -356,6 +421,16 @@ the checks that exist. **The blanks are the deliverable.** Known blanks going in
 value is in being systematic). *Needs:* a laptop for the doc; reading can
 happen anywhere.
 
+```
+Run the coverage audit. Read docs/TODO.md item 10. Per host, enumerate
+failure mode → what tells you → how fast, starting from what the host exists
+to do — not from the checks that exist. Output: a table in docs/, linked from
+ARCHITECTURE_DECISIONS.md, with the blanks made explicit; the blanks are the
+deliverable — do not fix anything mid-audit. Seed it with item 10's four
+known blanks (PVE updates, OPNsense firmware, backup restorability,
+role-owned script drift).
+```
+
 **11. agent-lxc — Phase C (operator mode) and the rebuild-identity decision**
 Phases A+B are live; Tier 2 investigates real alerts. Phase C is **designed,
 not built**: `~/.claude/plans/phase-c-operator-plan.md` (§0: no operator key, no
@@ -376,6 +451,15 @@ observer; do it under whichever option is chosen, not blind.
 *State:* planned (plan file is the source — do not delete it). *Effort:* large
 (Phase C), small (the decision). *Needs:* a laptop and Ignacio's sign-off on
 the plan.
+
+```
+Start Phase C (operator mode). Read ~/.claude/plans/phase-c-operator-plan.md
+end to end first — §0's decisions (no operator key, no operator user, choco
+via forwarded Secure-Enclave keys, ask + biometric double gate) are settled,
+and §0b makes a container dry-run part of every approval. Decide the rebuild
+identity before the destroy/recreate test: recommended option (1), accept +
+document the two-command re-key. Operator reference: docs/AGENT_LXC.md.
+```
 
 **12. Small-fix batch — none worth its own slot, all real**
 One branch, tick them off. Phone-taggable lines marked 📱.
@@ -418,6 +502,15 @@ One branch, tick them off. Phone-taggable lines marked 📱.
 *State:* all diagnosed, none started. *Effort:* small each. *Needs:* mixed —
 📱 lines work from a phone, the rest want a laptop.
 
+```
+Work through the small-fix batch. Read docs/TODO.md item 12 — thirteen
+diagnosed one-liners; do them on one branch and tick each off in the file as
+it lands. Start with the CLAUDE.md deploy_monitoring wording (it hid a
+4-month drift). For each fix verify the behaviour, not the absence of the
+error — the heartbeat curl fix must log a forced failure, the
+recovery-routing change must deliver a real recovery to the chosen channel.
+```
+
 ### 🧊 Blocked on Ignacio, not on work
 
 **8. Cabinet vent sizing.** Needs three physical measurements only he can take:
@@ -430,6 +523,16 @@ resting; the vents exist so the closed door can match the resting-door baseline
 (pkg 52–57 °C, zero throttling). Airflow is a ceiling, not a lever — running
 the fan harder is ruled out on acoustics.
 
+```
+I measured the cabinet: cwwk+switch power draw = __ W, usable panel =
+__ × __ cm, hole-count/aesthetic limit = __. Read docs/TODO.md item 8 and the
+"cwwk Cabinet Fan — Vent Sizing Handover" artifact. Compute the intake area
+needed for the fully closed door to match the resting-door baseline (the
+proven intake is the ~34.3 cm² resting-door gap; target pkg 52–57 °C, zero
+throttling) and give me a drill plan: hole count, diameter, spacing,
+placement. Show the thermal margin math.
+```
+
 **13. Cabinet ambient sensor.** Needs a hardware purchase decision: a Shelly H&T
 (or Shelly Add-On + DS18B20) reporting into HA via the existing Mosquitto broker
 on dockassist. It would be the first direct "the cabinet lost cooling" signal —
@@ -440,7 +543,25 @@ threshold). 📌 The software half — extending `save_temps.sh` to the Pis so t
 get the thermal history cwwk has — is *not* blocked and can ride any monitoring
 deploy.
 
+```
+Help me add the cabinet ambient sensor. Read docs/TODO.md item 13. Compare a
+Shelly H&T vs Shelly Add-On + DS18B20 for this cabinet (MQTT into the
+authenticated Mosquitto broker on dockassist, battery vs powered, placement),
+recommend ONE. Once I confirm the purchase: integrate it into HA, alert to
+#home-alerts at the Zyxel guide's 40 °C ambient limit, and extend
+save_temps.sh to the Pis in the same pass so the history exists before the
+first incident.
+```
+
 **14. UPS topology.** Confirm which devices actually share the Pis' power
 protection. The 2026-06-30 split (cwwk down, Pis up) suggests cwwk is
 unprotected, and the 2026-07-30 whole-house outage took the fleet down for ~24h.
 Physical check only he can do.
+
+```
+UPS findings: __ (which devices are on the UPS, its model, what happened at
+the last outage). Read docs/TODO.md item 14. Record the topology in
+docs/NETWORK.md, then decide: does cwwk need UPS protection and/or NUT
+monitoring, given it is the internet SPOF and came back on its own on
+2026-07-30? Recommend one option.
+```
