@@ -528,9 +528,9 @@ I measured the cabinet: cwwk+switch power draw = __ W, usable panel =
 __ × __ cm, hole-count/aesthetic limit = __. Read docs/TODO.md item 8 and the
 "cwwk Cabinet Fan — Vent Sizing Handover" artifact. Compute the intake area
 needed for the fully closed door to match the resting-door baseline (the
-proven intake is the ~34.3 cm² resting-door gap; target pkg 52–57 °C, zero
-throttling) and give me a drill plan: hole count, diameter, spacing,
-placement. Show the thermal margin math.
+proven intake is the measured 5 mm × 49 cm ≈ 24.5 cm² resting-door gap; target
+pkg 52–57 °C, zero throttling) and give me a drill plan: hole count, diameter,
+spacing, placement. Show the thermal margin math.
 ```
 
 **13. Cabinet ambient sensor.** Needs a hardware purchase decision: a Shelly H&T
