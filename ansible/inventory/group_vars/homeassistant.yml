@@ -31,7 +31,12 @@ internet_speed_tests: 5
 internet_speed_delay: 75
 
 # Platform
-disable_bluetooth: false  # Keep for BLE integrations
+# Nothing on this host uses Bluetooth: HA's adapter discovery is dismissed
+# (source: "ignore"), bluetooth.service is disabled and inactive, hci0 is
+# DOWN, and matter-server runs without --bluetooth-adapter so it never does
+# BLE commissioning. Commissioning via the companion app uses the phone's
+# radio and is unaffected. Verified 2026-08-22.
+disable_bluetooth: true
 disable_hdmi: true
 
 # ── vinylstreamer watchdog ────────────────────────────────────────────────────
