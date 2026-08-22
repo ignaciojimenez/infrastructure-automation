@@ -15,6 +15,8 @@
   register: thread_wifi_link_disabled
   changed_when: false
   failed_when: false
+  # Read-only: must still run under --check, or the guard below sees nothing.
+  check_mode: false
   when: not (is_test_environment | default(false))
   tags: [homeassistant, thread, network]
 
@@ -65,6 +67,7 @@
     cmd: nmcli -t -f NAME connection show --active
   register: thread_wifi_link_active
   changed_when: false
+  check_mode: false
   tags: [homeassistant, thread, network]
 
 - name: Bring up the Thread Wi-Fi link
@@ -84,8 +87,15 @@
     cmd: ip -6 route show
   register: thread_wifi_link_routes
   changed_when: false
+  check_mode: false
   retries: 6
   delay: 10
   until: thread_wifi_link_prefix in thread_wifi_link_routes.stdout
-  when: not (is_test_environment | default(false))
+  # --check skips the bring-up above, so on an unconverged host the route cannot
+  # be there yet. Assert only when the link is already up; otherwise --check
+  # would fail on precisely the change it declined to make.
+  when:
+    - not (is_test_environment | default(false))
+    - not ansible_check_mode
+      or thread_wifi_link_profile in (thread_wifi_link_active.stdout_lines | default([]))
   tags: [homeassistant, thread, network]
