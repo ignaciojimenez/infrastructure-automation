@@ -124,6 +124,15 @@ exited **1**; with an expired marker it printed the EXPIRED error and exited
 **1**. 15 laptop assertions (6 of which fail against `main`) and a container case
 green on CT 199 under `dash`.
 
+✅ **Production-confirmed 2026-08-22**, the next `*/7` run: window announced under
+cron at 04:00:02 (which is what proves `$HOME` resolves there — the one thing a
+forced run cannot show), Plex back at 04:00:23, backup exit 0, marker cleaned up,
+`#home-alerts` silent. ⚠️ **But the suppression did not fire that morning**: the
+`2-59/15` check sampled at 04:02, after Plex was back, and `check_plex.sh` read
+`active` at 04:00:02 by a fraction of a second. The offset carried it; the window
+was insurance. It stays proven only by the forced runs — which is the point, since
+the offset stops covering a stop that takes longer than two minutes.
+
 🐛 **`scripts/services/media/backup_plex.sh` was deleted**: a byte-identical,
 **unreferenced** copy of the file the role actually deploys
 (`roles/services/plex/files/backup_plex_config`) — and every comment in the repo
