@@ -588,6 +588,15 @@
   tags: [homeassistant, mqtt, ha_integration]
 
 # ============================================================
+# Thread border-router Wi-Fi leg
+# ============================================================
+
+- name: Deploy the Thread border-router Wi-Fi leg
+  ansible.builtin.import_tasks: thread_wifi_link.yml
+  when: enable_thread_wifi_link | default(false)
+  tags: [homeassistant, thread, network]
+
+# ============================================================
 # Dashboard Configuration
 # ============================================================
 

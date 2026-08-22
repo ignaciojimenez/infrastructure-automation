@@ -1,0 +1,47 @@
+# {{ ansible_managed }}
+#
+# Second, IPv6-only network leg for the Thread border router.
+#
+# WHY THIS EXISTS
+# The Eve door sensors speak Matter over Thread. This Pi has no 802.15.4 radio,
+# so every packet to them crosses a Thread Border Router — currently the HomePod
+# "Bano". The BR routes between the Thread mesh prefix and whatever LAN segment
+# its own Wi-Fi leg lands on, and it announces that route in a Router
+# Advertisement. RAs are link-local: they do not cross a VLAN boundary.
+#
+# On 2026-08-17 the HomePod was moved from the IoT SSID (VLAN 100) to
+# {{ thread_wifi_link_ssid }} (VLAN 20) to fix AirPlay. eth0 stayed on VLAN 100, so this
+# host stopped receiving the RA, lost its route to {{ thread_wifi_link_prefix }}, and both
+# door sensors went unavailable for five days. This profile puts a foot back on
+# the BR's link so the route returns.
+#
+# ⚠️ ipv4.method=disabled IS LOAD-BEARING — do not "fix" it to auto.
+# Docker sets net.ipv4.ip_forward=1 on this host. The only reason that does not
+# turn this Pi into a bridge between the IoT VLAN and {{ thread_wifi_link_ssid }} is that
+# wlan0 holds no IPv4 address. Giving this profile IPv4 would silently join two
+# segments that are firewalled apart on purpose. IPv6 forwarding is 0 on all
+# interfaces, which is what keeps the v6 side honest.
+#
+# It also keeps eth0 unambiguously primary: no second DHCP lease, no competing
+# default route, no second set of resolvers.
+
+[connection]
+id={{ thread_wifi_link_profile }}
+type=wifi
+interface-name={{ thread_wifi_link_interface }}
+autoconnect=true
+
+[wifi]
+mode=infrastructure
+ssid={{ thread_wifi_link_ssid }}
+
+[wifi-security]
+key-mgmt=wpa-psk
+psk={{ vault_thread_wifi_link_psk }}
+
+[ipv4]
+method=disabled
+
+[ipv6]
+method=auto
+may-fail=true

@@ -1,0 +1,91 @@
+---
+# Second, IPv6-only Wi-Fi leg onto the VLAN carrying the Thread border router.
+# See templates/thread_wifi_link.nmconnection.j2 for why this exists at all.
+
+# ⚠️ The Wi-Fi radio is load-bearing here, and on dockassist it survives only by
+# accident: config.txt carries `dt_overlay="disable-wifi"`, which is malformed
+# (the directive is `dtoverlay=`, unquoted) and therefore inert — verified
+# 2026-08-22, wlan0 and hci0 both present. Correcting that typo without reading
+# this would take the door sensors offline again, so fail loudly and early
+# rather than deploying a profile onto an interface that cannot come up.
+- name: Refuse to deploy if the Wi-Fi radio is disabled in firmware config
+  become: true
+  ansible.builtin.command:
+    cmd: "grep -cE '^[[:space:]]*dtoverlay[[:space:]]*=[[:space:]]*disable-wifi' {{ thread_wifi_link_boot_config }}"
+  register: thread_wifi_link_disabled
+  changed_when: false
+  failed_when: false
+  when: not (is_test_environment | default(false))
+  tags: [homeassistant, thread, network]
+
+- name: Fail with an explanation when the radio is disabled
+  ansible.builtin.fail:
+    msg: >-
+      {{ thread_wifi_link_boot_config }} disables the Wi-Fi radio
+      (dtoverlay=disable-wifi), but {{ thread_wifi_link_profile }} needs it: it is
+      the only path from this host to the Thread border router, and therefore to
+      every Matter-over-Thread device. Remove that line and reboot, or set
+      enable_thread_wifi_link=false and accept that those devices stay
+      unavailable.
+  when:
+    - not (is_test_environment | default(false))
+    - thread_wifi_link_disabled.stdout | default('0') | trim | int > 0
+  tags: [homeassistant, thread, network]
+
+- name: Confirm the Wi-Fi interface exists
+  ansible.builtin.assert:
+    that: thread_wifi_link_interface in ansible_facts.interfaces
+    fail_msg: >-
+      {{ thread_wifi_link_interface }} is not present on this host. Without it there is
+      no route to the Thread mesh. If this Pi was re-imaged, check that the SD
+      card was not provisioned with --no-wifi.
+  when: not (is_test_environment | default(false))
+  tags: [homeassistant, thread, network]
+
+- name: Deploy the Thread border-router Wi-Fi profile
+  become: true
+  ansible.builtin.template:
+    src: thread_wifi_link.nmconnection.j2
+    dest: "/etc/NetworkManager/system-connections/{{ thread_wifi_link_profile }}.nmconnection"
+    owner: root
+    group: root
+    mode: '0600'
+  # The rendered file carries the WPA passphrase, so never print it in --diff.
+  diff: false
+  notify: Reload NetworkManager connections
+  tags: [homeassistant, thread, network]
+
+- name: Flush handlers so the profile is loaded before it is activated
+  ansible.builtin.meta: flush_handlers
+  tags: [homeassistant, thread, network]
+
+- name: Check whether the Thread Wi-Fi link is active
+  become: true
+  ansible.builtin.command:
+    cmd: nmcli -t -f NAME connection show --active
+  register: thread_wifi_link_active
+  changed_when: false
+  tags: [homeassistant, thread, network]
+
+- name: Bring up the Thread Wi-Fi link
+  become: true
+  ansible.builtin.command:
+    cmd: "nmcli connection up {{ thread_wifi_link_profile }}"
+  when: thread_wifi_link_profile not in thread_wifi_link_active.stdout_lines
+  changed_when: true
+  tags: [homeassistant, thread, network]
+
+# The point of the profile is one route. Assert it arrived rather than assuming
+# that a connected radio means a working path — an associated Wi-Fi interface
+# with no RA looks identical to success from every angle except this one.
+- name: Wait for the border router's Router Advertisement to install the Thread route
+  become: true
+  ansible.builtin.command:
+    cmd: ip -6 route show
+  register: thread_wifi_link_routes
+  changed_when: false
+  retries: 6
+  delay: 10
+  until: thread_wifi_link_prefix in thread_wifi_link_routes.stdout
+  when: not (is_test_environment | default(false))
+  tags: [homeassistant, thread, network]
