@@ -560,6 +560,14 @@ One branch, tick them off. Phone-taggable lines marked 📱.
   `site.yml --limit unifi-lxc --check --diff` and align per-item.
 - `INJECT_FACTS_AS_VARS` goes away in ansible-core 2.24; the repo uses bare
   fact names everywhere. Mechanical repo-wide sweep, own branch.
+- 🔒 `docs/NETWORK.md` publishes all five SSIDs with their VLANs in a public
+  repo — including that the IoT SSID is **the only one with `pmf_mode`
+  disabled**, which names the deauth-vulnerable network for anyone reading.
+  `thread_wifi_link_ssid` moved to vault on 2026-08-23, but that only narrows
+  future exposure while this table stands. Decide: accept it, or move the
+  SSID/PMF columns behind vault-rendered docs. Enabling PMF on the IoT SSID is
+  the separate, better fix — check what breaks first, older IoT kit often cannot
+  do it.
 - cobra and dockassist still carry malformed `dt_overlay="disable-bt"` /
   `dt_overlay="disable-wifi"` lines in `/boot/firmware/config.txt`, left by an
   old `rpi-provisioner`. The directive is `dtoverlay=`, unquoted, so they are
@@ -570,7 +578,7 @@ One branch, tick them off. Phone-taggable lines marked 📱.
 📱 lines work from a phone, the rest want a laptop.
 
 ```
-Work through the small-fix batch. Read docs/TODO.md item 12 — fourteen
+Work through the small-fix batch. Read docs/TODO.md item 12 — fifteen
 diagnosed one-liners; do them on one branch and tick each off in the file as
 it lands. Start with the CLAUDE.md deploy_monitoring wording (it hid a
 4-month drift). For each fix verify the behaviour, not the absence of the
