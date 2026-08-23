@@ -30,3 +30,10 @@
     restart: true
   become_user: "{{ ansible_user }}"
   listen: restart mosquitto
+
+- name: Reload NetworkManager connections
+  become: true
+  ansible.builtin.command:
+    cmd: nmcli connection reload
+  changed_when: true
+  listen: Reload NetworkManager connections

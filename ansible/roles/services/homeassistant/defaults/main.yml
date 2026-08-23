@@ -7,6 +7,7 @@ enable_homeassistant: true
 enable_matter_server: true
 enable_cloudflare_tunnel: false  # Requires vault_cloudflare_tunnel_token
 enable_mqtt_broker: true         # Mosquitto broker for HA + shairport-sync
+enable_thread_wifi_link: false   # Second IPv6-only leg onto the Thread BR's VLAN
 
 # Container names
 homeassistant_container_name: "home-assistant"
@@ -28,6 +29,19 @@ homeassistant_external_url: "http://homeassistant.local:8123"
 
 # Hardware
 disable_modemmanager: true
+
+# Thread border-router Wi-Fi leg
+# See templates/thread_wifi_link.nmconnection.j2 for the full rationale.
+# thread_wifi_link_ssid is intentionally empty here — set it per function group.
+thread_wifi_link_profile: "thread-br-vlan20"
+thread_wifi_link_interface: "wlan0"
+thread_wifi_link_ssid: ""
+# The Thread mesh's off-mesh-routable prefix, as advertised by the border router.
+# ⚠️ A Thread network can regenerate its OMR prefix. If that happens this assert
+# fires and the value here is what needs updating — the check is doing its job,
+# not misbehaving. Read the current one from `ip -6 route show` on the host.
+thread_wifi_link_prefix: "fd24:839a:223a::/64"
+thread_wifi_link_boot_config: "/boot/firmware/config.txt"
 
 # Backup
 enable_homeassistant_backup: true

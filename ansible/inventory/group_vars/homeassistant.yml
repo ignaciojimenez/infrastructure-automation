@@ -31,7 +31,12 @@ internet_speed_tests: 5
 internet_speed_delay: 75
 
 # Platform
-disable_bluetooth: false  # Keep for BLE integrations
+# Nothing on this host uses Bluetooth: HA's adapter discovery is dismissed
+# (source: "ignore"), bluetooth.service is disabled and inactive, hci0 is
+# DOWN, and matter-server runs without --bluetooth-adapter so it never does
+# BLE commissioning. Commissioning via the companion app uses the phone's
+# radio and is unaffected. Verified 2026-08-22.
+disable_bluetooth: true
 disable_hdmi: true
 
 # ── vinylstreamer watchdog ────────────────────────────────────────────────────
@@ -81,3 +86,23 @@ homeassistant_lights:
   - light.floor_lamp_new
   - light.shelly_luz_outdoor
   - light.shelly_luz_salon
+
+# ============================================================
+# Thread border-router Wi-Fi leg
+# ============================================================
+# The Eve door sensors are Matter-over-Thread. This Pi has no 802.15.4 radio, so
+# it reaches them only through a Thread Border Router — the HomePod "Bano", which
+# announces the route to the mesh in a Router Advertisement. RAs are link-local
+# and do not cross VLANs.
+#
+# On 2026-08-17 11:33 CEST the HomePod was moved off the IoT SSID (VLAN 100) onto
+# estonoesmazagon_novpn (VLAN 20) to fix AirPlay. eth0 is on VLAN 100, so this
+# host lost the route; both door sensors went unavailable 3.5 minutes later and
+# stayed that way for five days. matter-server had given up and only re-checked
+# twice a day, so nothing recovered on its own.
+#
+# The HomePod is staying on VLAN 20. This gives dockassist a second, IPv6-only
+# foot on that VLAN so it is on-link with the BR again. eth0/VLAN 100 is
+# untouched — see the template for why ipv4.method=disabled is load-bearing.
+enable_thread_wifi_link: true
+thread_wifi_link_ssid: "estonoesmazagon_novpn"
