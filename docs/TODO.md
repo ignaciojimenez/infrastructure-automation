@@ -565,15 +565,12 @@ One branch, tick them off. Phone-taggable lines marked 📱.
   old `rpi-provisioner`. The directive is `dtoverlay=`, unquoted, so they are
   inert — but they read as active config and are exactly the trap that cost
   five days. Delete them; the correct `dtoverlay=disable-bt` is already there.
-- 📱 Mirror the `dockassist` preset from `rpi-provisioner/hosts.yml.sample`
-  into the real (gitignored) `hosts.yml`, or a re-image can still be flashed
-  with `--no-wifi` and take the Thread leg down.
 
 *State:* all diagnosed, none started. *Effort:* small each. *Needs:* mixed —
 📱 lines work from a phone, the rest want a laptop.
 
 ```
-Work through the small-fix batch. Read docs/TODO.md item 12 — thirteen
+Work through the small-fix batch. Read docs/TODO.md item 12 — fourteen
 diagnosed one-liners; do them on one branch and tick each off in the file as
 it lands. Start with the CLAUDE.md deploy_monitoring wording (it hid a
 4-month drift). For each fix verify the behaviour, not the absence of the
