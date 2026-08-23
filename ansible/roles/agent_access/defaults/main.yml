@@ -2,6 +2,9 @@
 # Agent access defaults
 agent_access_user: read_agent
 agent_access_shell: /bin/sh
+# Supplementary groups (Debian only; FreeBSD has no journal). Read-only by
+# design — see the task comment for why this is systemd-journal and not adm.
+agent_access_groups: "systemd-journal"
 # Each entry: from (source IP pinned in authorized_keys), pubkey, and an
 # optional `alert` (default true) controlling the Slack ping on key use.
 # Set alert: false for keys whose use is scheduled and constant — see the

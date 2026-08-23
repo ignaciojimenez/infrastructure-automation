@@ -662,7 +662,11 @@
 # that went away. So the design deliberately makes it LOUD:
 #
 #   * every outage reaches #home-alerts (slack_alert), including — especially —
-#     the outages this automation decides NOT to act on;
+#     the outages this automation decides NOT to act on. Since 2026-08-23 the
+#     automation also re-checks every {{ vinylstreamer_down_after_minutes }} min
+#     while the host stays down; those repeats go to #home-logging rather than
+#     the watched channel, so one outage still pages once per *decision*, not
+#     once per check;
 #   * a recovery says whether a power cycle was involved or whether the host came
 #     back on its own, because "it fixed itself" is the single most useful data
 #     point W1 is missing;
@@ -676,14 +680,45 @@
 - id: "vinylstreamer_offline_power_cycle"
   alias: "Vinylstreamer - offline, power cycle the plug"
   trigger:
+    # The outage itself. Fires once, on the transition into "off".
     - platform: state
+      id: went_offline
       entity_id: binary_sensor.vinylstreamer_online
       to: "off"
       for:
         minutes: {{ vinylstreamer_down_after_minutes }}
-  # No `condition:` block by design. Every branch below posts, so a suppressed
-  # power cycle is still a reported outage — a silent condition would make
-  # "guard held" and "trigger broken" look identical from Slack.
+    # 🔴 The re-arm, added 2026-08-23. WITHOUT THIS THE COOLDOWN CANCELS A CYCLE
+    # INSTEAD OF POSTPONING IT, and the host stays down forever.
+    #
+    # Measured on 2026-08-23: the host dropped at 01:58:06, this automation
+    # fired correctly at 02:13:06, and branch 3 refused because a cycle had run
+    # 29 min earlier (01:44:06). The cooldown expired at 07:44 with the host
+    # still down — and nothing re-evaluated, because a state trigger needs a
+    # *transition* and the sensor never left "off". Net result: eligible but
+    # untried for 8 h, until a human noticed at ~10:50.
+    #
+    # `vinylstreamer_cycle_cooldown_hours` was always meant as a rate limit
+    # ("at most one cycle per 6 h"), not a veto ("at most one cycle per
+    # outage, and none if the outage began inside the window"). This trigger
+    # makes the config mean what it says.
+    - platform: time_pattern
+      id: still_offline
+      minutes: "/{{ vinylstreamer_down_after_minutes }}"
+  # The original design had NO `condition:` block, so that every outage posted
+  # and a held guard could never be mistaken for a broken trigger. That property
+  # is preserved: `went_offline` is unconditional exactly as before. The guard
+  # applies only to the new periodic trigger, which would otherwise run against
+  # a perfectly healthy host every {{ vinylstreamer_down_after_minutes }} min.
+  condition:
+    - condition: or
+      conditions:
+        - condition: trigger
+          id: went_offline
+        - condition: state
+          entity_id: binary_sensor.vinylstreamer_online
+          state: "off"
+          for:
+            minutes: {{ vinylstreamer_down_after_minutes }}
   action:
     - choose:
         # 1. The plug is unreachable too, so power or the network is out at the
@@ -701,12 +736,25 @@
                   entity_id: {{ vinylstreamer_plug_entity }}
                   state: "unknown"
           sequence:
-            - service: rest_command.slack_alert
-              data:
-                message: >-
-                  ⚠️ vinylstreamer offline {{ vinylstreamer_down_after_minutes }} min — and its plug is
-                  unreachable as well, so this looks like a site-wide power or network event
-                  rather than the wifi lockout. NOT power-cycling.
+            # First sighting pages; the periodic re-checks trace quietly. Same
+            # reasoning as the cooldown branch below.
+            - choose:
+                - conditions:
+                    - condition: trigger
+                      id: went_offline
+                  sequence:
+                    - service: rest_command.slack_alert
+                      data:
+                        message: >-
+                          ⚠️ vinylstreamer offline {{ vinylstreamer_down_after_minutes }} min — and its plug is
+                          unreachable as well, so this looks like a site-wide power or network event
+                          rather than the wifi lockout. NOT power-cycling.
+              default:
+                - service: rest_command.slack_notify
+                  data:
+                    message: >-
+                      ⏳ vinylstreamer still offline and its plug is still unreachable — still treating
+                      this as a site-wide event, not the wifi lockout. NOT power-cycling.
 
         # 2. The plug is off. The host being down is already explained, and
         #    someone switched it off on purpose. Report it; do not override it.
@@ -715,12 +763,25 @@
               entity_id: {{ vinylstreamer_plug_entity }}
               state: "off"
           sequence:
-            - service: rest_command.slack_alert
-              data:
-                message: >-
-                  ⚠️ vinylstreamer offline {{ vinylstreamer_down_after_minutes }} min — its plug is
-                  switched OFF, which explains it. Assuming that was deliberate: NOT switching it
-                  back on. Turn the plug on to bring the host back.
+            # First sighting pages; the periodic re-checks trace quietly. A plug
+            # switched off by hand is a standing decision, not a new event.
+            - choose:
+                - conditions:
+                    - condition: trigger
+                      id: went_offline
+                  sequence:
+                    - service: rest_command.slack_alert
+                      data:
+                        message: >-
+                          ⚠️ vinylstreamer offline {{ vinylstreamer_down_after_minutes }} min — its plug is
+                          switched OFF, which explains it. Assuming that was deliberate: NOT switching it
+                          back on. Turn the plug on to bring the host back.
+              default:
+                - service: rest_command.slack_notify
+                  data:
+                    message: >-
+                      ⏳ vinylstreamer still offline with its plug still switched OFF — still assuming
+                      that is deliberate. Turn the plug on to bring the host back.
 
         # 3. Rate limit. A plug that reboots a Pi in a loop is a worse failure
         #    than the one it fixes — but silence here would be the plug hiding a
@@ -730,13 +791,33 @@
             - condition: template
               value_template: "{{ '{{' }} now().timestamp() - (state_attr(\"input_datetime.vinylstreamer_last_power_cycle\", \"timestamp\") | default(0, true)) < {{ vinylstreamer_cycle_cooldown_hours * 3600 }} {{ '}}' }}"
           sequence:
-            - service: rest_command.slack_alert
-              data:
-                message: >-
-                  🔴 vinylstreamer STILL offline, and it was already power-cycled at
-                  {{ '{{ states("input_datetime.vinylstreamer_last_power_cycle") }}' }} —
-                  inside the {{ vinylstreamer_cycle_cooldown_hours }}h cooldown, so NOT cycling again.
-                  A power cycle is not fixing this one. Needs a human.
+            # The FIRST refusal pages, exactly as before. The periodic re-checks
+            # that follow do not — a 6 h cooldown re-checked every
+            # {{ vinylstreamer_down_after_minutes }} min would post
+            # {{ (vinylstreamer_cycle_cooldown_hours * 60 / vinylstreamer_down_after_minutes) | int }}
+            # times per outage to the watched channel, which is how a channel
+            # stops being read. They still post to #home-logging, so "the guard
+            # is holding" stays visible and never looks like a dead trigger.
+            - choose:
+                - conditions:
+                    - condition: trigger
+                      id: went_offline
+                  sequence:
+                    - service: rest_command.slack_alert
+                      data:
+                        message: >-
+                          🔴 vinylstreamer STILL offline, and it was already power-cycled at
+                          {{ '{{ states("input_datetime.vinylstreamer_last_power_cycle") }}' }} —
+                          inside the {{ vinylstreamer_cycle_cooldown_hours }}h cooldown, so NOT cycling
+                          yet. Retrying automatically the moment the cooldown expires.
+              default:
+                - service: rest_command.slack_notify
+                  data:
+                    message: >-
+                      ⏳ vinylstreamer still offline; last cycle
+                      {{ '{{ states("input_datetime.vinylstreamer_last_power_cycle") }}' }},
+                      still inside the {{ vinylstreamer_cycle_cooldown_hours }}h cooldown. Will cycle
+                      when it expires.
 
       # 4. The real thing.
       default:

@@ -71,9 +71,17 @@ vinylstreamer_plug_entity: "switch.shellyplugsg3_48f6eeb67ae4"
 vinylstreamer_down_after_minutes: 15
 # 15 s off: a Pi PSU's capacitors will ride out a shorter cut.
 vinylstreamer_power_cycle_seconds: 15
-# At most one cycle per 6 h. A plug that reboots a Pi in a loop is a worse
-# failure than the one it fixes.
-vinylstreamer_cycle_cooldown_hours: 6
+# At most one cycle per hour. A plug that reboots a Pi in a loop is a worse
+# failure than the one it fixes — but this is a rate limit, not a veto.
+#
+# Was 6 h until 2026-08-23, when the cooldown was only ever evaluated on the
+# down-transition and therefore *cancelled* a cycle rather than postponing it.
+# Lowered to 1 h now that a time_pattern re-check actually retries: 6 h was
+# sized for "the one chance we get", and with a real retry it just means a
+# music streamer stays dead most of the night (measured: the 01:58 drop would
+# have waited until 07:45). The anti-loop concern is about *rapid* cycling,
+# and vinylstreamer_cycles_7d_escalate below already catches the crutch case.
+vinylstreamer_cycle_cooldown_hours: 1
 # Anti-masking: more than this many cycles in 7 days means the plug has stopped
 # being a safety net and started being a crutch. Escalates to #home-alerts.
 vinylstreamer_cycles_7d_escalate: 3

@@ -13,7 +13,13 @@ fi
 
 VPN_GATEWAY="$1"
 
-if ping -c 1 $VPN_GATEWAY > /dev/null; then
+# 3 packets, 2 s each, success on ANY reply. A single `ping -c 1` pages the
+# watched channel on one dropped packet — which is normal behaviour for ICMP
+# inside a UDP-encapsulated WireGuard tunnel, not a fault. Observed 2026-08-23
+# 09:00: one lost packet, the default 10 s linger expired (the alert's
+# "Duration: 10 seconds"), and a re-check moments later showed 0% loss.
+# Mirrors binary_sensor.vinylstreamer_online, which already probes this way.
+if ping -c 3 -W 2 "$VPN_GATEWAY" > /dev/null 2>&1; then
   echo "✅ VPN connection is active (gateway $VPN_GATEWAY is reachable)"
   exit 0
 else
