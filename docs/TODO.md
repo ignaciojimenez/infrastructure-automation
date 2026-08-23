@@ -3,7 +3,7 @@
 **Improvements and fixes waiting to be worked on.** Start at *What to work on
 next*; the first item you can act on is the right one.
 
-Updated: 2026-08-19
+Updated: 2026-08-23
 
 | Where a thing lives | |
 |---|---|
@@ -56,10 +56,15 @@ here is something to read past, every time, forever. The write-up goes to
 (numbers never move), but the order to work them is this, and the dashboard
 renders it:
 
-> **№1** 1c → **№2** 1d → **№3** 2 → **№4** 4 (plex) → **№5** 9 → **№6** 3a/3b
-> → **№7** W1 *(unlocks ~23 Aug)* → **№8** 12 → **№9** 5 → **№10** 10 →
-> **№11** 11 → **№12** 6 → **№13** 7 → **№14–16** 8/13/14 *(presence-gated —
-> whenever he is at the cabinet, not ranked)*
+> **№1** 1c → **№2** 1d → **№3** 2 → **№4** 4 (plex) → **№5** 15 → **№6** 9
+> → **№7** 3a/3b → **№8** W1 *(unlocks ~23 Aug)* → **№9** 12 → **№10** 5 →
+> **№11** 10 → **№12** 11 → **№13** 6 → **№14** 7 → **№15–18** 8/13/14/16
+> *(decision-gated — 16 needs a purchase call, the rest need him at the
+> cabinet; not ranked)*
+
+**15 enters at №5** because it is the only item here that has already cost
+something: two sensors offline for five days with every check green. It is also
+the cheapest insurance against 16 staying unfixed.
 
 📌 **Every item carries a paste-ready prompt** — including blocked ones, which
 carry *fill-in* prompts that take the physical measurement or decision as
@@ -349,6 +354,63 @@ Acceptance is a forced failure: peg one core on cwwk with
 #home-alerts. Then record a fresh idle + pegged-core thermal baseline.
 ```
 
+**15. Nothing noticed two door sensors were gone for five days**
+Both Eve door sensors went `unavailable` on 2026-08-17 09:37 UTC and stayed
+that way until 08-22. **No alert fired.** It surfaced only because Ignacio
+happened to notice them greyed out in HA.
+
+🐛 **The failure was loud, then perfectly silent.** `matter-server` logged
+twelve retries and `Node considered offline, shutdown subscription` — and then
+went quiet, waking only twice a day to log `No new update found.` A
+`matter-server` with zero live subscriptions is byte-for-byte as chatty as a
+healthy one.
+
+⚠️ **Every existing check passed throughout.** The fleet watches hosts,
+containers, services and cron freshness. The container was up, the service was
+running, the host was fine. **Nothing watches whether the devices HA is
+supposed to be talking to are still answering** — so a controller with every
+device offline reads as green.
+
+The check that would have caught it: ask HA's API for entities sitting in
+`unavailable` / `unknown`, and alert when one that is normally healthy stays
+there beyond a grace period.
+
+⚠️ **Three ways to build this wrong:**
+1. **`unavailable` is normal briefly.** Every HA restart flips the whole fleet
+   of entities through it. Without a grace window (~15 min) this pages on every
+   deploy — and a check that pages on every deploy gets muted, which is worse
+   than not having it.
+2. **Do not enumerate entities by hand.** A hardcoded list silently stops
+   covering anything added later, which is this same bug wearing a hat. Ask HA
+   what exists and diff against last known-good.
+3. **Some entities are legitimately unavailable** (see item 12 — five stale
+   Tado automations). Those need an explicit allowlist, or the check is noise on
+   day one.
+
+Tooling already on dockassist: `ha_state <entity_id>` (root-owned helper,
+read-only, token stays on the host) and `ha_monitor_token` in
+`homeassistant/secrets.yaml`. The REST API answers from localhost.
+
+📌 Concrete instance of item **10** (coverage audit), found the expensive way.
+Worth doing on its own rather than waiting for the audit.
+
+*State:* diagnosed 2026-08-22/23, nothing built. *Effort:* medium.
+*Needs:* a laptop (new check script + Ansible deploy).
+
+```
+Build the check that would have caught the five-day door-sensor outage. Read
+docs/TODO.md item 15 and archive/DONE.md 2026-08-23 — the facts are there, do
+not re-derive them. Write a monitoring check that queries HA for entities in
+unavailable/unknown and alerts via slack_alert when one exceeds a grace
+window; use enhanced_monitoring_wrapper with an explicit --monitoring-name.
+Verify by FORCING the failure, not by watching it stay quiet: stop
+matter-server, confirm the check fires for both door sensors, restart it,
+confirm the recovery clears. Then restart Home Assistant itself and confirm
+the grace window keeps it silent — a check that pages on every deploy will be
+muted, and a muted check is the bug in item 15 all over again.
+```
+
+
 ### 🟢 P3 — improvements, no urgency
 
 **5. Tokens out of cron command lines.** healthchecks.io and Slack tokens sit in
@@ -498,6 +560,14 @@ One branch, tick them off. Phone-taggable lines marked 📱.
   `site.yml --limit unifi-lxc --check --diff` and align per-item.
 - `INJECT_FACTS_AS_VARS` goes away in ansible-core 2.24; the repo uses bare
   fact names everywhere. Mechanical repo-wide sweep, own branch.
+- cobra and dockassist still carry malformed `dt_overlay="disable-bt"` /
+  `dt_overlay="disable-wifi"` lines in `/boot/firmware/config.txt`, left by an
+  old `rpi-provisioner`. The directive is `dtoverlay=`, unquoted, so they are
+  inert — but they read as active config and are exactly the trap that cost
+  five days. Delete them; the correct `dtoverlay=disable-bt` is already there.
+- 📱 Mirror the `dockassist` preset from `rpi-provisioner/hosts.yml.sample`
+  into the real (gitignored) `hosts.yml`, or a re-image can still be flashed
+  with `--no-wifi` and take the Thread leg down.
 
 *State:* all diagnosed, none started. *Effort:* small each. *Needs:* mixed —
 📱 lines work from a phone, the rest want a laptop.
@@ -512,6 +582,45 @@ recovery-routing change must deliver a real recovery to the chosen channel.
 ```
 
 ### 🧊 Blocked on Ignacio, not on work
+
+**16. The Thread mesh has exactly one border router, and it is a roaming HomePod**
+Needs a purchase decision. Every Matter-over-Thread device in the house reaches
+HA through **one** device: the HomePod "Bano" (`40:ed:cf:4e:8e:03`), on Wi-Fi.
+It is the only `_meshcop._udp` responder on the entire network.
+
+On 2026-08-17 it was moved from the IoT SSID to `estonoesmazagon_novpn` to fix
+AirPlay, and every Thread device dropped off HA for five days. dockassist now
+holds a second IPv6-only Wi-Fi leg onto that VLAN, which **restores the path
+but does not remove the dependency** — unplug the HomePod, move it again, or
+change that SSID's key, and everything Thread goes dark exactly as before.
+
+**Option (a): USB 802.15.4 dongle + OpenThread Border Router on dockassist**
+(~€25). The mesh becomes local to the host that needs it: no Wi-Fi hop, no
+VLAN, no HomePod, and it is Ansible-managed like everything else. It also makes
+the mesh survive losing either router.
+
+**Option (b): accept it**, and rely on item 15 to notice within minutes rather
+than days. Cheaper, and honestly reasonable once 15 exists.
+
+⚠️ **Verify before buying:** a second border router has to join the *existing*
+Thread network, or the Eve sensors need re-commissioning. HA is understood to
+be able to import Thread credentials from the Apple ecosystem via the companion
+app — **this is unverified** and it is the whole basis of option (a) being
+cheap. Check it first.
+
+*State:* diagnosed 2026-08-22/23, mitigated not fixed. *Needs:* a decision from
+Ignacio, then a laptop.
+
+```
+Decide the Thread border-router SPOF. Read docs/TODO.md item 16. FIRST verify
+the claim the decision rests on: can Home Assistant import the Apple
+ecosystem's Thread network credentials (companion app → HA Thread panel) so a
+second OTBR joins the SAME mesh without re-commissioning the Eve sensors?
+Answer that from Home Assistant's own documentation, and say plainly if it
+cannot be confirmed. Only then price a USB 802.15.4 dongle that works with
+OTBR on a Pi 4 and report both options back — do not buy anything.
+```
+
 
 **8. Cabinet vent sizing.** Needs three physical measurements only he can take:
 power draw of cwwk + the Zyxel switch (**the biggest unknown — every heat figure
