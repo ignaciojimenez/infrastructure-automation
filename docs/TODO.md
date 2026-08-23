@@ -340,14 +340,25 @@ power; that single observation is what separates locked-out from halted, and a
 blind power cycle destroys it.
 
 ```
-The W1 gate has passed (~2026-08-23) and a week of plug traffic is in
-#home-alerts. Resolve vinylstreamer's wifi lockout root cause. Read
+Resolve vinylstreamer's wifi lockout root cause. Read
 ~/.claude/plans/vinylstreamer-wifi-lockout-plan.md and docs/TODO.md item 4
-(W1) first. Step 1 is the contradiction: the standing model says
-NetworkManager gives up for days, but the one clean sample recovered
-unassisted in 18 minutes — use the alert history to decide which is true,
-excluding 2026-08-16 (W2's own acceptance tests). Only then configure
-anything, and only the asked-for change: verify on vinylstreamer alone, stop.
+(W1) first.
+
+The gate passed on 2026-08-23 and the contradiction is ALREADY RESOLVED —
+do not re-litigate it. 17–21 Aug had zero outage events; the single real
+incident (22/23 Aug) ran 9 h with no unassisted recovery, which is the
+"NetworkManager gives up and stays down" model. The 18-minute sample is
+inside the excluded 2026-08-16 window. Power draw was also measured
+(~1.4 W vs a ~1.57 W healthy baseline), so mains and the PSU are ruled
+out — the Pi is powered.
+
+Start at the host, not at the config. `journalctl -b -1` for the
+assoc-reject sequence (persistent journal, so it survived). The one thing
+still unknown is whether it was running-but-locked or halted — if it has
+not been power-cycled yet, check console/HDMI BEFORE pulling power,
+because that is the only way to tell and a cycle destroys the evidence.
+Only then configure anything, and only the asked-for change: verify on
+vinylstreamer alone, stop.
 ```
 
 **9. Runaway-process detection — the fan removed the only thing that caught the last one**
