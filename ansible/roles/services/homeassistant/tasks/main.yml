@@ -262,6 +262,7 @@
     mode: '0755'
   loop:
     - dockassist_monitor.sh
+    - check_ha_entities.sh
   tags: [homeassistant, monitoring]
 
 # check_nic_stalls.sh keeps a delta baseline here. The directory is otherwise
@@ -372,6 +373,29 @@
       >> {{ logs_dir }}/tado_health_check.log 2>&1
     user: "{{ ansible_user }}"
   when:
+    - logging_token is defined and logging_token != ''
+    - alert_token is defined and alert_token != ''
+  tags: [homeassistant, monitoring, cron]
+
+# The script above is deployed unconditionally even when the cron below is
+# disabled: `check_ha_entities.sh --report` is how the allowlist gets tuned, and
+# that has to be runnable by hand before anyone turns the alerting on.
+- name: Configure Home Assistant entity health cron job
+  ansible.builtin.cron:
+    name: "Home Assistant entity health check"
+    minute: "*/10"
+    job: >
+      {{ scripts_dir }}/enhanced_monitoring_wrapper
+      --heartbeat-interval=daily
+      --notify-fixed=true
+      --monitoring-name=homeassistant_entity_health
+      {{ logging_token }}
+      {{ alert_token }}
+      {{ scripts_dir }}/check_ha_entities.sh
+      >> {{ logs_dir }}/homeassistant_entity_health.log 2>&1
+    user: "{{ ansible_user }}"
+  when:
+    - enable_ha_entity_health_check | default(false) | bool
     - logging_token is defined and logging_token != ''
     - alert_token is defined and alert_token != ''
   tags: [homeassistant, monitoring, cron]
