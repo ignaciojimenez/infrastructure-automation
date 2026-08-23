@@ -32,6 +32,22 @@
     password: "!"
     system: false
     comment: "Read-only agent access"
+    # `systemd-journal` grants READ access to the system journal and nothing
+    # else — it is exactly the group systemd ships for this purpose.
+    #
+    # 🔴 Without it, persistent journald (playbooks/platform/raspberrypi.yml)
+    # is useless to the tier that needs it. Persistence was added 2026-07-14
+    # *because* a volatile journal made the 2026-07-12 vinylstreamer reboot
+    # un-diagnosable — but the agent was never given read rights, so on
+    # 2026-08-23 the investigation still reported "dmesg and the
+    # unattended-upgrades log aren't readable by this account". Verified on
+    # hifipi: read_agent is in no supplementary group, `journalctl -k` returns
+    # "-- No entries --", and journalctl itself prints the remedy: "Users in
+    # groups 'adm', 'systemd-journal' can see all messages."
+    #
+    # `systemd-journal` not `adm`: adm also opens /var/log/* incl. auth logs.
+    groups: "{{ agent_access_groups }}"
+    append: true
   become: true
   when: os_family == "debian"
 

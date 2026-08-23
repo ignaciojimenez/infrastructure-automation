@@ -305,8 +305,39 @@ says NetworkManager gives up and stays down **for days**, but the one clean
 sample is an **18-minute unassisted recovery**. That contradiction must be
 resolved before configuring anything.
 
-*State:* time-gated to ~2026-08-23, then re-judge on real traffic.
-*Needs:* nothing until then — **reading `#home-alerts` on the phone IS the task.**
+**✅ Gate passed 2026-08-23 — here is the week of traffic it was waiting for.**
+Excluding 2026-08-16 as the item instructs, **17–21 Aug contains zero
+vinylstreamer outage events** (verified by Slack search of `#home-alerts`; the
+only hit is an agent-key notice). The week produced exactly **one** genuine
+incident, the night of 22/23 Aug:
+
+| Time (CEST) | Event |
+|---|---|
+| 01:29 | drops off wifi — repeated `assoc-reject` on `estonoesmazagon_iot` |
+| 01:44:06 → 01:44:21 | plug cycled, exactly 15 s |
+| 01:45 | back online — **recovered only after the cycle** |
+| 01:58:06 | drops again |
+| 02:13:06 | watchdog fires, refused by cooldown |
+| 10:50+ | **still down, ~9 h, no self-recovery** |
+
+**(b) is resolved in favour of the standing model.** A 9-hour outage with no
+unassisted recovery is the "gives up and stays down" behaviour; the 18-minute
+sample sits inside the excluded 2026-08-16 window and should not be weighed.
+
+**New evidence, and it narrows the fault.** The Shelly was drawing **~1.4 W**
+against a healthy-period baseline of **~1.57 W** (derived from the plug's own
+`aenergy.total` ÷ `on_time`). So mains is present and the Pi is drawing roughly
+its normal power — this is **not** a dead PSU, a failed relay, or a bad cable.
+Power draw cannot separate "running but wifi-locked" from "halted", so that is
+the one thing to settle at the host.
+
+*State:* **gate passed, (b) resolved, root cause still open.**
+*Needs:* the host back. `wlan0` is down and the journal is the only copy, so
+there is no remote path to it — **`journalctl -b -1` on the box is the next
+step**, and it is `Storage=persistent`, so last night's assoc-reject sequence is
+intact and waiting. Check whether it answers on console/HDMI *before* pulling
+power; that single observation is what separates locked-out from halted, and a
+blind power cycle destroys it.
 
 ```
 The W1 gate has passed (~2026-08-23) and a week of plug traffic is in
