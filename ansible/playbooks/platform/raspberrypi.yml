@@ -20,6 +20,15 @@
       ansible.builtin.command: journalctl --flush
       changed_when: true
       listen: "journald_config_changed"
+
+    # `nmcli general reload conf` re-reads conf.d WITHOUT bouncing the
+    # interface — deliberately, since restarting NetworkManager on a host whose
+    # only link is the wifi we are reconfiguring is how you strand it. The new
+    # powersave value applies on the next association; retries apply at once.
+    - name: Reload NetworkManager configuration
+      ansible.builtin.command: nmcli general reload conf
+      changed_when: true
+      listen: "wifi_lockout_config_changed"
   tasks:
     - name: Raspberry Pi memory optimizations
       ansible.posix.sysctl:
@@ -259,3 +268,72 @@
         - platform_type == "raspberrypi"
         - disable_hdmi | default(true)
       tags: [raspberrypi, optimization, hdmi]
+
+    # ── W1: wifi lockout hardening ────────────────────────────────────────────
+    # Root-caused 2026-08-24 from vinylstreamer's own journal (docs/TODO.md
+    # item 4). Two separate faults; BOTH knobs are required.
+    #
+    #   1. Why it drops. `ASSOC-REJECT ... status_code=16` with an ALL-ZERO
+    #      BSSID means no AP ever answered the auth sequence — wpa_supplicant
+    #      raised that reject itself, on timeout. At -70 dBm with powersave on,
+    #      the radio sleeps through part of the handshake.
+    #
+    #   2. Why it STAYS down. NetworkManager misreads the timeout as missing
+    #      credentials — one line after logging "secrets exist. No new secrets
+    #      needed." — burns its retries, and lands on
+    #      `failed (reason 'no-secrets')`, which means "a human must
+    #      intervene". Autoconnect then stops dead: 14 min of total wlan0
+    #      silence on 2026-08-24, and ~22 h on 2026-08-23.
+    #
+    # Written as a conf.d drop-in rather than `nmcli con modify`, deliberately.
+    # vinylstreamer's profile is named `preconfigured` — created by Raspberry Pi
+    # Imager, not by us — and both properties on it are already set to "use the
+    # global value" (`powersave: default`, `autoconnect-retries: -1`). Setting
+    # the globals therefore configures it without owning a profile that a
+    # re-image would regenerate.
+    #
+    # Values verified against `man 5 nm-settings-nmcli` ON THE HOST:
+    #   autoconnect-retries  "Zero means forever, -1 means the global default
+    #                         (4 times if not overridden)"
+    #   powersave            "disable (2)"
+    # and the section each global belongs to, against `man 5
+    # NetworkManager.conf`: autoconnect-retries-default is [main], wifi.powersave
+    # is [connection].
+    #
+    # ⚠️ NOT defaulted on. The fleet's other Pis are wired, where this is cost
+    # with no benefit.
+    - name: Ensure NetworkManager conf.d exists
+      ansible.builtin.file:
+        path: /etc/NetworkManager/conf.d
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      when:
+        - platform_type == "raspberrypi"
+        - enable_wifi_lockout_hardening | default(false)
+      tags: [raspberrypi, wifi, w1]
+
+    - name: Harden wifi against the W1 lockout
+      ansible.builtin.copy:
+        dest: /etc/NetworkManager/conf.d/10-wifi-lockout.conf
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          # Managed by Ansible (playbooks/platform/raspberrypi.yml) - do not edit
+          # W1: see docs/TODO.md item 4. Both keys are load-bearing.
+          [main]
+          # 0 = retry forever. The default (4) is why a transient association
+          # timeout became a multi-hour outage.
+          autoconnect-retries-default=0
+
+          [connection]
+          # 2 = disable. The radio sleeping through the handshake at -70 dBm is
+          # what produces the timeout in the first place.
+          wifi.powersave=2
+      when:
+        - platform_type == "raspberrypi"
+        - enable_wifi_lockout_hardening | default(false)
+      notify: "wifi_lockout_config_changed"
+      tags: [raspberrypi, wifi, w1]
