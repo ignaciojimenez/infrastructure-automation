@@ -674,14 +674,37 @@ straddle two VLANs:
 | **`dockassist`** | **`10.30.100.100`** | **100 — IoT** | Raspberry Pi |
 | **`vinylstreamer`** | **`10.30.100.110`** | **100 — IoT** | Raspberry Pi |
 
-🔴 **The VLAN 100 gateway `10.30.100.254` does not answer ICMP.** Measured
-2026-08-24: 0/3 from a healthy host on the same VLAN. **Never use it as a
-reachability probe** — a health check built on pinging it can never pass. This
-is not a theoretical footgun: `wifi_reconnect.sh` was written that way and
-reloaded vinylstreamer's wifi driver every two minutes against a perfectly
-healthy radio until the host fell over. Verified to answer on VLAN 100:
-`10.30.100.100` (dockassist) and `10.30.100.217` (the vinylstreamer Shelly
-plug). Prefer a **local** signal over any reachability probe where one exists.
+🔴 **The VLAN 100 gateway `10.30.100.254` does not answer ICMP *from inside
+VLAN 100*. It does answer from other VLANs.** This is a deliberate firewall
+policy, not a fault — the IoT VLAN is kept as restricted as possible, and hosts
+on it are not given a pingable gateway.
+
+Measured 2026-08-24, both directions:
+
+| Probing from | Result |
+|---|---|
+| `dockassist` — **VLAN 100 (IoT)** | **0/3, 100% loss** |
+| `cobra` — VLAN 40 | 3/3, 0.24 ms |
+| `hifipi` — VLAN 40 | 3/3, 0.26 ms |
+
+⚠️ **The asymmetry is the trap.** Testing from VLAN 40 shows a healthy,
+responsive gateway, so a reachability check written or verified from there looks
+perfectly sound — and then never passes once it runs on an IoT host. That is
+exactly what happened: `wifi_reconnect.sh` gated its health on pinging this
+gateway and, on vinylstreamer, reloaded the wifi driver every two minutes
+against a perfectly healthy radio until the host fell over.
+
+**So for anything running ON VLAN 100:** never use the gateway as a reachability
+probe. Prefer a **local** signal (NetworkManager device state, presence of a
+route). If a peer probe is genuinely needed, `10.30.100.100` (dockassist) and
+`10.30.100.217` (the vinylstreamer Shelly plug) were both verified to answer
+from within the VLAN.
+
+📌 **Could be relaxed.** Allowing ICMP to the gateway from VLAN 100 is a
+risk/benefit call that has not been made, not a constraint to design around
+forever. If it is ever enabled, note that it would make the gateway a valid
+probe target and this warning would need revisiting — but the local-signal
+preference above stands regardless, since it does not depend on the firewall.
 
 Home Assistant and the vinyl streamer live on the **IoT** VLAN, not with the rest
 of the infrastructure. That is a sensible placement — both talk constantly to IoT

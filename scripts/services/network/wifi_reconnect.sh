@@ -82,11 +82,16 @@ fi
 # 🔴 HEALTH IS JUDGED FROM LOCAL FACTS ONLY. NEVER FROM A PING.
 #
 # The first version of this script pinged the default gateway (10.30.100.254)
-# and treated failure as "the radio is broken". That gateway does not answer
-# ICMP AT ALL — 0/3 even from a healthy host on the same VLAN — so the check
-# could never pass, and the script ran the full ladder (including a brcmfmac
+# and treated failure as "the radio is broken". That gateway DELIBERATELY does
+# not answer ICMP from inside VLAN 100 — firewall policy, the IoT VLAN is kept
+# restricted — while answering normally from VLAN 40 (measured: 0/3 from
+# dockassist, 3/3 from cobra and hifipi). So the check could never pass on the
+# only host it runs on, and the script ran the full ladder (including a brcmfmac
 # reload) every 2 minutes against a perfectly healthy radio. It took the host
 # down repeatedly on 2026-08-24 until the cron was pulled.
+#
+# The asymmetry is what makes it nasty: verified from a laptop or any VLAN 40
+# host, that ping looks perfectly healthy.
 #
 # The lesson is not "pick a better ping target". It is that a recovery action
 # must be gated on a signal whose HEALTHY value has been observed, not assumed.

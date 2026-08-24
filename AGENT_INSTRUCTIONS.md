@@ -84,10 +84,13 @@ Not in a container, not against stubs — on the host, by hand, before the cron
 exists. Stubs prove your logic; only the host proves your assumptions about it.
 
 This is not hypothetical. On 2026-08-24 `wifi_reconnect.sh` judged health by
-pinging vinylstreamer's default gateway, which answers **no ICMP at all**, so
-the check could never pass. Every branch had been exercised with stubs and gone
-green. On cron it reloaded the wifi driver every two minutes against a perfectly
-healthy radio until the host fell over. One manual healthy-path run would have
+pinging vinylstreamer's default gateway. That gateway **deliberately does not
+answer ICMP from inside the IoT VLAN** (firewall policy) while answering
+normally from every other VLAN — so the check could never pass on the one host
+it ran on, while looking entirely reasonable when tested from anywhere else.
+Every branch had been exercised with stubs and gone green. On cron it reloaded
+the wifi driver every two minutes against a perfectly healthy radio until the
+host fell over. One manual healthy-path run would have
 caught it in seconds — it printed "cannot reach … starting layered recovery" on
 a host that was completely fine.
 
