@@ -325,6 +325,67 @@
     mode: '0755'
   tags: [audio_streaming, monitoring, scripts, storage]
 
+# W1 layered wifi recovery. See docs/TODO.md item 4 and the script's own header.
+# NM gives up permanently on a `no-secrets` failure and `autoconnect-retries=0`
+# was proven not to reach that, so recovery has to come from outside NM.
+# The reconnect watchdog keeps its consecutive-failure counter here, and refuses
+# to act at all without it. Created by the proxmox role only, so it is absent on
+# a Pi — measured on vinylstreamer, where the counter was unwritable on the first
+# deploy and the safety gate would have silently degraded to "act immediately".
+- name: Ensure monitoring state directory exists
+  ansible.builtin.file:
+    path: /var/log/monitoring-state
+    state: directory
+    owner: "{{ primary_user }}"
+    group: "{{ primary_user }}"
+    mode: '0755'
+  become: true
+  when: enable_wifi_reconnect_watchdog | default(false)
+  tags: [audio_streaming, monitoring, w1]
+
+- name: Deploy layered wifi reconnect script
+  ansible.builtin.copy:
+    src: "{{ inventory_dir }}/../../scripts/services/network/wifi_reconnect.sh"
+    dest: "{{ scripts_dir }}/wifi_reconnect.sh"
+    owner: "{{ primary_user }}"
+    group: "{{ primary_user }}"
+    mode: '0755'
+  when: enable_wifi_reconnect_watchdog | default(false)
+  tags: [audio_streaming, monitoring, scripts, w1]
+
+# Every 2 min, so a lockout costs ~2 min instead of the plug watchdog's 15-45.
+#
+# 🔴 --monitoring-name is MANDATORY: the wrapper keys its state file on the
+# script basename and two crons sharing one basename silently share state.
+#
+# The script exits 0 when it recovers (and posts to #home-logging itself, so
+# the outage is still COUNTED — a self-heal that reports nothing would make the
+# fault invisible, which is item 15's failure mode) and exits 1 only when all
+# three layers failed, which is the case that genuinely warrants the watched
+# channel. The plug watchdog remains the backstop for exactly that case.
+- name: Configure layered wifi reconnect cron job
+  ansible.builtin.cron:
+    name: "Wifi reconnect watchdog"
+    minute: "*/2"
+    job: >
+      {{ scripts_dir }}/enhanced_monitoring_wrapper
+      --monitoring-name=wifi_reconnect
+      --heartbeat-interval=daily
+      --notify-fixed=true
+      {{ logging_token }}
+      {{ alert_token }}
+      {{ scripts_dir }}/wifi_reconnect.sh
+      {{ logging_token }}
+      {{ wifi_reconnect_peer | default('') }}
+      {{ wifi_reconnect_connection | default('preconfigured') }}
+      >> {{ logs_dir }}/wifi_reconnect.log 2>&1
+    user: "{{ primary_user }}"
+  when:
+    - enable_wifi_reconnect_watchdog | default(false)
+    - logging_token is defined and logging_token != ''
+    - alert_token is defined and alert_token != ''
+  tags: [audio_streaming, monitoring, cron, w1]
+
 - name: Configure vinylstreamer monitoring cron job
   ansible.builtin.cron:
     name: "Vinylstreamer audio streaming monitor"
