@@ -357,12 +357,63 @@ The remediation now works — both outages self-recovered via the re-armed
 watchdog — **which makes this less urgent and more maskable.** The plug is now
 genuinely a crutch; `vinylstreamer_cycles_7d_escalate: 3` is the tripwire.
 
-*Blocked on one thing:* `read_agent` on vinylstreamer is **not** in
-`systemd-journal`, because the host was unreachable during the 2026-08-24
-`agent_access` deploy and missed it. So the assoc-reject sequence still cannot
-be read by the agent tier. **Re-run `agent_access.yml --limit vinylstreamer`
-now that it is up** — then the journal is readable and the fix can be chosen
-from evidence rather than from the two defaults above.
+**✅ 2026-08-24 — the full failure chain, read from `journalctl -b -1`.**
+The 15:55 lockout is captured end to end. It is **not** an auth/PSK problem and
+**not** a signal dropout in the usual sense — it is an association *timeout*
+that NetworkManager then misfiles as a *credentials* problem:
+
+```
+15:55:34 wpa_supplicant: wlan0: CTRL-EVENT-ASSOC-REJECT bssid=00:00:00:00:00:00 status_code=16
+15:55:34 wpa_supplicant: CTRL-EVENT-SSID-TEMP-DISABLED auth_failures=2 duration=20 reason=CONN_FAILED
+15:55:48 NetworkManager: device (wlan0): Activation: (wifi) association took too long
+15:55:48 NetworkManager: device (wlan0): state change: config -> need-auth (reason 'none')
+15:55:48 NetworkManager: device (wlan0): Activation: (wifi) asking for new secrets
+15:55:48 NetworkManager: connection 'preconfigured' has security, and secrets exist. No new secrets needed.
+   … retry, ASSOC-REJECT again, SSID-TEMP-DISABLED backoff 10 s → 20 s …
+15:56:13 NetworkManager: device (wlan0): Activation: (wifi) association took too long
+15:56:13 NetworkManager: device (wlan0): state change: config -> failed (reason 'no-secrets')
+15:56:13 NetworkManager: device (wlan0): Activation: failed for connection 'preconfigured'
+15:56:14 NetworkManager: device (wlan0): supplicant interface state: scanning -> disconnected
+```
+
+**Then nothing. Not one further wlan0 line for the remaining ~14 minutes of
+that boot**, until the plug cycle at 16:10. That silence is the whole bug — it
+is what "NetworkManager gives up and goes quiet" looks like from the inside.
+
+Two distinct faults, and they need different fixes:
+
+1. **Why it drops** — `status_code=16` with an **all-zero BSSID** means no AP
+   ever answered the authentication sequence; wpa_supplicant generated the
+   reject itself on timeout. At **-70 dBm** with wifi powersave at NM's
+   default, the radio is asleep for parts of the handshake. This is the
+   `802-11-wireless.powersave` knob.
+2. **Why it stays down** — NM misattributes the timeout to missing
+   credentials, having just logged that *secrets exist*. It exhausts its
+   retries and lands on `failed (reason 'no-secrets')`, a reason that means
+   "a human must intervene" — so autoconnect stops. `nmcli` confirms
+   `connection.autoconnect-retries: -1`, and `man 5 NetworkManager.conf` on
+   the host states that -1 means the global default, *"connections will be
+   tried 4 times"*. This is the `autoconnect-retries` knob.
+
+⚠️ **Fixing only (1) leaves a host that still dies permanently on the next
+unlucky handshake; fixing only (2) leaves it flapping.** The proposed change is
+both, on vinylstreamer alone: `802-11-wireless.powersave=2` (disable) and
+`connection.autoconnect-retries=0` (retry forever).
+
+📌 **Verify by forcing a disassociation, not by watching it stay up.** The
+whole point is behaviour *after* a failed association, so a config that never
+gets tested against one proves nothing.
+
+*Unverified:* the precise IEEE 802.11 meaning of `status_code=16` (read as
+"authentication timeout waiting for the next frame in sequence") is from
+knowledge, not from a source on the host. The diagnosis does not depend on it —
+the all-zero BSSID and NM's own "association took too long" establish the
+timeout independently.
+
+*State:* **root cause established 2026-08-24; fix proposed, not applied.**
+*Needs:* a laptop. Also re-run `agent_access.yml --limit vinylstreamer` — that
+host missed the 2026-08-24 deploy, so `read_agent` still cannot read its
+journal (this evidence came from Ignacio's own phone session as `choco`).
 
 **New evidence, and it narrows the fault.** The Shelly was drawing **~1.4 W**
 against a healthy-period baseline of **~1.57 W** (derived from the plug's own
@@ -380,25 +431,35 @@ power; that single observation is what separates locked-out from halted, and a
 blind power cycle destroys it.
 
 ```
-Resolve vinylstreamer's wifi lockout root cause. Read
-~/.claude/plans/vinylstreamer-wifi-lockout-plan.md and docs/TODO.md item 4
-(W1) first.
+Apply the fix for vinylstreamer's wifi lockout (W1). Read docs/TODO.md item
+4 (W1) first.
 
-The gate passed on 2026-08-23 and the contradiction is ALREADY RESOLVED —
-do not re-litigate it. 17–21 Aug had zero outage events; the single real
-incident (22/23 Aug) ran 9 h with no unassisted recovery, which is the
-"NetworkManager gives up and stays down" model. The 18-minute sample is
-inside the excluded 2026-08-16 window. Power draw was also measured
-(~1.4 W vs a ~1.57 W healthy baseline), so mains and the PSU are ruled
-out — the Pi is powered.
+🔴 THE DIAGNOSIS IS COMPLETE. Do not re-derive it, do not re-read the
+journal to "confirm", and do not re-litigate whether the Pi was halted —
+it was not. Established by measurement on 2026-08-24: the host stays
+RUNNING and healthy while unreachable (its own health check ran 25 s
+before the reboot with all services active), and journalctl -b -1 caught
+the whole chain. Association times out (ASSOC-REJECT status_code=16,
+all-zero BSSID, "association took too long"), NetworkManager misfiles
+that as missing credentials one line after logging that secrets exist,
+exhausts its 4 default retries, ends at failed (reason 'no-secrets'), and
+then goes SILENT for 14 minutes until the plug cycle.
 
-Start at the host, not at the config. `journalctl -b -1` for the
-assoc-reject sequence (persistent journal, so it survived). The one thing
-still unknown is whether it was running-but-locked or halted — if it has
-not been power-cycled yet, check console/HDMI BEFORE pulling power,
-because that is the only way to tell and a cycle destroys the evidence.
-Only then configure anything, and only the asked-for change: verify on
-vinylstreamer alone, stop.
+The change, on vinylstreamer ONLY, both parts together:
+  802-11-wireless.powersave = 2   (disable — the radio sleeps through the
+                                   handshake at -70 dBm; this is why it drops)
+  connection.autoconnect-retries = 0  (retry forever — this is why it never
+                                   comes back)
+Fixing only one leaves either a host that still dies permanently or one
+that flaps. Deploy through Ansible, not by editing the host.
+
+VERIFY BY FORCING A DISASSOCIATION — the entire behaviour under test is
+what happens AFTER a failed association, so a config observed merely
+staying up proves nothing. Knock wlan0 down, watch it come back on its
+own, and confirm NM does not land on 'no-secrets' again.
+
+Then verify on vinylstreamer alone and stop. Do not roll powersave
+changes across the fleet.
 ```
 
 **9. Runaway-process detection — the fan removed the only thing that caught the last one**
