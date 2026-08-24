@@ -57,10 +57,17 @@ here is something to read past, every time, forever. The write-up goes to
 renders it:
 
 > **№1** 1c → **№2** 1d → **№3** 2 → **№4** 4 (plex) → **№5** 15 → **№6** 9
-> → **№7** 3a/3b → **№8** W1 *(unlocks ~23 Aug)* → **№9** 12 → **№10** 5 →
-> **№11** 10 → **№12** 11 → **№13** 6 → **№14** 7 → **№15–18** 8/13/14/16
+> → **№7** 3a/3b → **№8** W1 *(gate passed; needs `agent_access.yml --limit
+> vinylstreamer` first)* → **№9** 19 → **№10** 18 → **№11** 12 → **№12** 5 →
+> **№13** 10 → **№14** 11 → **№15** 6 → **№16** 7 → **№17–20** 8/13/14/16
 > *(decision-gated — 16 needs a purchase call, the rest need him at the
 > cabinet; not ranked)*
+
+**19 and 18 enter at №9 and №10** because both are small and both are about
+*seeing* — 19 restores a read path the agent tier was supposed to have, and 18
+adds the only tripwire for a fault that was invisible until 2026-08-24. The
+journal fix landed the same week and paid for itself within hours; these are
+the same trade.
 
 **15 enters at №5** because it is the only item here that has already cost
 something: two sensors offline for five days with every check green. It is also
@@ -324,6 +331,39 @@ incident, the night of 22/23 Aug:
 unassisted recovery is the "gives up and stays down" behaviour; the 18-minute
 sample sits inside the excluded 2026-08-16 window and should not be weighed.
 
+**✅ 2026-08-24 — the fault is now positively identified: the Pi stays RUNNING.**
+This was the one thing power draw could not settle, and the 16:10 outage settled
+it by accident. `vinylstreamer_monitor.sh` ran at **16:10:02–16:10:04** and
+reported every service active, CPU 3.8%, temp 41 °C — while HA had considered
+the host offline since ~15:55. `uptime -s` puts the boot at **16:10:27**, so
+that health check ran **25 s before the reboot**, i.e. on the locked-out
+session. The host was alive, healthy and executing cron the whole time it was
+unreachable.
+
+**So this is a Wi-Fi lockout at the network layer, not a crash, halt, or power
+fault.** Every remaining hypothesis about dead PSUs, SD corruption or brownouts
+is now excluded by direct measurement.
+
+Supporting conditions, measured the same day:
+
+| What | Value | Why it matters |
+|---|---|---|
+| Signal | **-70 dBm**, link quality 40 | Weak enough to drop, strong enough to look fine |
+| `NetworkManager` | active, **`conf.d/` is empty** | So `autoconnect-retries` is the default **4** — exactly the "gives up after 4" model |
+| wifi powersave | unset → NM default (**enabled**) | The `brcmfmac` powersave path W1 already suspects |
+| Recurrence | 2 outages in 16 h (23:45, 16:10) | It is getting worse, not settling |
+
+The remediation now works — both outages self-recovered via the re-armed
+watchdog — **which makes this less urgent and more maskable.** The plug is now
+genuinely a crutch; `vinylstreamer_cycles_7d_escalate: 3` is the tripwire.
+
+*Blocked on one thing:* `read_agent` on vinylstreamer is **not** in
+`systemd-journal`, because the host was unreachable during the 2026-08-24
+`agent_access` deploy and missed it. So the assoc-reject sequence still cannot
+be read by the agent tier. **Re-run `agent_access.yml --limit vinylstreamer`
+now that it is up** — then the journal is readable and the fix can be chosen
+from evidence rather than from the two defaults above.
+
 **New evidence, and it narrows the fault.** The Shelly was drawing **~1.4 W**
 against a healthy-period baseline of **~1.57 W** (derived from the plug's own
 `aenergy.total` ÷ `on_time`). So mains is present and the Pi is drawing roughly
@@ -452,6 +492,41 @@ the grace window keeps it silent — a check that pages on every deploy will be
 muted, and a muted check is the bug in item 15 all over again.
 ```
 
+
+**18. dockassist's ethernet driver stalled, and nothing noticed**
+On 2026-08-24 at 18:03:18 dockassist's NIC driver logged a transmit-queue hang:
+
+```
+bcmgenet fd580000.ethernet eth0: NETDEV WATCHDOG: CPU: 1: transmit queue 0 timed out 2024 ms
+```
+
+⚠️ **This surfaced only because `read_agent` was given `systemd-journal` that
+same day** — it had been invisible before, and there is still no check that
+would catch a repeat. `NETDEV WATCHDOG` means the kernel reset the queue
+because transmission stalled past the watchdog timeout; a single event is
+usually benign (a driver hiccup under load), but on **this** host it is worth a
+tripwire, because dockassist runs Home Assistant, the Matter server and
+Cloudflared. A NIC that silently stalls there produces exactly the class of
+outage item **15** exists to catch, one layer lower.
+
+📌 **Do not fix speculatively.** One event is not a pattern, and the useful
+first move is detection, not a driver workaround (`ethtool -K eth0 tso off`
+and friends are the usual folklore and would be a change with no evidence
+behind it). Count the occurrences first.
+
+*State:* observed once, cause unknown, no check exists. *Effort:* small.
+*Needs:* a laptop (check script + Ansible deploy).
+
+```
+Add a check that counts bcmgenet NETDEV WATCHDOG events on dockassist and
+alerts when the count increases. Read docs/TODO.md item 18 first — one event
+was seen on 2026-08-24 18:03:18 and nothing watches for it. Grep the journal
+(read_agent is in systemd-journal since 2026-08-24), track the count in wrapper
+state, and alert on a delta rather than on presence, or it pages forever about
+the same historical line. Do NOT apply offload/driver workarounds — there is
+one observation and no established pattern. Verify by forcing the parse against
+the real captured line, not against a synthetic one.
+```
 
 ### 🟢 P3 — improvements, no urgency
 
@@ -626,6 +701,52 @@ it lands. Start with the CLAUDE.md deploy_monitoring wording (it hid a
 4-month drift). For each fix verify the behaviour, not the absence of the
 error — the heartbeat curl fix must log a forced failure, the
 recovery-routing change must deliver a real recovery to the chosen channel.
+```
+
+**19. `ha_state` has never worked, and says the wrong thing when it fails**
+The helper exists so the agent tier can read HA entity state without ever
+touching the token. It cannot, and apparently never could:
+
+```
+$ ha_state binary_sensor.vinylstreamer_online
+ha_state: monitor token not found in /home/choco/homeassistant/secrets.yaml
+```
+
+🐛 **The message is wrong.** The token *is* in that file. The helper is
+`-rwxr-xr-x root root` — **not** setuid, and Linux ignores setuid on interpreted
+scripts anyway — so it runs as `read_agent`, and `/home/choco` is `0700`. The
+`sed` cannot open the file at all; an empty read is reported as "token not
+found". A permission failure is being displayed as a missing-value failure,
+which sends the reader looking in the wrong place.
+
+📌 **Third instance of one failure class, all found on 2026-08-23/24:** a
+capability built for the unattended tier that the tier lacks the permission to
+use. The other two were persistent journald (fixed — `systemd-journal` group)
+and, one layer up, item **15** itself. Worth asking what else in
+`agent_access` was never exercised end-to-end as `read_agent`.
+
+Fix is a sudoers line, not setuid: `read_agent ALL=(root) NOPASSWD:
+/usr/local/bin/ha_state`, callers use `sudo ha_state`. Keep the GET-only
+restriction — that part of the design is sound and is what makes the helper
+safe to run as root.
+
+*State:* diagnosed 2026-08-24, not fixed. *Effort:* small.
+*Needs:* a laptop (sudoers template + Ansible deploy).
+
+```
+Fix ha_state on dockassist. Read docs/TODO.md item 19 first — it is NOT a
+parsing bug, it is a permission bug wearing a parsing bug's error message.
+The helper runs as read_agent and cannot open /home/choco/homeassistant/
+secrets.yaml (0700). Add a sudoers rule in the agent_access role granting
+read_agent NOPASSWD on /usr/local/bin/ha_state only, and make the helper's
+own error distinguish "cannot read file" from "key absent". Do not make it
+setuid — Linux ignores setuid on scripts. Keep it GET-only against
+/api/states.
+
+Verify as read_agent over SSH, not as choco: `ssh dockassist-agent 'sudo
+ha_state binary_sensor.vinylstreamer_online'` must return JSON. Then force
+the other branch by pointing it at a nonexistent key and confirm the message
+now says the key is missing rather than blaming the file.
 ```
 
 ### 🧊 Blocked on Ignacio, not on work
