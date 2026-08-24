@@ -88,6 +88,30 @@ input_datetime:
     has_date: true
     has_time: true
     icon: mdi:restart-alert
+
+  # When the host actually went off the network. NOT derivable from the
+  # sensor's own last_changed, which is what the recovery message used until
+  # 2026-08-24: an HA restart re-creates the entity and resets last_changed, so
+  # a 22-HOUR outage that spanned the 23:24 restart was reported as "22 min".
+  # An input_datetime survives restarts, so it measures the outage rather than
+  # the uptime of the thing watching it.
+  #
+  # It is stamped only on a genuine on -> off edge, never on unavailable -> off,
+  # so a restart during an outage cannot overwrite the real start time.
+  vinylstreamer_offline_since:
+    name: Vinylstreamer Offline Since
+    has_date: true
+    has_time: true
+    icon: mdi:lan-disconnect
+    # 🔴 An unset input_datetime does NOT read as null — it defaults to TODAY AT
+    # MIDNIGHT, which is a perfectly valid timestamp. Without this sentinel the
+    # "have we ever stamped?" test passes on a value nobody wrote, and the first
+    # recovery after a fresh deploy reports the time since midnight as the
+    # outage length (measured: 21.8 h). That is the same class of confidently
+    # wrong number this entity exists to eliminate, so it gets an epoch value
+    # that no real outage can produce, and the templates treat pre-2000 as
+    # "never stamped".
+    initial: "1970-01-01 00:00:00"
 {% endif %}
 
 # Template sensors (modern syntax)

@@ -866,6 +866,28 @@
                   its job and the host is still gone, so this is not the wifi lockout. Needs a human.
   mode: single
 
+- id: "vinylstreamer_offline_stamp"
+  alias: "Vinylstreamer - stamp when the outage started"
+  # Fires immediately, with no `for:` — this records WHEN the host dropped, not
+  # whether the drop is worth acting on. The 15-minute judgement stays in the
+  # power-cycle automation.
+  #
+  # 🔴 `from: "on"` is load-bearing. Without it an HA restart, which walks every
+  # entity through unavailable -> off, would re-stamp mid-outage and destroy the
+  # very number this exists to preserve — reintroducing the bug in a new place.
+  trigger:
+    - platform: state
+      entity_id: binary_sensor.vinylstreamer_online
+      from: "on"
+      to: "off"
+  action:
+    - service: input_datetime.set_datetime
+      target:
+        entity_id: input_datetime.vinylstreamer_offline_since
+      data:
+        timestamp: "{{ '{{ now().timestamp() }}' }}"
+  mode: single
+
 - id: "vinylstreamer_back_online"
   alias: "Vinylstreamer - back online"
   trigger:
@@ -875,10 +897,26 @@
       to: "on"
   condition:
     # Only announce outages long enough to have been reported. Mirrors the gas
-    # detector's recovery debounce: suppresses HA-restart artefacts (where the
-    # prior-state duration is ~0) and short probe blips.
+    # detector's recovery debounce: suppresses HA-restart artefacts and short
+    # probe blips.
+    #
+    # 🔴 Measured from input_datetime.vinylstreamer_offline_since, NOT from the
+    # sensor's last_changed. An HA restart re-creates the entity and resets
+    # last_changed, which broke this in BOTH directions: on 2026-08-23 a
+    # 22-hour outage was announced as "22 min" (restart at 23:24, recovery at
+    # 23:46), and a recovery landing <15 min after a restart would have been
+    # suppressed entirely — a real outage ending with total silence.
+    #
+    # Falls back to the old comparison when the stamp is missing (first deploy,
+    # or an outage that began before this automation existed), so the worst case
+    # is the previous behaviour rather than no message at all.
     - condition: template
-      value_template: "{{ '{{' }} trigger.from_state is not none and (trigger.to_state.last_changed - trigger.from_state.last_changed).total_seconds() >= {{ vinylstreamer_down_after_minutes * 60 }} {{ '}}' }}"
+      value_template: >-
+        {{ '{%' }} set raw = state_attr("input_datetime.vinylstreamer_offline_since", "timestamp") {{ '%}' }}
+        {{ '{%' }} set t = raw if raw and raw > 946684800 else none {{ '%}' }}
+        {{ '{%' }} set fallback = (trigger.to_state.last_changed - trigger.from_state.last_changed).total_seconds()
+           if trigger.from_state is not none else 0 {{ '%}' }}
+        {{ '{{' }} (now().timestamp() - t if t else fallback) >= {{ vinylstreamer_down_after_minutes * 60 }} {{ '}}' }}
   action:
     # The self-recovery case is the point of this message. If vinylstreamer comes
     # back WITHOUT a power cycle, that contradicts the "NetworkManager gives up
@@ -901,8 +939,12 @@
       data:
         message: >-
           ✅ vinylstreamer back online after
-          {{ '{{ ((trigger.to_state.last_changed - trigger.from_state.last_changed).total_seconds() / 60) | round(0) | int }}' }}
-          min offline.
+          {{ '{%' }} set raw = state_attr("input_datetime.vinylstreamer_offline_since", "timestamp") {{ '%}' }}
+          {{ '{%' }} set t = raw if raw and raw > 946684800 else none {{ '%}' }}
+          {{ '{%' }} set secs = (now().timestamp() - t) if t
+             else (trigger.to_state.last_changed - trigger.from_state.last_changed).total_seconds() {{ '%}' }}
+          {{ '{{' }} (secs / 3600) | round(1) ~ " h" if secs >= 3600 else (secs / 60) | round(0) | int ~ " min" {{ '}}' }}
+          offline.
           {{ '{{ "Recovered after a power cycle (automatic or by hand)." if states("sensor.vinylstreamer_plug_cuts_10m") | int(0) > 0 else "Recovered on its own, with NO power cycle — record this against W1." }}' }}
   mode: single
 

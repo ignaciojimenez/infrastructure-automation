@@ -410,7 +410,35 @@ knowledge, not from a source on the host. The diagnosis does not depend on it �
 the all-zero BSSID and NM's own "association took too long" establish the
 timeout independently.
 
-*State:* **root cause established 2026-08-24; fix proposed, not applied.**
+**⚠️ 2026-08-24 — deployed, and only HALF of it is verified. Read this before
+declaring W1 closed.**
+
+* ✅ **`powersave=2` is confirmed live.** `iw dev wlan0 get power_save` read
+  `on` immediately after the drop-in was written — NM only applies powersave at
+  association time — and `off` after the next association. (`iw` lives in
+  `/usr/sbin`, which is not on `read_agent`'s PATH; an earlier "iw: not found"
+  was that, not a missing package.)
+* ❌ **`autoconnect-retries=0` is NOT confirmed, and cannot be synthetically.**
+  The acceptance test used `nmcli con down` + `con up`, which was the wrong
+  instrument: `con down` marks the connection deactivated *by user request* and
+  blocks autoconnect, defeating the mechanism under test. The host stayed down
+  16 min and was rescued by the plug (21:39), not by NM.
+  **A raw `iw dev wlan0 disconnect` would not settle it either** — retry-forever
+  only engages once association has failed repeatedly, so proving it needs the
+  real fault, not a clean disassociation.
+
+📌 **The next natural lockout IS the test, and it is self-reporting.** The
+recovery message already distinguishes *"Recovered after a power cycle"* from
+*"Recovered on its own, with NO power cycle"*. If the retries fix works, the
+next lockout ends with the second sentence and no plug cut. **Do not force
+another outage to chase this** — it costs a power cycle and proves nothing.
+
+📌 Note the plug counter hit **4 cycles in 7 days** on 2026-08-24 and the
+anti-masking escalation fired correctly. Read that as designed behaviour, not
+as a new fault — three of those four were the same night's diagnosis and this
+test.
+
+*State:* **root cause established 2026-08-24; fix deployed, half verified.**
 *Needs:* a laptop. Also re-run `agent_access.yml --limit vinylstreamer` — that
 host missed the 2026-08-24 deploy, so `read_agent` still cannot read its
 journal (this evidence came from Ignacio's own phone session as `choco`).
@@ -554,39 +582,62 @@ muted, and a muted check is the bug in item 15 all over again.
 ```
 
 
-**18. dockassist's ethernet driver stalled, and nothing noticed**
-On 2026-08-24 at 18:03:18 dockassist's NIC driver logged a transmit-queue hang:
+**18. dockassist's NIC stalls under the speedtest, nine times so far**
+`bcmgenet` logs a transmit-queue hang whenever the link is driven flat out:
 
 ```
 bcmgenet fd580000.ethernet eth0: NETDEV WATCHDOG: CPU: 1: transmit queue 0 timed out 2024 ms
 ```
 
-⚠️ **This surfaced only because `read_agent` was given `systemd-journal` that
-same day** — it had been invisible before, and there is still no check that
-would catch a repeat. `NETDEV WATCHDOG` means the kernel reset the queue
-because transmission stalled past the watchdog timeout; a single event is
-usually benign (a driver hiccup under load), but on **this** host it is worth a
-tripwire, because dockassist runs Home Assistant, the Matter server and
-Cloudflared. A NIC that silently stalls there produces exactly the class of
-outage item **15** exists to catch, one layer lower.
-
-📌 **Do not fix speculatively.** One event is not a pattern, and the useful
-first move is detection, not a driver workaround (`ethtool -K eth0 tso off`
-and friends are the usual folklore and would be a change with no evidence
-behind it). Count the occurrences first.
-
-*State:* observed once, cause unknown, no check exists. *Effort:* small.
-*Needs:* a laptop (check script + Ansible deploy).
+⚠️ **Not one event — nine, and they are not random.** Every single one lands
+1–6 minutes past an hour divisible by six:
 
 ```
-Add a check that counts bcmgenet NETDEV WATCHDOG events on dockassist and
-alerts when the count increases. Read docs/TODO.md item 18 first — one event
-was seen on 2026-08-24 18:03:18 and nothing watches for it. Grep the journal
-(read_agent is in systemd-journal since 2026-08-24), track the count in wrapper
-state, and alert on a delta rather than on presence, or it pages forever about
-the same historical line. Do NOT apply offload/driver workarounds — there is
-one observation and no established pattern. Verify by forcing the parse against
-the real captured line, not against a synthetic one.
+Aug 11 00:03 · Aug 12 06:03 · Aug 12 18:04 · Aug 13 12:03 · Aug 14 00:06
+Aug 16 06:01 · Aug 22 12:04 · Aug 22 18:06 · Aug 23 18:03
+```
+
+dockassist has exactly one 6-hourly cron: `0 */6 * * *`
+`internet_speed_monitor --min-download=850 --min-upload=850 --tests=5
+--delay=75` — five back-to-back saturation tests that hold the NIC at ~850+
+Mbps for several minutes. **The stalls are load-induced by our own monitoring.**
+
+📌 It is intermittent, not deterministic: the 2026-08-24 18:06 run produced no
+stall. So this is "sustained line-rate sometimes wedges the queue", not "the
+speedtest always breaks the NIC".
+
+⚠️ **This was invisible until `read_agent` gained `systemd-journal` on
+2026-08-24**, and it had been happening since at least 11 Aug. The detection
+now exists (`check_nic_stalls.sh`, hourly, alerts on the delta), so the count
+is no longer a thing nobody is watching.
+
+🔗 **Related to items 1c/1d**, which are already about this speedtest's
+dependency and what it measures. Worth deciding together: a bandwidth test that
+wedges the NIC of the Home Assistant host is paying a real cost for its
+measurement, and `--tests=5` may simply be more than is needed.
+
+🔴 **Do not reach for `ethtool -K eth0 tso off` or similar.** The queue resets
+itself and the link recovers, so the observed impact so far is a brief stall,
+not an outage — a driver workaround would be a change with no way to tell
+afterwards whether it helped.
+
+*State:* cause identified 2026-08-24, detection deployed, **no fix applied and
+possibly none needed** — the open question is whether to soften the speedtest.
+*Effort:* small. *Needs:* a decision, then a laptop.
+
+```
+Decide what to do about dockassist's NIC stalls. Read docs/TODO.md item 18
+first — the diagnosis is DONE, do not re-derive it. Nine bcmgenet NETDEV
+WATCHDOG events since 11 Aug, every one 1-6 min into the `0 */6 * * *`
+internet_speed_monitor run (5 saturation tests, ~850+ Mbps), intermittent
+rather than every run. Detection already ships as check_nic_stalls.sh.
+
+The question is NOT how to silence the driver. It is whether a bandwidth test
+that occasionally wedges the Home Assistant host's NIC is worth its current
+cost — consider fewer --tests, or folding this into the item 1c/1d decision
+about what that speedtest is even measuring. Do NOT apply offload/driver
+workarounds: the queue self-recovers, so there is no established harm to fix
+and no way to prove a workaround helped.
 ```
 
 ### 🟢 P3 — improvements, no urgency
@@ -764,50 +815,41 @@ error — the heartbeat curl fix must log a forced failure, the
 recovery-routing change must deliver a real recovery to the chosen channel.
 ```
 
-**19. `ha_state` has never worked, and says the wrong thing when it fails**
-The helper exists so the agent tier can read HA entity state without ever
-touching the token. It cannot, and apparently never could:
+**19. `ha_state`'s error message sends you to the wrong place**
+Run without `sudo`, the helper reports:
 
 ```
-$ ha_state binary_sensor.vinylstreamer_online
 ha_state: monitor token not found in /home/choco/homeassistant/secrets.yaml
 ```
 
-🐛 **The message is wrong.** The token *is* in that file. The helper is
-`-rwxr-xr-x root root` — **not** setuid, and Linux ignores setuid on interpreted
-scripts anyway — so it runs as `read_agent`, and `/home/choco` is `0700`. The
-`sed` cannot open the file at all; an empty read is reported as "token not
-found". A permission failure is being displayed as a missing-value failure,
-which sends the reader looking in the wrong place.
+The token is present and the helper works fine — `sudo ha_state <entity>`
+returns JSON, and the sudoers rule for it has existed all along. The message is
+simply wrong about *why* it failed: the helper runs as `read_agent`,
+`/home/choco` is `0700`, so the `sed` cannot open the file and an unreadable
+file is reported as a missing value.
 
-📌 **Third instance of one failure class, all found on 2026-08-23/24:** a
-capability built for the unattended tier that the tier lacks the permission to
-use. The other two were persistent journald (fixed — `systemd-journal` group)
-and, one layer up, item **15** itself. Worth asking what else in
-`agent_access` was never exercised end-to-end as `read_agent`.
+⚠️ **This is small, and it is here because it cost real time.** On 2026-08-24 a
+session read that message, concluded the helper had never worked, wrote it up as
+a third instance of "capability the unattended tier cannot use", and had to
+retract all of it once `sudo` was tried. **An error that misidentifies its own
+cause is worse than a vague one**, because it is confidently actionable in the
+wrong direction.
 
-Fix is a sudoers line, not setuid: `read_agent ALL=(root) NOPASSWD:
-/usr/local/bin/ha_state`, callers use `sudo ha_state`. Keep the GET-only
-restriction — that part of the design is sound and is what makes the helper
-safe to run as root.
-
-*State:* diagnosed 2026-08-24, not fixed. *Effort:* small.
-*Needs:* a laptop (sudoers template + Ansible deploy).
+*State:* fixed on branch `fix/w1-wifi-lockout-and-alert-fidelity` — the helper
+now distinguishes "cannot read the file, run with sudo" from "key absent".
+Kept here only until that lands.
 
 ```
-Fix ha_state on dockassist. Read docs/TODO.md item 19 first — it is NOT a
-parsing bug, it is a permission bug wearing a parsing bug's error message.
-The helper runs as read_agent and cannot open /home/choco/homeassistant/
-secrets.yaml (0700). Add a sudoers rule in the agent_access role granting
-read_agent NOPASSWD on /usr/local/bin/ha_state only, and make the helper's
-own error distinguish "cannot read file" from "key absent". Do not make it
-setuid — Linux ignores setuid on scripts. Keep it GET-only against
-/api/states.
-
-Verify as read_agent over SSH, not as choco: `ssh dockassist-agent 'sudo
-ha_state binary_sensor.vinylstreamer_online'` must return JSON. Then force
-the other branch by pointing it at a nonexistent key and confirm the message
-now says the key is missing rather than blaming the file.
+Verify the ha_state error-message fix on dockassist. Read docs/TODO.md item 19
+first — the helper is NOT broken, it needs sudo, and the old message hid that.
+Force BOTH branches as read_agent over SSH, not as choco:
+  ssh dockassist-agent 'ha_state binary_sensor.vinylstreamer_online'
+    -> must now say it cannot read the file and to use sudo
+  ssh dockassist-agent 'sudo ha_state binary_sensor.vinylstreamer_online'
+    -> must return JSON
+Then point it at a real file with the key removed to confirm the "key absent"
+branch still fires. A message that is merely reworded but never forced down
+both paths has not been tested.
 ```
 
 ### 🧊 Blocked on Ignacio, not on work
