@@ -674,6 +674,15 @@ straddle two VLANs:
 | **`dockassist`** | **`10.30.100.100`** | **100 — IoT** | Raspberry Pi |
 | **`vinylstreamer`** | **`10.30.100.110`** | **100 — IoT** | Raspberry Pi |
 
+🔴 **The VLAN 100 gateway `10.30.100.254` does not answer ICMP.** Measured
+2026-08-24: 0/3 from a healthy host on the same VLAN. **Never use it as a
+reachability probe** — a health check built on pinging it can never pass. This
+is not a theoretical footgun: `wifi_reconnect.sh` was written that way and
+reloaded vinylstreamer's wifi driver every two minutes against a perfectly
+healthy radio until the host fell over. Verified to answer on VLAN 100:
+`10.30.100.100` (dockassist) and `10.30.100.217` (the vinylstreamer Shelly
+plug). Prefer a **local** signal over any reachability probe where one exists.
+
 Home Assistant and the vinyl streamer live on the **IoT** VLAN, not with the rest
 of the infrastructure. That is a sensible placement — both talk constantly to IoT
 devices — but nothing in the repo says so, and it has two consequences:

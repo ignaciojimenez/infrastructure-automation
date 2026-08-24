@@ -71,6 +71,37 @@ with explicit `src:`/`dest:` entries.
    ansible-playbook ansible/playbooks/services.yml --limit my_new_host --check --diff
    ```
 
+### 🔴 Shipping a script that ACTS on the host
+
+Everything above validates Ansible. It does not validate the script's own
+assumptions, and a check that merely *reports* wrongly costs an alert while one
+that *acts* wrongly costs an outage. Before putting any corrective script on a
+cron or timer:
+
+**Run its healthy path on the target host and confirm it does nothing.**
+
+Not in a container, not against stubs — on the host, by hand, before the cron
+exists. Stubs prove your logic; only the host proves your assumptions about it.
+
+This is not hypothetical. On 2026-08-24 `wifi_reconnect.sh` judged health by
+pinging vinylstreamer's default gateway, which answers **no ICMP at all**, so
+the check could never pass. Every branch had been exercised with stubs and gone
+green. On cron it reloaded the wifi driver every two minutes against a perfectly
+healthy radio until the host fell over. One manual healthy-path run would have
+caught it in seconds — it printed "cannot reach … starting layered recovery" on
+a host that was completely fine.
+
+Two rules follow, and both are load-bearing:
+
+- **Gate actions on a signal whose HEALTHY value you have observed** on that
+  host, not one you assumed would work. Prefer local facts (`nmcli` device
+  state, presence of a route) over reachability of something else.
+- **A guard that depends on unavailable state is not a guard.** Counters under
+  `/var/log/monitoring-state` are a common case: that directory is created by
+  the **proxmox** role only, so it does not exist on a Pi. A script whose
+  safety gate silently degrades when its state file is unwritable must fail
+  loudly instead — refusing to act is always safer than acting ungated.
+
 ## Ansible Coding Rules
 
 | Rule | Example |

@@ -500,57 +500,62 @@ cooldown … Retrying automatically the moment the cooldown expires") and then
 **cycled at 22:45 the moment the cooldown expired**. Before that fix, the 22:30
 refusal would have been permanent. And `powersave=2` survives reboots.
 
-*State:* **root cause known; both deployed knobs proven insufficient; new fix
-direction identified, not built.**
-*Needs:* a laptop. Also re-run `agent_access.yml --limit vinylstreamer` — that
-host missed the 2026-08-24 deploy, so `read_agent` still cannot read its
-journal (this evidence came from Ignacio's own phone session as `choco`).
+**✅ 2026-08-24 23:30 — layered recovery DEPLOYED and running.**
+`scripts/services/network/wifi_reconnect.sh`, cron `*/2`, vinylstreamer only.
+Three layers, and **which one succeeds is the diagnostic**: `nmcli con up` =
+NM merely gave up · interface bounce = the link layer needed resetting ·
+`brcmfmac` reload = the driver itself wedged, which would reframe W1 entirely.
+Every recovery posts to **#home-logging**, deliberately: a ~2 min self-heal
+never reaches HA's 15-minute threshold, so without reporting the fault would
+simply become invisible — item 15's failure mode. The plug watchdog stays as
+the backstop for all-layers-failed.
 
-**New evidence, and it narrows the fault.** The Shelly was drawing **~1.4 W**
-against a healthy-period baseline of **~1.57 W** (derived from the plug's own
-`aenergy.total` ÷ `on_time`). So mains is present and the Pi is drawing roughly
-its normal power — this is **not** a dead PSU, a failed relay, or a bad cable.
-Power draw cannot separate "running but wifi-locked" from "halted", so that is
-the one thing to settle at the host.
+🔴 **READ THIS BEFORE TOUCHING THAT SCRIPT — it took the host down on the day
+it was written.** The first version judged health by pinging the default
+gateway `10.30.100.254`. **That gateway answers no ICMP at all** — 0/3 even
+from a healthy host on the same VLAN — so the check could never pass, and cron
+ran the full ladder *including a driver reload* every 2 minutes against a
+perfectly healthy radio until the host fell over. Every branch had been tested
+exhaustively with stubs; **the healthy path had never been run against the real
+host.**
 
-*State:* **gate passed, (b) resolved, root cause still open.**
-*Needs:* the host back. `wlan0` is down and the journal is the only copy, so
-there is no remote path to it — **`journalctl -b -1` on the box is the next
-step**, and it is `Storage=persistent`, so last night's assoc-reject sequence is
-intact and waiting. Check whether it answers on console/HDMI *before* pulling
-power; that single observation is what separates locked-out from halted, and a
-blind power cycle destroys it.
+Three guards exist because of that, and none is decorative:
+1. **Health comes from local facts whose healthy value was OBSERVED** — `nmcli`
+   reporting `wlan0:connected`, and a default route on the interface. The peer
+   IP is retained but is **diagnostic only and must never gate an action**.
+2. **Two consecutive bad observations before acting.** A single bad sample must
+   never reload a driver: acting wrongly costs an outage worse than the fault.
+3. **No state, no action.** `/var/log/monitoring-state` is created by the
+   *proxmox* role and is absent on a Pi, so the counter was unwritable on first
+   deploy and guard 2 would have silently degraded to "act immediately". The
+   script now refuses to run rather than run ungated.
+
+*State:* **root cause known; both NM knobs disproven; layered recovery live and
+being measured.** Next evidence is which layer the alerts name.
+*Needs:* nothing — read `#home-logging` for a few days.
 
 ```
-Apply the fix for vinylstreamer's wifi lockout (W1). Read docs/TODO.md item
-4 (W1) first.
+Judge the W1 layered recovery from the evidence it is producing. Read
+docs/TODO.md item 4 first — the diagnosis is DONE and the fix is DEPLOYED,
+do not redo either and do not re-test the NM knobs (both disproven).
 
-🔴 THE DIAGNOSIS IS COMPLETE. Do not re-derive it, do not re-read the
-journal to "confirm", and do not re-litigate whether the Pi was halted —
-it was not. Established by measurement on 2026-08-24: the host stays
-RUNNING and healthy while unreachable (its own health check ran 25 s
-before the reboot with all services active), and journalctl -b -1 caught
-the whole chain. Association times out (ASSOC-REJECT status_code=16,
-all-zero BSSID, "association took too long"), NetworkManager misfiles
-that as missing credentials one line after logging that secrets exist,
-exhausts its 4 default retries, ends at failed (reason 'no-secrets'), and
-then goes SILENT for 14 minutes until the plug cycle.
+Read #home-logging for "vinylstreamer wifi recovered at layer N":
+  layer 1 only  -> it was purely a NetworkManager give-up; consider retiring
+                   the plug watchdog to a much longer threshold.
+  layer 2 needed -> the link layer wedges, NM alone is not enough.
+  layer 3 needed -> the DRIVER wedges. That reframes W1: the fault is below
+                   NetworkManager and the brcmfmac/firmware angle becomes
+                   primary.
+  all layers fail -> the plug is still doing the work; escalate to hardware
+                   (aerial, placement, or a USB wifi adapter).
 
-The change, on vinylstreamer ONLY, both parts together:
-  802-11-wireless.powersave = 2   (disable — the radio sleeps through the
-                                   handshake at -70 dBm; this is why it drops)
-  connection.autoconnect-retries = 0  (retry forever — this is why it never
-                                   comes back)
-Fixing only one leaves either a host that still dies permanently or one
-that flaps. Deploy through Ansible, not by editing the host.
+🔴 DO NOT "improve" wifi_reconnect.sh by giving it a reachability-based
+health check. The first version did exactly that, pinging a gateway that
+answers no ICMP, and reloaded the driver every 2 min against a healthy
+radio until the host fell over. If you change the health signal at all,
+run the HEALTHY path on vinylstreamer itself and confirm it takes no
+action, BEFORE any cron exists.
 
-VERIFY BY FORCING A DISASSOCIATION — the entire behaviour under test is
-what happens AFTER a failed association, so a config observed merely
-staying up proves nothing. Knock wlan0 down, watch it come back on its
-own, and confirm NM does not land on 'no-secrets' again.
-
-Then verify on vinylstreamer alone and stop. Do not roll powersave
-changes across the fleet.
 ```
 
 **9. Runaway-process detection — the fan removed the only thing that caught the last one**
