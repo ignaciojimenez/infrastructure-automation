@@ -464,7 +464,44 @@ anti-masking escalation fired correctly. Read that as designed behaviour, not
 as a new fault — three of those four were the same night's diagnosis and this
 test.
 
-*State:* **root cause established 2026-08-24; fix deployed, half verified.**
+**🔴 2026-08-24 22:16 — THE RETRIES HALF IS DISPROVEN. Do not re-deploy it as a fix.**
+
+The natural lockout arrived 35 min after the previous recovery and was caught
+end to end. `autoconnect-retries-default=0` was **verifiably in effect** —
+`NetworkManager --print-config` on the host returns both
+`autoconnect-retries-default=0` and `wifi.powersave=2` — and the host gave up
+anyway, in the identical place:
+
+```
+22:17:17 Activation: (wifi) association took too long
+22:17:17 state change: config -> failed (reason 'no-secrets')
+22:17:18 supplicant interface state: scanning -> disconnected
+```
+
+**Then ZERO wlan0 or supplicant lines for 28 minutes**, until the plug cycled at
+22:45. Counted, not eyeballed. Powersave was off for this outage too (verified
+before and after), so **neither knob prevents the lockout**.
+
+*Hypothesis, NOT verified:* a `no-secrets` failure sets an autoconnect **block**,
+which is a different mechanism from the retry **counter** — a block disables
+autoconnect regardless of how many retries remain, so the knob cannot reach it.
+NM logs nothing explicit at info level; confirming this needs debug logging.
+
+📌 **What this changes.** The mechanism in the diagnosis above is still correct;
+what was wrong was assuming the retry counter could override the give-up. **The
+next fix must stop depending on NM's own autoconnect** — e.g. a systemd timer or
+NM dispatcher that runs `nmcli con up preconfigured` when `wlan0` has been down
+for N minutes. That also converts a 15–45 min plug-cycle outage into a ~30 s
+software recovery, and leaves the plug as the backstop it was meant to be.
+
+✅ **Two things that DID work and should not be re-litigated:** the watchdog
+re-arm behaved perfectly in production — it deferred at 22:30 ("inside the 1h
+cooldown … Retrying automatically the moment the cooldown expires") and then
+**cycled at 22:45 the moment the cooldown expired**. Before that fix, the 22:30
+refusal would have been permanent. And `powersave=2` survives reboots.
+
+*State:* **root cause known; both deployed knobs proven insufficient; new fix
+direction identified, not built.**
 *Needs:* a laptop. Also re-run `agent_access.yml --limit vinylstreamer` — that
 host missed the 2026-08-24 deploy, so `read_agent` still cannot read its
 journal (this evidence came from Ignacio's own phone session as `choco`).
