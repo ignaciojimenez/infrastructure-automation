@@ -106,6 +106,13 @@ program* on each host — Ookla 1.2.0.84 on dockassist, Debian's Python
 ```
 Fix the speedtest dependency without building the VPN monitor yet. Read
 docs/TODO.md item 1c — the verified facts are there, do not re-derive them.
+
+🔴 Also read item 18: the existing speedtest is intermittently wedging
+dockassist's NIC (nine stalls since 11 Aug, all inside its run window). That
+does not block this task — installing the right binary is correct either way —
+but do NOT increase test count or frequency while here, and if you touch
+agent-lxc's speedtest, note that host has no such measurement yet.
+
 Write the Ansible task installing Ookla's speedtest (repo
 packagecloud.io/ookla/speedtest-cli/debian/ <codename> main, keyring
 /etc/apt/keyrings/ookla_speedtest-cli-archive-keyring.gpg, package
@@ -150,8 +157,20 @@ nobody takes.
 `--tests=5` every 6h (~25 GB/day, ~26 min/day saturated). A second path doubles it —
 prefer `--tests=3` twice daily across both.
 
+🔗 **Read item 18 before sizing this. The current test already has a measured
+cost, not just a theoretical one.** dockassist's NIC has logged **nine
+`bcmgenet` transmit-queue stalls since 11 Aug, every one 1–6 minutes into the
+`0 */6` speedtest window** — the saturation run intermittently wedges the
+Home Assistant host's link. That was invisible until 2026-08-24 and is exactly
+the "prove the host can saturate" concern in point 3, arriving from the other
+direction: dockassist *can* saturate, but not reliably without cost.
+
+**So doubling the number of saturation runs is not a neutral change.** Decide
+the volume question (18) and the coverage question (1d) together, or 1d
+silently doubles a fault nobody had measured yet.
+
 ```
-Build VPN-vs-direct speed monitoring. Read TODO items 1c and 1d first — they
+Build VPN-vs-direct speed monitoring. Read TODO items 1c, 1d AND 18 first — they
 carry every verified fact, do not re-derive them.
 
 Order, each step gating the next:
@@ -168,6 +187,13 @@ Order, each step gating the next:
    container's NIC.
 4. THEN the ratio check: both paths sequentially, alert when VPN/direct drops below
    ~75% for two consecutive runs, plus a loose absolute floor.
+
+🔴 Item 18 constrains this one. dockassist's NIC has logged nine bcmgenet
+transmit-queue stalls since 11 Aug, EVERY one 1-6 min into the existing
+`0 */6` speedtest window — the saturation run intermittently wedges the Home
+Assistant host's link. Adding a second measured path DOUBLES the number of
+saturation runs, so decide the volume question (18) before or alongside the
+coverage question. Do not simply add a second `--tests=5` job.
 ```
 
 
