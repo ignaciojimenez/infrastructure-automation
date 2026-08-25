@@ -17,6 +17,58 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ---
 
+## 2026-08-25 — a controller with every device offline used to read as green
+
+**Decided:** dockassist runs `check_ha_entities.sh` every 10 minutes, asking HA
+what entities exist and judging all of them, **because** every check the fleet
+had watched the *machinery* — host up, container running, service active, cron
+fresh — and all of it was green for the five days the Eve door sensors were
+gone. A `matter-server` with zero live subscriptions is byte-for-byte as chatty
+as a healthy one.
+
+**Why a grace window rather than instant alerting:** an HA restart flips every
+entity through `unavailable` at once. A check that pages on every deploy gets
+muted, and a muted check reproduces the exact silence this exists to break. 900 s
+was chosen against restarts, not against the fault — the sensors were gone for
+five days, so fifteen minutes of patience costs nothing. **Verified by restarting
+Home Assistant with the cron live: exit 0 throughout, zero alerts, and the four
+transient artefacts cleared themselves.**
+
+**Why stateless domains are excused by DOMAIN, not by an allowlist:** the first
+real run found **90 of 296 entities** in `unavailable`/`unknown` and none were
+faults. 27 were buttons, which have no state until pressed. An allowlist of 27
+button ids stops covering the 28th, and every new Shelly ships one — that is the
+hardcoded-list failure the check exists to avoid, reintroduced through the back
+door. `unavailable` on the same entity still pages, because that means the
+device is gone; proven in both directions by unit test.
+
+**Why the phone's Companion sensors are muted, stated as a cost rather than a
+win:** ~20 of them go `unavailable` on any full-tunnel VPN, an already-accepted
+edge case. The consequence is that this check can no longer tell a broken
+Companion integration from Ignacio being on the VPN. Presence itself stays
+covered by `check_tado_health.sh`, which watches the trackers by name.
+
+**Refused: seeding the allowlist from whatever was broken on deploy day.** An
+auto-baseline would have silently accepted all 90, including anything genuinely
+dead, and shipped a check that could never fire. The list is explicit and
+versioned; the eleven stale automations in it are holding entries, and item 12
+should delete them rather than mute them.
+
+🐛 **A third category the design had not met:** a Shelly Plus Smoke mute button
+read `unavailable` — *conditionally available*, since that button exists only
+while the alarm sounds. Allowlisted by that one exact name; the detector's real
+health rides on `binary_sensor…smoke` and `sensor…battery`, neither allowlisted.
+
+📌 **Acceptance was a forced failure, not a quiet check.** `matter-server`
+stopped: ten entities dropped, detected in 45 s, alert on `#home-alerts` at exit
+code 10 naming both door sensors; restarted: recovery notification, all clear.
+That run also exposed [`TODO.md`](../TODO.md) item **20** — `check_container.sh`
+has never been able to `source stop_run_ha` under cron, so container
+auto-recovery across the host has always been a no-op. Reading the script would
+never have shown it; the path resolves fine from an interactive shell.
+
+---
+
 ## 2026-08-23 — the door sensors were fine; their only road had moved
 
 **Decided:** dockassist carries a second, **IPv6-only** `wlan0` leg onto VLAN 20

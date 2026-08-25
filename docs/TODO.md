@@ -56,24 +56,18 @@ here is something to read past, every time, forever. The write-up goes to
 (numbers never move), but the order to work them is this, and the dashboard
 renders it:
 
-> **№1** 15 *(deploy — built, waiting on a laptop)* → **№2** 1c → **№3** 1d →
-> **№4** 2 → **№5** 4 (plex) → **№6** 17 → **№7** 9 → **№8** 3a/3b →
-> **№9** W1 *(gate passed; needs `agent_access.yml --limit vinylstreamer`
-> first)* → **№10** 19 → **№11** 18 → **№12** 12 → **№13** 5 → **№14** 10 →
-> **№15** 11 → **№16** 6 → **№17** 7 → **№18–21** 8/13/14/16
+> **№1** 20 → **№2** 1c → **№3** 1d → **№4** 2 → **№5** 4 (plex) →
+> **№6** 17 → **№7** 9 → **№8** 3a/3b → **№9** W1 *(gate passed; needs
+> `agent_access.yml --limit vinylstreamer` first)* → **№10** 19 → **№11** 18 →
+> **№12** 12 → **№13** 5 → **№14** 10 → **№15** 11 → **№16** 6 → **№17** 7 →
+> **№18–21** 8/13/14/16
 > *(decision-gated — 16 needs a purchase call, the rest need him at the
 > cabinet; not ranked)*
 
-**15 is now №1** and its nature has changed: it is no longer "build a check",
-it is "run the six-step deploy in item 15". The code is written and 35 unit
-assertions are green, so what remains is the part only Ignacio can do — Touch
-ID for the deploy, and a forced failure watched in `#home-alerts`. It was
-already the only item that had cost something; it is now also the cheapest.
+**20 enters at №1** because it is the widest of these: every monitored
+container on dockassist alerts on death and then fails to restart, and that has
+been true for as long as the cron has existed. It is also small.
 
-**17 enters at №6.** A test suite that has been silently red for nine days is
-the same class of fault as 15 itself, and it undercuts confidence in every
-change made since — but nothing is on fire, so it sits behind the items that
-are.
 
 **19 and 18 enter at №10 and №11** because both are small and both are about
 *seeing* — 19 restores a read path the agent tier was supposed to have, and 18
@@ -601,104 +595,6 @@ Acceptance is a forced failure: peg one core on cwwk with
 #home-alerts. Then record a fresh idle + pegged-core thermal baseline.
 ```
 
-**15. Nothing noticed two door sensors were gone for five days**
-Both Eve door sensors went `unavailable` on 2026-08-17 09:37 UTC and stayed
-that way until 08-22. **No alert fired.** It surfaced only because Ignacio
-happened to notice them greyed out in HA.
-
-🐛 **The failure was loud, then perfectly silent.** `matter-server` logged
-twelve retries and `Node considered offline, shutdown subscription` — and then
-went quiet, waking only twice a day to log `No new update found.` A
-`matter-server` with zero live subscriptions is byte-for-byte as chatty as a
-healthy one.
-
-⚠️ **Every existing check passed throughout.** The fleet watches hosts,
-containers, services and cron freshness. The container was up, the service was
-running, the host was fine. **Nothing watches whether the devices HA is
-supposed to be talking to are still answering** — so a controller with every
-device offline reads as green.
-
-The check that would have caught it: ask HA's API for entities sitting in
-`unavailable` / `unknown`, and alert when one that is normally healthy stays
-there beyond a grace period.
-
-⚠️ **Three ways to build this wrong:**
-1. **`unavailable` is normal briefly.** Every HA restart flips the whole fleet
-   of entities through it. Without a grace window (~15 min) this pages on every
-   deploy — and a check that pages on every deploy gets muted, which is worse
-   than not having it.
-2. **Do not enumerate entities by hand.** A hardcoded list silently stops
-   covering anything added later, which is this same bug wearing a hat. Ask HA
-   what exists and diff against last known-good.
-3. **Some entities are legitimately unavailable** (see item 12 — five stale
-   Tado automations). Those need an explicit allowlist, or the check is noise on
-   day one.
-
-Tooling already on dockassist: `ha_state <entity_id>` (root-owned helper,
-read-only, token stays on the host) and `ha_monitor_token` in
-`homeassistant/secrets.yaml`. The REST API answers from localhost.
-
-📌 Concrete instance of item **10** (coverage audit), found the expensive way.
-Worth doing on its own rather than waiting for the audit.
-
-*State:* **BUILT AND TESTED ON THE LAPTOP 2026-08-23, NOT DEPLOYED.** Branch
-`feat/ha-entity-health`. *Effort remaining:* one deploy session (~30 min).
-*Needs:* Ignacio at the laptop — every remaining step needs Touch ID.
-
-**What exists:**
-- `scripts/services/homeassistant/check_ha_entities.sh.j2` — asks HA for all
-  entities, ages each bad one in a state file, pages past a grace window.
-- `tests/unit/ha_entity_health_test.sh` — **35 assertions, all green.**
-- Ansible wiring: templated deploy (ungated, so `--report` always works) plus a
-  `*/10` cron gated on `enable_ha_entity_health_check`, **shipped `false`**.
-
-**What was actually verified** (laptop only — a stub HA on :8123, not the real
-one): the five-day outage replayed and paged with exit 2 naming both sensors;
-200 entities flipping at once (an HA restart) stayed silent; the same 200 paged
-once they outlived the grace window; allowlisted entities were excused while a
-real fault beside them still paged; recovery cleared and reported; unparseable
-JSON, an empty entity list and an auth-error body were each treated as a
-failure rather than as health; a momentary API outage stayed quiet and a
-one-hour one paged. Rendered through **real Ansible Jinja** and syntax-checked
-under **dash on dockassist**, not just macOS `sh`.
-
-⚠️ **What is NOT verified, and only the deploy can settle it:** it has never
-seen the real `/api/states`. The allowlist is **empty**, and nobody yet knows
-how many entities on this HA sit unavailable as their normal condition — that
-number is what step 2 below exists to discover. No Slack alert has ever been
-produced by this check.
-
-```
-Deploy and switch on the HA entity-health check. It is built and unit-tested
-on branch feat/ha-entity-health; read docs/TODO.md item 15 first. Do NOT skip
-to step 4 — shipping it enabled with an empty allowlist pages #home-alerts
-with every already-unavailable entity and Tier 2 will bill you for it.
-
-1. ansible-playbook ansible/playbooks/services.yml --limit dockassist \
-     --tags homeassistant,monitoring --check --diff
-   The diff must show the new script and NO cron (the toggle is false), and
-   must not touch the HA container — an untagged run upgrades the image.
-   Then apply the same command without --check.
-2. ssh dockassist '~/.scripts/check_ha_entities.sh --report'
-   This is the measurement, not a formality: it prints every entity currently
-   unavailable/unknown. Decide one by one which are permanently-dead
-   (the five stale Tado automations of item 12) versus really broken.
-3. Put the dead ones in ha_entity_health_allowlist in
-   group_vars/homeassistant.yml as fnmatch patterns, re-run --report, and
-   confirm the ALERTING list is empty. If something real is in there, that is
-   a find — fix it or record it before muting it.
-4. Only now set enable_ha_entity_health_check: true and re-deploy.
-5. FORCE THE FAILURE — a quiet check is not a working check:
-   ssh dockassist 'docker stop matter-server'
-   then run the check by hand repeatedly until the grace window passes, and
-   watch a real alert reach #home-alerts naming both door sensors.
-   ssh dockassist 'docker start matter-server' and confirm the recovery.
-6. Then restart Home Assistant itself and confirm the grace window keeps it
-   silent. That is the deploy-noise test, and it is the one that decides
-   whether this check survives or gets muted.
-```
-
-
 **17. Four of the eleven unit tests have been failing since 2026-08-14, and nothing said so**
 Found incidentally on 2026-08-23 while running the suite before adding to it.
 `anomaly_dedup_test.sh`, `ssh_backoff_test.sh`, `sweep_absence_test.sh` and
@@ -794,6 +690,44 @@ cost — consider fewer --tests, or folding this into the item 1c/1d decision
 about what that speedtest is even measuring. Do NOT apply offload/driver
 workarounds: the queue self-recovers, so there is no established harm to fix
 and no way to prove a workaround helped.
+```
+
+**20. `check_container.sh`'s self-healing has never run under cron**
+Found 2026-08-25 by stopping `matter-server` as the acceptance test for item 15.
+The check detected it correctly and alerted — and then its remediation failed:
+
+```
+/home/choco/.scripts/check_container.sh: line 42: stop_run_ha: No such file or directory
+```
+
+Line 42 is `source stop_run_ha` — a **bare filename**, so `source` resolves it
+against `$PATH`. Cron's PATH is
+`/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`, which does not
+include `/home/choco/.scripts`. The file exists; `source` simply cannot find it.
+
+⚠️ **Scope is every monitored container on the host** — `home-assistant`,
+`matter-server`, `mosquitto`, `cloudflared`. Each one alerts correctly on death
+and then silently fails to restart. The fleet has been relying on an auto-recovery
+that does nothing, and nothing said so, because the alert that fires is about the
+container rather than about the remediation.
+
+📌 Same failure class as item 15 itself: a mechanism that is present, looks
+plausible, and contributes nothing. It surfaced only because a forced failure was
+run against a real host — no amount of reading the script would have shown it,
+since the path resolves fine from an interactive shell.
+
+*State:* diagnosed 2026-08-25, not fixed. *Effort:* small. *Needs:* a laptop.
+
+```
+Fix check_container.sh's self-healing. Read docs/TODO.md item 20 — the cause is
+confirmed, do not re-derive it. Line 42 is `source stop_run_ha`, a bare filename
+resolved against cron's PATH, which does not contain ~/.scripts. Use an absolute
+path built from the script's own location. Then FORCE IT: stop a non-critical
+container (mosquitto), watch the check restart it, and confirm the recovery
+notification — a fix verified only by reading the diff has not been verified,
+which is exactly how this survived. Check whether `source` is even right here:
+stop_run_ha is Home-Assistant-specific and check_container.sh is called for four
+different containers.
 ```
 
 ### 🟢 P3 — improvements, no urgency
