@@ -514,8 +514,11 @@ the backstop for all-layers-failed.
 
 🔴 **READ THIS BEFORE TOUCHING THAT SCRIPT — it took the host down on the day
 it was written.** The first version judged health by pinging the default
-gateway `10.30.100.254`. **That gateway answers no ICMP at all** — 0/3 even
-from a healthy host on the same VLAN — so the check could never pass, and cron
+gateway `10.30.100.254`. **That gateway deliberately answers no ICMP from
+inside VLAN 100** — firewall policy, the IoT VLAN is kept restricted — while
+answering normally from every other VLAN (measured: 0/3 from dockassist on
+VLAN 100, 3/3 from cobra and hifipi on VLAN 40). The asymmetry is the trap:
+probed from a laptop that gateway looks perfectly healthy — so the check could never pass, and cron
 ran the full ladder *including a driver reload* every 2 minutes against a
 perfectly healthy radio until the host fell over. Every branch had been tested
 exhaustively with stubs; **the healthy path had never been run against the real
@@ -553,7 +556,9 @@ Read #home-logging for "vinylstreamer wifi recovered at layer N":
 
 🔴 DO NOT "improve" wifi_reconnect.sh by giving it a reachability-based
 health check. The first version did exactly that, pinging a gateway that
-answers no ICMP, and reloaded the driver every 2 min against a healthy
+answers no ICMP from inside VLAN 100 (firewall policy — it DOES answer from
+other VLANs, so it looks fine when you test from a laptop), and reloaded the
+driver every 2 min against a healthy
 radio until the host fell over. If you change the health signal at all,
 run the HEALTHY path on vinylstreamer itself and confirm it takes no
 action, BEFORE any cron exists.
