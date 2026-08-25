@@ -78,6 +78,26 @@ ALLOWEOF
 )
 export HA_ALLOWLIST
 
+# Domains whose entities are STATELESS: a button, a notify service or a
+# conversation agent has no state to report until it is invoked, so HA renders
+# it `unknown` forever. That is correct behaviour, not a fault.
+#
+# Measured on dockassist 2026-08-25: 31 of 296 entities sat here, 27 of them
+# buttons. They are excluded by DOMAIN rather than by name on purpose — an
+# allowlist of 27 button ids would stop covering the 28th, and every new Shelly
+# ships another one. That is the "hardcoded list" failure this check exists to
+# avoid, so it must not be reintroduced in the allowlist.
+#
+# ⚠️ Only `unknown` is excused. A stateless entity that goes `unavailable` has
+# genuinely lost its device and still pages.
+HA_STATELESS_DOMAINS=$(cat <<'STATELESSEOF'
+{% for domain in ha_entity_health_stateless_domains | default([]) %}
+{{ domain }}
+{% endfor %}
+STATELESSEOF
+)
+export HA_STATELESS_DOMAINS
+
 TOKEN=$(sed -n 's/^ha_monitor_token:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}.*/\1/p' \
         "$SECRETS" 2>/dev/null | head -1)
 if [ -z "$TOKEN" ]; then
@@ -122,10 +142,25 @@ BAD_STATES = ("unavailable", "unknown")
 now = int(time.time())
 
 allow = [p.strip() for p in os.environ.get("HA_ALLOWLIST", "").splitlines() if p.strip()]
+stateless = {d.strip() for d in os.environ.get("HA_STATELESS_DOMAINS", "").splitlines() if d.strip()}
 
 
 def allowed(entity_id):
     return any(fnmatch.fnmatchcase(entity_id, pattern) for pattern in allow)
+
+
+def is_faulty(entity_id, entity_state):
+    """Whether this state is a fault for this entity, as opposed to its normal
+    resting condition.
+
+    `unavailable` always is. `unknown` is not, for a domain that has no state
+    to report until something invokes it — see HA_STATELESS_DOMAINS above.
+    """
+    if entity_state == "unavailable":
+        return True
+    if entity_state != "unknown":
+        return False
+    return entity_id.split(".", 1)[0] not in stateless
 
 
 # ------------------------------------------------------------------
@@ -222,7 +257,8 @@ for entity in entities:
         continue
     entity_id = entity.get("entity_id")
     entity_state = entity.get("state")
-    if isinstance(entity_id, str) and entity_state in BAD_STATES:
+    if isinstance(entity_id, str) and entity_state in BAD_STATES \
+            and is_faulty(entity_id, entity_state):
         bad_now[entity_id] = entity_state
 
 new_since = {}
