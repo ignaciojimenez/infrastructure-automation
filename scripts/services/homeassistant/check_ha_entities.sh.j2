@@ -1,0 +1,277 @@
+#!/bin/sh
+# check_ha_entities.sh — alert when Home Assistant entities stop answering.
+# Managed by Ansible — do not edit manually.
+#
+# The gap this closes (2026-08-17 → 08-22): both Eve door sensors sat
+# `unavailable` for five days and *every* existing check stayed green. The
+# fleet watches hosts, containers, services and cron freshness — the container
+# was up, matter-server was running, dockassist was fine. Nothing watched
+# whether the devices HA is supposed to be talking to still answer, so a
+# controller with every device offline read as healthy. See docs/TODO.md item
+# 15 and docs/archive/DONE.md 2026-08-23.
+#
+# Three design constraints, each of which is a way to build this wrong:
+#
+#   1. `unavailable` is normal briefly — every HA restart flips the whole
+#      entity fleet through it. Hence the grace window: an entity must be bad
+#      CONTINUOUSLY for HA_GRACE seconds before it pages. A check that pages on
+#      every deploy gets muted, and a muted check is the original bug again.
+#   2. Entities are never enumerated here. A hardcoded list silently stops
+#      covering anything added later — the same bug wearing a hat. We ask HA
+#      what exists and judge everything it returns.
+#   3. Some entities are legitimately unavailable forever (stale Tado
+#      automations, see TODO item 12). Those go in the allowlist in
+#      group_vars/homeassistant.yml — explicit, versioned and reviewable.
+#      There is deliberately no auto-baseline: silently accepting whatever was
+#      broken at deploy time is how you ship a check that never fires.
+#
+# Modes:
+#   (no args)   check mode — alert on entities bad beyond the grace window.
+#               Exit status is the NUMBER of alerting entities, so the wrapper
+#               sees a non-zero and the count is legible in cron logs.
+#   --report    report mode — print every currently-bad entity with its age
+#               and whether the allowlist covers it, then exit 0. This is how
+#               you seed and tune the allowlist without paging anyone.
+set -u
+
+HA_URL="http://localhost:8123"
+SECRETS="{{ homeassistant_config_dir }}/secrets.yaml"
+STATE_FILE="{{ ha_entity_health_state_file }}"
+HA_GRACE="{{ ha_entity_health_grace_seconds }}"
+
+# Retries absorb a Home Assistant restart, which takes HA offline for ~1-2 min.
+# Without them a restart landing on a cron tick pages immediately — the exact
+# "alerts on every deploy" failure this check exists to avoid. Sustained
+# unreachability is still caught: it runs through the same grace window as an
+# entity, below.
+FETCH_ATTEMPTS=3
+FETCH_INTERVAL=15
+
+# Pins stdout to UTF-8 so the ❌ below cannot raise UnicodeEncodeError — a
+# check that dies at the moment it has something to say is worse than no check.
+#
+# Honest scope: this is defence, not a rescue. Measured on dockassist
+# (Python 3.11.2, 2026-08-23), PEP 540 already forces UTF-8 mode under cron's
+# empty environment and under LC_ALL=C, and no reachable locale on that host
+# produced an ASCII stdout — including with PYTHONCOERCECLOCALE=0. The line
+# stays because it costs nothing and makes the check independent of Python's
+# locale heuristics rather than dependent on them holding.
+PYTHONIOENCODING=utf-8
+export PYTHONIOENCODING
+
+MODE="check"
+if [ "${1:-}" = "--report" ]; then
+    MODE="report"
+elif [ -n "${1:-}" ]; then
+    echo "usage: $(basename "$0") [--report]" >&2
+    exit 2
+fi
+
+# Patterns that are known-and-accepted unavailable. Newline separated and
+# passed through the environment, so no amount of globbing or whitespace in a
+# pattern can be re-split by the shell. fnmatch syntax: automation.tado_*
+HA_ALLOWLIST=$(cat <<'ALLOWEOF'
+{% for pattern in ha_entity_health_allowlist | default([]) %}
+{{ pattern }}
+{% endfor %}
+ALLOWEOF
+)
+export HA_ALLOWLIST
+
+TOKEN=$(sed -n 's/^ha_monitor_token:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}.*/\1/p' \
+        "$SECRETS" 2>/dev/null | head -1)
+if [ -z "$TOKEN" ]; then
+    echo "❌ ha_monitor_token not found in $SECRETS — this check cannot run"
+    exit 1
+fi
+
+STATES_FILE=$(mktemp) || exit 1
+trap 'rm -f "$STATES_FILE"' EXIT INT TERM
+
+# A check that cannot see is not a check that is happy: an empty body or a
+# non-200 is a failure to fetch, never an absence of broken entities.
+API_OK=0
+http_code="000"
+attempt=1
+while [ "$attempt" -le "$FETCH_ATTEMPTS" ]; do
+    http_code=$(curl -s -o "$STATES_FILE" -w '%{http_code}' --max-time 20 \
+                -H "Authorization: Bearer $TOKEN" \
+                "$HA_URL/api/states" 2>/dev/null) || http_code="000"
+    if [ "$http_code" = "200" ] && [ -s "$STATES_FILE" ]; then
+        API_OK=1
+        break
+    fi
+    attempt=$((attempt + 1))
+    [ "$attempt" -le "$FETCH_ATTEMPTS" ] && sleep "$FETCH_INTERVAL"
+done
+
+python3 - "$STATE_FILE" "$HA_GRACE" "$MODE" "$API_OK" "$http_code" "$STATES_FILE" <<'PYEOF'
+import fnmatch
+import json
+import os
+import sys
+import tempfile
+import time
+
+state_path, grace_raw, mode, api_raw, http_code, states_path = sys.argv[1:7]
+grace = int(grace_raw)
+api_ok = api_raw == "1"
+report = mode == "report"
+
+BAD_STATES = ("unavailable", "unknown")
+now = int(time.time())
+
+allow = [p.strip() for p in os.environ.get("HA_ALLOWLIST", "").splitlines() if p.strip()]
+
+
+def allowed(entity_id):
+    return any(fnmatch.fnmatchcase(entity_id, pattern) for pattern in allow)
+
+
+# ------------------------------------------------------------------
+# Load prior state.
+#
+# A MISSING state file is first run: every currently-bad entity simply starts
+# its clock now. A PRESENT but unreadable one is different — ages are lost, so
+# a fault that had already outlived the grace window silently gets a fresh one.
+# That is a real regression in coverage, so it is reported rather than
+# swallowed. Distinguishing the two is the whole point of state_broken.
+# ------------------------------------------------------------------
+state_broken = False
+state = {}
+if os.path.exists(state_path):
+    try:
+        with open(state_path) as fh:
+            loaded = json.load(fh)
+        if not isinstance(loaded, dict):
+            raise ValueError("state file is not a JSON object")
+        state = loaded
+    except (ValueError, OSError):
+        state_broken = True
+
+entity_since = state.get("entities")
+if not isinstance(entity_since, dict):
+    entity_since = {}
+entity_since = {k: v for k, v in entity_since.items() if isinstance(v, int)}
+
+api_down_since = state.get("api_down_since")
+if not isinstance(api_down_since, int):
+    api_down_since = None
+
+
+def write_state(entities, api_since):
+    payload = {"version": 1, "entities": entities, "api_down_since": api_since}
+    directory = os.path.dirname(state_path) or "."
+    try:
+        os.makedirs(directory, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=directory, prefix=".ha_entities.", suffix=".tmp")
+        with os.fdopen(fd, "w") as fh:
+            json.dump(payload, fh)
+        os.rename(tmp, state_path)
+    except OSError as exc:
+        print("⚠️  could not persist state to %s: %s" % (state_path, exc))
+
+
+def finish(rc):
+    # Report mode never pages: it exists to be run by hand while tuning the
+    # allowlist, and a tuning run that alerts is a tuning run nobody does.
+    sys.exit(0 if report else min(rc, 125))
+
+
+# ------------------------------------------------------------------
+# API unreachable — hold the entity clocks, do not reset them.
+#
+# Clearing them here would hand every already-broken entity a fresh grace
+# window every time HA restarted, which is an unbounded silence.
+# ------------------------------------------------------------------
+if not api_ok:
+    since = api_down_since if api_down_since is not None else now
+    age = now - since
+    write_state(entity_since, since)
+    if age >= grace:
+        print("❌ Home Assistant API unreachable for %d min (HTTP %s) — "
+              "entity health is UNKNOWN, not healthy" % (age // 60, http_code))
+        finish(1)
+    print("⚠️  Home Assistant API unreachable (HTTP %s) for %d min — inside the "
+          "%d min grace window" % (http_code, age // 60, grace // 60))
+    finish(0)
+
+try:
+    with open(states_path) as fh:
+        entities = json.load(fh)
+except (ValueError, OSError) as exc:
+    print("❌ HA /api/states returned unparseable JSON: %s" % exc)
+    write_state(entity_since, None)
+    finish(1)
+
+if not isinstance(entities, list):
+    detail = entities.get("message") if isinstance(entities, dict) else None
+    print("❌ HA /api/states did not return an entity list%s"
+          % (" — %s" % detail if detail else ""))
+    write_state(entity_since, None)
+    finish(1)
+
+if not entities:
+    print("❌ HA /api/states returned zero entities — that is never correct")
+    write_state(entity_since, None)
+    finish(1)
+
+bad_now = {}
+for entity in entities:
+    if not isinstance(entity, dict):
+        continue
+    entity_id = entity.get("entity_id")
+    entity_state = entity.get("state")
+    if isinstance(entity_id, str) and entity_state in BAD_STATES:
+        bad_now[entity_id] = entity_state
+
+new_since = {}
+alerting = []
+waiting = []
+excused = []
+for entity_id in sorted(bad_now):
+    first_seen = entity_since.get(entity_id, now)
+    new_since[entity_id] = first_seen
+    row = (entity_id, bad_now[entity_id], now - first_seen)
+    if allowed(entity_id):
+        excused.append(row)
+    elif row[2] >= grace:
+        alerting.append(row)
+    else:
+        waiting.append(row)
+
+recovered = sorted(set(entity_since) - set(bad_now))
+write_state(new_since, None)
+
+print("=== Home Assistant entity health ===")
+print("%d entities; %d unavailable/unknown (%d allowlisted, %d inside grace)"
+      % (len(entities), len(bad_now), len(excused), len(waiting)))
+
+for entity_id in recovered:
+    print("✅ recovered: %s" % entity_id)
+
+if report:
+    for label, rows in (("ALERTING", alerting), ("in grace", waiting), ("allowlisted", excused)):
+        for entity_id, entity_state, age in rows:
+            print("  [%-11s] %s = %s (%d min)" % (label, entity_id, entity_state, age // 60))
+    finish(0)
+
+for entity_id, entity_state, age in waiting:
+    print("⚠️  %s = %s for %d min (grace %d min)"
+          % (entity_id, entity_state, age // 60, grace // 60))
+
+rc = 0
+if state_broken:
+    print("❌ state file %s was unreadable and has been rebuilt — entity ages "
+          "were lost, so an old fault may be re-timed from now" % state_path)
+    rc += 1
+
+for entity_id, entity_state, age in alerting:
+    print("❌ %s = %s for %d min" % (entity_id, entity_state, age // 60))
+rc += len(alerting)
+
+if rc == 0:
+    print("✅ nothing unavailable beyond the %d min grace window" % (grace // 60))
+
+finish(rc)
+PYEOF

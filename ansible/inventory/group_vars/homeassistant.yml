@@ -114,3 +114,52 @@ homeassistant_lights:
 # untouched — see the template for why ipv4.method=disabled is load-bearing.
 enable_thread_wifi_link: true
 thread_wifi_link_ssid: "{{ vault_thread_wifi_link_ssid }}"
+
+# ============================================================
+# Entity health — the check the five-day outage did not have
+# ============================================================
+# Every check on this fleet watches the machinery: host up, container running,
+# service active, cron fresh. All of it was green for the five days above,
+# because a matter-server with zero live subscriptions is byte-for-byte as
+# chatty as a healthy one. Nothing watched whether the DEVICES still answered.
+# This does — it asks HA what entities exist and judges all of them.
+#
+# See docs/TODO.md item 15.
+#
+# 🔴 Ships DISABLED on purpose, and the toggle is the last step of the rollout,
+# not the first. With an empty allowlist the first cron run pages #home-alerts
+# with every entity that was already unavailable — the five stale Tado
+# automations of item 12, and whatever else the fleet has quietly accumulated.
+# That alert is unactionable at 07:00, it lands in the watched channel, and
+# agent-lxc's Tier 2 would spend real money investigating it. Seed the
+# allowlist from a `--report` run first; the deploy plan in TODO item 15 flips
+# this to true as step 4.
+enable_ha_entity_health_check: false
+
+# How long an entity may sit unavailable/unknown before it pages.
+#
+# 900s is chosen against Home Assistant restarts, not against the fault: a
+# restart flips every entity through `unavailable` at once, and a check that
+# pages on every deploy gets muted — which would reproduce the exact silence
+# this check exists to break. The door sensors were gone for five days, so
+# fifteen minutes of deliberate patience costs nothing against the failure
+# actually being defended against.
+ha_entity_health_grace_seconds: 900
+
+# Deliberately NOT under logs_dir: that is `.logs` (cron output) while the
+# monitoring wrapper's state lives in `.log`, one character apart, and
+# logs_dir never reaches cron's environment anyway. Named in full so neither
+# ambiguity can apply.
+ha_entity_health_state_file: "/home/{{ ansible_user }}/.log/ha_entity_health.state.json"
+
+# Entities that are known to be unavailable and accepted as such. fnmatch
+# patterns. Explicit and versioned on purpose — there is no auto-baseline,
+# because silently accepting whatever happened to be broken on deploy day is
+# how a check ships that can never fire.
+#
+# ⚠️ Seeded EMPTY. The five stale Tado automations in TODO item 12 are the
+# known candidates, but their entity_ids have not been read off the host yet —
+# guessing them would produce patterns that match nothing and look fine.
+# Populate from a real `check_ha_entities.sh --report` run before enabling the
+# cron; the deploy plan in docs/TODO.md item 15 does this as its first step.
+ha_entity_health_allowlist: []

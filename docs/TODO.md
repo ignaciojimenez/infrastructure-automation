@@ -56,22 +56,30 @@ here is something to read past, every time, forever. The write-up goes to
 (numbers never move), but the order to work them is this, and the dashboard
 renders it:
 
-> **№1** 1c → **№2** 1d → **№3** 2 → **№4** 4 (plex) → **№5** 15 → **№6** 9
-> → **№7** 3a/3b → **№8** W1 *(gate passed; needs `agent_access.yml --limit
-> vinylstreamer` first)* → **№9** 19 → **№10** 18 → **№11** 12 → **№12** 5 →
-> **№13** 10 → **№14** 11 → **№15** 6 → **№16** 7 → **№17–20** 8/13/14/16
+> **№1** 15 *(deploy — built, waiting on a laptop)* → **№2** 1c → **№3** 1d →
+> **№4** 2 → **№5** 4 (plex) → **№6** 17 → **№7** 9 → **№8** 3a/3b →
+> **№9** W1 *(gate passed; needs `agent_access.yml --limit vinylstreamer`
+> first)* → **№10** 19 → **№11** 18 → **№12** 12 → **№13** 5 → **№14** 10 →
+> **№15** 11 → **№16** 6 → **№17** 7 → **№18–21** 8/13/14/16
 > *(decision-gated — 16 needs a purchase call, the rest need him at the
 > cabinet; not ranked)*
 
-**19 and 18 enter at №9 and №10** because both are small and both are about
+**15 is now №1** and its nature has changed: it is no longer "build a check",
+it is "run the six-step deploy in item 15". The code is written and 35 unit
+assertions are green, so what remains is the part only Ignacio can do — Touch
+ID for the deploy, and a forced failure watched in `#home-alerts`. It was
+already the only item that had cost something; it is now also the cheapest.
+
+**17 enters at №6.** A test suite that has been silently red for nine days is
+the same class of fault as 15 itself, and it undercuts confidence in every
+change made since — but nothing is on fire, so it sits behind the items that
+are.
+
+**19 and 18 enter at №10 and №11** because both are small and both are about
 *seeing* — 19 restores a read path the agent tier was supposed to have, and 18
 adds the only tripwire for a fault that was invisible until 2026-08-24. The
 journal fix landed the same week and paid for itself within hours; these are
 the same trade.
-
-**15 enters at №5** because it is the only item here that has already cost
-something: two sensors offline for five days with every check green. It is also
-the cheapest insurance against 16 staying unfixed.
 
 📌 **Every item carries a paste-ready prompt** — including blocked ones, which
 carry *fill-in* prompts that take the physical measurement or decision as
@@ -633,22 +641,102 @@ read-only, token stays on the host) and `ha_monitor_token` in
 📌 Concrete instance of item **10** (coverage audit), found the expensive way.
 Worth doing on its own rather than waiting for the audit.
 
-*State:* diagnosed 2026-08-22/23, nothing built. *Effort:* medium.
-*Needs:* a laptop (new check script + Ansible deploy).
+*State:* **BUILT AND TESTED ON THE LAPTOP 2026-08-23, NOT DEPLOYED.** Branch
+`feat/ha-entity-health`. *Effort remaining:* one deploy session (~30 min).
+*Needs:* Ignacio at the laptop — every remaining step needs Touch ID.
+
+**What exists:**
+- `scripts/services/homeassistant/check_ha_entities.sh.j2` — asks HA for all
+  entities, ages each bad one in a state file, pages past a grace window.
+- `tests/unit/ha_entity_health_test.sh` — **35 assertions, all green.**
+- Ansible wiring: templated deploy (ungated, so `--report` always works) plus a
+  `*/10` cron gated on `enable_ha_entity_health_check`, **shipped `false`**.
+
+**What was actually verified** (laptop only — a stub HA on :8123, not the real
+one): the five-day outage replayed and paged with exit 2 naming both sensors;
+200 entities flipping at once (an HA restart) stayed silent; the same 200 paged
+once they outlived the grace window; allowlisted entities were excused while a
+real fault beside them still paged; recovery cleared and reported; unparseable
+JSON, an empty entity list and an auth-error body were each treated as a
+failure rather than as health; a momentary API outage stayed quiet and a
+one-hour one paged. Rendered through **real Ansible Jinja** and syntax-checked
+under **dash on dockassist**, not just macOS `sh`.
+
+⚠️ **What is NOT verified, and only the deploy can settle it:** it has never
+seen the real `/api/states`. The allowlist is **empty**, and nobody yet knows
+how many entities on this HA sit unavailable as their normal condition — that
+number is what step 2 below exists to discover. No Slack alert has ever been
+produced by this check.
 
 ```
-Build the check that would have caught the five-day door-sensor outage. Read
-docs/TODO.md item 15 and archive/DONE.md 2026-08-23 — the facts are there, do
-not re-derive them. Write a monitoring check that queries HA for entities in
-unavailable/unknown and alerts via slack_alert when one exceeds a grace
-window; use enhanced_monitoring_wrapper with an explicit --monitoring-name.
-Verify by FORCING the failure, not by watching it stay quiet: stop
-matter-server, confirm the check fires for both door sensors, restart it,
-confirm the recovery clears. Then restart Home Assistant itself and confirm
-the grace window keeps it silent — a check that pages on every deploy will be
-muted, and a muted check is the bug in item 15 all over again.
+Deploy and switch on the HA entity-health check. It is built and unit-tested
+on branch feat/ha-entity-health; read docs/TODO.md item 15 first. Do NOT skip
+to step 4 — shipping it enabled with an empty allowlist pages #home-alerts
+with every already-unavailable entity and Tier 2 will bill you for it.
+
+1. ansible-playbook ansible/playbooks/services.yml --limit dockassist \
+     --tags homeassistant,monitoring --check --diff
+   The diff must show the new script and NO cron (the toggle is false), and
+   must not touch the HA container — an untagged run upgrades the image.
+   Then apply the same command without --check.
+2. ssh dockassist '~/.scripts/check_ha_entities.sh --report'
+   This is the measurement, not a formality: it prints every entity currently
+   unavailable/unknown. Decide one by one which are permanently-dead
+   (the five stale Tado automations of item 12) versus really broken.
+3. Put the dead ones in ha_entity_health_allowlist in
+   group_vars/homeassistant.yml as fnmatch patterns, re-run --report, and
+   confirm the ALERTING list is empty. If something real is in there, that is
+   a find — fix it or record it before muting it.
+4. Only now set enable_ha_entity_health_check: true and re-deploy.
+5. FORCE THE FAILURE — a quiet check is not a working check:
+   ssh dockassist 'docker stop matter-server'
+   then run the check by hand repeatedly until the grace window passes, and
+   watch a real alert reach #home-alerts naming both door sensors.
+   ssh dockassist 'docker start matter-server' and confirm the recovery.
+6. Then restart Home Assistant itself and confirm the grace window keeps it
+   silent. That is the deploy-noise test, and it is the one that decides
+   whether this check survives or gets muted.
 ```
 
+
+**17. Four of the eleven unit tests have been failing since 2026-08-14, and nothing said so**
+Found incidentally on 2026-08-23 while running the suite before adding to it.
+`anomaly_dedup_test.sh`, `ssh_backoff_test.sh`, `sweep_absence_test.sh` and
+`sweep_healthcheck_test.sh` all abort at the render step with
+`render_j2: no value supplied for {{ agent_opnsense_api_ip }}`.
+
+**Cause is confirmed, not guessed.** Commit `6cfa1f0` ("read opnsense over its
+API instead of a shell it cannot keep") added `agent_opnsense_api_ip` to
+`scripts/services/agent/fleet_health_check.sh.j2`; the four tests that render
+that template were never given the new variable. Verified by A/B-ing the
+current `render_j2.py` against `git show HEAD:` — **both fail identically**, so
+this is not fallout from the renderer change made the same day.
+
+🐛 **This is item 15's own failure mode, one level up.** The suite that exists
+to catch regressions has been reporting nothing for nine days, and nothing
+watches the watcher — there is no CI, and `tests/run_tests.sh` does not cover
+`tests/unit/`. Fixing the four invocations is minutes; the interesting question
+is what makes anyone run them again.
+
+⚠️ **Do not just add the variable and move on.** These tests cover the agent
+sweep's SSH back-off and healthcheck freshness. They have not run since the
+opnsense-API change *landed in the thing they test*, so a green after the fix
+is the first real signal about that change, not a formality — read what they
+say before trusting them.
+
+*State:* diagnosed 2026-08-23, not fixed. *Effort:* small (the fix), small–medium
+(making it stick). *Needs:* a laptop.
+
+```
+Fix the four rotted unit tests. Read docs/TODO.md item 17 — the cause is
+confirmed there, do not re-derive it. Supply agent_opnsense_api_ip to the
+render_j2 invocations in anomaly_dedup_test.sh, ssh_backoff_test.sh,
+sweep_absence_test.sh and sweep_healthcheck_test.sh, using the same value
+group_vars/agent.yml uses. Then READ the results rather than accepting green:
+these cover the agent sweep's SSH back-off and healthcheck freshness and have
+not run since 6cfa1f0 changed how opnsense is read. Finish by making the suite
+self-reporting — tests/run_tests.sh should run tests/unit/ too, so the next
+nine-day silence is not possible.
 
 **18. dockassist's NIC stalls under the speedtest, nine times so far**
 `bcmgenet` logs a transmit-queue hang whenever the link is driven flat out:
