@@ -84,6 +84,7 @@ PY
 
 GRACE=900
 ALLOW=""
+STATELESS=""
 RC=0
 OUT=""
 
@@ -127,7 +128,7 @@ PY
 
 # run <state_file> <mode> <api_ok> <http> <states_file>
 run() {
-    OUT=$(HA_ALLOWLIST="$ALLOW" python3 "$WORK/check.py" \
+    OUT=$(HA_ALLOWLIST="$ALLOW" HA_STATELESS_DOMAINS="$STATELESS" python3 "$WORK/check.py" \
           "$1" "$GRACE" "$2" "$3" "$4" "$5" 2>&1)
     RC=$?
 }
@@ -247,6 +248,43 @@ ALLOW="automation.nothing_matches_*"
 run "$WORK/st4.json" check 1 200 "$WORK/s4.json"
 expect_rc 3 "a non-matching allowlist excuses nothing"
 ALLOW=""
+
+printf '\n   ── stateless domains\n'
+
+# ------------------------------------------------------------------
+# 4b. A button has no state until pressed, so `unknown` is its resting
+#     condition, not a fault. Measured on dockassist 2026-08-25: 27 of 296
+#     entities were exactly this. Excluding them by DOMAIN — never by a list of
+#     ids — is what stops the 28th button from paging the day it is added.
+#
+#     Both directions are asserted. Excusing `unknown` is only safe if
+#     `unavailable` on the very same entity still pages, because that means the
+#     device behind the button is genuinely gone.
+# ------------------------------------------------------------------
+states "$WORK/s4b.json" \
+    button.shelly_restart=unknown \
+    notify.mobile_app=unknown \
+    sensor.real_thing=unknown
+state "$WORK/st4b.json" \
+    button.shelly_restart:432000 \
+    notify.mobile_app:432000 \
+    sensor.real_thing:432000
+STATELESS="button
+notify"
+run "$WORK/st4b.json" check 1 200 "$WORK/s4b.json"
+expect_rc 1 "a stateless-domain 'unknown' is not a fault; a real sensor's still is"
+expect_out "sensor.real_thing" "the non-stateless entity still pages"
+expect_no_out "❌ button.shelly_restart" "the button does not page for being unknown"
+expect_no_out "❌ notify.mobile_app" "nor does the notify service"
+
+# ...but the same button going UNAVAILABLE means its device is gone, and that
+# must still page. Without this, the domain rule is a blanket mute.
+states "$WORK/s4c.json" button.shelly_restart=unavailable
+state "$WORK/st4c.json" button.shelly_restart:432000
+run "$WORK/st4c.json" check 1 200 "$WORK/s4c.json"
+expect_rc 1 "the SAME button going unavailable still pages"
+expect_out "button.shelly_restart" "and names it"
+STATELESS=""
 
 printf '\n   ── recovery\n'
 

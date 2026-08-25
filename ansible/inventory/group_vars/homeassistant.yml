@@ -134,7 +134,7 @@ thread_wifi_link_ssid: "{{ vault_thread_wifi_link_ssid }}"
 # agent-lxc's Tier 2 would spend real money investigating it. Seed the
 # allowlist from a `--report` run first; the deploy plan in TODO item 15 flips
 # this to true as step 4.
-enable_ha_entity_health_check: false
+enable_ha_entity_health_check: true
 
 # How long an entity may sit unavailable/unknown before it pages.
 #
@@ -157,9 +157,70 @@ ha_entity_health_state_file: "/home/{{ ansible_user }}/.log/ha_entity_health.sta
 # because silently accepting whatever happened to be broken on deploy day is
 # how a check ships that can never fire.
 #
-# ⚠️ Seeded EMPTY. The five stale Tado automations in TODO item 12 are the
-# known candidates, but their entity_ids have not been read off the host yet —
-# guessing them would produce patterns that match nothing and look fine.
-# Populate from a real `check_ha_entities.sh --report` run before enabling the
-# cron; the deploy plan in docs/TODO.md item 15 does this as its first step.
-ha_entity_health_allowlist: []
+# Seeded 2026-08-25 from a real `--report` run on dockassist (296 entities, 90
+# in unavailable/unknown), NOT from guesswork. Every pattern below was matched
+# against an entity that actually exists.
+ha_entity_health_allowlist:
+  # The phone's Companion App sensors. These go unavailable whenever a
+  # full-tunnel VPN is up or the app is asleep — a known, accepted edge case,
+  # not a fault. ⚠️ The cost is real and deliberate: this check can no longer
+  # tell you the Companion integration has BROKEN, because broken and
+  # "he's on the VPN" look identical from here. Presence itself is still
+  # covered by check_tado_health.sh, which watches the trackers by name.
+  - "sensor.nexuschoky_*"
+  - "binary_sensor.nexuschoky_*"
+  - "sensor.iphone_de_candela_*"
+  # Shairport now-playing metadata, fed over MQTT: `unknown` is its resting
+  # state when nothing is streaming. Verified 2026-08-25 rather than assumed —
+  # hifipi's shairport-sync 5.1 build does include `mqtt`, so these are idle,
+  # not a dead integration.
+  - "sensor.shairport_sync_hifipi_*"
+  - "binary_sensor.shairport_sync_hifipi_*"
+  # HA's built-in backup integration, never configured — our backups are
+  # do_backup + heartbeat_backup.sh, not this.
+  - "sensor.backup_*"
+  # A placeholder person with no device tracker, by construction.
+  - "person.ai_agent"
+  # 🔴 HOLDING ENTRIES, NOT A VERDICT. Eleven stale automations left in HA's
+  # .storage — TODO item 12 says delete them in the UI (it estimated five; the
+  # real count is eleven). Listed by exact name, never as `automation.*`, so a
+  # genuine automation failure still pages. Once deleted they disappear from
+  # /api/states and these entries go inert; remove them then.
+  - "automation.scheduled_mon_tue_tado_home"
+  - "automation.tado_away_schedule"
+  - "automation.tado_health_check"
+  - "automation.tado_integration_down_alert"
+  - "automation.tado_integration_recovery_alert"
+  - "automation.wyze_bulb_offline_alert"
+  - "automation.wyze_bulb_online_recovery"
+  - "automation.spotify_play"
+  - "automation.spotify_stop"
+  - "automation.sun_elevation_lights_on_simple"
+  - "automation.sunset_lights_on_sunset"
+  # CONDITIONALLY AVAILABLE, which is a third category — neither stateless nor
+  # dead. A Shelly Plus Smoke exposes its mute button only while the alarm is
+  # actually sounding; with no alarm there is nothing to mute, so HA renders it
+  # `unavailable`. Found by this check's first real run, 2026-08-25.
+  #
+  # ⚠️ Safe ONLY because it is this one entity by name. The detector's real
+  # health rides on its siblings — binary_sensor...smoke (off), sensor...battery
+  # (96%) — and neither is allowlisted, so a genuinely offline smoke alarm still
+  # pages. Never widen this to shellyplussmoke_*.
+  - "button.shellyplussmoke_3076f523fd68_mute_alarm"
+  # Same class, same holding status.
+  - "schedule.mon_thu_away_schedule"
+  - "binary_sensor.wyze_online"
+  - "media_player.bathroom_2"
+  - "remote.bathroom_2"
+
+# Domains with no state until something invokes them — see the script's own
+# note. `unknown` here is normal; `unavailable` still pages.
+ha_entity_health_stateless_domains:
+  - button
+  - notify
+  - conversation
+  - infrared
+  - scene
+  - script
+  - tts
+  - stt
