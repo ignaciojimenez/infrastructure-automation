@@ -56,17 +56,19 @@ here is something to read past, every time, forever. The write-up goes to
 (numbers never move), but the order to work them is this, and the dashboard
 renders it:
 
-> **№1** 20 → **№2** 1c → **№3** 1d → **№4** 2 → **№5** 4 (plex) →
-> **№6** 17 → **№7** 9 → **№8** 3a/3b → **№9** W1 *(gate passed; needs
-> `agent_access.yml --limit vinylstreamer` first)* → **№10** 19 → **№11** 18 →
-> **№12** 12 → **№13** 5 → **№14** 10 → **№15** 11 → **№16** 6 → **№17** 7 →
+> **№1** 1c → **№2** 1d → **№3** 2 → **№4** 4 (plex) → **№5** 17 →
+> **№6** 9 → **№7** 3a/3b → **№8** W1 *(gate passed; needs `agent_access.yml
+> --limit vinylstreamer` first)* → **№9** 19 → **№10** 18 → **№11** 12 →
+> **№12** 20 → **№13** 5 → **№14** 10 → **№15** 11 → **№16** 6 → **№17** 7 →
 > **№18–21** 8/13/14/16
 > *(decision-gated — 16 needs a purchase call, the rest need him at the
 > cabinet; not ranked)*
 
-**20 enters at №1** because it is the widest of these: every monitored
-container on dockassist alerts on death and then fails to restart, and that has
-been true for as long as the cron has existed. It is also small.
+**20 sits at №12, not №1.** It was briefly ranked first on the belief that
+container auto-recovery was dead fleet-wide. It is not: `unless-stopped` covers
+every crash and reboot, and the only gap is a container a human deliberately
+stopped. The dead code is worth removing; it is not worth pre-empting anything.
+
 
 
 **19 and 18 enter at №10 and №11** because both are small and both are about
@@ -697,45 +699,56 @@ workarounds: the queue self-recovers, so there is no established harm to fix
 and no way to prove a workaround helped.
 ```
 
-**20. `check_container.sh`'s self-healing has never run under cron**
+### 🟢 P3 — improvements, no urgency
+
+**20. `check_container.sh`'s self-healing has never worked, and mostly does not matter**
 Found 2026-08-25 by stopping `matter-server` as the acceptance test for item 15.
-The check detected it correctly and alerted — and then its remediation failed:
+The check detected it and alerted correctly; its remediation then failed:
 
 ```
 /home/choco/.scripts/check_container.sh: line 42: stop_run_ha: No such file or directory
 ```
 
-Line 42 is `source stop_run_ha` — a **bare filename**, so `source` resolves it
-against `$PATH`. Cron's PATH is
-`/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`, which does not
-include `/home/choco/.scripts`. The file exists; `source` simply cannot find it.
+Line 42 is `source stop_run_ha` — a bare filename, so `source` resolves it
+against `$PATH`. **`~/.scripts` is on no PATH at all** — not cron's, and not an
+interactive login shell's either (both checked 2026-08-26). The file exists and
+is executable; nothing can find it. `check_container.sh` has **one commit in its
+entire history**, the initial migration, and the line was in it from the start,
+so this has never worked and was not broken by any recent change.
 
-⚠️ **Scope is every monitored container on the host** — `home-assistant`,
-`matter-server`, `mosquitto`, `cloudflared`. Each one alerts correctly on death
-and then silently fails to restart. The fleet has been relying on an auto-recovery
-that does nothing, and nothing said so, because the alert that fires is about the
-container rather than about the remediation.
+✅ **Severity is low, and an earlier version of this entry overstated it.**
+All four containers run `restart_policy: unless-stopped`, which restarts them on
+any crash, non-zero exit or host reboot regardless of this script —
+**cloudflared has a RestartCount of 28**, so Docker's recovery is demonstrably
+doing the work. The only case the dead `source` leaves uncovered is a container
+a human explicitly stopped, and `unless-stopped` deliberately does not restart
+those. Auto-restarting something someone deliberately stopped would arguably be
+wrong anyway. The alert still fires, which is the part that matters.
 
-📌 Same failure class as item 15 itself: a mechanism that is present, looks
-plausible, and contributes nothing. It surfaced only because a forced failure was
-run against a real host — no amount of reading the script would have shown it,
-since the path resolves fine from an interactive shell.
+📌 **Worth fixing as correctness, not as risk** — a remediation that cannot run
+should either work or not be there, because the next reader will assume the host
+self-heals. 🐛 Also decide whether `source` is right at all: `stop_run_ha` is
+Home-Assistant-specific and `check_container.sh` is invoked for four different
+containers, so sourcing it for `mosquitto` would be wrong even if the path resolved.
 
-*State:* diagnosed 2026-08-25, not fixed. *Effort:* small. *Needs:* a laptop.
+*State:* diagnosed 2026-08-25/26, not fixed. *Effort:* small. *Needs:* a laptop.
 
 ```
-Fix check_container.sh's self-healing. Read docs/TODO.md item 20 — the cause is
-confirmed, do not re-derive it. Line 42 is `source stop_run_ha`, a bare filename
-resolved against cron's PATH, which does not contain ~/.scripts. Use an absolute
-path built from the script's own location. Then FORCE IT: stop a non-critical
-container (mosquitto), watch the check restart it, and confirm the recovery
-notification — a fix verified only by reading the diff has not been verified,
-which is exactly how this survived. Check whether `source` is even right here:
-stop_run_ha is Home-Assistant-specific and check_container.sh is called for four
-different containers.
+Fix or remove check_container.sh's dead self-healing. Read docs/TODO.md item 20
+— the cause is confirmed, do not re-derive it. Line 42 is `source stop_run_ha`,
+a bare filename, and ~/.scripts is on no PATH anywhere, so it has never run.
+Severity is LOW: restart_policy unless-stopped already covers crashes and
+reboots (cloudflared has restarted 28 times that way), so do not treat this as
+an outage risk.
+
+Decide first whether the remediation should exist at all — stop_run_ha is
+Home-Assistant-specific and this script runs for four different containers, so
+sourcing it for mosquitto would be wrong even with a correct path. If it stays,
+use an absolute path derived from the script's own location, and FORCE IT: stop
+mosquitto, watch the check restart it, confirm the recovery notification.
 ```
 
-### 🟢 P3 — improvements, no urgency
+
 
 **5. Tokens out of cron command lines.** healthchecks.io and Slack tokens sit in
 literal cron args, visible to `crontab -l` and `ps` — and to `read_agent` via

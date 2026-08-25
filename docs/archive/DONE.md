@@ -63,9 +63,15 @@ health rides on `binary_sensor…smoke` and `sensor…battery`, neither allowlis
 stopped: ten entities dropped, detected in 45 s, alert on `#home-alerts` at exit
 code 10 naming both door sensors; restarted: recovery notification, all clear.
 That run also exposed [`TODO.md`](../TODO.md) item **20** — `check_container.sh`
-has never been able to `source stop_run_ha` under cron, so container
-auto-recovery across the host has always been a no-op. Reading the script would
-never have shown it; the path resolves fine from an interactive shell.
+has never been able to `source stop_run_ha`, because `~/.scripts` is on no PATH
+at all (cron's *or* an interactive shell's). ⚠️ **The first version of this
+entry called that "container auto-recovery is a no-op across the host", which
+was wrong and is corrected here:** every container runs `restart_policy:
+unless-stopped`, which covers crashes and reboots on its own — cloudflared has
+restarted 28 times that way. The dead `source` only leaves uncovered a container
+a human explicitly stopped, which `unless-stopped` declines to restart by
+design. Lesson worth keeping: **a broken remediation is not automatically an
+outage risk — check what else already covers the failure before ranking it.**
 
 ---
 
