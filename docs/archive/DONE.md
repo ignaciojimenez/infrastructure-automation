@@ -59,6 +59,15 @@ read `unavailable` — *conditionally available*, since that button exists only
 while the alarm sounds. Allowlisted by that one exact name; the detector's real
 health rides on `binary_sensor…smoke` and `sensor…battery`, neither allowlisted.
 
+🐛 **The allowlist was seeded from ONE sample, and that was not enough.** The
+`--report` run happened while the TV was on. It went off at 23:40 the same night
+and the check failed **54 consecutive runs** before anyone looked — a device a
+human switches off is `unavailable` for exactly the reason it should be, every
+night. Fixed by allowlisting `media_player.cobi_tv*` / `remote.cobi_tv*`, but
+the transferable rule is: **a point-in-time baseline only sees what is asleep
+right now.** Before trusting a fresh baseline of "normal", ask which devices are
+off at this hour and would therefore not appear in it.
+
 📌 **Acceptance was a forced failure, not a quiet check.** `matter-server`
 stopped: ten entities dropped, detected in 45 s, alert on `#home-alerts` at exit
 code 10 naming both door sensors; restarted: recovery notification, all clear.

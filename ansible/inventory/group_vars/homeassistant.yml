@@ -207,6 +207,18 @@ ha_entity_health_allowlist:
   # (96%) — and neither is allowlisted, so a genuinely offline smoke alarm still
   # pages. Never widen this to shellyplussmoke_*.
   - "button.shellyplussmoke_3076f523fd68_mute_alarm"
+  # 🔴 DIURNAL DEVICES — the hole the first seeding missed, and the reason this
+  # list cannot be built from one sample. The allowlist was seeded 2026-08-25
+  # from a single `--report` run taken while the TV happened to be ON. It went
+  # off at 23:40 that night and the check then failed 54 consecutive runs
+  # before anyone looked. A device a human switches off is `unavailable` for
+  # exactly the reason it should be, every night, forever.
+  #
+  # 📌 Rule for anything added here later: a point-in-time baseline only sees
+  # what is asleep *right now*. Before trusting a fresh `--report`, ask which
+  # devices are off at this hour and would not appear.
+  - "media_player.cobi_tv*"
+  - "remote.cobi_tv*"
   # Same class, same holding status.
   - "schedule.mon_thu_away_schedule"
   - "binary_sensor.wyze_online"
