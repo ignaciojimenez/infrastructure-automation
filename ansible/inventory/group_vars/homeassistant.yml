@@ -184,8 +184,28 @@ ha_entity_health_allowlist:
   # ⚠️ Presence is deliberately NOT relying on this check — device_tracker for
   # both phones is watched by name in check_tado_health.sh, which is why muting
   # the whole device here does not create a presence blind spot.
-  - "*nexuschoky*"
-  - "*iphone_de_candela*"
+  # The Companion App creates entities in exactly four domains. All four were
+  # enumerated on 2026-08-26 and each got a deliberate decision, so this is not
+  # the domain-at-a-time patching it resembles:
+  #
+  #   sensor / binary_sensor  -> SUPPRESS. 26 of 56 were dark at 21:40 on a
+  #                              normal evening. Battery, storage, steps, SSID,
+  #                              geocoded location — telemetry, no function.
+  #   device_tracker          -> WATCH. Measured: these held `home`/`not_home`
+  #                              while half their siblings went unavailable, so
+  #                              they cost nothing in noise and a tracker that
+  #                              DOES go unavailable is a real fault.
+  #   notify                  -> WATCH. If these go unavailable, HA's push
+  #                              notifications stop silently. Stateless, so the
+  #                              domain rule already excuses their permanent
+  #                              `unknown`; only `unavailable` can page.
+  #
+  # ⚠️ Do not collapse these back to `*nexuschoky*` — that was tried and it
+  # swallowed both trackers and both notify services.
+  - "sensor.nexuschoky_*"
+  - "binary_sensor.nexuschoky_*"
+  - "sensor.iphone_de_candela_*"
+  - "binary_sensor.iphone_de_candela_*"
   # Shairport now-playing metadata, fed over MQTT: `unknown` is its resting
   # state when nothing is streaming. Verified 2026-08-25 rather than assumed —
   # hifipi's shairport-sync 5.1 build does include `mqtt`, so these are idle,
