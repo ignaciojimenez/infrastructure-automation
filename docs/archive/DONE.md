@@ -46,7 +46,8 @@ device is gone; proven in both directions by unit test.
 win:** ~20 of them go `unavailable` on any full-tunnel VPN, an already-accepted
 edge case. The consequence is that this check can no longer tell a broken
 Companion integration from Ignacio being on the VPN. Presence itself stays
-covered by `check_tado_health.sh`, which watches the trackers by name.
+covered by `check_presence_health.sh` (renamed from `check_tado_health.sh`
+2026-08-26), which watches the trackers by name.
 
 **Refused: seeding the allowlist from whatever was broken on deploy day.** An
 auto-baseline would have silently accepted all 90, including anything genuinely

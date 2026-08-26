@@ -116,6 +116,33 @@ enable_thread_wifi_link: true
 thread_wifi_link_ssid: "{{ vault_thread_wifi_link_ssid }}"
 
 # ============================================================
+# Presence health — the source Tado consumes, not Tado itself
+# ============================================================
+# Renamed from the Tado check on 2026-08-26 because the old name described the
+# consumer rather than the thing being checked. There is ONE presence source:
+# Companion App -> device_tracker -> person -> group.persons -> Tado API.
+presence_trackers:
+  - entity: device_tracker.nexuschoky
+    name: "Choco phone"
+  - entity: device_tracker.iphone_de_candela_2
+    name: "Candela iPhone"
+
+presence_persons:
+  - entity: person.choco
+    name: "Choco"
+  - entity: person.candela
+    name: "Candela"
+
+# Hours of silence before a tracker still reading `home` is called frozen.
+#
+# Derived from measurement, not taste (7 days of HA history, 2026-08-26): the
+# widest healthy reporting gaps were 470 min and 721 min. 18 h is ~2.3x the
+# larger. ⚠️ Do not tighten this without re-measuring — a value under ~12 h
+# pages on ordinary overnight quiet, and only `home` can trigger it anyway, so
+# tightening buys very little.
+presence_stale_hours: 18
+
+# ============================================================
 # Entity health — the check the five-day outage did not have
 # ============================================================
 # Every check on this fleet watches the machinery: host up, container running,
@@ -182,7 +209,7 @@ ha_entity_health_allowlist:
   # binary_sensor.) were one pattern each; this is the whole device, once.
   #
   # ⚠️ Presence is deliberately NOT relying on this check — device_tracker for
-  # both phones is watched by name in check_tado_health.sh, which is why muting
+  # both phones is watched by name in check_presence_health.sh, which is why muting
   # the whole device here does not create a presence blind spot.
   # The Companion App creates entities in exactly four domains. All four were
   # enumerated on 2026-08-26 and each got a deliberate decision, so this is not

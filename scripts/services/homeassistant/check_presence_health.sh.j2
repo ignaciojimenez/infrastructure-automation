@@ -1,0 +1,168 @@
+#!/bin/sh
+# check_presence_health.sh — is the presence signal still trustworthy?
+# Managed by Ansible — do not edit manually.
+#
+# RENAMED from check_tado_health.sh on 2026-08-26. The old name cost a real
+# conversation: it does not check Tado. Tado is downstream — it *consumes*
+# presence. The chain is
+#
+#   Companion App -> device_tracker.* -> person.* -> group.persons -> Tado API
+#
+# and this script watches the left-hand end, the only place presence is
+# actually produced. There is one presence source, not two.
+#
+# Three failure modes, and the third is the reason for the rewrite:
+#
+#   1. tracker `unavailable` — the app is gone. Loud and obvious.
+#   2. person `unknown`/`unavailable` — the entity is misconfigured.
+#   3. tracker FROZEN — still reporting a state, just not updating. The old
+#      header claimed "verifies device trackers are fresh"; the code only ever
+#      tested for `unavailable`, so a stuck tracker was invisible. A tracker
+#      stuck on `home` means heating runs all day and every away-automation
+#      stays asleep.
+#
+# ⚠️ Why staleness alone is NOT alerted on, measured rather than assumed
+# (7 days of HA history, 2026-08-26): normal reporting gaps reach **470 min**
+# for one phone and **721 min** for the other. Any threshold tight enough to
+# catch a freeze quickly would page twice a day forever. So the rule is
+# **stale AND home**:
+#
+#   stale + not_home -> someone is out with their phone off. Benign, common,
+#                       and every one of the long observed gaps looks like this.
+#   stale + home     -> presence is frozen claiming someone is in. This is the
+#                       one that costs money and comfort.
+#
+# {{ presence_stale_hours }}h gives ~2.3x headroom over the widest observed
+# healthy gap. Against 7 days of real history this rule fires zero times.
+set -eu
+
+SECRETS_FILE="{{ homeassistant_config_dir }}/secrets.yaml"
+HA_URL="http://localhost:8123"
+STALE_HOURS="{{ presence_stale_hours }}"
+
+# cron has no LANG; pin stdout so the status markers below cannot raise
+# UnicodeEncodeError at the moment the check has something to say.
+PYTHONIOENCODING=utf-8
+export PYTHONIOENCODING
+
+HA_TOKEN=$(sed -n 's/^ha_monitor_token:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}.*/\1/p' \
+           "$SECRETS_FILE" 2>/dev/null | head -1)
+if [ -z "$HA_TOKEN" ]; then
+    echo "❌ ha_monitor_token not found in $SECRETS_FILE — this check cannot run"
+    exit 1
+fi
+
+TRACKERS=$(cat <<'TRACKEOF'
+{% for t in presence_trackers %}
+{{ t.entity }}|{{ t.name }}
+{% endfor %}
+TRACKEOF
+)
+export TRACKERS
+
+PERSONS=$(cat <<'PERSONEOF'
+{% for p in presence_persons %}
+{{ p.entity }}|{{ p.name }}
+{% endfor %}
+PERSONEOF
+)
+export PERSONS
+
+python3 - "$HA_TOKEN" "$HA_URL" "$STALE_HOURS" <<'PYEOF'
+import datetime
+import json
+import os
+import sys
+from urllib.request import Request, urlopen
+from urllib.error import HTTPError, URLError
+
+token, ha_url, stale_hours = sys.argv[1], sys.argv[2], float(sys.argv[3])
+now = datetime.datetime.now(datetime.timezone.utc)
+
+
+def pairs(env):
+    out = []
+    for line in os.environ.get(env, "").splitlines():
+        line = line.strip()
+        if line and "|" in line:
+            entity, label = line.split("|", 1)
+            out.append((entity, label))
+    return out
+
+
+def get_state(entity_id):
+    req = Request("%s/api/states/%s" % (ha_url, entity_id))
+    req.add_header("Authorization", "Bearer %s" % token)
+    with urlopen(req, timeout=10) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def age_minutes(state):
+    """Minutes since HA last heard from this entity.
+
+    `last_reported` is the right field: `last_changed` only moves when the
+    value differs, so a phone sitting at `home` all day would look stale
+    within the hour and page constantly.
+    """
+    stamp = state.get("last_reported") or state.get("last_updated")
+    if not stamp:
+        return None
+    try:
+        return (now - datetime.datetime.fromisoformat(stamp)).total_seconds() / 60.0
+    except ValueError:
+        return None
+
+
+issues = []
+notes = []
+
+for entity, label in pairs("TRACKERS"):
+    try:
+        st = get_state(entity)
+    except (HTTPError, URLError, TimeoutError, OSError) as exc:
+        issues.append("%s: API error: %s" % (label, exc))
+        continue
+
+    state = st.get("state")
+    if state == "unavailable":
+        issues.append("%s tracker is unavailable — the app is not reporting at all" % label)
+        continue
+
+    age = age_minutes(st)
+    if age is None:
+        notes.append("%s: no timestamp on the state, cannot judge freshness" % label)
+        continue
+
+    if age > stale_hours * 60:
+        if state == "home":
+            issues.append(
+                "%s tracker is FROZEN on 'home' — last reported %.0f h ago "
+                "(threshold %.0f h). Presence is claiming someone is in; heating "
+                "and away-automations are running on a stale signal."
+                % (label, age / 60.0, stale_hours))
+        else:
+            notes.append(
+                "%s quiet for %.0f h but reads '%s' — benign, phone is away or off"
+                % (label, age / 60.0, state))
+
+for entity, label in pairs("PERSONS"):
+    try:
+        st = get_state(entity)
+    except (HTTPError, URLError, TimeoutError, OSError) as exc:
+        issues.append("%s: person API error: %s" % (label, exc))
+        continue
+    state = st.get("state")
+    if state in ("unknown", "unavailable"):
+        issues.append("%s person entity is %s" % (label, state))
+
+for note in notes:
+    print("⚠️  %s" % note)
+
+if issues:
+    for issue in issues:
+        print("❌ %s" % issue)
+    sys.exit(min(len(issues), 125))
+
+print("✅ presence is live: trackers reporting and person entities valid")
+sys.exit(0)
+PYEOF

@@ -249,7 +249,6 @@
     - check_ha_web.sh
     - check_container.sh
     - docker_prune.sh
-    - check_tado_health.sh
     - check_nic_stalls.sh
   tags: [homeassistant, monitoring]
 
@@ -263,6 +262,7 @@
   loop:
     - dockassist_monitor.sh
     - check_ha_entities.sh
+    - check_presence_health.sh
   tags: [homeassistant, monitoring]
 
 # check_nic_stalls.sh keeps a delta baseline here. The directory is otherwise
@@ -359,18 +359,43 @@
     - alert_token is defined and alert_token != ''
   tags: [homeassistant, monitoring, cron]
 
-- name: Configure Tado presence health check cron job
+# Retirement of the old name. Ansible's cron module keys on `name`, so simply
+# renaming the task would leave the old entry in place — a duplicate cron
+# invoking a script this play has just deleted. Both the cron and the file are
+# removed explicitly, and this pair must survive until every host has converged.
+- name: Retire the old Tado-named presence cron
   ansible.builtin.cron:
     name: "Tado presence health check"
+    state: absent
+    user: "{{ ansible_user }}"
+  tags: [homeassistant, monitoring, cron]
+
+# The script and its now-orphaned wrapper state. The state file matters: left
+# behind it keeps reporting whatever last_status it died with, forever, which
+# is how ~/.log accumulated a 2025 update_ha_state.json still reading
+# "failure". The rotated .log history is deliberately NOT removed.
+- name: Remove the old Tado-named presence script and its orphaned state
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ scripts_dir }}/check_tado_health.sh"
+    - "/home/{{ ansible_user }}/.log/check_tado_health.sh.json"
+  tags: [homeassistant, monitoring]
+
+- name: Configure presence health check cron job
+  ansible.builtin.cron:
+    name: "Presence health check"
     minute: "*/30"
     job: >
       {{ scripts_dir }}/enhanced_monitoring_wrapper
       --heartbeat-interval=daily
       --notify-fixed=true
+      --monitoring-name=presence_health
       {{ logging_token }}
       {{ alert_token }}
-      {{ scripts_dir }}/check_tado_health.sh
-      >> {{ logs_dir }}/tado_health_check.log 2>&1
+      {{ scripts_dir }}/check_presence_health.sh
+      >> {{ logs_dir }}/presence_health_check.log 2>&1
     user: "{{ ansible_user }}"
   when:
     - logging_token is defined and logging_token != ''
