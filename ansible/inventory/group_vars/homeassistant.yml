@@ -167,9 +167,25 @@ ha_entity_health_allowlist:
   # tell you the Companion integration has BROKEN, because broken and
   # "he's on the VPN" look identical from here. Presence itself is still
   # covered by check_tado_health.sh, which watches the trackers by name.
-  - "sensor.nexuschoky_*"
-  - "binary_sensor.nexuschoky_*"
-  - "sensor.iphone_de_candela_*"
+  # ⚠️ Cover BOTH domains for BOTH phones. The first seeding had
+  # sensor.+binary_sensor. for nexuschoky but only sensor. for iphone_de_candela,
+  # purely because no binary_sensor of Candela's phone happened to be offline
+  # during the sample. binary_sensor.iphone_de_candela_camera_motion then paged
+  # for 45 consecutive runs on 2026-08-26. Same root cause as the TV below —
+  # a snapshot cannot show you what is asleep at a different hour — but this one
+  # was also catchable by symmetry: if a pattern is right for one phone it is
+  # right for the other.
+  # Matched by DEVICE, not by domain. Listing sensor.+binary_sensor. per phone
+  # meant a third domain appearing later would page — and the Companion App
+  # creates entities across sensor, binary_sensor, device_tracker and notify.
+  # Two reactive patches in two days (2026-08-25 sensor., 2026-08-26
+  # binary_sensor.) were one pattern each; this is the whole device, once.
+  #
+  # ⚠️ Presence is deliberately NOT relying on this check — device_tracker for
+  # both phones is watched by name in check_tado_health.sh, which is why muting
+  # the whole device here does not create a presence blind spot.
+  - "*nexuschoky*"
+  - "*iphone_de_candela*"
   # Shairport now-playing metadata, fed over MQTT: `unknown` is its resting
   # state when nothing is streaming. Verified 2026-08-25 rather than assumed —
   # hifipi's shairport-sync 5.1 build does include `mqtt`, so these are idle,
