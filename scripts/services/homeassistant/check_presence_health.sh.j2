@@ -52,21 +52,15 @@ if [ -z "$HA_TOKEN" ]; then
     exit 1
 fi
 
-TRACKERS=$(cat <<'TRACKEOF'
-{% for t in presence_trackers %}
-{{ t.entity }}|{{ t.name }}
+# Persons deliberately NOT monitored. Placeholders with no human behind them —
+# listing them here is cheaper than teaching the discovery below to guess.
+PRESENCE_IGNORE=$(cat <<'IGNOREEOF'
+{% for p in presence_ignore_persons | default([]) %}
+{{ p }}
 {% endfor %}
-TRACKEOF
+IGNOREEOF
 )
-export TRACKERS
-
-PERSONS=$(cat <<'PERSONEOF'
-{% for p in presence_persons %}
-{{ p.entity }}|{{ p.name }}
-{% endfor %}
-PERSONEOF
-)
-export PERSONS
+export PRESENCE_IGNORE
 
 python3 - "$HA_TOKEN" "$HA_URL" "$STALE_HOURS" <<'PYEOF'
 import datetime
@@ -80,20 +74,20 @@ token, ha_url, stale_hours = sys.argv[1], sys.argv[2], float(sys.argv[3])
 now = datetime.datetime.now(datetime.timezone.utc)
 
 
-def pairs(env):
-    out = []
-    for line in os.environ.get(env, "").splitlines():
-        line = line.strip()
-        if line and "|" in line:
-            entity, label = line.split("|", 1)
-            out.append((entity, label))
-    return out
+ignored = {p.strip() for p in os.environ.get("PRESENCE_IGNORE", "").splitlines() if p.strip()}
 
 
 def get_state(entity_id):
     req = Request("%s/api/states/%s" % (ha_url, entity_id))
     req.add_header("Authorization", "Bearer %s" % token)
     with urlopen(req, timeout=10) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def all_states():
+    req = Request("%s/api/states" % ha_url)
+    req.add_header("Authorization", "Bearer %s" % token)
+    with urlopen(req, timeout=30) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 
@@ -116,44 +110,83 @@ def age_minutes(state):
 issues = []
 notes = []
 
-for entity, label in pairs("TRACKERS"):
-    try:
-        st = get_state(entity)
-    except (HTTPError, URLError, TimeoutError, OSError) as exc:
-        issues.append("%s: API error: %s" % (label, exc))
-        continue
+# ---------------------------------------------------------------------------
+# Discover what to watch, rather than being told.
+#
+# Every `person` entity carries a `device_trackers` attribute naming exactly the
+# trackers HA uses to decide where that person is. Walking that is strictly
+# better than naming phones in inventory, or than matching `source_type == gps`:
+#
+#   * a phone replaced or added is picked up the moment it is attached to a
+#     person in HA's UI — no repo change, and no silent gap while nobody
+#     remembers to edit a list;
+#   * a stray tracker that feeds nobody is correctly ignored, because it cannot
+#     affect presence;
+#   * it mirrors HA's own model instead of guessing at one.
+#
+# This is the same lesson as the entity check: a hardcoded list stops covering
+# whatever is added after it was written.
+# ---------------------------------------------------------------------------
+try:
+    states = all_states()
+except (HTTPError, URLError, TimeoutError, OSError) as exc:
+    print("❌ cannot reach Home Assistant to enumerate presence: %s" % exc)
+    sys.exit(1)
 
-    state = st.get("state")
-    if state == "unavailable":
-        issues.append("%s tracker is unavailable — the app is not reporting at all" % label)
-        continue
+by_id = {s["entity_id"]: s for s in states if isinstance(s, dict) and "entity_id" in s}
+persons = [s for eid, s in by_id.items()
+           if eid.startswith("person.") and eid not in ignored]
 
-    age = age_minutes(st)
-    if age is None:
-        notes.append("%s: no timestamp on the state, cannot judge freshness" % label)
-        continue
+if not persons:
+    print("❌ no person entities found — presence cannot be judged, and HA "
+          "having none is itself wrong")
+    sys.exit(1)
 
-    if age > stale_hours * 60:
-        if state == "home":
-            issues.append(
-                "%s tracker is FROZEN on 'home' — last reported %.0f h ago "
-                "(threshold %.0f h). Presence is claiming someone is in; heating "
-                "and away-automations are running on a stale signal."
-                % (label, age / 60.0, stale_hours))
-        else:
-            notes.append(
-                "%s quiet for %.0f h but reads '%s' — benign, phone is away or off"
-                % (label, age / 60.0, state))
-
-for entity, label in pairs("PERSONS"):
-    try:
-        st = get_state(entity)
-    except (HTTPError, URLError, TimeoutError, OSError) as exc:
-        issues.append("%s: person API error: %s" % (label, exc))
-        continue
-    state = st.get("state")
+watched = 0
+for person in sorted(persons, key=lambda s: s["entity_id"]):
+    pid = person["entity_id"]
+    label = person.get("attributes", {}).get("friendly_name") or pid
+    state = person.get("state")
     if state in ("unknown", "unavailable"):
         issues.append("%s person entity is %s" % (label, state))
+
+    trackers = person.get("attributes", {}).get("device_trackers") or []
+    if not trackers:
+        notes.append("%s has no device_trackers attached — presence for them is "
+                     "unconfigured, so nothing here can watch it" % label)
+        continue
+
+    for tid in trackers:
+        st = by_id.get(tid)
+        if st is None:
+            issues.append("%s: tracker %s is attached but does not exist in HA"
+                          % (label, tid))
+            continue
+        watched += 1
+        tstate = st.get("state")
+        tlabel = "%s / %s" % (label, st.get("attributes", {}).get("friendly_name") or tid)
+
+        if tstate == "unavailable":
+            issues.append("%s tracker is unavailable — the app is not reporting at all"
+                          % tlabel)
+            continue
+
+        age = age_minutes(st)
+        if age is None:
+            notes.append("%s: no timestamp on the state, cannot judge freshness" % tlabel)
+            continue
+
+        if age > stale_hours * 60:
+            if tstate == "home":
+                issues.append(
+                    "%s tracker is FROZEN on 'home' — last reported %.0f h ago "
+                    "(threshold %.0f h). Presence is claiming someone is in; heating "
+                    "and away-automations are running on a stale signal."
+                    % (tlabel, age / 60.0, stale_hours))
+            else:
+                notes.append(
+                    "%s quiet for %.0f h but reads '%s' — benign, phone is away or off"
+                    % (tlabel, age / 60.0, tstate))
 
 for note in notes:
     print("⚠️  %s" % note)
@@ -163,6 +196,7 @@ if issues:
         print("❌ %s" % issue)
     sys.exit(min(len(issues), 125))
 
-print("✅ presence is live: trackers reporting and person entities valid")
+print("✅ presence is live: %d person(s), %d tracker(s), all reporting"
+      % (len(persons), watched))
 sys.exit(0)
 PYEOF

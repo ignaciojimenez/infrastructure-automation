@@ -121,17 +121,17 @@ thread_wifi_link_ssid: "{{ vault_thread_wifi_link_ssid }}"
 # Renamed from the Tado check on 2026-08-26 because the old name described the
 # consumer rather than the thing being checked. There is ONE presence source:
 # Companion App -> device_tracker -> person -> group.persons -> Tado API.
-presence_trackers:
-  - entity: device_tracker.nexuschoky
-    name: "Choco phone"
-  - entity: device_tracker.iphone_de_candela_2
-    name: "Candela iPhone"
-
-presence_persons:
-  - entity: person.choco
-    name: "Choco"
-  - entity: person.candela
-    name: "Candela"
+# Nothing lists the phones. The check walks every `person` entity's
+# `device_trackers` attribute, so a replaced or added phone is covered the
+# moment it is attached to a person in HA's UI — no repo change, and no silent
+# gap while nobody remembers to edit a list. Same lesson as the entity check's
+# stateless-domain rule: a hardcoded roster stops covering what comes next.
+#
+# The only thing worth naming is what to SKIP.
+presence_ignore_persons:
+  # A placeholder person for the agent tier — no human, no phone, permanently
+  # `unknown`. Without this it would page on every run.
+  - person.ai_agent
 
 # Hours of silence before a tracker still reading `home` is called frozen.
 #
