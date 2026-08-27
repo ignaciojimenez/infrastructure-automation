@@ -59,8 +59,8 @@ renders it:
 > **№1** 1c → **№2** 1d → **№3** 2 → **№4** 4 (plex) → **№5** 17 →
 > **№6** 9 → **№7** 3a/3b → **№8** W1 *(gate passed; needs `agent_access.yml
 > --limit vinylstreamer` first)* → **№9** 19 → **№10** 18 → **№11** 12 →
-> **№12** 20 → **№13** 5 → **№14** 10 → **№15** 11 → **№16** 6 → **№17** 7 →
-> **№18–21** 8/13/14/16
+> **№12** 21 → **№13** 20 → **№14** 5 → **№15** 10 → **№16** 11 → **№17** 6 →
+> **№18** 7 → **№19–22** 8/13/14/16
 > *(decision-gated — 16 needs a purchase call, the rest need him at the
 > cabinet; not ranked)*
 
@@ -943,9 +943,9 @@ retract all of it once `sudo` was tried. **An error that misidentifies its own
 cause is worse than a vague one**, because it is confidently actionable in the
 wrong direction.
 
-*State:* fixed on branch `fix/w1-wifi-lockout-and-alert-fidelity` — the helper
-now distinguishes "cannot read the file, run with sudo" from "key absent".
-Kept here only until that lands.
+*State:* **fix is on `main`** (merged `d650d1d`, 2026-08-24) — the helper now
+distinguishes "cannot read the file, run with sudo" from "key absent". Deployed
+to dockassist. Open only because both branches have not been force-verified.
 
 ```
 Verify the ha_state error-message fix on dockassist. Read docs/TODO.md item 19
@@ -958,6 +958,56 @@ Force BOTH branches as read_agent over SSH, not as choco:
 Then point it at a real file with the key removed to confirm the "key absent"
 branch still fires. A message that is merely reworded but never forced down
 both paths has not been tested.
+```
+
+
+**21. `agent_read` returns gzip bytes for rotated logs instead of saying it cannot help**
+Reading a rotated log through the agent helper returns the raw compressed file:
+
+```
+$ sudo agent_read log wifi_reconnect.log.2.gz
+<binary gzip>
+```
+
+🐛 **The danger is that grep still "works".** A search over those bytes matches
+nothing and returns `0` — which reads exactly like *"the event never happened"*
+rather than *"this file is unreadable"*. Measured 2026-08-27 while answering
+"has the W1 ladder ever fired?": the current log covered only ~15 h of a ~57 h
+uptime because it rotates often, and the rotated `.gz` reported **0 ladder
+starts**. Piping it through `gunzip` locally recovered the missing 25 hours —
+which contained **8**. (They turned out to be a known self-inflicted burst, but
+the tool had no way to tell me that; it just said zero.)
+
+📌 **Same failure family as item 19**, and the third instance this month: a
+tool built for the unattended tier that returns something *useless* rather than
+refusing. The pattern is now explicit in `AGENT_INSTRUCTIONS.md` — the fix here
+is one line of `zcat`, but the value is closing a silent blind spot in every
+future investigation that reads history.
+
+⚠️ **Any past investigation that read a rotated log through `agent_read` may
+have concluded "nothing found" from unreadable bytes.** Worth remembering before
+trusting an old negative result about anything older than a rotation.
+
+*State:* diagnosed 2026-08-27, not fixed. *Effort:* small.
+*Needs:* a laptop (edit `agent_read.sh.j2`, redeploy `agent_access.yml`).
+
+```
+Make agent_read handle rotated logs. Read docs/TODO.md item 21 first — this is
+NOT "add a feature", it is closing a silent blind spot: today it cats .gz files
+raw, so grep over them returns 0 matches and an investigation reads that as
+"the event never happened".
+
+In roles/agent_access/templates/agent_read.sh.j2, detect a .gz suffix and use
+zcat/gunzip -c; leave plain files alone. Keep it read-only and keep the
+existing path confinement — do not widen what it can open.
+
+Verify by FORCING both branches as read_agent over SSH, not as choco:
+  ssh vinylstreamer-agent 'sudo agent_read log wifi_reconnect.log.2.gz | head -3'
+    -> must print readable timestamped lines, not binary
+  ssh vinylstreamer-agent 'sudo agent_read log wifi_reconnect.log | head -3'
+    -> must still work unchanged
+Then grep the .gz for a string you KNOW is in it and confirm a non-zero count —
+a reworded helper that was never grepped has not been tested.
 ```
 
 ### 🧊 Blocked on Ignacio, not on work
