@@ -188,35 +188,41 @@
   when: enable_cloudflare_tunnel | default(true)
   tags: [homeassistant, cloudflare, docker]
 
-# Install HACS (Home Assistant Community Store)
-- name: Wait for Home Assistant to start
-  ansible.builtin.wait_for:
-    port: 8123
-    host: localhost
-    delay: 30
-    timeout: 300
-  tags: [homeassistant, hacs]
-
-- name: Download HACS installer in container
-  community.docker.docker_container_exec:
-    container: "{{ homeassistant_container_name | default('home-assistant') }}"
-    command: "curl -fsSL https://get.hacs.xyz -o /config/install_hacs.sh"
-  become_user: "{{ ansible_user }}"
-  tags: [homeassistant, hacs]
-
-- name: Execute HACS installer
-  community.docker.docker_container_exec:
-    container: "{{ homeassistant_container_name | default('home-assistant') }}"
-    command: "/bin/bash /config/install_hacs.sh"
-  become_user: "{{ ansible_user }}"
-  tags: [homeassistant, hacs]
-
-- name: Remove HACS installer script
-  community.docker.docker_container_exec:
-    container: "{{ homeassistant_container_name | default('home-assistant') }}"
-    command: "/bin/rm /config/install_hacs.sh"
-  become_user: "{{ ansible_user }}"
-  failed_when: false
+# HACS removed 2026-08-28. It was installed, loaded on every boot, refreshed a
+# 2.6 MB repository catalogue — and had installed exactly nothing:
+# custom_components/ contained only hacs itself.
+#
+# 🔴 What it cost to keep: three tasks ran on EVERY deploy, unconditionally —
+#     curl -fsSL https://get.hacs.xyz -o /config/install_hacs.sh
+#     /bin/bash /config/install_hacs.sh
+# That is unpinned remote code execution as root inside the container holding
+# secrets.yaml, the HA monitor token and the Cloudflare tunnel token. No
+# checksum, no version pin, re-rolled on every run rather than once at install.
+#
+# 📌 It is also why this host could never reach changed=0: those three were the
+# permanent `changed=3` on a second run, so dockassist could not demonstrate
+# idempotency and a genuine unexpected change hid among three expected ones.
+# A `wait_for` port 8123 with a 30 s delay went with them — it existed only to
+# gate the installer.
+#
+# Gating the installer was considered and rejected: gating means the remote code
+# runs once, removal means it never runs again, and nothing here used HACS.
+# Reinstalling it deliberately later is cheaper than carrying the path.
+#
+# The tasks below clear what the integration left behind. They can be deleted
+# once dockassist has converged — they are a retirement, not permanent config.
+- name: Remove the HACS custom component and its stored state
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  become: true
+  loop:
+    - "{{ homeassistant_config_dir | default('/home/' + ansible_user + '/homeassistant') }}/custom_components/hacs"
+    - "{{ homeassistant_config_dir | default('/home/' + ansible_user + '/homeassistant') }}/.storage/hacs.data"
+    - "{{ homeassistant_config_dir | default('/home/' + ansible_user + '/homeassistant') }}/.storage/hacs.hacs"
+    - "{{ homeassistant_config_dir | default('/home/' + ansible_user + '/homeassistant') }}/.storage/hacs.repositories"
+    - "{{ homeassistant_config_dir | default('/home/' + ansible_user + '/homeassistant') }}/.storage/hacs.critical"
+  notify: Restart Home Assistant
   tags: [homeassistant, hacs]
 
 # Deploy management scripts

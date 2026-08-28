@@ -17,6 +17,32 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ---
 
+## 2026-08-28 — HACS removed, and dockassist proves idempotency for the first time
+
+**Decided:** HACS is gone rather than gated, **because** it was installed,
+loaded on every boot, refreshed a 2.6 MB repository catalogue — and had
+installed **nothing**. `custom_components/` contained only HACS itself, and its
+only entity was `update.hacs_update`.
+
+**What keeping it cost:** three role tasks ran unconditionally on every deploy —
+`curl -fsSL https://get.hacs.xyz` then `bash` it — inside the container holding
+`secrets.yaml`, the HA monitor token and the Cloudflare tunnel token. Unpinned
+remote code execution as root, no checksum, no version pin, re-rolled every run
+rather than once at install time.
+
+**Why removal beat gating:** gating means the remote code runs once; removal
+means it never runs again, and nothing here used the capability. Reinstalling
+deliberately later is cheaper than carrying the path indefinitely.
+
+📌 **It was also why this host could never reach `changed=0`.** Those three
+tasks were the permanent `changed=3` on a second run — the repo's own stated
+proof of convergence — so dockassist could not demonstrate idempotency at all,
+and a genuine unexpected change would have hidden among three expected ones.
+**Measured after removal: `changed=0`.** A `wait_for` on port 8123 with a 30 s
+delay went too; it existed only to gate the installer.
+
+---
+
 ## 2026-08-28 — the container check's self-heal, and the exit code that was an accident
 
 **Decided:** `check_container.sh` no longer attempts self-healing, **because**
