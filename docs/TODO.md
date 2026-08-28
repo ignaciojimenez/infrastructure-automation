@@ -59,8 +59,8 @@ renders it:
 > **№1** 1c → **№2** 1d → **№3** 2 → **№4** 4 (plex) → **№5** 17 →
 > **№6** 9 → **№7** 3a/3b → **№8** W1 *(gate passed; needs `agent_access.yml
 > --limit vinylstreamer` first)* → **№9** 19 → **№10** 18 → **№11** 12 →
-> **№12** 20 → **№13** 21 → **№14** 5 → **№15** 10 → **№16** 11 → **№17** 6 →
-> **№18** 7 → **№19–22** 8/13/14/16
+> **№12** 20 → **№13** 21 → **№14** 22 → **№15** 5 → **№16** 10 → **№17** 11 →
+> **№18** 6 → **№19** 7 → **№20–23** 8/13/14/16
 > *(decision-gated — 16 needs a purchase call, the rest need him at the
 > cabinet; not ranked)*
 
@@ -994,7 +994,7 @@ both paths has not been tested.
 ```
 
 
-**21. `agent_read` returns gzip bytes for rotated logs instead of saying it cannot help**
+**22. `agent_read` returns gzip bytes for rotated logs instead of saying it cannot help**
 Reading a rotated log through the agent helper returns the raw compressed file:
 
 ```
@@ -1025,7 +1025,7 @@ trusting an old negative result about anything older than a rotation.
 *Needs:* a laptop (edit `agent_read.sh.j2`, redeploy `agent_access.yml`).
 
 ```
-Make agent_read handle rotated logs. Read docs/TODO.md item 21 first — this is
+Make agent_read handle rotated logs. Read docs/TODO.md item 22 first — this is
 NOT "add a feature", it is closing a silent blind spot: today it cats .gz files
 raw, so grep over them returns 0 matches and an investigation reads that as
 "the event never happened".
