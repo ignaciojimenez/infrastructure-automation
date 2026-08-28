@@ -59,7 +59,7 @@ renders it:
 > **№1** 1c → **№2** 1d → **№3** 2 → **№4** 4 (plex) → **№5** 17 →
 > **№6** 9 → **№7** 3a/3b → **№8** W1 *(gate passed; needs `agent_access.yml
 > --limit vinylstreamer` first)* → **№9** 19 → **№10** 18 → **№11** 12 →
-> **№12** 21 → **№13** 20 → **№14** 5 → **№15** 10 → **№16** 11 → **№17** 6 →
+> **№12** 20 → **№13** 21 → **№14** 5 → **№15** 10 → **№16** 11 → **№17** 6 →
 > **№18** 7 → **№19–22** 8/13/14/16
 > *(decision-gated — 16 needs a purchase call, the rest need him at the
 > cabinet; not ranked)*
@@ -700,6 +700,39 @@ and no way to prove a workaround helped.
 ```
 
 ### 🟢 P3 — improvements, no urgency
+
+**21. One grace window for every entity is the wrong shape**
+`ha_entity_health_grace_seconds` is global, so the same 15 minutes governs a
+door sensor that should never be silent and a floor lamp that is switched off
+every night. That forces a binary choice per device — page on normal use, or
+allowlist it and lose its failure signal entirely.
+
+Found 2026-08-28 the expensive way: `light.book_floor_lamp` paged for 25 hours
+(15 alerts) because the lamp had been switched off. A Shelly bulb on a switched
+circuit loses power and reports `unavailable`, which is byte-identical to the
+bulb being dead. It had to be allowlisted, and its real failures are now
+invisible.
+
+**A per-pattern grace override recovers that.** A lamp off overnight is ~12 h; a
+dead bulb is forever. A 7-day window on `light.book_floor_lamp` would stay quiet
+through ordinary use and still catch a bulb that never comes back — coverage the
+current allowlist throws away.
+
+📌 Cheap: the state file already records `first_seen` per entity, so the change
+is choosing a threshold per match instead of one global constant.
+
+*State:* diagnosed 2026-08-28, not built. *Effort:* small. *Needs:* a laptop.
+
+```
+Give the HA entity check per-pattern grace windows. Read docs/TODO.md item 21.
+Today ha_entity_health_grace_seconds is one global value, so a device that is
+legitimately off part of the day can only be allowlisted, which discards its
+failure signal. Add an ordered list of {pattern, grace_seconds} consulted before
+the global default; first match wins. Then move light.book_floor_lamp and the
+cobi_tv entities out of the allowlist and onto a multi-day window, and prove
+BOTH halves: switch the lamp off and confirm silence overnight, then simulate a
+week of absence in the state file and confirm it pages.
+```
 
 **20. `check_container.sh`'s self-healing has never worked, and mostly does not matter**
 Found 2026-08-25 by stopping `matter-server` as the acceptance test for item 15.
