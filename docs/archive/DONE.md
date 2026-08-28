@@ -17,6 +17,34 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ---
 
+## 2026-08-28 — a lamp being switched off is not a fault, and muting it was the wrong price
+
+**Decided:** the HA entity check takes **per-pattern grace windows**, first match
+wins, **because** one global 15-minute window cannot serve both a door sensor
+that should never be silent and a floor lamp switched off every night. Before
+this, such a device could only be allowlisted — which silences its real failures
+too. `light.book_floor_lamp` was muted exactly that way earlier the same day,
+after paging for 25 hours over ordinary use.
+
+**Why a long window rather than an allowlist entry:** a lamp off overnight is
+~12 h; a dead bulb is forever. 4 days is clear of the 25 h actually observed and
+still catches a device that never comes back. That keeps both properties —
+quiet through normal use, loud on real death — which an allowlist throws away.
+
+📌 **`off` vs `unavailable` is the discriminator worth remembering.** A Shelly
+Duo on a *switched* circuit loses power and reports `unavailable`; its three
+siblings read `off` because their circuits stay live. `off` means HA is talking
+to the device; `unavailable` means it is gone. Three identical bulbs being fine
+is what distinguished a real fault from a nightly pattern.
+
+⚠️ **A long window that never fires is an allowlist entry with extra steps**, so
+both halves are pinned by unit test: a 12 h switch-off stays silent while a door
+sensor beside it still pages, and a week of absence pages anyway. A malformed
+override is announced rather than silently falling back to the global default,
+which would quietly tighten a window someone widened on purpose.
+
+---
+
 ## 2026-08-25 — a controller with every device offline used to read as green
 
 **Decided:** dockassist runs `check_ha_entities.sh` every 10 minutes, asking HA

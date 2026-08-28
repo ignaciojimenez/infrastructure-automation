@@ -98,6 +98,22 @@ STATELESSEOF
 )
 export HA_STATELESS_DOMAINS
 
+# Per-pattern grace windows, "pattern|seconds", FIRST MATCH WINS so order is
+# meaningful. One global window cannot fit both a door sensor that should never
+# be silent and a floor lamp switched off every night: the tight value pages on
+# ordinary use, and the only escape was the allowlist, which throws the device's
+# failure signal away entirely.
+#
+# A long window keeps both. A lamp off overnight is ~12 h; a dead bulb is
+# forever. See docs/TODO.md item 21.
+HA_GRACE_OVERRIDES=$(cat <<'GRACEEOF'
+{% for o in ha_entity_health_grace_overrides | default([]) %}
+{{ o.pattern }}|{{ o.grace_seconds }}
+{% endfor %}
+GRACEEOF
+)
+export HA_GRACE_OVERRIDES
+
 TOKEN=$(sed -n 's/^ha_monitor_token:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}.*/\1/p' \
         "$SECRETS" 2>/dev/null | head -1)
 if [ -z "$TOKEN" ]; then
@@ -143,6 +159,27 @@ now = int(time.time())
 
 allow = [p.strip() for p in os.environ.get("HA_ALLOWLIST", "").splitlines() if p.strip()]
 stateless = {d.strip() for d in os.environ.get("HA_STATELESS_DOMAINS", "").splitlines() if d.strip()}
+
+overrides = []
+for line in os.environ.get("HA_GRACE_OVERRIDES", "").splitlines():
+    line = line.strip()
+    if not line or "|" not in line:
+        continue
+    pattern, _, seconds = line.partition("|")
+    try:
+        overrides.append((pattern.strip(), int(seconds)))
+    except ValueError:
+        # A malformed override must not silently become the global default and
+        # quietly tighten a window someone deliberately widened.
+        print("⚠️  ignoring malformed grace override: %s" % line)
+
+
+def grace_for(entity_id):
+    """Seconds this entity may be bad before it pages. First match wins."""
+    for pattern, seconds in overrides:
+        if fnmatch.fnmatchcase(entity_id, pattern):
+            return seconds
+    return grace
 
 
 def allowed(entity_id):
@@ -268,10 +305,11 @@ excused = []
 for entity_id in sorted(bad_now):
     first_seen = entity_since.get(entity_id, now)
     new_since[entity_id] = first_seen
-    row = (entity_id, bad_now[entity_id], now - first_seen)
+    entity_grace = grace_for(entity_id)
+    row = (entity_id, bad_now[entity_id], now - first_seen, entity_grace)
     if allowed(entity_id):
         excused.append(row)
-    elif row[2] >= grace:
+    elif row[2] >= entity_grace:
         alerting.append(row)
     else:
         waiting.append(row)
@@ -288,13 +326,15 @@ for entity_id in recovered:
 
 if report:
     for label, rows in (("ALERTING", alerting), ("in grace", waiting), ("allowlisted", excused)):
-        for entity_id, entity_state, age in rows:
-            print("  [%-11s] %s = %s (%d min)" % (label, entity_id, entity_state, age // 60))
+        for entity_id, entity_state, age, eg in rows:
+            window = "" if eg == grace else "  [grace %d min]" % (eg // 60)
+            print("  [%-11s] %s = %s (%d min)%s"
+                  % (label, entity_id, entity_state, age // 60, window))
     finish(0)
 
-for entity_id, entity_state, age in waiting:
+for entity_id, entity_state, age, eg in waiting:
     print("⚠️  %s = %s for %d min (grace %d min)"
-          % (entity_id, entity_state, age // 60, grace // 60))
+          % (entity_id, entity_state, age // 60, eg // 60))
 
 rc = 0
 if state_broken:
@@ -302,8 +342,9 @@ if state_broken:
           "were lost, so an old fault may be re-timed from now" % state_path)
     rc += 1
 
-for entity_id, entity_state, age in alerting:
-    print("❌ %s = %s for %d min" % (entity_id, entity_state, age // 60))
+for entity_id, entity_state, age, eg in alerting:
+    print("❌ %s = %s for %d min (past its %d min grace)"
+          % (entity_id, entity_state, age // 60, eg // 60))
 rc += len(alerting)
 
 if rc == 0:

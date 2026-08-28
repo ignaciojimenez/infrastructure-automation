@@ -142,6 +142,30 @@ presence_ignore_persons:
 # tightening buys very little.
 presence_stale_hours: 18
 
+# ── per-entity grace windows ──────────────────────────────────────────────────
+# FIRST MATCH WINS, so order is meaningful. These exist because one global
+# window cannot serve both a door sensor that should never be silent and a lamp
+# switched off every night. Before this, such devices could only be allowlisted,
+# which silenced their real failures too — `light.book_floor_lamp` was muted
+# exactly that way on 2026-08-28.
+#
+# A long window keeps both properties: quiet through ordinary use, still loud
+# when something genuinely never comes back.
+ha_entity_health_grace_overrides:
+  # Switched floor lamp. A Shelly Duo on a switched circuit loses power and
+  # reports `unavailable` — indistinguishable from a dead bulb in the moment,
+  # but not over days. Measured 2026-08-28: it was off for ~25 h of ordinary
+  # use. 4 days is well clear of that and still catches a bulb that dies.
+  - pattern: "light.book_floor_lamp"
+    grace_seconds: 345600
+  - pattern: "*shellyduobulbg3_d885ac037d10*"
+    grace_seconds: 345600
+  # The television. Off overnight, every night — observed 550 min in one stretch.
+  - pattern: "media_player.cobi_tv*"
+    grace_seconds: 345600
+  - pattern: "remote.cobi_tv*"
+    grace_seconds: 345600
+
 # ============================================================
 # Entity health — the check the five-day outage did not have
 # ============================================================
@@ -270,34 +294,9 @@ ha_entity_health_allowlist:
   # (96%) — and neither is allowlisted, so a genuinely offline smoke alarm still
   # pages. Never widen this to shellyplussmoke_*.
   - "button.shellyplussmoke_3076f523fd68_mute_alarm"
-  # 🔴 DIURNAL DEVICES — the hole the first seeding missed, and the reason this
-  # list cannot be built from one sample. The allowlist was seeded 2026-08-25
-  # from a single `--report` run taken while the TV happened to be ON. It went
-  # off at 23:40 that night and the check then failed 54 consecutive runs
-  # before anyone looked. A device a human switches off is `unavailable` for
-  # exactly the reason it should be, every night, forever.
-  #
-  # 📌 Rule for anything added here later: a point-in-time baseline only sees
-  # what is asleep *right now*. Before trusting a fresh `--report`, ask which
-  # devices are off at this hour and would not appear.
-  - "media_player.cobi_tv*"
-  - "remote.cobi_tv*"
-  # A smart bulb on a SWITCHED circuit. Verified physically 2026-08-28: the lamp
-  # was simply switched off, and a Shelly Duo loses power with the circuit, so
-  # it reports `unavailable` rather than `off`.
-  #
-  # 📌 The discriminator for which bulbs need this: its three identical siblings
-  # read `off` — powered, reachable, unlit — because their circuits stay live.
-  # Only this one is on a switch someone actually uses. Do not blanket-mute the
-  # other Shelly Duos; they would correctly report a real failure.
-  #
-  # ⚠️ Cost, stated rather than buried: a genuine failure of THIS bulb is now
-  # invisible. Accepted because it is *indistinguishable* from switched-off —
-  # both are `unavailable`, and nothing this check can see separates them. The
-  # fix that would recover the coverage is per-pattern grace windows (a lamp off
-  # overnight is ~12 h; a dead bulb is forever), filed as TODO item 21.
-  - "light.book_floor_lamp"
-  - "*shellyduobulbg3_d885ac037d10*"
+  # 📌 The diurnal devices that used to live here — the TV and the switched
+  # floor lamp — have MOVED to ha_entity_health_grace_overrides below. They are
+  # watched again, just on a window sized for how they are actually used.
   # Same class, same holding status.
   - "schedule.mon_thu_away_schedule"
   - "binary_sensor.wyze_online"

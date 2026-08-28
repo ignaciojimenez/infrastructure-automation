@@ -85,6 +85,7 @@ PY
 GRACE=900
 ALLOW=""
 STATELESS=""
+OVERRIDES=""
 RC=0
 OUT=""
 
@@ -128,7 +129,7 @@ PY
 
 # run <state_file> <mode> <api_ok> <http> <states_file>
 run() {
-    OUT=$(HA_ALLOWLIST="$ALLOW" HA_STATELESS_DOMAINS="$STATELESS" python3 "$WORK/check.py" \
+    OUT=$(HA_ALLOWLIST="$ALLOW" HA_STATELESS_DOMAINS="$STATELESS" HA_GRACE_OVERRIDES="$OVERRIDES" python3 "$WORK/check.py" \
           "$1" "$GRACE" "$2" "$3" "$4" "$5" 2>&1)
     RC=$?
 }
@@ -285,6 +286,44 @@ run "$WORK/st4c.json" check 1 200 "$WORK/s4c.json"
 expect_rc 1 "the SAME button going unavailable still pages"
 expect_out "button.shelly_restart" "and names it"
 STATELESS=""
+
+printf '\n   ── per-entity grace windows\n'
+
+# ------------------------------------------------------------------
+# 4d. One global window cannot serve a door sensor and a lamp that is switched
+#     off nightly. Before overrides existed the only escape was the allowlist,
+#     which discards the device's real failures too — light.book_floor_lamp was
+#     muted exactly that way after paging for 25 h of ordinary use.
+#
+#     Both halves are asserted, because a long window that never fires is just
+#     an allowlist entry with extra steps.
+# ------------------------------------------------------------------
+states "$WORK/s4d.json" light.lamp=unavailable binary_sensor.front_door=unavailable
+OVERRIDES="light.lamp|345600"
+
+# Half one: a night off must stay silent, while the door sensor beside it pages.
+state "$WORK/st4d.json" light.lamp:43200 binary_sensor.front_door:43200
+run "$WORK/st4d.json" check 1 200 "$WORK/s4d.json"
+expect_rc 1 "a 12h switch-off is silent on its long window; the door sensor still pages"
+expect_out "binary_sensor.front_door" "the globally-graced entity still pages"
+expect_no_out "❌ light.lamp" "the long-window entity does not"
+
+# Half two: gone for a week is NOT ordinary use, and must page.
+state "$WORK/st4e.json" light.lamp:604800 binary_sensor.front_door:43200
+run "$WORK/st4e.json" check 1 200 "$WORK/s4d.json"
+expect_rc 2 "a week of absence pages even on the long window"
+expect_out "❌ light.lamp" "the device that never came back is named"
+
+# An override must not leak onto entities it does not match.
+OVERRIDES="light.somethingelse|345600"
+run "$WORK/st4d.json" check 1 200 "$WORK/s4d.json"
+expect_rc 2 "a non-matching override changes nothing"
+
+# A malformed override must be reported, not silently ignored.
+OVERRIDES="light.lamp|notanumber"
+run "$WORK/st4d.json" check 1 200 "$WORK/s4d.json"
+expect_out "ignoring malformed grace override" "a broken override is announced"
+OVERRIDES=""
 
 printf '\n   ── recovery\n'
 
