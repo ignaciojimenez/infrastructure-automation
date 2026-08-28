@@ -353,7 +353,21 @@
   when: enable_wifi_reconnect_watchdog | default(false)
   tags: [audio_streaming, monitoring, scripts, w1]
 
-# Every 2 min, so a lockout costs ~2 min instead of the plug watchdog's 15-45.
+# Every 5 min. Was */2 until 2026-08-28, relaxed once `powersave=2` had held
+# vinylstreamer up for 3.6 days with the ladder never firing — polling hard for
+# a fault that has stopped occurring is cost without information, and this
+# script is the one component here that has itself taken the host down.
+#
+# ⚠️ The interval is load-bearing, so do the arithmetic before changing it. The
+# script needs TWO consecutive bad observations before acting, so detection
+# costs up to 2 intervals, plus ~30 s for the ladder itself:
+#
+#   */2  -> acts by ~4.5 min   (plug watchdog at 15 min, ~10 min of margin)
+#   */5  -> acts by ~11 min    (plug watchdog at 15 min, ~4 min of margin)
+#
+# Software recovery MUST still land before the plug does, or the plug reboots a
+# host that was about to fix itself and we lose the layer diagnostic. */5 keeps
+# that ordering; */10 would not, and would need the plug threshold raised first.
 #
 # 🔴 --monitoring-name is MANDATORY: the wrapper keys its state file on the
 # script basename and two crons sharing one basename silently share state.
@@ -366,7 +380,7 @@
 - name: Configure layered wifi reconnect cron job
   ansible.builtin.cron:
     name: "Wifi reconnect watchdog"
-    minute: "*/2"
+    minute: "*/5"
     job: >
       {{ scripts_dir }}/enhanced_monitoring_wrapper
       --monitoring-name=wifi_reconnect

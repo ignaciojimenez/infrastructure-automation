@@ -537,6 +537,52 @@ Three guards exist because of that, and none is decorative:
    deploy and guard 2 would have silently degraded to "act immediately". The
    script now refuses to run rather than run ungated.
 
+**📊 2026-08-28 — `powersave=2` is now the prime suspect, and it is measurably
+free.** 3.6 days with **zero** lockouts, zero ladder starts and zero plug
+cycles, against **2 lockouts in 4 hours** the night before it went live. The
+layered ladder has never fired on a real fault, so it has produced no layer
+diagnostic — there has been nothing to diagnose.
+
+Cost of keeping it, measured rather than assumed (Shelly counters, before vs
+since):
+
+| | Before | Since | Delta |
+|---|---|---|---|
+| Average draw | 1.489 W | 1.538 W | **+0.049 W (+3.3%)**, ≈0.43 kWh/year |
+| Pi CPU temp | 41 °C | 45 °C | throttles at ~80 °C |
+| Signal | -70 dBm / q40 | -67 dBm / q43 | improved |
+| Icecast source | — | **unbroken since 24 Aug 23:13:45** | no stream drops |
+
+⚠️ The "before" average includes hours when the host was *down* and drawing
+nothing, so the real delta is if anything smaller.
+
+**No functional downside found, and plausibly an improvement**: a sleeping radio
+buffers frames between beacons, adding latency and jitter — the wrong behaviour
+for a host whose job is streaming audio. The one reason to want powersave
+(battery) does not apply; vinylstreamer is mains-fed through the Shelly.
+
+🔴 **NOT proven yet — do not start removing the safety nets.** This item's own
+history contains a **~5-day quiet stretch (17–21 Aug)** that ended with the
+fault returning. 3.6 days has not beaten that. Revisit at **7+ quiet days**;
+until then `wifi_reconnect.sh`, the plug watchdog and `autoconnect-retries=0`
+all stay.
+
+**What was reconsidered on 2026-08-28 and deliberately LEFT ALONE:**
+* `autoconnect-retries=0` — disproven as a fix and now dormant, but harmless
+  ("retry forever" is right for an unattended host when the AP genuinely goes
+  away). Removing it would be churn. **It is not doing work; do not cite it as
+  the fix.**
+* Plug watchdog cooldown (6 h → 1 h) — the ordering still holds: software
+  recovery acts first, the plug is third-line and rarely reached.
+* Nothing to roll out elsewhere — vinylstreamer is the fleet's only Wi-Fi host.
+
+**Changed:** `wifi_reconnect.sh` cron `*/2` → `*/5`. Polling hard for a fault
+that has stopped is cost without information, and this script is the one
+component here that has itself taken the host down. Detection now costs up to
+~11 min (two observations + the ladder) against the plug's 15 — software
+recovery must keep landing first, so **`*/10` would break that ordering** and
+needs the plug threshold raised before it could be considered.
+
 *State:* **root cause known; both NM knobs disproven; layered recovery live and
 being measured.** Next evidence is which layer the alerts name.
 *Needs:* nothing — read `#home-logging` for a few days.
