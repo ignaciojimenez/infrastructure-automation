@@ -26,10 +26,26 @@ this, such a device could only be allowlisted — which silences its real failur
 too. `light.book_floor_lamp` was muted exactly that way earlier the same day,
 after paging for 25 hours over ordinary use.
 
-**Why a long window rather than an allowlist entry:** a lamp off overnight is
-~12 h; a dead bulb is forever. 4 days is clear of the 25 h actually observed and
-still catches a device that never comes back. That keeps both properties —
-quiet through normal use, loud on real death — which an allowlist throws away.
+**Why a long window rather than an allowlist entry:** a device that is
+legitimately absent part of the day can otherwise only be muted, which discards
+its real failures too. A long window keeps both properties — quiet through
+normal use, loud on real death.
+
+⚠️ **Corrected the same day: the floor lamp never needed one.** It read
+`unavailable` only because its wall switch had been used, cutting power to the
+bulb; that switch is meant to stay on. With power restored it reports `on` like
+its three siblings, so `unavailable` means broken and the ordinary 15-minute
+window is correct. **The fix was the switch, not a threshold** — and a proposal
+to stop watching the `light` domain altogether was withdrawn, because six of the
+seven lights were already monitored correctly and excluding them would have
+deleted working coverage to solve a one-device wiring problem.
+
+The override mechanism stays (it is the right shape for a device that really is
+periodically absent) but **the list is currently empty** — nothing needs one.
+The television is allowlisted instead, honestly: a TV in standby drops its
+network, so `unavailable` is its resting state every night and cannot be told
+from a dead TV. Enabling the set's "network standby" option would make it report
+`off` and monitorable, like the lights.
 
 📌 **`off` vs `unavailable` is the discriminator worth remembering.** A Shelly
 Duo on a *switched* circuit loses power and reports `unavailable`; its three

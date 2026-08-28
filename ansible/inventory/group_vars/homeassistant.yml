@@ -152,19 +152,17 @@ presence_stale_hours: 18
 # A long window keeps both properties: quiet through ordinary use, still loud
 # when something genuinely never comes back.
 ha_entity_health_grace_overrides:
-  # Switched floor lamp. A Shelly Duo on a switched circuit loses power and
-  # reports `unavailable` — indistinguishable from a dead bulb in the moment,
-  # but not over days. Measured 2026-08-28: it was off for ~25 h of ordinary
-  # use. 4 days is well clear of that and still catches a bulb that dies.
-  - pattern: "light.book_floor_lamp"
-    grace_seconds: 345600
-  - pattern: "*shellyduobulbg3_d885ac037d10*"
-    grace_seconds: 345600
-  # The television. Off overnight, every night — observed 550 min in one stretch.
-  - pattern: "media_player.cobi_tv*"
-    grace_seconds: 345600
-  - pattern: "remote.cobi_tv*"
-    grace_seconds: 345600
+  # The television. Its socket is live and it is simply switched off — a TV in
+  # standby drops its network interface, so `unavailable` IS its resting state,
+  # every night. Nothing observable separates that from a dead TV, so a window
+  # here would only be a delayed false alarm; it is allowlisted honestly below
+  # instead. This list is deliberately EMPTY: no device currently needs one.
+  #
+  # 📌 Confirmed 2026-08-28 that `light.book_floor_lamp` does NOT belong here.
+  # Its wall switch is meant to stay on; with power restored it reports `on`
+  # like its three siblings, so `unavailable` means broken and the normal
+  # 15-minute window is exactly right. The fix was the switch, not a threshold.
+  []
 
 # ============================================================
 # Entity health — the check the five-day outage did not have
@@ -294,9 +292,17 @@ ha_entity_health_allowlist:
   # (96%) — and neither is allowlisted, so a genuinely offline smoke alarm still
   # pages. Never widen this to shellyplussmoke_*.
   - "button.shellyplussmoke_3076f523fd68_mute_alarm"
-  # 📌 The diurnal devices that used to live here — the TV and the switched
-  # floor lamp — have MOVED to ha_entity_health_grace_overrides below. They are
-  # watched again, just on a window sized for how they are actually used.
+  # The television, allowlisted rather than windowed. Its socket is live; a TV
+  # in standby drops its network, so `unavailable` is its normal resting state
+  # every single night and is indistinguishable from the TV being dead.
+  #
+  # ⚠️ Cost, stated not buried: a genuinely broken TV is invisible here.
+  # 🔧 It need not stay that way — most sets have a "network standby" /
+  # "quick start" option that keeps Wi-Fi alive while off. Turn that on and the
+  # TV reports `off` instead of `unavailable`, exactly like the lights, and it
+  # can come off this list and be monitored properly.
+  - "media_player.cobi_tv*"
+  - "remote.cobi_tv*"
   # Same class, same holding status.
   - "schedule.mon_thu_away_schedule"
   - "binary_sensor.wyze_online"
