@@ -54,6 +54,12 @@ mkdir -p "$AGENT_DIR" "$STUB_DIR" "$WORK/bin"
 printf '\n── Tier 1 absence reporting\n'
 
 python3 "$REPO_ROOT/tests/lib/render_j2.py" "$TEMPLATE" "$WORK/sweep.sh" \
+    agent_opnsense_api_pubkey_pin="sha256//eX/oOnHGacY+Z41pCAhi2/cxAREZHgcqW5ODY4yisJA=" \
+    agent_opnsense_api_timeout=15 \
+    agent_opnsense_monitoring_check_name="OPNsense monitoring alive" \
+    agent_healthchecks_api_key_file="$AGENT_DIR/healthchecks_api.creds" \
+    agent_opnsense_api_creds_path="$AGENT_DIR/opnsense_api.creds" \
+    agent_opnsense_api_ip=10.30.40.254 \
     agent_disk_threshold=85 \
     agent_wrapper_max_age_hours=26 \
     agent_ssh_timeout=5 \

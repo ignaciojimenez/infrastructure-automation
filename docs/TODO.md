@@ -56,11 +56,11 @@ here is something to read past, every time, forever. The write-up goes to
 (numbers never move), but the order to work them is this, and the dashboard
 renders it:
 
-> **№1** 1c → **№2** 1d → **№3** 2 → **№4** 4 (plex) → **№5** 17 →
-> **№6** 9 → **№7** 3a/3b → **№8** W1 *(gate passed; needs `agent_access.yml
-> --limit vinylstreamer` first)* → **№9** 19 → **№10** 18 → **№11** 12 →
-> **№12** 20 → **№13** 5 → **№14** 10 → **№15** 11 → **№16** 6 → **№17** 7 →
-> **№18–21** 8/13/14/16
+> **№1** 1c → **№2** 1d → **№3** 2 → **№4** 4 (plex) → **№5** 9 →
+> **№6** 3a/3b → **№7** W1 *(gate passed; needs `agent_access.yml --limit
+> vinylstreamer` first)* → **№8** 19 → **№9** 18 → **№10** 12 → **№11** 20 →
+> **№12** 5 → **№13** 10 → **№14** 11 → **№15** 6 → **№16** 7 →
+> **№17–20** 8/13/14/16
 > *(decision-gated — 16 needs a purchase call, the rest need him at the
 > cabinet; not ranked)*
 
@@ -647,45 +647,6 @@ Acceptance is a forced failure: peg one core on cwwk with
 `timeout 300 sh -c 'while :; do :; done'` and watch the alert reach
 #home-alerts. Then record a fresh idle + pegged-core thermal baseline.
 ```
-
-**17. Four of the eleven unit tests have been failing since 2026-08-14, and nothing said so**
-Found incidentally on 2026-08-23 while running the suite before adding to it.
-`anomaly_dedup_test.sh`, `ssh_backoff_test.sh`, `sweep_absence_test.sh` and
-`sweep_healthcheck_test.sh` all abort at the render step with
-`render_j2: no value supplied for {{ agent_opnsense_api_ip }}`.
-
-**Cause is confirmed, not guessed.** Commit `6cfa1f0` ("read opnsense over its
-API instead of a shell it cannot keep") added `agent_opnsense_api_ip` to
-`scripts/services/agent/fleet_health_check.sh.j2`; the four tests that render
-that template were never given the new variable. Verified by A/B-ing the
-current `render_j2.py` against `git show HEAD:` — **both fail identically**, so
-this is not fallout from the renderer change made the same day.
-
-🐛 **This is item 15's own failure mode, one level up.** The suite that exists
-to catch regressions has been reporting nothing for nine days, and nothing
-watches the watcher — there is no CI, and `tests/run_tests.sh` does not cover
-`tests/unit/`. Fixing the four invocations is minutes; the interesting question
-is what makes anyone run them again.
-
-⚠️ **Do not just add the variable and move on.** These tests cover the agent
-sweep's SSH back-off and healthcheck freshness. They have not run since the
-opnsense-API change *landed in the thing they test*, so a green after the fix
-is the first real signal about that change, not a formality — read what they
-say before trusting them.
-
-*State:* diagnosed 2026-08-23, not fixed. *Effort:* small (the fix), small–medium
-(making it stick). *Needs:* a laptop.
-
-```
-Fix the four rotted unit tests. Read docs/TODO.md item 17 — the cause is
-confirmed there, do not re-derive it. Supply agent_opnsense_api_ip to the
-render_j2 invocations in anomaly_dedup_test.sh, ssh_backoff_test.sh,
-sweep_absence_test.sh and sweep_healthcheck_test.sh, using the same value
-group_vars/agent.yml uses. Then READ the results rather than accepting green:
-these cover the agent sweep's SSH back-off and healthcheck freshness and have
-not run since 6cfa1f0 changed how opnsense is read. Finish by making the suite
-self-reporting — tests/run_tests.sh should run tests/unit/ too, so the next
-nine-day silence is not possible.
 
 **18. dockassist's NIC stalls under the speedtest, nine times so far**
 `bcmgenet` logs a transmit-queue hang whenever the link is driven flat out:

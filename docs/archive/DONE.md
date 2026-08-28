@@ -17,6 +17,39 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ---
 
+## 2026-08-28 — the regression suite nobody ran
+
+**Decided:** `tests/run_unit_tests.sh` exists and runs every `tests/unit/*_test.sh`,
+**because** nothing ran them at all. `run_tests.sh` stages the repo onto a
+disposable LXC and connects as root; the unit tests need no container, no network
+and no privilege, so they were simply never invoked by anything.
+
+Four of the eleven had been red since `6cfa1f0`, which added **five** variables
+to `fleet_health_check.sh.j2` — `agent_opnsense_api_ip`, `_pubkey_pin`,
+`_timeout`, `_creds_path` and `agent_opnsense_monitoring_check_name` — without
+updating the tests that render it. Eleven days red, and the only reason anyone
+noticed was running the suite by hand before adding to it.
+
+📌 **Diff the template's variables against the test's, do not fix them one at a
+time.** The first patch supplied `agent_opnsense_api_ip`, and the tests failed
+again on the next missing name. Extracting every `{{ … }}` from the template and
+subtracting what each test supplies found all five in one pass.
+
+⚠️ **The runner's own failure paths are tested**, because a green runner is
+exactly what was missing: a deliberately broken suite makes it exit 1, and a
+filter matching nothing exits 1 rather than reporting success — otherwise a
+renamed directory would read as "all passed".
+
+**Not merged into `run_tests.sh`**, whose contract (root onto a disposable
+container, forcing real faults) is deliberately narrow and stated at the top of
+that file.
+
+**Result: 11/11 for the first time in eleven days.** The four recovered suites
+cover the agent sweep's snapshot dedup, SSH back-off directives, absence
+thresholds and the curl→wget fallback — all read, not merely observed green.
+
+---
+
 ## 2026-08-28 — a lamp being switched off is not a fault, and muting it was the wrong price
 
 **Decided:** the HA entity check takes **per-pattern grace windows**, first match
