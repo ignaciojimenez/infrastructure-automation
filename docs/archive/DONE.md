@@ -17,6 +17,39 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ---
 
+## 2026-08-28 — the container check's self-heal, and the exit code that was an accident
+
+**Decided:** `check_container.sh` no longer attempts self-healing, **because**
+the call it made had never once executed and repairing it would have been worse
+than deleting it. `source stop_run_ha` was wrong four ways: a bare filename, and
+`~/.scripts` is on no PATH anywhere; `source` rather than execute, which would
+have imposed the sourced script's `set -euo pipefail` on the caller; no
+argument, so the CLI it targets would print usage; and its `CONTAINER_NAME` is
+hardcoded to `home-assistant`, so a dead `mosquitto` would have restarted Home
+Assistant.
+
+**Nothing is lost.** Every container runs `restart_policy: unless-stopped`,
+which covers crashes, non-zero exits and reboots on its own — cloudflared has a
+RestartCount of 28 from exactly that. The only uncovered case is a container a
+human deliberately stopped, which `unless-stopped` declines to restart by
+design. The function is renamed `notify_and_recheck`, which is what it does.
+
+🐛 **Removing the dead line exposed that the check's non-zero exit had always
+been an ACCIDENT.** `source` failed on every run, and that failure was the last
+command's status, which became the script's. Delete the broken line and the
+check would detect a dead container, post its own Slack message, and still
+exit 0 — so `enhanced_monitoring_wrapper` would record success, with no state
+tracking, no repeat suppression and no ALERT. The function now reports the
+container's real state in its exit status.
+
+📌 **The lesson worth keeping: a fix that makes an error message disappear can
+remove the only signal that anything was wrong.** Verified by forcing it, not by
+reading the diff — mosquitto stopped gives exit 1 and a real
+`Sending alert (new or changed failure)` through the wrapper; restarted gives
+exit 0.
+
+---
+
 ## 2026-08-28 — the regression suite nobody ran
 
 **Decided:** `tests/run_unit_tests.sh` exists and runs every `tests/unit/*_test.sh`,

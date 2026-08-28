@@ -56,11 +56,11 @@ here is something to read past, every time, forever. The write-up goes to
 (numbers never move), but the order to work them is this, and the dashboard
 renders it:
 
-> **№1** 1c → **№2** 1d → **№3** 2 → **№4** 4 (plex) → **№5** 9 →
-> **№6** 3a/3b → **№7** W1 *(gate passed; needs `agent_access.yml --limit
-> vinylstreamer` first)* → **№8** 19 → **№9** 18 → **№10** 12 → **№11** 20 →
-> **№12** 5 → **№13** 10 → **№14** 11 → **№15** 6 → **№16** 7 →
-> **№17–20** 8/13/14/16
+> **№1** 1c → **№2** 1d → **№3** 2 → **№4** 4 (plex) → **№5** 23 →
+> **№6** 9 → **№7** 3a/3b → **№8** W1 *(gate passed; needs `agent_access.yml
+> --limit vinylstreamer` first)* → **№9** 19 → **№10** 18 → **№11** 12 →
+> **№12** 22 → **№13** 5 → **№14** 10 → **№15** 11 → **№16** 6 → **№17** 7 →
+> **№18–21** 8/13/14/16
 > *(decision-gated — 16 needs a purchase call, the rest need him at the
 > cabinet; not ranked)*
 
@@ -706,56 +706,47 @@ workarounds: the queue self-recovers, so there is no established harm to fix
 and no way to prove a workaround helped.
 ```
 
+**23. Every deploy downloads and executes a third-party installer inside Home Assistant**
+Three tasks in the homeassistant role run on **every single deploy**, with no
+`creates:` guard and no `changed_when`:
+
+```yaml
+command: "curl -fsSL https://get.hacs.xyz -o /config/install_hacs.sh"
+command: "/bin/bash /config/install_hacs.sh"
+command: "/bin/rm /config/install_hacs.sh"
+```
+
+🔴 **This is unpinned remote code execution on a routine cadence.** Whatever
+`get.hacs.xyz` serves at that moment is fetched over the network and run as
+root inside the container that holds the HA config, the recorder database and
+`secrets.yaml` — including the monitor token and the Cloudflare tunnel token.
+There is no checksum, no version pin, and no signature check. A bad day
+upstream, or DNS, is a bad day here, and it is re-rolled on every `--tags
+homeassistant` run rather than once at install time.
+
+📌 **It is also why this host can never reach `changed=0`.** These three are the
+persistent `changed=3` on every second run, which is the repo's own stated proof
+of convergence — so dockassist cannot demonstrate idempotency at all, and a real
+unexpected change hides in the noise of three expected ones.
+
+*State:* found 2026-08-28 while verifying an unrelated deploy; not fixed.
+*Effort:* small. *Needs:* a laptop.
+
+```
+Stop re-running the HACS installer on every deploy. Read docs/TODO.md item 23.
+Three tasks in the homeassistant role curl https://get.hacs.xyz and bash it
+inside the HA container unconditionally — unpinned remote code execution, as
+root, in the container holding secrets.yaml, on every run.
+
+Gate them so they run once: HACS installs to /config/custom_components/hacs, so
+a `creates:`-style guard or a stat + `when:` is enough. Better if cheap: pin a
+release and verify a checksum rather than trusting whatever the URL serves.
+Confirm afterwards that `services.yml --limit dockassist --tags homeassistant`
+reports changed=0 on a second run — today it reports changed=3 and always has,
+which is why this host has never been able to prove idempotency.
+```
+
 ### 🟢 P3 — improvements, no urgency
-
-**20. `check_container.sh`'s self-healing has never worked, and mostly does not matter**
-Found 2026-08-25 by stopping `matter-server` as the acceptance test for item 15.
-The check detected it and alerted correctly; its remediation then failed:
-
-```
-/home/choco/.scripts/check_container.sh: line 42: stop_run_ha: No such file or directory
-```
-
-Line 42 is `source stop_run_ha` — a bare filename, so `source` resolves it
-against `$PATH`. **`~/.scripts` is on no PATH at all** — not cron's, and not an
-interactive login shell's either (both checked 2026-08-26). The file exists and
-is executable; nothing can find it. `check_container.sh` has **one commit in its
-entire history**, the initial migration, and the line was in it from the start,
-so this has never worked and was not broken by any recent change.
-
-✅ **Severity is low, and an earlier version of this entry overstated it.**
-All four containers run `restart_policy: unless-stopped`, which restarts them on
-any crash, non-zero exit or host reboot regardless of this script —
-**cloudflared has a RestartCount of 28**, so Docker's recovery is demonstrably
-doing the work. The only case the dead `source` leaves uncovered is a container
-a human explicitly stopped, and `unless-stopped` deliberately does not restart
-those. Auto-restarting something someone deliberately stopped would arguably be
-wrong anyway. The alert still fires, which is the part that matters.
-
-📌 **Worth fixing as correctness, not as risk** — a remediation that cannot run
-should either work or not be there, because the next reader will assume the host
-self-heals. 🐛 Also decide whether `source` is right at all: `stop_run_ha` is
-Home-Assistant-specific and `check_container.sh` is invoked for four different
-containers, so sourcing it for `mosquitto` would be wrong even if the path resolved.
-
-*State:* diagnosed 2026-08-25/26, not fixed. *Effort:* small. *Needs:* a laptop.
-
-```
-Fix or remove check_container.sh's dead self-healing. Read docs/TODO.md item 20
-— the cause is confirmed, do not re-derive it. Line 42 is `source stop_run_ha`,
-a bare filename, and ~/.scripts is on no PATH anywhere, so it has never run.
-Severity is LOW: restart_policy unless-stopped already covers crashes and
-reboots (cloudflared has restarted 28 times that way), so do not treat this as
-an outage risk.
-
-Decide first whether the remediation should exist at all — stop_run_ha is
-Home-Assistant-specific and this script runs for four different containers, so
-sourcing it for mosquitto would be wrong even with a correct path. If it stays,
-use an absolute path derived from the script's own location, and FORCE IT: stop
-mosquitto, watch the check restart it, confirm the recovery notification.
-```
-
-
 
 **5. Tokens out of cron command lines.** healthchecks.io and Slack tokens sit in
 literal cron args, visible to `crontab -l` and `ps` — and to `read_agent` via
