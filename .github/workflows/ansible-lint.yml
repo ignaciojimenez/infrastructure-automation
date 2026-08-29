@@ -113,7 +113,9 @@ jobs:
       # the thing that went unnoticed. Alerting on both would turn the one
       # watched channel into a second #home-logging, which is the exact failure
       # being fixed here.
-      - name: Alert #home-alerts when main goes red
+      # Quoted: an unquoted " #" opens a YAML comment, which silently truncated
+      # this name to "Alert" and left the rest as a comment ansible-lint rejected.
+      - name: "Alert #home-alerts when main goes red"
         if: failure() && github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_ALERT_WEBHOOK }}
