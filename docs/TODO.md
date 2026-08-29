@@ -537,6 +537,49 @@ Three guards exist because of that, and none is decorative:
    deploy and guard 2 would have silently degraded to "act immediately". The
    script now refuses to run rather than run ungated.
 
+**🔴 2026-08-29 — the streak ended at 4.52 days, and the ladder's verdict was
+wrong. Read this before trusting any layer conclusion.**
+
+The fault returned at ~11:10 with the identical signature (`ASSOC-REJECT
+status_code=16`, all-zero BSSID). The 2-observation gate worked, the ladder
+fired, and it reported **"all three recovery layers failed after 264s"**. The
+plug cycled at 11:25:55 (**6 cycles in 7 days**) and the host was back at
+11:26:53 after 16 min.
+
+**It is vinylstreamer-specific, not an AP event.** HA successfully commanded the
+Shelly plug — Wi-Fi, same VLAN, same AP — at 11:25:55 while vinylstreamer had
+been off-network 15 min. dockassist (wired, same VLAN) has been up since 10 Aug
+with no events in that window.
+
+⚠️ **But layer 3 never ran, so "all three failed" was false.** `brcmfmac` is
+held by `brcmfmac_wcc` (`lsmod` → "Used by: 1"), so `modprobe -r brcmfmac` fails
+with *module in use* — and the script swallowed that error and fell through to
+the failure message. The journal for that window contains **no brcmfmac lines at
+all**, which is how it was caught. Corrected state of the diagnostic:
+
+| Layer | Verdict |
+|---|---|
+| 1 — `nmcli con up` | genuinely tried, **failed** (association rejected 3×) |
+| 2 — interface bounce | genuinely tried, **failed** |
+| 3 — `brcmfmac` reload | **NEVER RAN** — untested, verdict void |
+
+So NM-level and link-level recovery are ruled out. **Whether a driver reload
+works is still open**, and it is now the question that decides whether W1 lives
+above or below the driver. Fixed 2026-08-29 (`6c52b02`): the dependent is
+removed first and every step reports, so "could not run" can never again read as
+"ran and did not help".
+
+⚠️ **Second defect from the same event:** the ladder took **264 s**, not the
+"~30 s" this repo claimed — each `nmcli con up` burned its 90 s default. It
+finished **88 s** before the plug fired. A plug cycle landing mid-ladder would
+destroy the very diagnostic the ladder exists to produce. `nmcli -w 20` now
+bounds it to ~60–90 s.
+
+📌 **What the streak means for powersave.** 4.52 days of uptime versus roughly
+one lockout every 4 h before it — `powersave=2` clearly *helped* and did not
+*fix*. Keep it; stop treating 7 quiet days as the bar for "solved", because the
+fault has now proven it can hide for 4.5.
+
 **📊 2026-08-28 — `powersave=2` is now the prime suspect, and it is measurably
 free.** 3.6 days with **zero** lockouts, zero ladder starts and zero plug
 cycles, against **2 lockouts in 4 hours** the night before it went live. The
