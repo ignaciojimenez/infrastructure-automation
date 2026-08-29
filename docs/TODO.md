@@ -1079,42 +1079,64 @@ executes is not a gate.** Two instances of one bug class now.
 The fleet's own monitoring pages Slack within minutes; the repo that manages
 the fleet was silently broken for a week and a half.
 
-🔴 **Notifications are already enabled, and they still did not work** — so
-"turn on notifications" is NOT the fix, and do not propose it. Probed
-2026-08-29 via `gh api /notifications?all=true`: **zero `CheckSuite` entries
-across every repo**, while the same feed carried 32 `PullRequest`, 4
-`Release` and 1 Dependabot item. The feed works; workflow failures are not
-reaching it. **Unverified:** whether GitHub emailed them instead — there is no
-API for notification preferences, so if the setting is email-only the empty
-inbox is expected and the mail went somewhere that produced no action. Check
-the Actions section of <https://github.com/settings/notifications> before
-building anything; the answer decides whether this needs a setting change or
-a real local gate.
+🔴 **This was never a detection problem, and that decides the fix.** CI caught
+the fault correctly on all 22 pushes and sent an email every time — confirmed
+by Ignacio 2026-08-29: notifications are email, and **he receives them.**
+Nothing went undetected and nothing went unsent. The break is entirely in the
+last hop: *notice → act.*
 
-*State:* **the three findings are fixed** (branch
-`fix/ci-shellcheck-green-2026-08-29`) — shellcheck exits 0 on the exact CI
-invocation and 11/11 unit suites pass. Open only for the recurrence gap.
+So **do NOT build a second detector.** A `tests/lint.sh` plus a pre-push hook
+adds a 23rd detection of something already detected 22 times, and a hook is
+bypassable with `--no-verify` by exactly the person who ignored 22 emails.
+(Probe for the record: `gh api /notifications?all=true` shows zero
+`CheckSuite` entries across every repo while the same feed carries 32
+`PullRequest`, 4 `Release` and 1 Dependabot item — the web inbox is not the
+channel; email is.)
+
+📌 **This repo already knows the answer, in its own vocabulary.**
+`slack_alert` → `#home-alerts` is *watched*; `slack_notify` → `#home-logging`
+is an *unwatched firehose* (see [ARCHITECTURE_DECISIONS.md]). **GitHub's
+failure email is #home-logging.** The fix is to move CI failure into the
+watched channel, not to detect it again.
+
+*Recommended, one change:* post **failed runs on `main` only** to
+`#home-alerts` via the existing webhook
+(`https://hooks.slack.com/services/{{ vault_alert_token }}`, the same one
+`homeassistant/templates/secrets.yaml.j2` renders), with the token as a
+**GitHub encrypted secret** — never in the workflow file. Restricting it to
+`main` + failure keeps it rare and always actionable, which is what protects
+`#home-alerts` from becoming a second firehose.
+
+*State:* **the three findings are fixed and merged** (`0e54911`, CI green) and
+the deprecated-Node action bumps landed in `813a336`. Open only for the
+notice→act gap above.
 *Laptop.*
 
 ```
-Close the gap that let CI stay red for 11 days. Read docs/TODO.md item 25.
-Add ONE local entrypoint — tests/lint.sh — that runs exactly what
-.github/workflows/ansible-lint.yml runs for shellcheck, and change the
-workflow to call that script instead of duplicating the invocation, so the
-two cannot drift. Do NOT widen the file set: scripts/ is not clean yet and
-the workflow comment says why.
+Route CI failure into the channel Ignacio actually watches. Read docs/TODO.md
+item 25 first — the diagnosis is DONE, do not re-derive it and do not redo the
+notification probe.
 
-Do NOT propose "turn on notifications" — they are already on and 22 failures
-still went unnoticed. The GitHub notification inbox holds zero CheckSuite
-entries across every repo while carrying plenty of PR and Release ones, so
-workflow failures are not reaching it. FIRST check the Actions section of
-https://github.com/settings/notifications and report which it is: failures
-not being sent at all, or being emailed to somewhere that produces no action.
-That answer decides whether the fix is a setting or a local gate.
+Settled, do not reopen: CI detected the fault on all 22 pushes and emailed
+every one, and he receives those emails. This is NOT a detection problem, so
+do NOT build tests/lint.sh, a pre-push hook, or any second detector — that
+adds a 23rd detection of something already detected 22 times, and a hook is
+bypassable with --no-verify by the same person who ignored 22 emails.
 
-Verify the script by breaking a test file on purpose and confirming the local
-entrypoint exits non-zero BEFORE the push, then fixing it. A lint script that
-was never run against a known-bad file has not been tested.
+Add a final step to .github/workflows/ansible-lint.yml that posts to
+#home-alerts on failure, gated to push-on-main only (if: failure() && github
+.ref == 'refs/heads/main'), so it stays rare and always actionable — that is
+what keeps #home-alerts from becoming a second firehose like #home-logging.
+Reuse the existing webhook, https://hooks.slack.com/services/<vault_alert_token>
+— the same one homeassistant/templates/secrets.yaml.j2 renders. Put the token
+in a GitHub encrypted secret via `gh secret set`; it must NOT appear in the
+workflow file, and the repo is public.
+
+🔴 Verify by FORCING a real failure, not by reading the YAML: push a branch
+that breaks shellcheck on purpose, confirm the message arrives in #home-alerts
+with a link to the run, then confirm a GREEN run posts nothing. A notifier
+that was never made to fire has not been tested, and one that fires on success
+too is a firehose.
 ```
 
 ### 🧊 Blocked on Ignacio, not on work
