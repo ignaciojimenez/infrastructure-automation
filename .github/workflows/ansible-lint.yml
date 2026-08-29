@@ -99,3 +99,41 @@ jobs:
             fi
           done
           exit $failed
+
+      # Last step on purpose: everything above must have had its chance to fail.
+      #
+      # Why this exists at all — CI caught the shellcheck fault on all 22 pushes
+      # between 18 and 29 Aug and emailed every one, and those emails arrived.
+      # Nothing went undetected and nothing went unsent; the repo stayed broken
+      # for eleven days purely because email is not a channel that produces
+      # action here. #home-alerts is. See docs/TODO.md item 25.
+      #
+      # Gated to failures on a push to main, and nothing else. A red branch is
+      # the author's problem while they are already watching it; a red main is
+      # the thing that went unnoticed. Alerting on both would turn the one
+      # watched channel into a second #home-logging, which is the exact failure
+      # being fixed here.
+      - name: Alert #home-alerts when main goes red
+        if: failure() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_ALERT_WEBHOOK }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          # Read through env, never interpolated into the script below: a commit
+          # message is untrusted input and ${{ }} inside `run` is shell injection.
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          set -eu
+          if [ -z "$SLACK_WEBHOOK" ]; then
+            echo "SLACK_ALERT_WEBHOOK is not set, so this failure was not announced."
+            echo "Set it with: gh secret set SLACK_ALERT_WEBHOOK"
+            exit 1
+          fi
+          short_sha=$(printf '%s' "$COMMIT_SHA" | cut -c1-7)
+          subject=$(printf '%s' "$COMMIT_MSG" | head -1)
+          # jq builds the payload so quotes or newlines in a commit subject
+          # cannot break out of the JSON string.
+          jq -n --arg sha "$short_sha" --arg subject "$subject" --arg url "$RUN_URL" \
+            '{text: ("🔴 *CI red on main* — infrastructure-automation\n`" + $sha + "` " + $subject + "\n" + $url)}' \
+          | curl -sS --fail-with-body -X POST \
+              -H 'Content-type: application/json' --data @- "$SLACK_WEBHOOK"
