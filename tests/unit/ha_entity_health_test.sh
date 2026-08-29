@@ -216,6 +216,10 @@ expect_rc 0 "200 entities flipping at once during a restart does not page"
 
 # ...but an HA that is still broken an hour later must page. A restart is
 # quiet; a restart that never finished is not.
+# The split is the point: state() takes one entity:age pair per argument, and
+# 200 of them are generated rather than typed. Quoting would pass all 200 as a
+# single argument and rsplit(":") would then build one nonsense entity.
+# shellcheck disable=SC2046
 state "$WORK/st3b.json" $(python3 -c 'print(" ".join("sensor.e%03d:3600" % i for i in range(200)))')
 run "$WORK/st3b.json" check 1 200 "$WORK/s3.json"
 if [ "$RC" -gt 0 ]; then

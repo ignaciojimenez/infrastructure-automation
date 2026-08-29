@@ -49,7 +49,7 @@ chmod 755 "$MW_DIR"
 # ---------------------------------------------------------------------------
 assert_precondition "cron is running" systemctl is-active --quiet cron
 run_uut_as "$INFRA_USER" scripts/common/system_health_check.sh
-baseline_status="$_uut_status"
+baseline_status=$(uut_status)
 note "baseline exit status with everything healthy: $baseline_status"
 
 # ---------------------------------------------------------------------------

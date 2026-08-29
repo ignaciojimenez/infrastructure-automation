@@ -166,6 +166,13 @@ assert_exit_nonzero() {
     fi
 }
 
+# The status of the last run_uut/run_uut_as, for a case that needs to hold on
+# to it — the baseline for assert_exit_equals below. Cases go through this
+# rather than reading $_uut_status: the underscore names are harness internals,
+# and a case that touches them is also unreadable to shellcheck, which cannot
+# follow this file through the $(dirname "$0") in every case's source line.
+uut_status() { printf '%s' "$_uut_status"; }
+
 # Compare against a status captured earlier, for a case whose claim is "this
 # changed nothing". On a host that carries an unrelated issue — a container with
 # no unattended-upgrades, say — `assert_exit_zero` would fail for a reason the
