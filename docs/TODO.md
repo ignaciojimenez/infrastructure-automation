@@ -1079,6 +1079,18 @@ executes is not a gate.** Two instances of one bug class now.
 The fleet's own monitoring pages Slack within minutes; the repo that manages
 the fleet was silently broken for a week and a half.
 
+🔴 **Notifications are already enabled, and they still did not work** — so
+"turn on notifications" is NOT the fix, and do not propose it. Probed
+2026-08-29 via `gh api /notifications?all=true`: **zero `CheckSuite` entries
+across every repo**, while the same feed carried 32 `PullRequest`, 4
+`Release` and 1 Dependabot item. The feed works; workflow failures are not
+reaching it. **Unverified:** whether GitHub emailed them instead — there is no
+API for notification preferences, so if the setting is email-only the empty
+inbox is expected and the mail went somewhere that produced no action. Check
+the Actions section of <https://github.com/settings/notifications> before
+building anything; the answer decides whether this needs a setting change or
+a real local gate.
+
 *State:* **the three findings are fixed** (branch
 `fix/ci-shellcheck-green-2026-08-29`) — shellcheck exits 0 on the exact CI
 invocation and 11/11 unit suites pass. Open only for the recurrence gap.
@@ -1092,11 +1104,17 @@ workflow to call that script instead of duplicating the invocation, so the
 two cannot drift. Do NOT widen the file set: scripts/ is not clean yet and
 the workflow comment says why.
 
-Then decide whether it gets a pre-push hook or a GitHub notification setting
-— pick one, do not build both. Verify by breaking a test file on purpose and
-confirming the local entrypoint exits non-zero BEFORE the push, then fixing
-it. A lint script that was never run against a known-bad file has not been
-tested.
+Do NOT propose "turn on notifications" — they are already on and 22 failures
+still went unnoticed. The GitHub notification inbox holds zero CheckSuite
+entries across every repo while carrying plenty of PR and Release ones, so
+workflow failures are not reaching it. FIRST check the Actions section of
+https://github.com/settings/notifications and report which it is: failures
+not being sent at all, or being emailed to somewhere that produces no action.
+That answer decides whether the fix is a setting or a local gate.
+
+Verify the script by breaking a test file on purpose and confirming the local
+entrypoint exits non-zero BEFORE the push, then fixing it. A lint script that
+was never run against a known-bad file has not been tested.
 ```
 
 ### 🧊 Blocked on Ignacio, not on work
