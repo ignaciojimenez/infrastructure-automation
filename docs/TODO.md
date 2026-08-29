@@ -56,18 +56,23 @@ here is something to read past, every time, forever. The write-up goes to
 (numbers never move), but the order to work them is this, and the dashboard
 renders it:
 
-> **№1** 1c → **№2** 1d → **№3** 2 → **№4** 4 (plex) → **№5** 9 →
-> **№6** 3a/3b → **№7** W1 *(gate passed; needs `agent_access.yml --limit
-> vinylstreamer` first)* → **№8** 19 → **№9** 18 → **№10** 12 → **№11** 22 →
-> **№12** 5 → **№13** 10 → **№14** 11 → **№15** 6 → **№16** 7 →
-> **№17–20** 8/13/14/16
+> **№1** 24 *(public repo, security)* → **№2** 18 *(the only active fault, and
+> it gates 1d)* → **№3** 1c → **№4** 1d *(only after 18)* → **№5** 2 →
+> **№6** 4 (plex) → **№7** 9 → **№8** 3a/3b → **№9** W1 *(gate passed; needs
+> `agent_access.yml --limit vinylstreamer` first)* → **№10** 5 → **№11** 19 →
+> **№12** 12 → **№13** 22 → **№14** 10 → **№15** 11 → **№16** 6 → **№17** 7 →
+> **№18–21** 8/13/14/16
 > *(decision-gated — 16 needs a purchase call, the rest need him at the
 > cabinet; not ranked)*
 
-**20 sits at №12, not №1.** It was briefly ranked first on the belief that
-container auto-recovery was dead fleet-wide. It is not: `unless-stopped` covers
-every crash and reboot, and the only gap is a container a human deliberately
-stopped. The dead code is worth removing; it is not worth pre-empting anything.
+**Re-ranked 2026-08-29 on the question "is 1c really the most important?"** —
+it was not. **24 enters at №1**: it is a live disclosure in a public repo, and
+redacting a document is cheap. **18 takes №2** because it is the only thing
+actively recurring — nine NIC stalls since 11 Aug — and because it inverts the
+obvious order: **1d doubles the saturation runs, so doing it before 18 would
+knowingly make the active fault worse.** 1c is independent and stays ahead of
+1d. Nothing else was time-sensitive enough to move.
+
 
 
 
@@ -749,6 +754,58 @@ workarounds: the queue self-recovers, so there is no established harm to fix
 and no way to prove a workaround helped.
 ```
 
+**24. The public repo maps your wireless topology, including where PMF is off**
+`docs/NETWORK.md` carries a full `SSID → Network → VLAN → L2 isolation → PMF`
+table, plus a section headed *"The IoT SSID has protected management frames
+disabled"* naming `estonoesmazagon_iot` explicitly. The repo is **PUBLIC**
+(confirmed via `gh repo view` 2026-08-29).
+
+📌 **Be precise about what is actually leaked**, because it decides how much of a
+hurry this is:
+- **SSID names** — broadcast in beacons. Discoverable by anyone in range, not a
+  secret, and not worth pretending otherwise.
+- **PMF disabled** — also advertised in RSN capabilities, so likewise
+  discoverable on site.
+- **VLAN mapping and L2 isolation posture** — **not** remotely discoverable.
+  This is genuine internal topology disclosure.
+
+So the cost is twofold: real disclosure of which VLAN holds what and where
+isolation is absent, plus dropping reconnaissance from *"be in RF range and
+analyse beacons"* to *"read GitHub"*. For a public portfolio repo belonging to
+someone whose profession is platform security, it is the wrong artefact to carry.
+
+⚠️ **Redacting HEAD does not unpublish it.** The table is in git history and in
+any clone or fork. A history rewrite is possible but is its own decision with
+its own costs, and it cannot recall what has already been read. That trade
+should be made deliberately rather than assumed.
+
+🔧 **Enabling PMF on the IoT SSID is the better fix and a separate one** — it
+removes the weakness rather than hiding the note about it. Check what breaks
+first; older IoT kit often cannot associate with PMF required.
+
+*State:* diagnosed 2026-08-29 (promoted out of item 12, where it was one bullet
+of fifteen). *Effort:* small to redact, larger to decide on history.
+*Needs:* a laptop, and a decision from Ignacio on the history question.
+
+```
+Reduce what docs/NETWORK.md discloses. Read docs/TODO.md item 24 first — the
+repo is public and the analysis of what is genuinely leaked versus merely
+broadcast is already there, do not re-derive it.
+
+Redact the VLAN/isolation columns and the PMF section from the tracked file;
+SSID names alone are broadcast anyway, so the value is in the correlation and
+the topology, not the names. Keep the operational detail somewhere Ignacio can
+still read it — a vault-rendered doc or an untracked local file — because
+NETWORK.md exists for a reason and blanking it helps nobody.
+
+Then TELL HIM PLAINLY what redacting HEAD does and does not achieve: the table
+remains in git history, in every clone and in any fork, so this narrows future
+exposure only. Do not rewrite history without an explicit decision.
+
+Do NOT change wireless config as part of this. Enabling PMF on the IoT SSID is
+the better fix and belongs in its own change, after checking what fails.
+```
+
 ### 🟢 P3 — improvements, no urgency
 
 **5. Tokens out of cron command lines.** healthchecks.io and Slack tokens sit in
@@ -898,14 +955,6 @@ One branch, tick them off. Phone-taggable lines marked 📱.
   `site.yml --limit unifi-lxc --check --diff` and align per-item.
 - `INJECT_FACTS_AS_VARS` goes away in ansible-core 2.24; the repo uses bare
   fact names everywhere. Mechanical repo-wide sweep, own branch.
-- 🔒 `docs/NETWORK.md` publishes all five SSIDs with their VLANs in a public
-  repo — including that the IoT SSID is **the only one with `pmf_mode`
-  disabled**, which names the deauth-vulnerable network for anyone reading.
-  `thread_wifi_link_ssid` moved to vault on 2026-08-23, but that only narrows
-  future exposure while this table stands. Decide: accept it, or move the
-  SSID/PMF columns behind vault-rendered docs. Enabling PMF on the IoT SSID is
-  the separate, better fix — check what breaks first, older IoT kit often cannot
-  do it.
 - cobra and dockassist still carry malformed `dt_overlay="disable-bt"` /
   `dt_overlay="disable-wifi"` lines in `/boot/firmware/config.txt`, left by an
   old `rpi-provisioner`. The directive is `dtoverlay=`, unquoted, so they are
@@ -916,7 +965,7 @@ One branch, tick them off. Phone-taggable lines marked 📱.
 📱 lines work from a phone, the rest want a laptop.
 
 ```
-Work through the small-fix batch. Read docs/TODO.md item 12 — fifteen
+Work through the small-fix batch. Read docs/TODO.md item 12 — fourteen
 diagnosed one-liners; do them on one branch and tick each off in the file as
 it lands. Start with the CLAUDE.md deploy_monitoring wording (it hid a
 4-month drift). For each fix verify the behaviour, not the absence of the
