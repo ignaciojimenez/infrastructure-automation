@@ -57,6 +57,13 @@ NMCLI="${WIFI_RECONNECT_NMCLI:-sudo nmcli}"
 IPCMD="${WIFI_RECONNECT_IP:-sudo ip}"
 MODPROBE="${WIFI_RECONNECT_MODPROBE:-sudo modprobe}"
 SETI="${WIFI_RECONNECT_SETTLE:-8}"
+# 🔴 Bound each `nmcli con up`. Its DEFAULT is 90 s, and three layers each
+# burning that took the 2026-08-29 run to **264 s** — long enough that the
+# ladder nearly outran the plug watchdog it is supposed to beat (it finished
+# 88 s before the plug fired). The ladder must always complete inside the
+# plug's window or the plug reboots a host mid-recovery and the layer
+# diagnostic is lost. 20 s is ample: a working association completes in ~2 s.
+NMWAIT="${WIFI_RECONNECT_NMWAIT:-20}"
 CURL="${WIFI_RECONNECT_CURL:-curl}"
 
 STATE_DIR="${WIFI_RECONNECT_STATE_DIR:-/var/log/monitoring-state}"
@@ -151,7 +158,7 @@ START=$(date +%s)
 
 # --- Layer 1: NetworkManager gave up; ask it again. ---------------------------
 echo "→ layer 1: ${NMCLI} con up ${CONN}"
-$NMCLI con up "$CONN" >/dev/null 2>&1
+$NMCLI -w "$NMWAIT" con up "$CONN" >/dev/null 2>&1
 sleep "$SETI"
 if health_is_ok; then
     echo "0" > "$STATE_FILE" 2>/dev/null || true
@@ -167,7 +174,7 @@ $IPCMD link set "$IFACE" down >/dev/null 2>&1
 sleep 2
 $IPCMD link set "$IFACE" up >/dev/null 2>&1
 sleep 2
-$NMCLI con up "$CONN" >/dev/null 2>&1
+$NMCLI -w "$NMWAIT" con up "$CONN" >/dev/null 2>&1
 sleep "$SETI"
 if health_is_ok; then
     echo "0" > "$STATE_FILE" 2>/dev/null || true
@@ -181,12 +188,29 @@ fi
 # ⚠️ Last resort before the plug. Reloading the module on a host whose only link
 # is this radio strands it if the reload fails — which is precisely why the plug
 # watchdog stays in place and is not being retired by this script.
+# 🔴 `brcmfmac` is held by `brcmfmac_wcc` (lsmod: "Used by: 1"), so a bare
+# `modprobe -r brcmfmac` fails with "module in use" — and the original swallowed
+# that error and went straight to "all three layers failed". On 2026-08-29 the
+# ladder therefore reported a verdict on a layer THAT NEVER RAN: the journal
+# for that window contains no brcmfmac lines at all.
+#
+# So: remove the dependent first, and report each step. A layer that cannot run
+# must say so, never be mistaken for a layer that ran and did not help.
 echo "→ layer 3: reload brcmfmac"
-$MODPROBE -r brcmfmac >/dev/null 2>&1
+_wcc=$($MODPROBE -r brcmfmac_wcc 2>&1) \
+    && echo "   rmmod brcmfmac_wcc: ok" \
+    || echo "   rmmod brcmfmac_wcc: FAILED (${_wcc:-no message}) — may simply be absent"
+_rm=$($MODPROBE -r brcmfmac 2>&1) \
+    && echo "   rmmod brcmfmac: ok" \
+    || echo "   rmmod brcmfmac: FAILED (${_rm:-no message}) — layer 3 did NOT run"
 sleep 3
-$MODPROBE brcmfmac >/dev/null 2>&1
-sleep 5
-$NMCLI con up "$CONN" >/dev/null 2>&1
+_ld=$($MODPROBE brcmfmac 2>&1) \
+    && echo "   modprobe brcmfmac: ok" \
+    || echo "   modprobe brcmfmac: FAILED (${_ld:-no message})"
+# The interface has to reappear and NM has to adopt it before a connect can
+# possibly succeed; 5 s was optimistic for a cold driver.
+sleep 10
+$NMCLI -w "$NMWAIT" con up "$CONN" >/dev/null 2>&1
 sleep "$SETI"
 if health_is_ok; then
     echo "0" > "$STATE_FILE" 2>/dev/null || true
