@@ -17,6 +17,66 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ---
 
+## 2026-08-30 — CI was red for 11 days with the alarm working perfectly
+
+**The fault:** `ansible-lint.yml` failed on **every push from 18 to 29 Aug** — 22
+runs, always the same step (`ShellCheck the test harness`), never any other.
+Three findings, introduced with test files added over that window:
+`run_unit_tests.sh` checking `$?` after an assignment (SC2181),
+`health_maintenance_window.sh` reading `$_uut_status` out of the harness
+(SC2154), and `ha_entity_health_test.sh` splitting 200 generated arguments
+(SC2046, where the split is the mechanism). Fixed in `0a14ee0`, merged `0e54911`.
+
+**Decided: do not add a local lint gate**, **because** this was never a
+detection problem. CI caught the fault on all 22 pushes and emailed every one,
+and Ignacio *receives* those emails. Nothing went undetected; nothing went
+unsent. A `tests/lint.sh` plus a pre-push hook would have been a 23rd detection
+of something already detected 22 times, behind a hook `--no-verify` walks past.
+**The broken hop was `notice → act`, and only that hop.**
+
+**So the fix was routing, not detection.** This repo already draws the
+distinction in its own vocabulary: `slack_alert` → `#home-alerts` is watched,
+`slack_notify` → `#home-logging` is an unwatched firehose. **GitHub's failure
+email is `#home-logging`.** A final workflow step now posts a red `main` to
+`#home-alerts` (`5e2e5f6`), webhook in a GitHub encrypted secret because the
+repo is public.
+
+**Gated to `failure()` on a push to `main`, deliberately.** A red branch is the
+author's problem while they are watching it; a red `main` is what went
+unnoticed. Alerting on both would turn the one watched channel into a second
+`#home-logging` — the exact failure being fixed.
+
+**Verified by forcing it, not by reading YAML.** `3ebfa81` deliberately broke
+shellcheck on `main`; run `33280938971` went red and the message reached
+`#home-alerts` at 01:26:40 CEST with the right SHA and a resolving run link.
+Reverted in `db674fa`, whose green run posted nothing. Both branches observed on
+the real runner. The payload is built with `jq` and was checked against a commit
+subject carrying quotes, braces, a backslash and a newline — output stayed valid
+JSON with exactly the key `text` and no injected key. The commit subject reaches
+the script through `env`, never `${{ }}` inside `run`, which on a public repo is
+shell injection.
+
+**Two things cost time and are worth not repeating.** The step was first written
+one position too early, where `failure()` cannot see the final step fail — a
+notifier that would never have fired for a `Validate role structure` failure.
+And `- name: Alert #home-alerts …` unquoted: ` #` opens a YAML comment, which
+silently truncated the name to `Alert` and turned the rest into a comment
+ansible-lint rejected, turning `main` red (`5e2e5f6` → fixed `600e75f`). **A
+step-order dump printed `12. Alert` and the truncation was read straight past.**
+
+**Also landed:** `actions/checkout@v4 → v7` and `setup-python@v5 → v7`
+(`813a336`), off the deprecated Node 20 runtime — verified against each action's
+own `action.yml` rather than assumed, and each major's notes checked for
+anything touching this workflow (nothing did).
+
+**Left open, and it needs Ignacio:** the failure email now duplicates the Slack
+alert. There is **no API** for that preference — `/user/notification_settings`,
+`/settings/notifications` and `/user/preferences/notifications` all 404, so it is
+a UI toggle — and it is **global across the 10 repos that have workflows**, not
+per-repo. See TODO item 26.
+
+---
+
 ## 2026-08-28 — HACS removed, and dockassist proves idempotency for the first time
 
 **Decided:** HACS is gone rather than gated, **because** it was installed,

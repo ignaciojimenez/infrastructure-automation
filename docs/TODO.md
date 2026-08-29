@@ -3,7 +3,7 @@
 **Improvements and fixes waiting to be worked on.** Start at *What to work on
 next*; the first item you can act on is the right one.
 
-Updated: 2026-08-29
+Updated: 2026-08-30
 
 | Where a thing lives | |
 |---|---|
@@ -62,8 +62,7 @@ renders it:
 > fired 29 Aug; layered recovery is deployed and now produces a trustworthy
 > layer verdict on the next outage)* → **№10** 5 → **№11** 19 →
 > **№12** 12 → **№13** 22 → **№14** 10 → **№15** 11 → **№16** 6 → **№17** 7 →
-> **№18** 25 →
-> **№19–22** 8/13/14/16
+> **№18–21** 8/13/14/16 · **№22** 26 *(one UI toggle, global — his call)*
 > *(decision-gated — 16 needs a purchase call, the rest need him at the
 > cabinet; not ranked)*
 
@@ -1062,84 +1061,49 @@ Then grep the .gz for a string you KNOW is in it and confirm a non-zero count �
 a reworded helper that was never grepped has not been tested.
 ```
 
-**25. Nothing runs the CI lint locally, so a red pipeline stays red unnoticed**
-`ansible-lint.yml` was red on **every push from 2026-08-18 to 2026-08-29** — 22
-consecutive runs, always failing on the same step (`ShellCheck the test
-harness`) and never on any other. Three findings, all introduced with test
-files added over that window.
-
-🐛 **The findings are not the problem — the eleven days are.** There is no
-git hook, no `make lint`, no script that runs what CI runs. The only way to
-learn the pipeline is broken is to open the Actions tab, and nothing prompts
-that. This is the same shape as the `tests/unit/` suites that were red for
-eleven days (see the header comment in `run_unit_tests.sh`): **a gate nobody
-executes is not a gate.** Two instances of one bug class now.
-
-⚠️ Note what did *not* happen: no alert, no digest, no failing-push warning.
-The fleet's own monitoring pages Slack within minutes; the repo that manages
-the fleet was silently broken for a week and a half.
-
-🔴 **This was never a detection problem, and that decides the fix.** CI caught
-the fault correctly on all 22 pushes and sent an email every time — confirmed
-by Ignacio 2026-08-29: notifications are email, and **he receives them.**
-Nothing went undetected and nothing went unsent. The break is entirely in the
-last hop: *notice → act.*
-
-So **do NOT build a second detector.** A `tests/lint.sh` plus a pre-push hook
-adds a 23rd detection of something already detected 22 times, and a hook is
-bypassable with `--no-verify` by exactly the person who ignored 22 emails.
-(Probe for the record: `gh api /notifications?all=true` shows zero
-`CheckSuite` entries across every repo while the same feed carries 32
-`PullRequest`, 4 `Release` and 1 Dependabot item — the web inbox is not the
-channel; email is.)
-
-📌 **This repo already knows the answer, in its own vocabulary.**
-`slack_alert` → `#home-alerts` is *watched*; `slack_notify` → `#home-logging`
-is an *unwatched firehose* (see [ARCHITECTURE_DECISIONS.md]). **GitHub's
-failure email is #home-logging.** The fix is to move CI failure into the
-watched channel, not to detect it again.
-
-*Recommended, one change:* post **failed runs on `main` only** to
-`#home-alerts` via the existing webhook
-(`https://hooks.slack.com/services/{{ vault_alert_token }}`, the same one
-`homeassistant/templates/secrets.yaml.j2` renders), with the token as a
-**GitHub encrypted secret** — never in the workflow file. Restricting it to
-`main` + failure keeps it rare and always actionable, which is what protects
-`#home-alerts` from becoming a second firehose.
-
-*State:* **the three findings are fixed and merged** (`0e54911`, CI green) and
-the deprecated-Node action bumps landed in `813a336`. Open only for the
-notice→act gap above.
-*Laptop.*
-
-```
-Route CI failure into the channel Ignacio actually watches. Read docs/TODO.md
-item 25 first — the diagnosis is DONE, do not re-derive it and do not redo the
-notification probe.
-
-Settled, do not reopen: CI detected the fault on all 22 pushes and emailed
-every one, and he receives those emails. This is NOT a detection problem, so
-do NOT build tests/lint.sh, a pre-push hook, or any second detector — that
-adds a 23rd detection of something already detected 22 times, and a hook is
-bypassable with --no-verify by the same person who ignored 22 emails.
-
-Add a final step to .github/workflows/ansible-lint.yml that posts to
-#home-alerts on failure, gated to push-on-main only (if: failure() && github
-.ref == 'refs/heads/main'), so it stays rare and always actionable — that is
-what keeps #home-alerts from becoming a second firehose like #home-logging.
-Reuse the existing webhook, https://hooks.slack.com/services/<vault_alert_token>
-— the same one homeassistant/templates/secrets.yaml.j2 renders. Put the token
-in a GitHub encrypted secret via `gh secret set`; it must NOT appear in the
-workflow file, and the repo is public.
-
-🔴 Verify by FORCING a real failure, not by reading the YAML: push a branch
-that breaks shellcheck on purpose, confirm the message arrives in #home-alerts
-with a link to the run, then confirm a GREEN run posts nothing. A notifier
-that was never made to fire has not been tested, and one that fires on success
-too is a firehose.
-```
-
 ### 🧊 Blocked on Ignacio, not on work
+
+**26. The CI failure email now duplicates the #home-alerts message**
+A red `main` announces itself twice: the Slack alert added 2026-08-30, and
+GitHub's own failure email. Ignacio does not want both.
+
+🔴 **There is no CLI path — this one really is a UI toggle.** Probed
+2026-08-30: `/user/notification_settings`, `/settings/notifications` and
+`/user/preferences/notifications` all return 404. No REST endpoint exposes the
+preference.
+
+⚠️ **And it is global, not per-repo.** Ten repos have workflows —
+`touchid-agent` (4), `ignaciojimenezpi.github.io` (6), `pastebin-worker` (4),
+`.allstar` (3), `cobra` (2), `dotfiles`, `liquidsoap-daemon`,
+`recordsdelmundo-site`, `vulnalerts`, `infrastructure-automation`. Turning the
+email off blinds **nine repos that have no Slack alerting**, including a public
+one distributed through a brew tap and the Allstar security policy repo.
+
+📌 **The duplicate is nominal, not real.** The email costs no attention today —
+22 of them were scrolled past in 11 days. This is *one ignored email plus one
+alert he will see*, not two competing notifications.
+
+*State:* decision only, nothing to build. *Effort:* one toggle, or a small
+rollout. *Needs:* him. *Phone — it is a browser setting.*
+
+```
+Decide the CI failure email. Read docs/TODO.md item 26 — the probe is DONE, do
+not repeat it: there is no API for this preference (three endpoints, all 404),
+it is a UI toggle at https://github.com/settings/notifications, and it is
+GLOBAL across the 10 repos that have workflows.
+
+Two coherent options, and it is Ignacio's call, not the agent's:
+(a) Leave it. The email is already ignored, so the duplicate costs nothing and
+    nine other repos keep their only failure notification.
+(b) Turn it off AND roll the #home-alerts step out to the repos where a red CI
+    actually matters — touchid-agent and .allstar first. Do NOT turn it off
+    without that rollout; that trades a duplicate for a blind spot.
+
+If (b): reuse the step from .github/workflows/ansible-lint.yml verbatim,
+including the failure()+push+main gating and the env-not-${{ }} handling of the
+commit subject. Each repo needs its own SLACK_ALERT_WEBHOOK secret. Force a
+real failure in each and watch #home-alerts before calling any of them done.
+```
 
 **16. The Thread mesh has exactly one border router, and it is a roaming HomePod**
 Needs a purchase decision. Every Matter-over-Thread device in the house reaches
