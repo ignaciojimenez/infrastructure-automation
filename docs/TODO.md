@@ -3,7 +3,7 @@
 **Improvements and fixes waiting to be worked on.** Start at *What to work on
 next*; the first item you can act on is the right one.
 
-Updated: 2026-08-23
+Updated: 2026-08-29
 
 | Where a thing lives | |
 |---|---|
@@ -62,7 +62,8 @@ renders it:
 > fired 29 Aug; layered recovery is deployed and now produces a trustworthy
 > layer verdict on the next outage)* → **№10** 5 → **№11** 19 →
 > **№12** 12 → **№13** 22 → **№14** 10 → **№15** 11 → **№16** 6 → **№17** 7 →
-> **№18–21** 8/13/14/16
+> **№18** 25 →
+> **№19–22** 8/13/14/16
 > *(decision-gated — 16 needs a purchase call, the rest need him at the
 > cabinet; not ranked)*
 
@@ -1059,6 +1060,43 @@ Verify by FORCING both branches as read_agent over SSH, not as choco:
     -> must still work unchanged
 Then grep the .gz for a string you KNOW is in it and confirm a non-zero count —
 a reworded helper that was never grepped has not been tested.
+```
+
+**25. Nothing runs the CI lint locally, so a red pipeline stays red unnoticed**
+`ansible-lint.yml` was red on **every push from 2026-08-18 to 2026-08-29** — 22
+consecutive runs, always failing on the same step (`ShellCheck the test
+harness`) and never on any other. Three findings, all introduced with test
+files added over that window.
+
+🐛 **The findings are not the problem — the eleven days are.** There is no
+git hook, no `make lint`, no script that runs what CI runs. The only way to
+learn the pipeline is broken is to open the Actions tab, and nothing prompts
+that. This is the same shape as the `tests/unit/` suites that were red for
+eleven days (see the header comment in `run_unit_tests.sh`): **a gate nobody
+executes is not a gate.** Two instances of one bug class now.
+
+⚠️ Note what did *not* happen: no alert, no digest, no failing-push warning.
+The fleet's own monitoring pages Slack within minutes; the repo that manages
+the fleet was silently broken for a week and a half.
+
+*State:* **the three findings are fixed** (branch
+`fix/ci-shellcheck-green-2026-08-29`) — shellcheck exits 0 on the exact CI
+invocation and 11/11 unit suites pass. Open only for the recurrence gap.
+*Laptop.*
+
+```
+Close the gap that let CI stay red for 11 days. Read docs/TODO.md item 25.
+Add ONE local entrypoint — tests/lint.sh — that runs exactly what
+.github/workflows/ansible-lint.yml runs for shellcheck, and change the
+workflow to call that script instead of duplicating the invocation, so the
+two cannot drift. Do NOT widen the file set: scripts/ is not clean yet and
+the workflow comment says why.
+
+Then decide whether it gets a pre-push hook or a GitHub notification setting
+— pick one, do not build both. Verify by breaking a test file on purpose and
+confirming the local entrypoint exits non-zero BEFORE the push, then fixing
+it. A lint script that was never run against a known-bad file has not been
+tested.
 ```
 
 ### 🧊 Blocked on Ignacio, not on work
