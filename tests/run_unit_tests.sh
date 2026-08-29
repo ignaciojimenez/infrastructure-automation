@@ -35,8 +35,7 @@ for t in "$ROOT"/unit/*_test.sh; do
 
     # Captured, not streamed: a passing suite should be one line each. The full
     # output is printed only for failures, which is when it is worth reading.
-    out=$(sh "$t" 2>&1)
-    if [ $? -eq 0 ]; then
+    if out=$(sh "$t" 2>&1); then
         pass=$((pass + 1))
         printf '  ✅ %s\n' "$name"
     else
