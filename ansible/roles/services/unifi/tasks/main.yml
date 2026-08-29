@@ -67,8 +67,10 @@
         var: unifi_install_result.stdout_lines
       tags: [unifi, install]
 
+    # command, not shell: no pipe, redirect or glob here, so a shell buys
+    # nothing. The installer task above genuinely needs one for `2>&1 | tee`.
     - name: Check installation log for errors
-      ansible.builtin.shell:
+      ansible.builtin.command:
         cmd: tail -50 {{ unifi_install_dir }}/install.log
       register: install_log
       failed_when: false
