@@ -56,10 +56,11 @@ here is something to read past, every time, forever. The write-up goes to
 (numbers never move), but the order to work them is this, and the dashboard
 renders it:
 
-> **№1** 24 *(public repo, security)* → **№2** 18 *(the only active fault, and
-> it gates 1d)* → **№3** 1c → **№4** 1d *(only after 18)* → **№5** 2 →
-> **№6** 4 (plex) → **№7** 9 → **№8** 3a/3b → **№9** W1 *(gate passed; needs
-> `agent_access.yml --limit vinylstreamer` first)* → **№10** 5 → **№11** 19 →
+> **№1** 24 *(public repo, security)* → **№2** 18 *(active fault, and it gates
+> 1d)* → **№3** 1c → **№4** 1d *(only after 18)* → **№5** 2 →
+> **№6** 4 (plex) → **№7** 9 → **№8** 3a/3b → **№9** W1 *(also an active fault — it
+> fired 29 Aug; layered recovery is deployed and now produces a trustworthy
+> layer verdict on the next outage)* → **№10** 5 → **№11** 19 →
 > **№12** 12 → **№13** 22 → **№14** 10 → **№15** 11 → **№16** 6 → **№17** 7 →
 > **№18–21** 8/13/14/16
 > *(decision-gated — 16 needs a purchase call, the rest need him at the
