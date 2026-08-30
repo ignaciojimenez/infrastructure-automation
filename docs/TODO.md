@@ -287,7 +287,7 @@ creates *and* destroys, and CT 198 covers Debian 12 for the Pis. **Do not rebuil
 any of that.**
 
 *State:* assessed, planned below. *Effort:* 3a small, 3b medium, 3c small.
-*Needs:* a laptop, and CT 199 started (`ssh cwwk 'sudo pct start 199'`).
+*Needs:* a laptop, and CT 199 started (`ssh cwwk 'sudo /usr/sbin/pct start 199'`).
 
 **3a. Run `bootstrap.yml` and a full `site.yml` against a container — never done**
 The playbook goal 1 most exists for is the one least tested. Highest value here,
@@ -298,7 +298,7 @@ Run the playbooks that have never been tested against a container. Read
 docs/TESTING_GOALS.md goal 1 first — the inventory and provisioning already
 exist, do not rebuild them.
 
-Start CT 199 (ssh cwwk "sudo pct start 199"). Then, against
+Start CT 199 (ssh cwwk "sudo /usr/sbin/pct start 199"). Then, against
 ansible/inventory/test_hosts.yml ONLY — never the fleet inventory:
 (1) bootstrap.yml against a TEST_CT_BARE=1 container with -e ansible_user=root,
 which is the only state where its user-creation branch runs at all;
@@ -342,6 +342,23 @@ expensive half.
 drops privilege — it has no `run_uut` call, so it was out of scope for a
 mechanical conversion. The wrapper does run as the infrastructure user under cron
 on every fleet host.
+
+```
+Add `sandbox.sh --create` so a fresh box does not need a laptop tap. Read
+docs/TESTING_GOALS.md goal 2 and docs/TODO.md item 3c first — the scope
+boundary is already decided and is NOT up for redesign: agent-lxc gets no
+pct create/destroy/exec and no Linux-reachable vault (option (a), 18 Aug).
+The agent proposes; a human runs the ephemeral test.
+
+Do 3a and 3b first — 3b is the driver this extends, and building 3c against
+a driver that does not exist yet means guessing at its interface.
+
+Also open and narrower, fold it in only if it is genuinely one edit:
+wrapper_state_collision never drops privilege — it has no run_uut call, so
+the mechanical conversion skipped it, yet the wrapper DOES run as the
+infrastructure user under cron on every fleet host. Fixing it means the test
+exercises the privilege level production actually uses.
+```
 
 **W1. vinylstreamer's wifi lockout root cause**
 📌 **Addressed as `W1`, not as a number.** It carried the heading "4." until
@@ -839,6 +856,19 @@ flow on 30 Aug was IPv4 — Happy Eyeballs falls back. Latent defect only.
 *State:* mechanism proven, no real client seen taking that path. *Needs:* a
 reason to care. Do not act unless a capture shows a client actually stalling on
 it — narrowing the repeater's interface list is the fix if one ever does.
+
+```
+Decide whether reflected unroutable IPv6 is worth acting on. Read docs/TODO.md
+item 29 — the measurement is DONE and so is the follow-up question it used to
+ask: a forced connect to Bano's reflected fe80:: hangs 75 s, BUT every real
+phone->Bano flow on 30 Aug was IPv4, so Happy Eyeballs masks it. Do not re-run
+either check.
+
+This is latent, not an active fault. Act ONLY if a capture shows a real client
+stalling on the link-local. If one ever does, the fix is to narrow the mDNS
+repeater's interface list so Bano's records are not pushed onto VLANs that cannot
+route to it. Do NOT add IPv6 routing to OPNsense for this.
+```
 
 **30. 🔴 AirPlay to Baño from the VPN SSID is unreliable — a setup race, not a blocked path**
 The family normally uses `estonoesmazagon` (VLAN 80); Baño is on VLAN 20. Bar is
