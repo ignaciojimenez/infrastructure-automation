@@ -1141,16 +1141,19 @@ line in the same 90 minutes — the network was fine.
 
 🔴 **This item is a threshold for acting, not a task.** Four self-healing drops
 in 13 days do not justify changing anything, and the failure mode to avoid here
-is fixing a bulb that is not broken. See the 2026-08-30 entry in
-[`archive/DONE.md`](archive/DONE.md) for what was already settled — including
-that `sys.reset_reason` is undocumented and must not be reasoned from.
+is fixing a bulb that is not broken. See *&ldquo;the floor lamp that switched
+itself on&rdquo;* in [`archive/DONE.md`](archive/DONE.md) for what was already
+settled — including that `sys.reset_reason` is undocumented and must not be
+reasoned from.
 
 *State:* diagnosed 2026-08-30, nothing broken, nothing to build.
 *Effort:* none until it recurs. *Needs:* a fifth drop, or a longer one.
 
 ```
 Investigate the floor-lamp Shelly drops — ONLY if a fifth has happened. Read
-docs/TODO.md item 27 and the 2026-08-30 entry in docs/archive/DONE.md first;
+docs/TODO.md item 27 and the DONE.md entry "2026-08-30 — the floor lamp that
+switched itself on, and an alert that was simply true" first (three entries
+share that date, so match the title, not the date);
 the 29 Aug alert was TRUE, the check behaved correctly, and initial_state is
 already fixed. Do not re-derive any of that, and do not "fix" this by widening
 any grace window.
