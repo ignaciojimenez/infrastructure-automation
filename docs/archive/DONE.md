@@ -205,6 +205,54 @@ prediction — force the condition (here: reboot, or empty the state file) and
 watch it.**
 
 ---
+## 2026-08-30 — the public repo mapped the wireless topology (TODO item 24)
+
+`docs/NETWORK.md` carried a full `SSID → Network → VLAN → L2 isolation → PMF`
+table plus a section headed *"The IoT SSID has protected management frames
+disabled"*, naming the SSID. The repo is public.
+
+**The distinction that decided the fix.** SSID names are broadcast in beacons and
+`pmf_mode` is advertised in RSN capabilities — both are readable by anyone in RF
+range, and pretending otherwise would have been theatre. What was *not* remotely
+discoverable was the **correlation**: which SSID lands in which VLAN, where L2
+isolation is absent, and that the weak-PMF one fronts the segment controlling
+heating and mains power. That correlation is what dropped recon from *"be on site
+and analyse beacons"* to *"read GitHub"*.
+
+**So: publish the mechanism, move the correlation.** The wireless table and
+findings 8 and 9 went to `docs/local/WIRELESS.md` (gitignored). `NETWORK.md` keeps
+both findings — mechanism, severity, the "very likely deliberate" caveat, and the
+statement that redaction is not the fix — and links to where the identifiers went.
+A redaction that leaves only hints would have been the worst of both.
+
+**Generalised into a standing rule** rather than left as a one-off:
+[*Disclosure tiering*](../ARCHITECTURE_DECISIONS.md#disclosure-tiering--what-goes-in-a-public-repo),
+which asks one question — *does this shorten the path from "be in range" to "know
+which weakness to hit"?* — and sorts into tracked / `docs/local/` / vault. It also
+gave `docs/local/` (which already held `CONSOLES.md`) a README and a reason to
+exist beyond "seemed sensitive". A holistic sweep applied the same rule to
+`TODO.md`, `archive/DONE.md` and `ARCHITECTURE_DECISIONS.md`: SSID names replaced
+by segment descriptions, the HomePod's MAC moved out. Docs stayed readable — the
+segment is what the sentences were actually about.
+
+⚠️ **This narrows future exposure only.** The tables are in git history, in every
+clone; GitHub serves the old blobs at their commit SHAs. **No history rewrite was
+performed** — that is a separate, explicit decision, now TODO item 32, whose
+default is *no*.
+
+📊 **Measured while closing this, and it reframed the whole item.** GitHub's
+14-day traffic API returned **222 clones from 85 unique cloners** against **4
+views from 1 unique viewer**. Nobody reads this repo in a browser; automation
+clones it constantly, and a clone takes the full history. So the old tables are
+already out at scale, a rewrite would recover nothing (0 forks notwithstanding) —
+*and* every future commit here is pulled by ~85 unique cloners within a
+fortnight. That second half is the real reason the tiering rule is worth
+keeping.
+
+🔧 **Redaction is not remediation.** The weakness itself — PMF disabled on that
+SSID — is untouched and is now **TODO item 31**, ranked above the rewrite
+question on purpose. Wireless config was deliberately *not* changed in this
+work: enabling PMF needs a check of what fails, and belongs in its own change.
 
 ## 2026-08-30 — an allowlist entry that was hiding a firewall gap
 
@@ -542,7 +590,7 @@ arrive — RAs are link-local, and no firewall rule substitutes for one.
 Both Eve door sensors read `unavailable` from 2026-08-17 09:37 UTC to 08-22.
 Nothing was wrong with them: they never left the Thread mesh and were still
 advertising `_matter._tcp` throughout. At 09:33:44 UTC the HomePod acting as
-border router moved from the IoT SSID (VLAN 100) to `estonoesmazagon_novpn`
+border router moved from the IoT SSID (VLAN 100) to the no-VPN SSID
 (VLAN 20) to fix AirPlay. dockassist is on VLAN 100, so its route to the mesh
 prefix `fd24:839a:223a::/64` aged out. The first sensor went unavailable 3m36s
 later. `ping6` from dockassist returned `Network is unreachable` — no route, not

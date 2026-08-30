@@ -50,6 +50,24 @@ Personal infrastructure-as-code repository managing a home network of Raspberry 
 - Cron jobs defined in Ansible role tasks
 - **Cron naming**: Ansible `cron` module identifies entries by `name` — renaming a cron job creates a duplicate unless the old name is explicitly removed with `state: absent`
 
+### Disclosure tiering (this repo is public)
+
+Three tiers, decided by one question: **does this line shorten the path from
+"be in radio or physical range" to "know which specific weakness to hit"?**
+
+- **Tracked** — design intent, mechanisms, reasoning, RFC1918 subnets, host
+  roles, decisions. Generous on purpose; this is what makes the repo worth
+  showing.
+- **`docs/local/`** (gitignored, never commit) — correlations and target lists:
+  SSID→VLAN→isolation→PMF, console URLs/ports/auth state, MACs, third-party
+  names. Start here when troubleshooting the network; `docs/local/README.md` is
+  the index.
+- **`vault.yml`** — keys, tokens, hashes, PSKs, WAN addressing.
+
+A redaction in a tracked file must keep the finding and its severity, move only
+the identifier, and link to where it went. Full rule in
+[ARCHITECTURE_DECISIONS.md](docs/ARCHITECTURE_DECISIONS.md#disclosure-tiering--what-goes-in-a-public-repo).
+
 ### Secrets
 - Ansible Vault (`vault.yml`) committed encrypted — vault password in macOS Keychain
 - Templates reference vault vars as `{{ vault_* }}`

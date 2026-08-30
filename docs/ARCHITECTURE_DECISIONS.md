@@ -81,6 +81,65 @@ Simple log of key technical decisions made in this project.
 - **Example files for onboarding** - `vault.yml.example` and `*.ini.example` files show structure without secrets
 - **No plaintext secrets** - All sensitive data (tokens, passwords, keys) in vault only
 
+## Disclosure tiering — what goes in a public repo
+
+*Adopted 2026-08-30, closing TODO item 24.*
+
+This repo is **public on purpose**: it is a portfolio as much as an automation
+tree. It is also the only written record of a real home network. Those two jobs
+pull in opposite directions, and "write less" resolves them badly — a document
+nobody can use is not a security control, it is just a worse document.
+
+The rule is therefore **not** *how sensitive is this fact*, which produces
+endless argument. It is a single discriminator:
+
+> 🎯 **Does this line shorten the path from *"stand within radio or physical
+> range"* to *"know which specific weakness to hit"*?**
+
+A fact that is already broadcast, printed on the box, or resolvable in DNS costs
+nothing to publish. A fact that **correlates** two of those — this name lands in
+that segment, that segment holds the mains-power devices, this one has the weaker
+setting — is the thing an attacker would otherwise have to be on site to learn.
+Publish the mechanism; keep the correlation local.
+
+**Tier 0 — publish.** Design intent, mechanisms, reasoning, failure modes,
+corrections. RFC1918 subnets and VLAN purposes. Host names, roles and their
+Ansible config. Decisions and the arguments behind them. Public DNS names.
+*This is the tier that makes the repo worth showing, and it should stay generous.*
+
+**Tier 1 — `docs/local/` (gitignored).** Correlations and target lists:
+- SSID → VLAN → isolation → PMF mapping, and which SSID carries which weakness
+- console URLs, ports, and their observed auth state (`docs/local/CONSOLES.md`)
+- MAC addresses and any device↔person↔room mapping
+- third parties' names, wherever they appear as identifiers
+- anything that reads as "here is the soft spot, and here is where it lives"
+
+**Tier 2 — vault only.** Keys, tokens, password hashes, PSKs, WAN addressing,
+WireGuard public keys and endpoints. Never in a tracked file, encrypted or not,
+and never in `docs/local/` either.
+
+📌 **A redaction in a Tier 0 file must say what it hid and where it went**, or
+the document rots into hints. Leave the finding, its mechanism and its severity
+in place; move only the identifier. `docs/NETWORK.md` findings 8 and 9 are the
+worked example.
+
+⚠️ **Redaction narrows future exposure only.** Anything that was ever committed
+stands in git history, in every clone and in every fork, and GitHub serves the
+old blob at its commit SHA. A history rewrite is a separate, deliberate decision
+with its own costs — it force-pushes a public repo and still cannot recall what
+has been read. **Never treat a redaction as a remediation for the underlying
+weakness**: the fix for "PMF is disabled on that SSID" is enabling PMF.
+
+🔒 **`docs/local/` is untracked, not unbacked — and the difference matters.**
+Gitignored means *out of the public repo*, not *confined to this machine*: the
+tree lives under `~/Documents`, which syncs to iCloud Drive (verified 2026-09-01
+— `docs/local/` is visible there). So the tier boundary is "never in public git",
+and iCloud is an acceptable home for correlations. **It is not an acceptable home
+for secrets** — those stay in `vault.yml`, which is encrypted before it ever
+touches any sync. If `docs/local/` ever grows something that would be expensive
+to re-derive *and* must survive an Apple-account loss, put it in the R2 backup
+set — see `docs/BACKUP_AND_RECOVERY.md`.
+
 ## LXC Container Management
 
 - **Hostname resolution fix** - Early fix in bootstrap.yml adds hostname to /etc/hosts
@@ -133,7 +192,7 @@ Simple log of key technical decisions made in this project.
 
 - **The Thread border router must be on a VLAN dockassist is on-link with** (2026-08-23)
   - dockassist has no 802.15.4 radio, so every Matter-over-Thread packet crosses
-    a border router — today the HomePod "Bano" (`40:ed:cf:4e:8e:03`)
+    a border router — today the HomePod "Bano"
   - The BR announces the route to the Thread mesh prefix in a **Router
     Advertisement**. RAs are link-local: they do not cross a VLAN boundary, and
     no firewall rule can substitute for one. OPNsense carries no IPv6 at all —
