@@ -59,7 +59,7 @@ renders it:
 > **№1** 24 *(public repo, security)* → **№2** 18 *(active fault, and it gates
 > 1d)* → **№3** 30 *(the reported AirPlay fault)* → **№4** 1c →
 > **№5** 1d *(only after 18)* → **№6** 2 → **№7** 4 (plex) → **№8** 9 →
-> **№9** 3a/3b → **№10** W1 *(also an active fault — it fired 29 Aug; layered
+> **№9** 3a/3b/3c → **№10** W1 *(also an active fault — it fired 29 Aug; layered
 > recovery is deployed and now produces a trustworthy layer verdict on the next
 > outage)* → **№11** 5 → **№12** 19 → **№13** 12 → **№14** 22 → **№15** 10 →
 > **№16** 11 → **№17** 6 → **№18** 7 →
@@ -343,7 +343,13 @@ drops privilege — it has no `run_uut` call, so it was out of scope for a
 mechanical conversion. The wrapper does run as the infrastructure user under cron
 on every fleet host.
 
-**4. `W1` — vinylstreamer's wifi lockout root cause**
+**W1. vinylstreamer's wifi lockout root cause**
+📌 **Addressed as `W1`, not as a number.** It carried the heading "4." until
+2026-08-30, colliding with the cobra Plex item — two different prompts both
+said *"read docs/TODO.md item 4"*. `W1` was already the name the queue line,
+this item's own prose and `ARCHITECTURE_DECISIONS.md` all used, so the heading
+was corrected to match rather than the Plex item renumbered.
+
 The plug (W2) is remediation; the fault is untouched. Investigation exists at
 `~/.claude/plans/vinylstreamer-wifi-lockout-plan.md`.
 
@@ -643,28 +649,36 @@ being measured.** Next evidence is which layer the alerts name.
 
 ```
 Judge the W1 layered recovery from the evidence it is producing. Read
-docs/TODO.md item 4 first — the diagnosis is DONE and the fix is DEPLOYED,
+docs/TODO.md item W1 first — the diagnosis is DONE and the fix is DEPLOYED,
 do not redo either and do not re-test the NM knobs (both disproven).
 
+Ignore any layer verdict from BEFORE 2026-08-29: layer 3 could not run
+(brcmfmac held by brcmfmac_wcc, and the error was swallowed), so "all three
+layers failed" was VOID. That is fixed; the next run reports each modprobe
+step.
+
 Read #home-logging for "vinylstreamer wifi recovered at layer N":
-  layer 1 only  -> it was purely a NetworkManager give-up; consider retiring
-                   the plug watchdog to a much longer threshold.
+  layer 1 only  -> purely a NetworkManager give-up; consider retiring the
+                   plug watchdog to a much longer threshold.
   layer 2 needed -> the link layer wedges, NM alone is not enough.
   layer 3 needed -> the DRIVER wedges. That reframes W1: the fault is below
                    NetworkManager and the brcmfmac/firmware angle becomes
                    primary.
-  all layers fail -> the plug is still doing the work; escalate to hardware
-                   (aerial, placement, or a USB wifi adapter).
+  "rmmod brcmfmac: FAILED" -> layer 3 STILL cannot run; fix that before
+                   drawing any conclusion from the run.
+  all layers fail, cleanly -> only a power cycle clears it; escalate to
+                   hardware (aerial, placement, or a USB wifi adapter).
+
+powersave=2 stays regardless: measured +0.049 W, and it took the fault from
+roughly 4-hourly to roughly 4.5-daily.
 
 🔴 DO NOT "improve" wifi_reconnect.sh by giving it a reachability-based
 health check. The first version did exactly that, pinging a gateway that
 answers no ICMP from inside VLAN 100 (firewall policy — it DOES answer from
 other VLANs, so it looks fine when you test from a laptop), and reloaded the
-driver every 2 min against a healthy
-radio until the host fell over. If you change the health signal at all,
-run the HEALTHY path on vinylstreamer itself and confirm it takes no
-action, BEFORE any cron exists.
-
+driver every 2 min against a healthy radio until the host fell over. If you
+change the health signal at all, run the HEALTHY path on vinylstreamer
+itself and confirm it takes no action, BEFORE any cron exists.
 ```
 
 **9. Runaway-process detection — the fan removed the only thing that caught the last one**
