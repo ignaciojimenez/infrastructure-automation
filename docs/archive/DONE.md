@@ -17,6 +17,30 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ---
 
+## 2026-08-30 — an allowlist entry that was hiding a firewall gap
+
+`dockassist` (VLAN 100) reached the HomePod on `7000` but was **blocked on the
+ephemeral port** pyatv negotiates for the AirPlay event channel, so the
+`apple_tv` entry never finished setup — it retried once a minute and stalled HA
+`bootstrap` on every restart since ~23 Aug. Cause: the floating AirPlay rules are
+**fixed destination ports only** (`5000`/`7000`/`7100`/UDP `3722`), and VLAN 100
+is not in the `Trusted_VLANs` allow-all group.
+
+**Fixed** with one floating rule: source `10.30.100.100` only, destination the
+**`Music_Players` alias** (so hifipi is covered by the same rule), TCP
+`49152–65535`. ⚠️ **Rejected:** adding VLAN 100 to `Trusted_VLANs` — that hands
+every IoT device an allow-all to fix one integration.
+
+📌 **The lesson: it had already been silenced.** `media_player.bathroom_2` and
+`remote.bathroom_2` were in `ha_entity_health_allowlist` because they were
+permanently `unavailable` — which was this bug. **An allowlist entry claims an
+entity is expected to be dead; when that claim is wrong it hides a real fault
+until someone re-checks it.** Both entries removed once the entities came up.
+
+🐛 **Tag gotcha:** `ha_entity_health_allowlist` is consumed by
+`check_ha_entities.sh.j2` under `tags: [homeassistant, monitoring]`.
+`--tags config` returns `changed=0` and looks like success.
+
 ## 2026-08-30 — the floor lamp that switched itself on, and an alert that was simply true
 
 **The alert:** `check_ha_entities.sh` paged `#home-alerts` at 29 Aug 23:30, exit
