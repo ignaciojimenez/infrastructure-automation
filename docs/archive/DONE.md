@@ -17,6 +17,44 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ---
 
+## 2026-08-30 — the floor lamp that switched itself on, and an alert that was simply true
+
+**The alert:** `check_ha_entities.sh` paged `#home-alerts` at 29 Aug 23:30, exit
+5 — five entities of the Shelly Duo Bulb G3 `48f6eebd40d4`
+(`light.floor_lamp_new`, `10.30.100.238`, VLAN 100) unavailable past the
+15-minute grace. **It was true.** The bulb was gone 23:07 → 23:37, ~30 minutes,
+and returned by itself. Signature in the HA log is the same pair every time:
+`aioshelly.rpc_device.wsrpc: Invalid Message from host 10.30.100.238:80`, then
+`Error fetching … while reconnecting`.
+
+**Decided: change nothing about the check**, **because** the outage was twice
+the grace window. Widening `ha_entity_health_grace_seconds` would have turned a
+correct alert into a slower correct alert while blunting it for every other
+device — the classic trade this repo already refused on 28 Aug for
+`light.book_floor_lamp`, where the answer was also the device and not the
+threshold. The discriminating evidence was cheap and worth recording: **Home
+Assistant logged exactly two lines in the entire 90-minute window, both about
+this bulb.** A network or HA-side event cannot be that quiet, so the fault was
+localised without touching anything.
+
+**The change that was made is a device default, not repo config.** The bulb's
+`CCT.GetConfig` reported `initial_state: "on"`, so *every* reboot switched the
+lamp on regardless of prior state — which is why it sat lit at 4% from 23:37
+until morning with nobody asking. Set to `restore_last` over
+`CCT.SetConfig` (verified against the official CCT docs before writing, not
+assumed; `cfg_rev` 51 → 52, `restart_required: false`). **A night-time reboot is
+now invisible instead of illuminating an empty room.**
+
+⚠️ **Not concluded, deliberately: whether the bulb wedged or lost power.**
+`sys.reset_reason` read `1`, but Shelly does not document that field's value
+mapping — the obvious ESP-IDF reading is a guess. Recorded as unresolved rather
+than written up as a cause. A future session should not treat `reset_reason` as
+meaningful without verifying the mapping first.
+
+📌 **The recurrence is still open as TODO item 27** — four drops in 13 days
+(17 Aug ×2, 18 Aug, 29 Aug), all self-healing, and the bar for acting on them is
+a fifth, not a hunch.
+
 ## 2026-08-30 — CI was red for 11 days with the alarm working perfectly
 
 **The fault:** `ansible-lint.yml` failed on **every push from 18 to 29 Aug** — 22
