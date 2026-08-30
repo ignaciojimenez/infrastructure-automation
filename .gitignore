@@ -24,6 +24,11 @@ vault_pass
 # subdirectory a session was started in.
 **/.claude/
 
+# Local-only operational docs. Public repo: console URLs, ports and reachability
+# are a recon shortcut and belong with the item-24 decision (operational detail
+# stays readable locally, not published). Never commit this directory.
+docs/local/
+
 # System
 .DS_Store
 *.swp

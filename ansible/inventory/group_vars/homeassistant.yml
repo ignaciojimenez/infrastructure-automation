@@ -306,8 +306,9 @@ ha_entity_health_allowlist:
   # Same class, same holding status.
   - "schedule.mon_thu_away_schedule"
   - "binary_sensor.wyze_online"
-  - "media_player.bathroom_2"
-  - "remote.bathroom_2"
+  # media_player.bathroom_2 / remote.bathroom_2 removed 2026-08-30: they were
+  # allowlisted for being permanently unavailable, which turned out to be a
+  # firewall gap (see archive/DONE.md), not expected behaviour.
 
 # Domains with no state until something invokes them — see the script's own
 # note. `unknown` here is normal; `unavailable` still pages.
