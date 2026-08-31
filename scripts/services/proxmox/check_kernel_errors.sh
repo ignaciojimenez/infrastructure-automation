@@ -58,10 +58,23 @@ WARNING_PATTERNS=(
 # one hashes to a new md5 and the seen-before dedup below never suppresses
 # them — cwwk paged "Script Failed" on every VM restart.
 #
+# vfio boot lines: the module-init banner and the command-register transition
+# pci_enable_device() logs when the passthrough NIC is first bound. Both are
+# emitted once, at boot. `dmesg -T` re-renders wall-clock timestamps, so after
+# every host reboot they hash fresh and page again — four reboots in the three
+# weeks to 2026-08-31, each one alert.
+#
+# The dedup is not the bug and must not be relaxed to fix this: a new boot's
+# messages genuinely are new events, and hashing timestamp-stripped lines would
+# suppress a real fault that recurs after a reboot. Exclude the benign lines.
+#
 # Anchored at end-of-line deliberately. A reset that *fails* carries extra text
-# ("Failed to reset device", "reset failed") and must still alert.
+# ("Failed to reset device", "reset failed"), as does a bind that fails
+# ("enabling device (0002 -> 0003) failed"), and both must still alert.
 BENIGN_PATTERNS=(
     "vfio-pci [0-9a-fA-F:.]+: reset(ting| done)[[:space:]]*$"
+    "vfio-pci [0-9a-fA-F:.]+: enabling device \\([0-9a-fA-F]+ -> [0-9a-fA-F]+\\)[[:space:]]*$"
+    "VFIO - User Level meta-driver version: [0-9.]+[[:space:]]*$"
 )
 
 # Function to check dmesg for patterns

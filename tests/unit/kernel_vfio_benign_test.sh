@@ -1,6 +1,8 @@
 #!/bin/sh
-# Regression test: check_kernel_errors.sh must ignore benign vfio-pci reset
-# lines and must still alert on every other VFIO-shaped message.
+# Regression test: check_kernel_errors.sh must ignore the benign VFIO lines
+# cwwk actually emits — the vfio-pci resets logged on every OPNsense VM restart
+# and the two banner lines logged once per host boot — and must still alert on
+# every other VFIO-shaped message.
 #
 # Runs on the laptop — no container, no fleet, no network. `sudo`, `dmesg` and
 # `md5sum` are stubbed; the script under test is the real one.
@@ -84,6 +86,14 @@ cat > "$BENIGN" <<'LOG'
 [Wed Aug 19 20:13:30 2026] vfio-pci 0000:01:00.0: reset done
 LOG
 
+# Captured from cwwk 2026-08-31, host reboot at 23:51 the night before. These
+# two paged even with the reset exclusion in place: they are emitted once per
+# boot, and `dmesg -T` gives them a fresh timestamp -> a fresh md5 -> no dedup.
+cat >> "$BENIGN" <<'LOG'
+[Sun Aug 30 23:51:39 2026] VFIO - User Level meta-driver version: 0.3
+[Sun Aug 30 23:51:41 2026] vfio-pci 0000:01:00.0: enabling device (0002 -> 0003)
+LOG
+
 # Run the check against a fixture with a fresh state dir, so each case
 # exercises the first-sighting path the cron hits after a VM restart.
 run_check() {
@@ -95,7 +105,7 @@ run_check() {
     return $rc
 }
 
-printf '\n── check_kernel_errors.sh · benign vfio-pci resets\n'
+printf '\n── check_kernel_errors.sh · benign VFIO lines\n'
 
 # ------------------------------------------------------------------
 # 1. The lines that actually paged must now exit OK
@@ -135,6 +145,10 @@ done <<'FAULTS'
 [Wed Aug 19 20:14:01 2026] vfio-pci 0000:03:00.0: BAR 0: can't reserve
 [Wed Aug 19 20:14:01 2026] vfio-pci 0000:03:00.0: DMAR: DMA fault
 [Wed Aug 19 20:14:01 2026] vfio_bar_restore: 0000:01:00.0 reset recovery
+[Sun Aug 30 23:51:41 2026] vfio-pci 0000:01:00.0: enabling device (0002 -> 0003) failed
+[Sun Aug 30 23:51:41 2026] vfio-pci 0000:01:00.0: Failed enabling device (0002 -> 0003)
+[Sun Aug 30 23:51:41 2026] vfio-pci 0000:01:00.0: enabling device failed
+[Sun Aug 30 23:51:39 2026] VFIO - User Level meta-driver version: 0.3 (tainted)
 FAULTS
 
 printf '\n'

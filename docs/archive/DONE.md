@@ -17,6 +17,66 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ---
 
+## 2026-08-31 — the VFIO residue that was left on purpose, and the reason it was left was wrong
+
+**Decided:** the two VFIO lines cwwk logs once per host boot are now excluded
+too — `vfio-pci <BDF>: enabling device (NNNN -> NNNN)` and
+`VFIO - User Level meta-driver version: N.N` — **because** the reason given on
+2026-08-19 for leaving them was factually wrong, not merely a cost call.
+
+That entry reasoned: *"they are logged once per module load, so their timestamps
+are stable, their md5s dedup correctly, and they were already in cwwk's state
+file."* The first half is false. `dmesg -T` renders wall-clock timestamps at
+**read** time from a ring buffer that is emptied by a reboot, so after every
+boot those lines carry new timestamps, hash to new signatures, and dedup cannot
+suppress them. Being in the state file was a property of that boot only. The
+reboot on 2026-08-30 23:51 paged, exactly as the mechanism requires — and
+`last -x reboot` shows four reboots in the preceding three weeks, so the
+"one alert per host reboot" this was traded for was not the rare event the
+trade assumed.
+
+**Refused, again and deliberately: do not fix this in the dedup.** Hashing the
+line with its timestamp stripped would silence every boot-time message forever,
+including a passthrough fault that recurs after a reboot — which is precisely
+the failure this check exists to catch. The dedup is correct: a new boot's
+messages genuinely are new events. Excluding named benign lines stays the only
+sanctioned lever, per the rule this same check established
+([2026-08-19](#2026-08-19--exclude-the-benign-line-never-the-pattern-cwwks-vfio-false-positive)):
+*exclude the benign line, never the pattern.*
+
+Both new patterns are end-of-line anchored, so a bind that fails
+(`enabling device (0002 -> 0003) failed`) still alerts.
+
+**Proven by forcing the failure on cwwk**, against real `dmesg` (1,116 lines)
+with a **fresh** state file, so dedup could not account for any silence:
+
+| injected line | exit |
+|---|---|
+| *(none — real buffer incl. both boot lines)* | `0` OK |
+| `vfio-pci 0000:01:00.0: Failed to reset device` | `1` WARNING |
+| `vfio-pci 0000:01:00.0: enabling device (0002 -> 0003) failed` | `1` WARNING |
+| `vfio-pci 0000:03:00.0: DMAR: DMA fault` | `1` WARNING |
+| `VFIO - User Level meta-driver version: 0.3 (tainted)` | `1` WARNING |
+| the three benign forms, at fresh timestamps | `0` OK |
+
+The deployed copy was then confirmed byte-identical to the repo
+(`58645a0aa18234151f72f027e821af74`) and re-run as the cron user with a fresh
+state file: exit `0`. `tests/unit/kernel_vfio_benign_test.sh` went 8 → 12
+assertions and was confirmed **red against the pre-fix script** first.
+
+🔴 **The lesson is about the shape of the argument, not VFIO.** The 2026-08-19
+session enumerated the input space correctly — four distinct line forms — then
+declined to act on two of them on the strength of a mechanism it had not
+tested. It had *already been burned that same session* by a fixture that went
+green while the host failed. Enumerating an input is not the same as verifying
+what it does: the two lines were seen, named in the write-up, and reasoned
+about, and the reasoning was still wrong. **If a line is inside the pattern and
+you are choosing not to exclude it, the claim "it dedups correctly" is a
+prediction — force the condition (here: reboot, or empty the state file) and
+watch it.**
+
+---
+
 ## 2026-08-30 — an allowlist entry that was hiding a firewall gap
 
 `dockassist` (VLAN 100) reached the HomePod on `7000` but was **blocked on the
@@ -463,12 +523,15 @@ never seen red proves nothing.
 fixture held only reset lines, so it went green while cwwk still exited `1`:
 real `dmesg` also carries `VFIO - User Level meta-driver version: 0.3` and
 `vfio-pci <BDF>: enabling device (0002 -> 0003)`. **Left unexcluded on
-purpose** — unlike the resets they are logged once per module load, so their
+purpose** — reasoning that they are logged once per module load, so their
 timestamps are stable, their md5s dedup correctly, and they were already in
-cwwk's state file. They cost one alert per *host* reboot, not per VM restart,
-which is the thing that was actually wrong. Deliberately not chased: the whole
-VFIO buffer is four distinct line forms, and excluding the other two would have
-been scope creep bought with a real loss of coverage.
+cwwk's state file; they would cost one alert per *host* reboot, not per VM
+restart, which is the thing that was actually wrong.
+
+⚠️ **That reasoning was wrong and this was reopened on 2026-08-31** — see the
+entry at the top of this file. `dmesg -T` timestamps are rendered at read time
+from a buffer a reboot empties, so the boot lines do **not** dedup across
+reboots, and the 2026-08-30 reboot paged. Both are now excluded.
 
 ---
 
