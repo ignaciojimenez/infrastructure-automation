@@ -205,6 +205,76 @@ prediction — force the condition (here: reboot, or empty the state file) and
 watch it.**
 
 ---
+## 2026-09-01 — the docs audit, and the recovery path that already existed
+
+Second and third halves of the item-24 session: once the disclosure tiering moved
+operational detail out of the public repo, two questions followed — *does the rest of
+the documentation hold up to the same scrutiny*, and *if some data now lives outside
+git, how is it recovered*.
+
+### The audit found something worse than a disclosure
+
+**`docs/AGENT_ACCESS.md` and `ARCHITECTURE_DECISIONS.md` both claimed the `read_agent`
+SSH key was passphrase-encrypted, with the passphrase in `vault_agent_ssh_passphrase`.
+Neither was true.** The variable was referenced in six documentation locations and
+consumed by **zero** playbooks, templates or tasks. Verified empirically:
+`ssh-keygen -y -P "" -f ~/.ssh/read_agent_ed25519` succeeds — the key has no passphrase.
+
+🔴 **For a public repo belonging to a security professional, a doc that overstates a
+control is a worse defect than one that discloses too much.** A reader — or a future
+session — plans around a protection that is not there. The claim is now corrected
+*in place with a note saying it was wrong*, rather than quietly deleted, and replaced
+with the four controls that do exist and are verifiable: `from=` pinning, the forced
+`ssh_alert.sh` command that Slack-alerts every connection, read-only sudo, and a locked
+password with no privileged groups. The design was always sound; only the description
+was wrong. `CLAUDE.md` had it right all along ("passphrase-free"), which is what
+surfaced the contradiction.
+
+Also corrected: `from=` is documented as a single control-machine IP but is really
+`10.30.0.0/16` (blast-radius limit, not an identity check — narrowing it is item 12);
+`IdentityAgent SSH_AUTH_SOCK` is actually `IdentityAgent none`; **Secretive → this
+estate's own `touchid-agent`** across four files, which had left the repo crediting a
+third-party tool instead of the operator's own published one; two broken anchors
+(GitHub does not support kramdown `{#id}` syntax) and a relative link off by one
+directory level. `README.md`'s index listed 4 of 11 docs and omitted `NETWORK.md`, the
+best document in the tree — it is now a complete table with `NETWORK.md` as the stated
+entry point.
+
+### Losing the laptop was never a lockout — nothing said so
+
+The worry was concrete: Secure-Enclave keys are hardware-bound and non-exportable, so
+a dead Mac reads like a locked-out fleet. **It is not, and the reason was already built
+and simply undocumented.** `ssh_hardening.yml` deploys `/usr/local/bin/update_keys`
+(`curl -sf https://github.com/<profile>.keys`) wired as `AuthorizedKeysCommand` — a
+**live lookup at every authentication**, not a bootstrap snapshot. New laptop, enrol one
+key at GitHub, every host accepts it.
+
+✅ **Verified wired on all six Linux hosts** (`sudo sshd -T | grep -i
+authorizedkeyscommand`) rather than assumed from the playbook — the mechanism existing
+in source and being live on a host are different facts.
+
+⚠️ **The mechanism lives in `templates/debian/sshd_config.j2` at the repository root,
+not under `ansible/`.** A search scoped to `ansible/` misses it completely and yields
+the confident, wrong conclusion that laptop loss means physical recovery of eight hosts.
+That happened during this session and is recorded because the next reader will grep the
+same way.
+
+📌 **The real single point of failure turned out to be the GitHub account, not the
+laptop** — `exclusive: true` from `{{ gh_keys }}` *and* the live `AuthorizedKeysCommand`
+both terminate there. So the credential that must survive is the **2FA recovery codes**.
+That inversion is the finding; it is now the first residual in item 33.
+
+Also settled: `~/Documents` **does** sync to iCloud, so gitignored `docs/local/` is
+untracked but not unbacked — two claims written earlier the same week said the opposite
+and were corrected. `brctl status` and `mdls kMDItemIsCloudItem` are the wrong
+instruments for checking this; both return nothing even for genuine iCloud files, which
+a control test caught before the wrong conclusion was published.
+
+`BACKUP_AND_RECOVERY.md` gained a *Recovering without the laptop* playbook, a
+prerequisites table rewritten around *where each thing lives* rather than what it is,
+and a laptop-loss row in the quarterly restore-test schedule — the one restore path
+never yet exercised.
+
 ## 2026-08-30 — the public repo mapped the wireless topology (TODO item 24)
 
 `docs/NETWORK.md` carried a full `SSID → Network → VLAN → L2 isolation → PMF`

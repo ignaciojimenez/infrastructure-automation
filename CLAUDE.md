@@ -92,10 +92,10 @@ All hosts are reachable via SSH (key-based auth). Use the **SSH Hostname** from 
 - `unifi-lxc` → `ssh unifi` (set as `ansible_host` in the inventory)
 - `agent-lxc` → `ssh 10.30.40.203` (IP-pinned; no mDNS name)
 
-**Autonomous / unattended SSH** (Claude Code, scripts, agents): always use the `-agent` hostname suffix. This uses the passphrase-free `read_agent_ed25519` key as the `read_agent` user — no Secretive/biometric prompt required.
+**Autonomous / unattended SSH** (Claude Code, scripts, agents): always use the `-agent` hostname suffix. This uses the passphrase-free `read_agent_ed25519` key as the `read_agent` user — no `touchid-agent` biometric prompt required.
 - `ssh cwwk-agent "command"` — not `ssh cwwk "command"`
 - `ssh dockassist-agent "command"`, `ssh cobra-agent "command"`, etc.
-- Never try to use the main user's Secretive key for autonomous work — it will block waiting for Touch ID.
+- Never try to use the main user's `touchid-agent` (Secure Enclave) key for autonomous work — it will block waiting for Touch ID.
 
 The `read_agent` user has scoped sudo rights (read-only diagnostics). Each connection fires a Slack alert (30-min cooldown) as a compensating control for the passphrase-free key.
 

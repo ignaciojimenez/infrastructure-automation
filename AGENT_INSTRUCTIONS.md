@@ -192,7 +192,6 @@ automatically as **Phase 4b** in `site.yml` (after baseline, before platform con
 ```yaml
 vault_agent_control_ip: "192.168.1.x"   # IP of your control machine
 vault_agent_ssh_pubkey: "ssh-ed25519 AAAA..."  # Public key for the agent SSH key
-vault_agent_ssh_passphrase: "..."        # Passphrase for the private key
 ```
 
 The private key lives at `~/.ssh/read_agent_ed25519` on the control machine (outside any

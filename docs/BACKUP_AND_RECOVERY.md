@@ -54,13 +54,111 @@ config, so this is a manual re-entry — roughly 15 minutes for 12 ports.
 
 ## Prerequisites for Any Recovery
 
-Before recovering any host, you need:
+Before recovering any host, you need the five things below. **The right question is not
+what they are but where they live** — because the interesting failure is not a dead
+Raspberry Pi, it is a dead control machine.
 
-1. **This repository** — cloned locally with Ansible installed
-2. **Ansible Vault password** — stored in macOS Keychain (`security find-generic-password -s ansible-vault-master -w`)
-3. **age secret key** — one line (`AGE-SECRET-KEY-1...`), stored in password manager
-4. **SSH access** — key-based auth via Secretive (Secure Enclave)
-5. **Slack webhook tokens** — in vault, needed for post-recovery monitoring
+| # | Prerequisite | Where it lives | Survives losing the laptop? |
+|---|---|---|---|
+| 1 | **This repository** | GitHub (`origin`) | ✅ Clone it again |
+| 2 | **Ansible Vault password** | Apple Passwords (iCloud-synced). A copy sits in the local `login.keychain-db` purely as Ansible's non-interactive accessor — `security find-generic-password -s ansible-vault-master -w` | ✅ via Apple Passwords |
+| 3 | **age secret key** | One line (`AGE-SECRET-KEY-1…`), Apple Passwords | ✅ |
+| 4 | **SSH access to hosts** | Secure Enclave key via [`touchid-agent`](https://github.com/ignaciojimenez/touchid-agent) — **hardware-bound and non-exportable, so it does *not* survive** | ✅ **but by a different route — see below** |
+| 5 | **Slack webhook tokens** | `vault.yml` (needs #2) | ✅ |
+
+⚠️ **`login.keychain-db` does not sync to iCloud.** It is a local file. Item 2 is safe
+because it is *also* in Apple Passwords — do not let the keychain copy be the only one.
+
+---
+
+## Recovering without the laptop
+
+**Losing the Mac is not a lockout.** This is worth stating plainly because the obvious
+reading of prerequisite 4 says otherwise: the Secure Enclave key cannot be backed up,
+copied, or migrated — not by Time Machine, not by Migration Assistant, not by anything.
+That is `touchid-agent` working correctly, and it would be a genuine problem if SSH
+depended on that key alone. **It does not.**
+
+### Why it works: sshd asks GitHub, every time
+
+`ansible/playbooks/tasks/ssh_hardening.yml` deploys a two-line script to every Debian
+host and wires it into `sshd`:
+
+```sh
+#!/bin/sh
+curl -sf "https://github.com/<profile>.keys"      # /usr/local/bin/update_keys, root, 0755
+```
+
+```
+AuthorizedKeysCommand       /usr/local/bin/update_keys
+AuthorizedKeysCommandUser   nobody
+```
+
+This is a **live lookup at authentication time**, not a snapshot written at bootstrap.
+Add a public key to your GitHub profile and every host accepts it on the next
+connection — no Ansible run, no physical access, no SD-card surgery.
+
+> 📌 The template is `templates/debian/sshd_config.j2` at the **repository root**, not
+> under `ansible/`. Searching only `ansible/` misses this mechanism entirely and leads
+> to the wrong conclusion that laptop loss means a lockout.
+
+### The procedure
+
+1. **Get into GitHub** — password and 2FA are in Apple Passwords.
+2. **New key, enrolled at GitHub:**
+   ```bash
+   ssh-keygen -t ed25519 -C "choco@<new-machine>"
+   # paste ~/.ssh/id_ed25519.pub into github.com/settings/keys
+   ```
+3. **Clone and go:**
+   ```bash
+   git clone git@github.com:ignaciojimenez/infrastructure-automation.git
+   ssh cobra    # works immediately — sshd fetched the new key from GitHub
+   ```
+4. **Restore the vault password and age key** from Apple Passwords; re-create the
+   Keychain accessor so Ansible runs non-interactively:
+   ```bash
+   security add-generic-password -s ansible-vault-master -a "$USER" -w
+   ```
+5. **Re-establish `touchid-agent`** for day-to-day use, and let the next Ansible run
+   reconcile `authorized_keys` (`exclusive: true` from `{{ gh_keys }}`).
+6. **Regenerate the agent key** — `~/.ssh/read_agent_ed25519` lives outside
+   `~/Documents`, so it is not in iCloud. It is disposable: re-create it and re-run
+   `ansible-playbook ansible/playbooks/system/agent_access.yml`.
+
+### Verified state, and the one exception
+
+✅ **Confirmed 2026-09-01** via `sudo sshd -T | grep -i authorizedkeyscommand` on each:
+`cobra`, `hifipi`, `dockassist`, `vinylstreamer`, `cwwk`, `unifi-lxc` — **all six wired**.
+`agent-lxc` has the script present and fetching.
+
+⚠️ **OPNsense is the exception.** The hardened-sshd task is gated
+`when: os_family == "debian"`, and OPNsense regenerates `sshd_config` from `config.xml`
+regardless — so it almost certainly has no `AuthorizedKeysCommand`. *This is reasoned
+from the playbook, not verified on the host* (`read_agent`'s shell there is disabled).
+Two other ways in, both password-based, both in Apple Passwords: the web UI at
+`https://opnsense/`, or `qm terminal 100` from the Proxmox console.
+
+🔴 **So the real single point of failure is the GitHub account, not the laptop.**
+`authorized_key` is deployed with `exclusive: true` from `{{ gh_keys }}` *and*
+`AuthorizedKeysCommand` reads GitHub live — both paths terminate at the same account.
+**The credential that must survive is the GitHub 2FA recovery codes.** Keep them in
+Apple Passwords alongside everything else. Losing the phone and the laptop together is
+the scenario that makes them matter.
+
+### What else is only on the laptop
+
+| Artifact | Backed up by | Notes |
+|---|---|---|
+| The repo + `docs/local/` | **iCloud Drive** (`~/Documents` syncs) | Verified 2026-09-01 — `docs/local/` is visible in iCloud Drive. Gitignored ≠ unbacked |
+| `~/.claude/plans/` | ❌ nothing | Outside `~/Documents`. `phase-c-operator-plan.md` is the source for TODO item 11 |
+| `~/.ssh/read_agent_ed25519` | ❌ nothing | Deliberate — disposable, regenerate per step 6 above |
+| Backup URLs | Slack history | Random IDs, not discoverable — the Slack message *is* the index |
+
+📌 **If the Apple account is lost as well as the laptop**, iCloud goes with it and
+`docs/local/` is gone. Everything in it is re-derivable by re-probing the network (that
+is how it was written), so this is a time cost, not a data loss. Nothing operationally
+critical may live only there — that is the rule, not an aspiration.
 
 ## How to Decrypt a Backup
 
@@ -265,6 +363,7 @@ Every quarter, pick one backup and test the full restore chain: download/locate 
 | Q3 2026 | dockassist | curlbin HA backup → decrypt → inspect contents |
 | Q4 2026 | opnsense | USB vzdump → temporary VM (qmrestore 999) |
 | Q1 2027 | cobra | curlbin Plex backup → decrypt → inspect contents |
+| **Any quarter** | **control machine** | **Laptop-loss drill** — from a fresh macOS user account: enrol a new SSH key at GitHub, confirm `ssh cobra` works without the Secure-Enclave key, and restore the vault password from Apple Passwords. The one restore path never yet exercised |
 
 Results are logged in `docs/RESTORE_TEST_LOG.md`.
 
@@ -275,7 +374,9 @@ Results are logged in `docs/RESTORE_TEST_LOG.md`.
 | Gap | Impact | Mitigation |
 |-----|--------|------------|
 | **cobra media files** not backed up | Loss of media library (100s of GB) | Too large for curlbin (200 MB limit). Re-downloadable content. |
-| **age secret key in password manager only** | Cannot decrypt backups without password manager access | Single line key — easy to store in multiple locations if needed |
+| **age secret key in password manager only** | Cannot decrypt backups without password manager access | Apple Passwords, iCloud-synced — survives the laptop. Single line, easy to duplicate |
+| **GitHub account is the root of fleet SSH access** | Losing it locks you out of every host that trusts `AuthorizedKeysCommand` | Password + 2FA in Apple Passwords; **keep the 2FA recovery codes there too**. OPNsense and Proxmox stay reachable by password as an independent path |
+| **`~/.claude/plans/` is on the laptop only** | TODO item 11's source plan is lost with the machine | Outside `~/Documents`, so iCloud does not cover it. Move it into the repo or `docs/local/` if it matters |
 | **Backup URLs only in Slack** | If Slack notification is missed, URL is gone — IDs are random and not discoverable | `do_backup` also logs URLs to `/tmp/backup_url_*.txt` on the source host, but this is volatile |
 | **Tado OAuth tokens** | Need re-auth on dockassist rebuild | Recoverable via `tado_setup.sh` (interactive OAuth2 flow) |
 | **curlbin single point of failure** | If curlbin is down, uploads fail | `do_backup` saves local fallback to `/tmp/backup_*.age`; 3 retries with 5s delay |

@@ -74,7 +74,26 @@ The playbook automatically deploys **all scripts** in `scripts/common/` - no con
 
 ## Documentation
 
-- **[docs/ARCHITECTURE_DECISIONS.md](docs/ARCHITECTURE_DECISIONS.md)** - Key technical decisions and patterns
-- **[docs/AUDIO_AUTOMATION.md](docs/AUDIO_AUTOMATION.md)** - Living room audio: source-driven amp power + IR input routing
-- **[docs/BACKUP_AND_RECOVERY.md](docs/BACKUP_AND_RECOVERY.md)** - Backup inventory and per-host recovery procedures
-- **[docs/TODO.md](docs/TODO.md)** - Prioritized infrastructure work items
+**Start here** — [docs/NETWORK.md](docs/NETWORK.md) is the layer that isn't in the code:
+six VLANs, thirteen WireGuard tunnels, and the physical topology, read from the live
+firewall rather than inferred.
+
+| Doc | What it answers |
+|---|---|
+| **[NETWORK.md](docs/NETWORK.md)** | Segmentation, VPN, DNS, the physical layer, and a list of confirmed defects |
+| **[ARCHITECTURE_DECISIONS.md](docs/ARCHITECTURE_DECISIONS.md)** | Standing rules — consult before designing anything new |
+| **[BACKUP_AND_RECOVERY.md](docs/BACKUP_AND_RECOVERY.md)** | What is backed up, and how to rebuild each host — **including losing the laptop** |
+| **[AGENT_ACCESS.md](docs/AGENT_ACCESS.md)** | The read-only `read_agent` account: threat model, sudo scope, revocation |
+| **[AGENT_LXC.md](docs/AGENT_LXC.md)** | The fleet-observer container (CT 103) — operator reference |
+| **[OPNSENSE_API.md](docs/OPNSENSE_API.md)** | Reading the firewall over its API instead of SSH |
+| **[AUDIO_AUTOMATION.md](docs/AUDIO_AUTOMATION.md)** | Source-driven amp power + IR input routing |
+| **[TESTING_GOALS.md](docs/TESTING_GOALS.md)** | What the test rig is *for* — read before test work |
+| **[TEST_CONTAINER.md](docs/TEST_CONTAINER.md)** | The ephemeral LXC rig and how to drive it |
+| **[TODO.md](docs/TODO.md)** | Open work, ranked, each item with a paste-ready prompt |
+| **[archive/DONE.md](docs/archive/DONE.md)** | Finished work and *why* — so a conclusion is not re-derived |
+| **[RESTORE_TEST_LOG.md](docs/RESTORE_TEST_LOG.md)** | Quarterly restore-test results |
+
+> **This repo is public, and what it discloses is tiered on purpose.** Mechanisms and
+> reasoning are published; correlations that would shorten the path from *"be in range"*
+> to *"know which weakness to hit"* live in an untracked `docs/local/`. The rule is in
+> [ARCHITECTURE_DECISIONS.md](docs/ARCHITECTURE_DECISIONS.md#disclosure-tiering--what-goes-in-a-public-repo).

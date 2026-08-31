@@ -61,12 +61,20 @@ renders it:
 > **№4** 1c → **№5** 1d *(only after 18)* → **№6** 2 → **№7** 4 (plex) →
 > **№8** 9 → **№9** 3a/3b/3c → **№10** 5 → **№11** 19 → **№12** 12 →
 > **№13** 22 → **№14** 10 → **№15** 11 → **№16** 6 → **№17** 7 →
-> **№18–21** 8/13/14/16 · **№22** 32 *(git-history rewrite — decision only,
-> default is no)* · **№23** 26 *(one UI toggle, global — his call)* ·
-> **№24** 27 *(watch only — needs a fifth drop before it is work at all)* ·
-> **№25** 29 *(latent — measured NOT to be the cause of the 30 Aug fault)*
+> **№18** 33 *(three loose ends on laptop-loss recovery — minutes, and (a) is a
+> real SPOF check)* · **№19–22** 8/13/14/16 · **№23** 32 *(git-history rewrite —
+> decision only, default is no)* · **№24** 26 *(one UI toggle, global — his
+> call)* · **№25** 27 *(watch only — needs a fifth drop before it is work at
+> all)* · **№26** 29 *(latent — measured NOT to be the cause of the 30 Aug
+> fault)*
 > *(decision-gated — 16 needs a purchase call, 32 needs his call on a public
 > force-push, the rest need him at the cabinet; not ranked)*
+
+**33 enters at №19 (2026-09-01)** — the laptop-loss recovery path turned out to
+already exist and is now documented and verified; what is left is three
+verifications, one of which (GitHub 2FA recovery codes) guards the credential the
+whole fleet now hangs off. Small, but it protects the recovery story rather than
+extending it.
 
 **24 closed 2026-08-30 and everything above it moves up one** — the redaction
 shipped and the disclosure policy behind it is now
@@ -1025,6 +1033,52 @@ that forks and anything already read are unaffected.
 
 Do NOT start a rewrite on your own judgment, and do NOT treat it as a
 prerequisite for item 31 — they are independent.
+```
+
+**33. Three small gaps left in laptop-loss recovery — all verification, no building**
+The recovery path itself is **done and documented** (`BACKUP_AND_RECOVERY.md` →
+*Recovering without the laptop*): `sshd` pulls authorized keys live from GitHub, so
+a new machine gets in by enrolling one key. Verified wired on all six Linux hosts
+2026-09-01. What is left is three loose ends, each a few minutes.
+
+**a. GitHub 2FA recovery codes.** 🔴 **The GitHub account is now the actual single
+point of failure for fleet SSH** — `authorized_key` uses `exclusive: true` from
+`{{ gh_keys }}` *and* `AuthorizedKeysCommand` reads GitHub live, so both paths end
+there. Confirm the 2FA recovery codes are in Apple Passwords. Losing phone and
+laptop together is the case that needs them.
+
+**b. OPNsense is unverified.** The hardened-sshd task is gated
+`when: os_family == "debian"` and OPNsense rewrites `sshd_config` from `config.xml`,
+so it almost certainly has no `AuthorizedKeysCommand`. *Reasoned from source, never
+checked on the host* — `read_agent`'s shell there is disabled. It has two
+password-based paths in, so this is a "know the answer" item, not a risk.
+
+**c. `~/.claude/plans/` is on the laptop only.** Outside `~/Documents`, so iCloud
+does not cover it. `phase-c-operator-plan.md` is the stated source for item 11.
+
+*State:* recovery path shipped and verified; these are the residuals. *Effort:*
+minutes each. *Needs:* Ignacio for (a), a laptop for (b) and (c).
+
+```
+Close the three residual gaps in laptop-loss recovery. Read docs/TODO.md item 33 and
+docs/BACKUP_AND_RECOVERY.md "Recovering without the laptop" first — the mechanism is
+DONE and verified on six hosts, do NOT re-derive it and do NOT rebuild anything.
+
+(a) Ignacio confirms GitHub 2FA recovery codes are in Apple Passwords. Ask; do not
+    guess. If they are not, that is the highest-value fix in this item.
+
+(b) Verify OPNsense. Expect NO AuthorizedKeysCommand there (FreeBSD, gated out).
+    Check over the OPNsense API or the console, not read_agent SSH — its shell is
+    disabled. Whatever the answer, record it in BACKUP_AND_RECOVERY.md and replace
+    the "reasoned from source, not verified" caveat with the measured result.
+
+(c) Decide where ~/.claude/plans/phase-c-operator-plan.md should live so it survives
+    the laptop: docs/local/ (iCloud-backed) is the obvious home. Move it, then fix
+    the reference in TODO item 11 and in the memory that points at it.
+
+Do NOT add a second SSH key, a break-glass credential, or anything in the vault for
+this — the GitHub path already IS the break-glass and adding another credential
+makes the estate less safe, not more.
 ```
 
 **8. Cabinet vent sizing.** Needs three physical measurements only he can take:
