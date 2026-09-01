@@ -2,23 +2,54 @@
 
 Complete reference for what is backed up, where backups live, and how to recover each host from scratch.
 
+> 🔥 **In an incident, start here:** [Failure scenarios — walked, not
+> assumed](#failure-scenarios--walked-not-assumed) names your situation and says
+> whether the procedure below has been tested or only reasoned through.
+> Lost the laptop? → [Recovering without the
+> laptop](#recovering-without-the-laptop). Need to open a backup? → [How to Decrypt a
+> Backup](#how-to-decrypt-a-backup).
+
+## Contents
+
+- [Backup Inventory](#backup-inventory)
+- [Failure scenarios — walked, not assumed](#failure-scenarios--walked-not-assumed)
+- [Prerequisites for Any Recovery](#prerequisites-for-any-recovery)
+- [Recovering without the laptop](#recovering-without-the-laptop)
+- [How to Decrypt a Backup](#how-to-decrypt-a-backup)
+- [Per-Host Recovery Procedures](#per-host-recovery-procedures)
+- [USB Recovery Drive](#usb-recovery-drive)
+- [Quarterly Restore Testing](#quarterly-restore-testing)
+- [Known Gaps and Accepted Risks](#known-gaps-and-accepted-risks)
+- [Backup Schedule Overview](#backup-schedule-overview)
+
 ---
 
 ## Backup Inventory
 
-| Host | What | Frequency | Time | Script | Retention |
-|------|------|-----------|------|--------|-----------|
-| dockassist | HA native `.tar.gz` backup | Daily | 04:00 | `backup_last_mod` | 7 backups (weekly cleanup) |
-| cobra | Plex config (Preferences, Plug-ins) | Every 7 days | 04:00 | `backup_plex_config` | Latest per upload |
-| unifi-lxc | UniFi `.unf` autobackup | Daily | 03:00 | `backup_unifi` | Latest per upload |
-| proxmox | `/etc/pve/` + host configs | Every 7 days | 04:00 | `backup_proxmox_config.sh` | Latest per upload |
-| proxmox | vzdump snapshots (VM 100, LXC 101) → USB | Weekly (Sunday) | 05:00 | `sync_usb_recovery.sh` | 2 generations on USB |
-| opnsense | `/conf/config.xml` | Daily | 04:15 | `backup_opnsense.sh` | Latest per upload |
-| hifipi | — | — | — | Pure IaC, no unique state | — |
-| vinylstreamer | — | — | — | Pure IaC, no unique state | — |
-| **zyxel switch** | VLAN/PVID map | **Manual** | — | Web UI export → `docs/reference/` | In git |
+| Host | What | Frequency | Script | **Source in this repo** | Retention |
+|------|------|-----------|--------|--------------------------|-----------|
+| dockassist | HA native `.tar.gz` | Daily 04:00 | `backup_ha` | `ansible/roles/services/homeassistant/templates/backup_ha.j2` | 7 (weekly cleanup) |
+| cobra | Plex config | 04:00, days 1/8/15/22/29 | `backup_plex_config` | `ansible/roles/services/plex/files/backup_plex_config` | Latest per upload |
+| unifi-lxc | UniFi `.unf` | Daily 03:00 | `backup_unifi` | `scripts/services/network/backup_unifi.sh` | Latest per upload |
+| proxmox | `/etc/pve/` + host configs | 04:00, days 1/8/15/22/29 | `backup_proxmox_config.sh` | `scripts/services/proxmox/` | Latest per upload |
+| proxmox | vzdump (VM 100, LXC 101) → USB | Sun 05:00 | `sync_usb_recovery.sh` | `scripts/services/proxmox/` | 2 generations |
+| opnsense | `/conf/config.xml` | Daily 04:15 | `backup_opnsense.sh` | `scripts/services/opnsense/` | Latest per upload |
+| hifipi · vinylstreamer | — | — | — | Pure IaC, no unique state | — |
+| **zyxel switch** | VLAN/PVID map | **Manual** | Web UI export | `docs/reference/zyxel-xgs1250-12.cfg` | In git |
 
-All backups are age-encrypted (asymmetric, public key on hosts) and uploaded to curlbin. Success/failure notifications go to Slack.
+Every one of these ends in `do_backup` (`scripts/common/do_backup`), which age-encrypts
+and uploads to curlbin. Success and failure both notify Slack.
+
+> ⚠️ **Backup scripts live in three different places, and that has already misled a
+> search.** `scripts/common/`, `scripts/services/<area>/`, **and**
+> `ansible/roles/services/<role>/{files,templates}/`. A `find scripts/ -name
+> backup_plex_config` returns nothing and looks like the script does not exist — it is
+> in the Plex role. The *Source in this repo* column above exists because that mistake
+> was actually made while auditing this document.
+>
+> 📌 **`backup_last_mod` is not part of this.** It is a generic helper deployed only to
+> OPNsense; an earlier version of this table wrongly named it as dockassist's backup
+> script.
 
 ### Zyxel XGS1250-12 — manual, and deliberately so
 
@@ -51,6 +82,51 @@ restoring onto a factory-reset switch means setting a new password regardless.
 gateway `10.30.40.254`, set management VLAN to 40, then re-enter the VLAN and
 per-port config from the committed file. There is no import path for a redacted
 config, so this is a manual re-entry — roughly 15 minutes for 12 ports.
+
+## Failure scenarios — walked, not assumed
+
+Each row below was walked against this document and the repo on 2026-09-01, checking
+that every command, path and file it depends on actually exists. **"Verified" means
+tested on the live estate; "walked" means the procedure and its dependencies were
+checked but the restore itself was not performed.** Nothing here is marked from
+memory.
+
+| # | Scenario | Status | What it depends on holding |
+|--:|---|---|---|
+| 1 | **Laptop lost or stolen** | ✅ **Verified** | `AuthorizedKeysCommand` live on all 6 Linux hosts (`sshd -T`). Credentials in two managers, both memorised. See *Recovering without the laptop* |
+| 2 | **A Pi's SD card dies** | ⚠️ **Walked — one gap now closed** | Was hand-waved at *"ensure SSH is accessible"*. `rpi-provisioner` does exactly that and is now referenced. `site.yml` imports `bootstrap.yml`, so one command covers a bare host |
+| 3 | **HA data loss / bad upgrade** | ✅ Walked | Daily `.tar.gz` on curlbin; restore through HA's own UI. Tado needs re-auth (documented) |
+| 4 | **OPNsense config corrupted, VM alive** | ✅ Walked | Daily `config.xml` on curlbin, restored via web UI. Needs only the OPNsense password |
+| 5 | **OPNsense VM lost** | ✅ Walked | `qmrestore` from the USB drive on cwwk. Faster than a rebuild and does not need the network |
+| 6 | **cwwk NVMe dies** | 🔴 **Walked — circular dependency** | See the warning below. The procedure is right; its *precondition* is not stated |
+| 7 | **Zyxel switch dies** | ✅ Walked | Manual re-entry from `docs/reference/`, ~15 min. No import path for a redacted config — that is accepted |
+| 8 | **Apple account lost** | ✅ Walked | Two YubiKeys locally, one abroad; Bitwarden holds the age key and vault password and unlocks from memory |
+| 9 | **GitHub account lost** | ✅ Walked | Multi-factor incl. hardware tokens. OPNsense and Proxmox stay reachable by password independently |
+| 10 | **House fire or burglary** | 🔴 **Walked — untested link** | USB and NVMe are co-located and both lost. curlbin/R2 is the only path, and *finding* the objects is the unproven step — see below |
+
+### 🔴 Scenario 6 — the precondition nobody writes down
+
+Rebuilding `cwwk` needs a Proxmox ISO, and **`cwwk` is the internet SPOF**: OPNsense
+runs as VM 100 on it, so while it is down there is no routing and no WAN. You cannot
+download the installer from the network you are trying to restore.
+
+**Keep a Proxmox ISO on the USB recovery drive, or plan to tether a phone.** The wired
+VLAN 40 path documented in `NETWORK.md` gets a laptop to the *switch* and to `cwwk`'s
+own port, but it does not conjure an internet connection.
+
+### 🔴 Scenario 10 — decryption is solved, discovery is not
+
+The age key now has two homes, so an encrypted backup can always be opened. **What has
+never been tested is finding it.** curlbin URLs are random and, by design, not
+enumerable; the Slack message announcing each upload *is* the index. If Slack history
+is unavailable, the documented fallback is to enumerate the R2 bucket through the
+Cloudflare account — **and nobody has ever done that.**
+
+📌 **This is the single most valuable thing to rehearse**, because it is the one link
+in the chain where "should work" has never become "does work". It is the laptop-loss
+row in [Quarterly Restore Testing](#quarterly-restore-testing).
+
+---
 
 ## Prerequisites for Any Recovery
 
@@ -343,16 +419,25 @@ Ordered by rebuild complexity (highest risk first).
 
 **Recovery steps:**
 
-1. Flash Raspberry Pi OS to SD card, ensure SSH is accessible, then deploy:
+1. Flash the SD card **with `rpi-provisioner`** (sibling repo,
+   `~/Documents/Workspaces/rpi-provisioner`) — it downloads the OS, sets Wi-Fi, and
+   **installs your GitHub SSH keys**, which is the step that makes the host reachable:
+   ```bash
+   ./provision_pi <image> dockassist
+   ```
+   Doing this by hand is the slow path: a stock image has no user and no key, and
+   `bootstrap.yml` can only connect if it can reach *some* account (it tries the
+   infrastructure user, then `pi`, then `root`).
+2. Deploy — `site.yml` imports `bootstrap.yml`, so one command covers a bare host:
    ```bash
    ansible-playbook ansible/playbooks/site.yml --limit dockassist
    ```
    This runs bootstrap + baseline + deploys Docker, Home Assistant container, Matter Server, and Cloudflared tunnel.
-2. Access HA at `http://dockassist:8123` — initial onboarding screen
-3. **Settings > System > Backups > Upload Backup** — upload the decrypted `.tar.gz`
-4. Restore from the uploaded backup
-5. HA will restart with all config, automations, history, and integrations
-6. Re-authenticate Tado — the script is not deployed by Ansible; run it from the repo:
+3. Access HA at `http://dockassist:8123` — initial onboarding screen
+4. **Settings > System > Backups > Upload Backup** — upload the decrypted `.tar.gz`
+5. Restore from the uploaded backup
+6. HA will restart with all config, automations, history, and integrations
+7. Re-authenticate Tado — the script is not deployed by Ansible; run it from the repo:
    ```bash
    ssh dockassist
    bash /path/to/repo/scripts/services/homeassistant/tado_setup.sh
@@ -390,7 +475,8 @@ Ordered by rebuild complexity (highest risk first).
 
 **Recovery steps:**
 
-1. Flash Raspberry Pi OS to SD card, ensure SSH is accessible, then deploy:
+1. Flash the SD card with **`rpi-provisioner`** (installs your GitHub SSH keys —
+   see the dockassist procedure above), then deploy:
    ```bash
    ansible-playbook ansible/playbooks/site.yml --limit cobra
    ```
@@ -414,7 +500,8 @@ Ordered by rebuild complexity (highest risk first).
 
 **Recovery steps:**
 
-1. Flash Raspberry Pi OS to SD card, ensure SSH is accessible, then deploy:
+1. Flash the SD card with **`rpi-provisioner`** (installs your GitHub SSH keys —
+   see the dockassist procedure above), then deploy:
    ```bash
    ansible-playbook ansible/playbooks/site.yml --limit hifipi  # or vinylstreamer
    ```

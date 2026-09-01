@@ -35,6 +35,52 @@ out. Probe commands are listed under
 [Reading the UniFi controller](#reading-the-unifi-controller), so this can be
 checked rather than trusted.
 
+## Contents
+
+Sections `1.`–`13.` under *Confirmed drift and defects* are numbered findings — cite them by number.
+
+- [Segmentation](#segmentation)
+- [The circular dependency worth knowing](#the-circular-dependency-worth-knowing)
+  - [When only OPNsense is down, go wired](#when-only-opnsense-is-down-go-wired)
+- [VPN](#vpn)
+  - [Outbound — Mullvad (12 tunnels)](#outbound--mullvad-12-tunnels)
+  - [Inbound — wg1_server (road warrior)](#inbound--wg1_server-road-warrior)
+- [DNS](#dns)
+  - [Unbound is fully recursive](#unbound-is-fully-recursive)
+  - [Port 53 redirect](#port-53-redirect)
+- [⚠️ Confirmed drift and defects](#-confirmed-drift-and-defects)
+  - [1. wg9 (Mullvad US3) is dead, and Quad9 is routed through it](#1-wg9-mullvad-us3-is-dead-and-quad9-is-routed-through-it)
+  - [2. cwwk bypasses the estate resolver](#2-cwwk-bypasses-the-estate-resolver)
+  - [3. The DNS failover script's premise no longer holds](#3-the-dns-failover-scripts-premise-no-longer-holds)
+  - [4. Two wg1 peers have never connected](#4-two-wg1-peers-have-never-connected)
+  - [5. One Ubiquiti device is a firmware generation behind — RETRACTED](#5-one-ubiquiti-device-is-a-firmware-generation-behind--retracted)
+  - [6. Fleet name resolution has no fallback](#6-fleet-name-resolution-has-no-fallback)
+  - [7. Pi-hole-era naming outlived Pi-hole by nine months](#7-pi-hole-era-naming-outlived-pi-hole-by-nine-months)
+  - [8. Two guest SSIDs share one VLAN with different isolation — 🔒 detail redacted](#8-two-guest-ssids-share-one-vlan-with-different-isolation---detail-redacted)
+  - [9. One SSID has protected management frames disabled — 🔒 detail redacted](#9-one-ssid-has-protected-management-frames-disabled---detail-redacted)
+  - [10. Switch port 1 is running at 10 Mbps half-duplex](#10-switch-port-1-is-running-at-10-mbps-half-duplex)
+  - [11. Switch port 4 has a CRC error](#11-switch-port-4-has-a-crc-error)
+  - [12. The switch configuration is not backed up](#12-the-switch-configuration-is-not-backed-up)
+  - [13. The EdgeRouter X is unmanageable and unrecoverable](#13-the-edgerouter-x-is-unmanageable-and-unrecoverable)
+- [Physical layer](#physical-layer)
+  - [The backbone switch — Zyxel XGS1250-12](#the-backbone-switch--zyxel-xgs1250-12)
+  - [Access points](#access-points)
+  - [Wireless — SSID → VLAN](#wireless--ssid--vlan)
+  - [Compute](#compute)
+- [Where the fleet actually lives](#where-the-fleet-actually-lives)
+  - [IoT devices (VLAN 100)](#iot-devices-vlan-100)
+- [Name resolution runs on mDNS, not DNS](#name-resolution-runs-on-mdns-not-dns)
+- [Reading the UniFi controller](#reading-the-unifi-controller)
+- [Getting at the switch](#getting-at-the-switch)
+- [The EdgeRouter X — a known unknown](#the-edgerouter-x--a-known-unknown)
+  - [Four ways it was hunted, on 2026-08-07 — all negative](#four-ways-it-was-hunted-on-2026-08-07--all-negative)
+  - [An unexplained observation](#an-unexplained-observation)
+- [Re-deriving this document](#re-deriving-this-document)
+- [Sources](#sources)
+
+---
+
+
 ---
 
 ## Segmentation

@@ -15,6 +15,41 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 > history. `git log --follow docs/TODO.md` and read the commit that removed a
 > section. Nothing here needs to reproduce it.
 
+## Contents
+
+- [2026-09-01 — vinylstreamer's wifi lockout: every software layer excluded, and parked](#2026-09-01--vinylstreamers-wifi-lockout-every-software-layer-excluded-and-parked)
+- [2026-09-01 — the health check that pages the whole fleet on the 1st of every month](#2026-09-01--the-health-check-that-pages-the-whole-fleet-on-the-1st-of-every-month)
+- [2026-08-31 — the VFIO residue that was left on purpose, and the reason it was left was wrong](#2026-08-31--the-vfio-residue-that-was-left-on-purpose-and-the-reason-it-was-left-was-wrong)
+- [2026-09-01 — laptop-loss recovery closed out, and read_agent finally written down](#2026-09-01--laptop-loss-recovery-closed-out-and-read_agent-finally-written-down)
+- [2026-09-01 — the docs audit, and the recovery path that already existed](#2026-09-01--the-docs-audit-and-the-recovery-path-that-already-existed)
+- [2026-08-30 — the public repo mapped the wireless topology (TODO item 24)](#2026-08-30--the-public-repo-mapped-the-wireless-topology-todo-item-24)
+- [2026-08-30 — an allowlist entry that was hiding a firewall gap](#2026-08-30--an-allowlist-entry-that-was-hiding-a-firewall-gap)
+- [2026-08-30 — the floor lamp that switched itself on, and an alert that was simply true](#2026-08-30--the-floor-lamp-that-switched-itself-on-and-an-alert-that-was-simply-true)
+- [2026-08-30 — CI was red for 11 days with the alarm working perfectly](#2026-08-30--ci-was-red-for-11-days-with-the-alarm-working-perfectly)
+- [2026-08-28 — HACS removed, and dockassist proves idempotency for the first time](#2026-08-28--hacs-removed-and-dockassist-proves-idempotency-for-the-first-time)
+- [2026-08-28 — the container check's self-heal, and the exit code that was an accident](#2026-08-28--the-container-checks-self-heal-and-the-exit-code-that-was-an-accident)
+- [2026-08-28 — the regression suite nobody ran](#2026-08-28--the-regression-suite-nobody-ran)
+- [2026-08-28 — a lamp being switched off is not a fault, and muting it was the wrong price](#2026-08-28--a-lamp-being-switched-off-is-not-a-fault-and-muting-it-was-the-wrong-price)
+- [2026-08-25 — a controller with every device offline used to read as green](#2026-08-25--a-controller-with-every-device-offline-used-to-read-as-green)
+- [2026-08-23 — the door sensors were fine; their only road had moved](#2026-08-23--the-door-sensors-were-fine-their-only-road-had-moved)
+- [2026-08-19 — exclude the benign line, never the pattern (cwwk's VFIO false positive)](#2026-08-19--exclude-the-benign-line-never-the-pattern-cwwks-vfio-false-positive)
+- [2026-08-19 — hifipi's amixer alerts: the fix sat in git for four months](#2026-08-19--hifipis-amixer-alerts-the-fix-sat-in-git-for-four-months)
+- [2026-08-18 — the job that stops a service announces it (cobra's 04:00 alert)](#2026-08-18--the-job-that-stops-a-service-announces-it-cobras-0400-alert)
+- [2026-08-18 — the test rig is green, and no longer root-blind](#2026-08-18--the-test-rig-is-green-and-no-longer-root-blind)
+- [2026-08-17 — opnsense is read over its API, not a shell (L-H)](#2026-08-17--opnsense-is-read-over-its-api-not-a-shell-l-h)
+- [2026-08-16 — cwwk KSM codified, and the power tuner stopped lying (L-E)](#2026-08-16--cwwk-ksm-codified-and-the-power-tuner-stopped-lying-l-e)
+- [2026-08-16 — vinylstreamer's plug automates a manual power-cycle (L-I W2)](#2026-08-16--vinylstreamers-plug-automates-a-manual-power-cycle-l-i-w2)
+- [2026-08-16 — independent monitoring tails, one diagnosed wrong (L-D)](#2026-08-16--independent-monitoring-tails-one-diagnosed-wrong-l-d)
+- [2026-08-14 — the alert flood is dead, and a dead host reads differently (L-F)](#2026-08-14--the-alert-flood-is-dead-and-a-dead-host-reads-differently-l-f)
+- [2026-08-13 — agent-lxc Tier 2 live, and the sweep had never run (L-C)](#2026-08-13--agent-lxc-tier-2-live-and-the-sweep-had-never-run-l-c)
+- [2026-08-13 — the monitoring sprint, live on all 8 hosts (L-B)](#2026-08-13--the-monitoring-sprint-live-on-all-8-hosts-l-b)
+- [2026-08-13 — system_health_check.sh could never fail, and now can](#2026-08-13--system_health_checksh-could-never-fail-and-now-can)
+- [2026-08-13 — three cron jobs, one state file (the #home-logging flood)](#2026-08-13--three-cron-jobs-one-state-file-the-home-logging-flood)
+- [Smaller closed items](#smaller-closed-items)
+
+---
+
+
 ---
 
 ## 2026-09-01 — vinylstreamer's wifi lockout: every software layer excluded, and parked

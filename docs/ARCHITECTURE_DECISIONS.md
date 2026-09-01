@@ -2,6 +2,30 @@
 
 Simple log of key technical decisions made in this project.
 
+## Contents
+
+**Standing rules.** Consult before designing anything new; each entry says what was decided and why, so a settled question is not re-litigated.
+
+- [Infrastructure Strategy](#infrastructure-strategy)
+- [Hardware Configuration](#hardware-configuration)
+- [Deployment & Provisioning](#deployment--provisioning)
+- [Naming Conventions](#naming-conventions)
+- [Monitoring & Observability](#monitoring--observability)
+- [Configuration Loading Order](#configuration-loading-order)
+- [Secrets & Vault Strategy](#secrets--vault-strategy)
+- [Disclosure tiering — what goes in a public repo](#disclosure-tiering--what-goes-in-a-public-repo)
+- [LXC Container Management](#lxc-container-management)
+- [Proxmox Host Management](#proxmox-host-management)
+- [DNS Architecture (Updated November 2025)](#dns-architecture-updated-november-2025)
+- [Home Assistant Architecture (Updated November 2025)](#home-assistant-architecture-updated-november-2025)
+- [Backup Strategy](#backup-strategy)
+- [Agent Access](#agent-access)
+- [Test Environments (2026-08-18)](#test-environments-2026-08-18)
+- [Agent LXC — Fleet Observer (CT 103, 2026-07-22)](#agent-lxc--fleet-observer-ct-103-2026-07-22)
+
+---
+
+
 ## Infrastructure Strategy
 
 - **Ansible roles are self-healing** - Roles detect and fix missing configuration (e.g., hardware overlays, service configs)
