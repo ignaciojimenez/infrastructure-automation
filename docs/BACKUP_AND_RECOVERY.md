@@ -139,12 +139,21 @@ from the playbook, not verified on the host* (`read_agent`'s shell there is disa
 Two other ways in, both password-based, both in Apple Passwords: the web UI at
 `https://opnsense/`, or `qm terminal 100` from the Proxmox console.
 
-🔴 **So the real single point of failure is the GitHub account, not the laptop.**
+📌 **So the account that matters most is GitHub, not the laptop.**
 `authorized_key` is deployed with `exclusive: true` from `{{ gh_keys }}` *and*
 `AuthorizedKeysCommand` reads GitHub live — both paths terminate at the same account.
-**The credential that must survive is the GitHub 2FA recovery codes.** Keep them in
-Apple Passwords alongside everything else. Losing the phone and the laptop together is
-the scenario that makes them matter.
+
+✅ **Confirmed well covered (2026-09-01).** That account carries several independent
+authentication and recovery factors, **at least one of which is a physical token that
+depends on neither the laptop nor the Apple account**. Laptop loss does not threaten
+it. The factor inventory is in `docs/local/RECOVERY.md` — kept out of this file because
+listing which factors guard an account is a targeting aid, not a mechanism.
+
+⚠️ **The residual risk is therefore the Apple account, not GitHub.** Most factors
+restore from iCloud, so the failure worth planning for is a lost or locked Apple ID —
+in which case the physical token is the one thing left. A second registered hardware
+key, stored elsewhere, is the standard answer to "the only independent factor is a
+single object."
 
 ### What else is only on the laptop
 
@@ -375,7 +384,8 @@ Results are logged in `docs/RESTORE_TEST_LOG.md`.
 |-----|--------|------------|
 | **cobra media files** not backed up | Loss of media library (100s of GB) | Too large for curlbin (200 MB limit). Re-downloadable content. |
 | **age secret key in password manager only** | Cannot decrypt backups without password manager access | Apple Passwords, iCloud-synced — survives the laptop. Single line, easy to duplicate |
-| **GitHub account is the root of fleet SSH access** | Losing it locks you out of every host that trusts `AuthorizedKeysCommand` | Password + 2FA in Apple Passwords; **keep the 2FA recovery codes there too**. OPNsense and Proxmox stay reachable by password as an independent path |
+| **GitHub account is the root of fleet SSH access** | Losing it locks you out of every host that trusts `AuthorizedKeysCommand` | ✅ Covered — multiple factors incl. a physical token independent of both the laptop and the Apple account (inventory: `docs/local/RECOVERY.md`). OPNsense and Proxmox stay reachable by password as a further independent path |
+| **Most recovery material sits behind one Apple account** | A lost or locked Apple ID takes the vault password, the age key, every console password and most GitHub factors at once | The hardware token is the one factor outside it. A second registered key kept elsewhere would remove the last single-object dependency |
 | **`~/.claude/plans/` is on the laptop only** | TODO item 11's source plan is lost with the machine | Outside `~/Documents`, so iCloud does not cover it. Move it into the repo or `docs/local/` if it matters |
 | **Backup URLs only in Slack** | If Slack notification is missed, URL is gone — IDs are random and not discoverable | `do_backup` also logs URLs to `/tmp/backup_url_*.txt` on the source host, but this is volatile |
 | **Tado OAuth tokens** | Need re-auth on dockassist rebuild | Recoverable via `tado_setup.sh` (interactive OAuth2 flow) |

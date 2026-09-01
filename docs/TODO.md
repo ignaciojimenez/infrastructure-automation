@@ -61,8 +61,7 @@ renders it:
 > **№4** 1c → **№5** 1d *(only after 18)* → **№6** 2 → **№7** 4 (plex) →
 > **№8** 9 → **№9** 3a/3b/3c → **№10** 5 → **№11** 19 → **№12** 12 →
 > **№13** 22 → **№14** 10 → **№15** 11 → **№16** 6 → **№17** 7 →
-> **№18** 33 *(three loose ends on laptop-loss recovery — minutes, and (a) is a
-> real SPOF check)* · **№19–22** 8/13/14/16 · **№23** 32 *(git-history rewrite —
+> **№18** 33 *(two loose ends left on laptop-loss recovery — (a) closed 2026-09-01)* · **№19–22** 8/13/14/16 · **№23** 32 *(git-history rewrite —
 > decision only, default is no)* · **№24** 26 *(one UI toggle, global — his
 > call)* · **№25** 27 *(watch only — needs a fifth drop before it is work at
 > all)* · **№26** 29 *(latent — measured NOT to be the cause of the 30 Aug
@@ -1041,11 +1040,21 @@ The recovery path itself is **done and documented** (`BACKUP_AND_RECOVERY.md` �
 a new machine gets in by enrolling one key. Verified wired on all six Linux hosts
 2026-09-01. What is left is three loose ends, each a few minutes.
 
-**a. GitHub 2FA recovery codes.** 🔴 **The GitHub account is now the actual single
-point of failure for fleet SSH** — `authorized_key` uses `exclusive: true` from
-`{{ gh_keys }}` *and* `AuthorizedKeysCommand` reads GitHub live, so both paths end
-there. Confirm the 2FA recovery codes are in Apple Passwords. Losing phone and
-laptop together is the case that needs them.
+**a. GitHub account coverage — ✅ CLOSED 2026-09-01.** Confirmed by Ignacio:
+several independent factors, **including a physical token that depends on neither
+the laptop nor the Apple account**, plus recovery codes. Inventory in
+`docs/local/RECOVERY.md`. Laptop loss does not threaten fleet access.
+
+📌 **It moved the risk rather than removing it.** Almost everything else —
+vault password, age key, every console password, most GitHub factors — sits
+behind **one Apple account**. The hardware token is the only thing outside it, and
+it is a single physical object. A second registered key kept elsewhere is the
+standard answer; **not opened as work, because it is a purchase decision.**
+
+⚠️ **One claim unverified:** "Sign in with Apple" for GitHub. GitHub.com is not
+known to offer it for personal accounts. Check `github.com/settings/security`
+before counting it as a recovery path — an imagined factor is the same class of
+error this session found in `AGENT_ACCESS.md`.
 
 **b. OPNsense is unverified.** The hardened-sshd task is gated
 `when: os_family == "debian"` and OPNsense rewrites `sshd_config` from `config.xml`,
@@ -1056,16 +1065,18 @@ password-based paths in, so this is a "know the answer" item, not a risk.
 **c. `~/.claude/plans/` is on the laptop only.** Outside `~/Documents`, so iCloud
 does not cover it. `phase-c-operator-plan.md` is the stated source for item 11.
 
-*State:* recovery path shipped and verified; these are the residuals. *Effort:*
-minutes each. *Needs:* Ignacio for (a), a laptop for (b) and (c).
+*State:* recovery path shipped and verified; (a) closed 2026-09-01, (b) and (c)
+remain. *Effort:* minutes each. *Needs:* a laptop.
 
 ```
 Close the three residual gaps in laptop-loss recovery. Read docs/TODO.md item 33 and
 docs/BACKUP_AND_RECOVERY.md "Recovering without the laptop" first — the mechanism is
 DONE and verified on six hosts, do NOT re-derive it and do NOT rebuild anything.
 
-(a) Ignacio confirms GitHub 2FA recovery codes are in Apple Passwords. Ask; do not
-    guess. If they are not, that is the highest-value fix in this item.
+(a) is CLOSED — GitHub coverage is confirmed strong (docs/local/RECOVERY.md). Do
+    NOT re-ask it. The only open thread there is whether "Sign in with Apple" is a
+    real GitHub auth method; check github.com/settings/security and correct the
+    local file either way.
 
 (b) Verify OPNsense. Expect NO AuthorizedKeysCommand there (FreeBSD, gated out).
     Check over the OPNsense API or the console, not read_agent SSH — its shell is
