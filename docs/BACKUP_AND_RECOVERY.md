@@ -154,14 +154,19 @@ are registered on *both* the Apple account and GitHub, so the two recovery roots
 rescue each other: lose the Apple account and the tokens still open GitHub; lose both
 tokens and the Apple-held factors still open GitHub. Losing one token costs nothing.
 
-🔴 **The residual is not an account — it is the two secrets that are single-homed.**
-The **age secret key** and the Ansible Vault password exist only in Apple Passwords,
-and no hardware token recovers them: they are secrets to be *read*, not logins to be
-authenticated. If the Apple account and the laptop are lost together, **every
-age-encrypted backup in this document becomes permanently undecryptable** — the one
-loss here that effort cannot undo, and it destroys the backups rather than merely
-blocking a door. The age key is one line of text; keep a copy somewhere independent of
-Apple (printed, or a second manager). Detail in `docs/local/RECOVERY.md`."
+✅ **The age key now has a second home too (2026-09-01).** It previously existed only
+in the primary password manager, which made "Apple account and laptop lost together"
+an *irreversible* event: every age-encrypted backup in this document would have become
+permanently undecryptable. A copy now lives in a separate backup password manager, so
+that scenario is recoverable.
+
+🟠 **Two things still worth closing, neither fatal.** The **Ansible Vault password** is
+still single-homed — losing it means rotating every token and webhook in `vault.yml`
+rather than losing data, so it is painful, not terminal; it belongs in the backup
+manager alongside the age key. And the second manager is only genuinely independent if
+**unlocking it does not route back through the primary one** — a redundancy that
+depends on the thing it is backing up is apparent rather than real. Detail and the
+exact question in `docs/local/RECOVERY.md`."
 
 ### What else is only on the laptop
 
@@ -393,7 +398,8 @@ Results are logged in `docs/RESTORE_TEST_LOG.md`.
 | **cobra media files** not backed up | Loss of media library (100s of GB) | Too large for curlbin (200 MB limit). Re-downloadable content. |
 | **age secret key in password manager only** | Cannot decrypt backups without password manager access | Apple Passwords, iCloud-synced — survives the laptop. Single line, easy to duplicate |
 | **GitHub account is the root of fleet SSH access** | Losing it locks you out of every host that trusts `AuthorizedKeysCommand` | ✅ Covered — multiple factors incl. a physical token independent of both the laptop and the Apple account (inventory: `docs/local/RECOVERY.md`). OPNsense and Proxmox stay reachable by password as a further independent path |
-| **The age key and vault password are single-homed in Apple Passwords** | Losing the Apple account *and* the laptop makes every age-encrypted backup permanently undecryptable — irreversible, and it destroys the backups themselves | Hardware tokens do not help: these are secrets to read, not logins. Keep an offline copy of the age key (one line) independent of Apple. **Open — see TODO item 33** |
+| **The Ansible Vault password is single-homed** | Losing it means `vault.yml` cannot be decrypted — every token, webhook and PSK must be rotated | Painful, not data loss. Copy it into the backup password manager alongside the age key. **Open — see TODO item 33** |
+| **A backup password manager can depend on the thing it backs up** | If its master password lives only in the primary manager, the second home is apparent rather than real | Verify the unlock path is independent, and register a hardware token on it. **Open — see TODO item 33** |
 | **`~/.claude/plans/` is on the laptop only** | TODO item 11's source plan is lost with the machine | Outside `~/Documents`, so iCloud does not cover it. Move it into the repo or `docs/local/` if it matters |
 | **Backup URLs only in Slack** | If Slack notification is missed, URL is gone — IDs are random and not discoverable | `do_backup` also logs URLs to `/tmp/backup_url_*.txt` on the source host, but this is volatile |
 | **Tado OAuth tokens** | Need re-auth on dockassist rebuild | Recoverable via `tado_setup.sh` (interactive OAuth2 flow) |

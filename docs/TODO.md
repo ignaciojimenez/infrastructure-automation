@@ -61,7 +61,7 @@ renders it:
 > **№4** 1c → **№5** 1d *(only after 18)* → **№6** 2 → **№7** 4 (plex) →
 > **№8** 9 → **№9** 3a/3b/3c → **№10** 5 → **№11** 19 → **№12** 12 →
 > **№13** 22 → **№14** 10 → **№15** 11 → **№16** 6 → **№17** 7 →
-> **№18** 33 *(the age key is single-homed — 2 min, and the only irreversible loss left)* · **№19–22** 8/13/14/16 · **№23** 32 *(git-history rewrite —
+> **№18** 33 *(recovery residuals — all small now; no irreversible loss left)* · **№19–22** 8/13/14/16 · **№23** 32 *(git-history rewrite —
 > decision only, default is no)* · **№24** 26 *(one UI toggle, global — his
 > call)* · **№25** 27 *(watch only — needs a fifth drop before it is work at
 > all)* · **№26** 29 *(latent — measured NOT to be the cause of the 30 Aug
@@ -1049,15 +1049,23 @@ the laptop nor the Apple account**, plus recovery codes. Inventory in
 registered on **both** the Apple account and GitHub, so the two recovery roots
 rescue each other in either direction. Losing one token costs nothing.
 
-🔴 **(a2) NEW, and it is the sharpest thing left: the age key is single-homed.**
-Hardware tokens do not help here — the age secret key and the vault password are
-secrets to be *read*, not logins to be authenticated, and both exist only in Apple
-Passwords. Lose the Apple account and the laptop together and **every age-encrypted
-backup becomes permanently undecryptable.** That is the one loss in this estate
-that effort cannot undo, and it destroys the backups rather than blocking a door.
-**The age key is one line of text** — keep a copy independent of Apple (printed in
-a safe, or a second manager). Same for the vault password while there.
-*Effort: two minutes. Needs: Ignacio.*
+✅ **(a2) The age key is no longer single-homed — closed 2026-09-01.** It now also
+lives in the backup password manager, so "Apple account and laptop lost together"
+is recoverable rather than irreversible. Three hardware tokens exist; two are
+stored separately, and the third is **in another country**, which gives the Apple
+account genuine geographic separation. Its cost is *time* — retrieval means travel
+or shipping, so Apple-account recovery is days, not minutes.
+
+🟠 **(a3) Two small threads left from that, neither fatal.**
+(i) The **vault password is still single-homed** — losing it means rotating every
+token and webhook rather than losing data. It belongs in the backup manager
+alongside the age key: same two minutes.
+(ii) **Verify the backup manager's own unlock path is independent.** Ignacio
+memorises no passwords, so if its master password lives only in the primary
+manager, the second home is apparent rather than real — the redundancy would
+depend on the very thing it backs up. Registering a hardware token on it is the
+clean fix. *This decides whether recovery is minutes or days, not whether it is
+possible.*
 
 ⚠️ **One claim unverified:** "Sign in with Apple" for GitHub. GitHub.com is not
 known to offer it for personal accounts. Check `github.com/settings/security`
