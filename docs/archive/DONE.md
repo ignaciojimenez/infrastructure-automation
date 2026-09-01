@@ -17,6 +17,76 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ---
 
+## 2026-09-01 — vinylstreamer's wifi lockout: every software layer excluded, and parked
+
+**Decided: accept the plug as permanent remediation, because the fault is below
+everything software can reach.** Not "gave up" — each layer was excluded by
+direct test, in order, over five days.
+
+The host stays fully running and drops off wifi. NetworkManager times out
+mid-association (`ASSOC-REJECT status_code=16`, all-zero BSSID — no AP ever
+answered), misreads that as missing credentials *one line after logging that
+secrets exist*, and lands on `failed (reason 'no-secrets')` — a reason meaning
+"a human must intervene". It then emits nothing at all: 28 minutes of silence on
+2026-08-24, ~22 hours on 08-23.
+
+**What was tried, and what each attempt proved:**
+
+| Attempt | Result |
+|---|---|
+| `connection.autoconnect-retries=0` | **Disproven.** Verified in effect via `NetworkManager --print-config`; the host gave up anyway. A `no-secrets` failure appears to *block* autoconnect rather than exhaust a counter, and a counter cannot reach a block |
+| `802-11-wireless.powersave=2` | **Helped, did not fix.** Took the fault from roughly 4-hourly to roughly daily, for a measured **+0.049 W** (+3.3%, ≈0.43 kWh/yr). Kept |
+| `nmcli con up` (ladder layer 1) | Tried, failed |
+| interface bounce (layer 2) | Tried, failed |
+| **`brcmfmac` reload (layer 3)** | **Ran for real on 08-30 and failed** — `rmmod brcmfmac_wcc: ok / rmmod brcmfmac: ok / modprobe brcmfmac: ok`, and the radio still would not associate |
+
+Only removing power clears it. **So the fault sits below NetworkManager, below
+the link layer, and below the driver** — the on-board Broadcom radio or its
+firmware reaches a state that a cold start resets and a software reload does not.
+
+⚠️ **The 08-29 verdict was void and nearly became the conclusion.** The ladder
+reported "all three layers failed", but `brcmfmac` is held by `brcmfmac_wcc`, so
+`modprobe -r brcmfmac` failed with *module in use* — and the error was swallowed.
+The tell was that the journal for that window contained **no brcmfmac lines at
+all**. Layer 3 now removes the dependent first and reports every step. *A layer
+that cannot run must never be mistaken for a layer that ran and did not help.*
+
+**Ruled out along the way:** an AP or VLAN-wide event — HA drove the Shelly plug
+(wifi, same VLAN, same AP) while vinylstreamer was off-network, and wired
+dockassist saw nothing.
+
+**What stays, and why:**
+- **The plug watchdog is now load-bearing, not a backstop.** It is the only thing
+  that recovers this host. Its 15-minute threshold and 1 h cooldown are
+  production settings.
+- **`powersave=2`** — measurably free, and it cut the frequency several-fold.
+- **`wifi_reconnect.sh`** (`*/5`) — it can no longer recover anything, but its
+  per-layer reporting is what produced this verdict and is what would show the
+  fault changing shape.
+
+📌 **The one untried avenue is hardware: swap in a newer Pi.** Spares are on
+hand. A Pi 4/5 has a different wireless chain and the option of wired, so it
+replaces the failing part rather than nursing it. **Keep everything else
+identical — same SSID, same position, same `powersave=2` — so the radio is the
+only variable.** If the fault stops, that confirms the on-board radio; if it
+does *not*, that is the more interesting result and points at the AP or the
+environment instead.
+
+🔴 **Do not give `wifi_reconnect.sh` a reachability-based health check.** An
+early version pinged the VLAN 100 gateway, which by firewall policy answers no
+ICMP from inside that VLAN — while answering normally from every other VLAN, so
+it looked entirely sound tested from a laptop. On cron it reloaded the wifi
+driver every two minutes against a perfectly healthy radio until the host fell
+over. Health is judged from local facts only.
+
+🔴 **Reading `wifi_reconnect.log` for evidence: decompress the rotations.**
+`agent_read` returns raw gzip bytes, so grep over a `.gz` returns 0 matches and
+reads as "it never happened". That produced a false negative twice, including
+once on this very question (`ladder_starts: 0` in the live log while both runs
+sat in a rotated file). Tracked as item 22.
+
+---
+
 ## 2026-09-01 — the health check that pages the whole fleet on the 1st of every month
 
 Six hosts paged between 00:02 and 00:32 — unifi, cobra, dockassist, hifipi, cwwk,
