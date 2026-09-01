@@ -121,7 +121,8 @@ connection — no Ansible run, no physical access, no SD-card surgery.
    security add-generic-password -s ansible-vault-master -a "$USER" -w
    ```
 5. **Re-establish `touchid-agent`** for day-to-day use, and let the next Ansible run
-   reconcile `authorized_keys` (`exclusive: true` from `{{ gh_keys }}`).
+   reconcile `authorized_keys` (`exclusive: true` from `{{ gh_keys }}`). **OPNsense is
+   the exception** — paste the key into its UI instead; see below.
 6. **Regenerate the agent key** — `~/.ssh/read_agent_ed25519` lives outside
    `~/Documents`, so it is not in iCloud. It is disposable: re-create it and re-run
    `ansible-playbook ansible/playbooks/system/agent_access.yml`.
@@ -147,10 +148,17 @@ UI at `https://opnsense/` or `qm terminal 100` from the Proxmox console (both
 passworded, both in the managers). One Ansible run then re-syncs its `authorized_keys`.
 Not a lockout — one host with a different door.
 
-🔴 **The snapshot can go missing silently.** A firmware upgrade once deleted the
-Ansible-created `read_agent` account and it went unnoticed for ~3 months (see
-`ARCHITECTURE_DECISIONS.md`, *Agent Access*). The same mechanism can empty
-`authorized_keys`. Checking that it is still populated is TODO item 33.
+🔑 **And pushing a new key there with Ansible is the wrong move.** OPNsense rebuilds
+state from `config.xml` on every config apply and upgrade — that is
+[settled](ARCHITECTURE_DECISIONS.md#agent-access), verified against `auth.inc` and
+live-tested, and it is why `read_agent` is deliberately `pw`-managed and out-of-band.
+Writing `~/.ssh/authorized_keys` from Ansible is writing to a file the platform
+considers its own.
+
+**So the rule for this one host: paste the new key into the OPNsense UI**
+(System → Access → Users), where `config.xml` will keep it. Every other host takes it
+from GitHub with no action at all. *Confirming the key currently lives in that field
+rather than only on disk is TODO item 33.*
 
 📌 **So the account that matters most is GitHub, not the laptop.**
 `authorized_key` is deployed with `exclusive: true` from `{{ gh_keys }}` *and*

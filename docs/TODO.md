@@ -1034,114 +1034,65 @@ Do NOT start a rewrite on your own judgment, and do NOT treat it as a
 prerequisite for item 31 — they are independent.
 ```
 
-**33. One check left: is OPNsense's authorized_keys snapshot still there?**
-The recovery path itself is **done and documented** (`BACKUP_AND_RECOVERY.md` →
-*Recovering without the laptop*): `sshd` pulls authorized keys live from GitHub, so
-a new machine gets in by enrolling one key. Verified wired on all six Linux hosts
-2026-09-01. What is left is three loose ends, each a few minutes.
+**33. OPNsense needs its new-laptop key pasted into the UI, not pushed by Ansible**
+Everything else in laptop-loss recovery is closed (a, a2, a3 on 2026-09-01; (c)
+dropped as not a recovery concern). This is the last thread, and it is **not** a
+re-opening of the OPNsense/config.xml question — that is **settled** in
+[ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md#agent-access), verified
+against `auth.inc` and live-tested. **Do not re-derive it.**
 
-**a. GitHub account coverage — ✅ CLOSED 2026-09-01.** Confirmed by Ignacio:
-several independent factors, **including a physical token that depends on neither
-the laptop nor the Apple account**, plus recovery codes. Inventory in
-`docs/local/RECOVERY.md`. Laptop loss does not threaten fleet access.
+**Applying the settled rule to recovery gives a specific consequence nobody has
+written down.** OPNsense rebuilds state from `config.xml` on every config apply and
+upgrade. So for this host:
 
-✅ **And account access is fully solved (2026-09-01).** Two hardware tokens are
-registered on **both** the Apple account and GitHub, so the two recovery roots
-rescue each other in either direction. Losing one token costs nothing.
+- `/usr/local/bin/update_keys` **is** deployed (that task has no OS gate), but
+  `sshd` is never wired to it — the sshd-config task is gated
+  `os_family == "debian"`, and `openssh.inc` would regenerate it anyway. **No live
+  GitHub lookup on OPNsense.**
+- Ansible's `authorized_key` write to `~/.ssh/authorized_keys` is therefore a
+  file OPNsense considers its own to rebuild.
 
-✅ **(a2) The age key is no longer single-homed — closed 2026-09-01.** It now also
-lives in the backup password manager, so "Apple account and laptop lost together"
-is recoverable rather than irreversible. Three hardware tokens exist; two are
-stored separately, and the third is **in another country**, which gives the Apple
-account genuine geographic separation. Its cost is *time* — retrieval means travel
-or shipping, so Apple-account recovery is days, not minutes.
+🔑 **So the practical rule: on a new laptop, OPNsense is the one host where you
+paste the key into the OPNsense UI.** Every Debian host accepts it from GitHub
+immediately; OPNsense does not, and pushing it with Ansible is writing to a file
+the platform regenerates.
 
-✅ **(a3) Also closed 2026-09-01.** The vault password joined the age key in the
-backup manager, and the independence question is answered: **both managers unlock
-from memory**, so neither routes through the other. Every credential in the
-restore chain now survives losing the laptop, the Apple account, or either
-manager.
+⚠️ **One inference, flagged as such.** For Ansible to log in as
+`{{ infrastructure_user }}` at all, that account must have a working shell — and
+the settled decision establishes OPNsense forces `/usr/sbin/nologin` on any user
+failing `userIsAdmin()`. So it is almost certainly a **config.xml-managed admin
+user**, which means its authorized keys come from the user manager's key field.
+*That last step is reasoned, not verified.* Confirming it also confirms where the
+key must be pasted.
 
-📌 **Credentials are done; the chain is untested.** Each link is individually
-recoverable, but the end-to-end path — find a backup, decrypt it, restore it, on
-a machine that is not this one — has never been walked. Two things it would
-surface: whether the R2 bucket can be enumerated when Slack history is not there
-to supply the URL, and whether the documented steps are actually followable. That
-is the laptop-loss row already in the quarterly restore-test table, and it is now
-the only thing between "should work" and "does work".
-
-⚠️ **One claim unverified:** "Sign in with Apple" for GitHub. GitHub.com is not
-known to offer it for personal accounts. Check `github.com/settings/security`
-before counting it as a recovery path — an imagined factor is the same class of
-error this session found in `AGENT_ACCESS.md`.
-
-**b. OPNsense gets a snapshot, not a live lookup — and upgrades are known to eat
-it.** Source settles the mechanism (re-read 2026-09-01, no host access needed):
-
-- `ssh_hardening.yml` runs on `hosts: all`, so OPNsense **is** in scope.
-- `/usr/local/bin/update_keys` **is** deployed there — that task is gated only on
-  `gh_keys is defined`, with no OS check.
-- But `Deploy hardened sshd config` **is** gated `when: os_family == "debian"`, so
-  `sshd` is never wired to call it. OPNsense also regenerates `sshd_config` from
-  `config.xml`, which would undo it anyway.
-- `Set authorized keys for standard user from github` has no OS gate either, so
-  OPNsense's `authorized_keys` is a **snapshot written at Ansible-run time**.
-
-🔑 **So on a new laptop: every Debian host accepts a freshly-enrolled GitHub key
-immediately; OPNsense does not.** Reach it by web UI or `qm terminal 100` from
-Proxmox (both passworded, both in the managers), then one Ansible run re-syncs its
-`authorized_keys`. Not a lockout — just the one host that needs a different door.
-
-🔴 **The part actually worth checking is different from what this item first
-said.** A firmware upgrade once deleted the Ansible-created `read_agent` account
-and it went unnoticed for ~3 months (`ARCHITECTURE_DECISIONS.md`, *Agent Access*).
-The same mechanism can silently empty `authorized_keys`. **So the question is not
-"is it wired" — source answers that — it is "is the snapshot still there today".**
-One command from the console or web UI shell settles it.
-
-**c. ~~`~/.claude/plans/` is on the laptop only~~ — DROPPED as a recovery concern
-2026-09-01.** It was over-weighted here. The directory holds *plans for work that
-has not started*; losing it costs re-thinking, not recovery, and nothing in the
-running estate depends on it. It is not operational state, not a secret, and not
-in the restore chain.
-
-📌 **The residue is repo hygiene, not recovery:** item 11 cites a file that is not
-in the repo, so a session picking it up cannot read its own source. Fold the plan
-into item 11 or into `docs/` whenever item 11 is next touched. Not tracked
-separately.
-
-*State:* (a), (a2), (a3) closed 2026-09-01; (c) dropped as not a recovery concern.
-**Only (b) remains**, and it is one command. *Needs:* the OPNsense web UI or the
-Proxmox console — `read_agent`'s shell on that host is disabled.
+*State:* mechanism settled; the recovery consequence needs recording once
+confirmed. *Effort:* one look at the UI. *Needs:* the OPNsense web UI —
+`read_agent`'s shell there is disabled, so this cannot be checked over SSH.
 
 ```
-Close the three residual gaps in laptop-loss recovery. Read docs/TODO.md item 33 and
-docs/BACKUP_AND_RECOVERY.md "Recovering without the laptop" first — the mechanism is
-DONE and verified on six hosts, do NOT re-derive it and do NOT rebuild anything.
+Settle where OPNsense's SSH key for the infrastructure user actually lives, then
+record it. Read docs/TODO.md item 33 first.
 
-(a) is CLOSED — GitHub coverage is confirmed strong (docs/local/RECOVERY.md). Do
-    NOT re-ask it. The only open thread there is whether "Sign in with Apple" is a
-    real GitHub auth method; check github.com/settings/security and correct the
-    local file either way.
+🔴 Do NOT re-open the OPNsense/config.xml question. It is SETTLED in
+ARCHITECTURE_DECISIONS.md "Agent Access" — verified against auth.inc and live
+tested: config.xml wins, non-admin users get nologin, sshd_config is regenerated
+by openssh.inc, and sshd_config.d/ is the only durable override point. Do not
+re-derive any of that and do not propose making OPNsense Ansible-managed.
 
-(b) is the only thing left, and the source question is already answered — do NOT
-    re-derive it. OPNsense has update_keys deployed but sshd is NOT wired to it, so
-    its authorized_keys is a SNAPSHOT from the last Ansible run, not a live lookup.
-    The real question is whether that snapshot SURVIVED: a firmware upgrade once
-    deleted the Ansible-created read_agent account unnoticed for ~3 months, and the
-    same mechanism can empty authorized_keys.
+The question is narrow: in System > Access > Users, does the infrastructure user
+carry its SSH public key in the user manager's authorized-keys field?
 
-    Check from the OPNsense web UI shell or `qm terminal 100` on Proxmox — NOT
-    read_agent SSH, its shell there is disabled:
-      cat ~/.ssh/authorized_keys        (as the infrastructure user)
-    Non-empty and matching the GitHub key set = fine, record it and close the item.
-    Empty or stale = re-run `ansible-playbook ansible/playbooks/services.yml
-    --limit opnsense --tags ssh` and then consider whether this host needs a
-    freshness check, since the failure mode is silent by construction.
+If YES (expected): that field is the source of truth, and enrolling a new laptop
+key on OPNsense means pasting it there. Record exactly that in
+BACKUP_AND_RECOVERY.md under "Recovering without the laptop", replacing the
+inference note, and close this item.
 
-Do NOT add a second SSH key, a break-glass credential, or anything in the vault for
-this — the GitHub path already IS the break-glass and adding another credential
-makes the estate less safe, not more.
+If NO — the key is only in ~/.ssh/authorized_keys on disk — then it is living
+outside config.xml and is vulnerable to the same silent wipe that deleted
+read_agent for three months. Say so plainly, put the key in the UI field, and
+note that this host has no detection for that failure.
+
+Either way this is a five-minute item. Do not build anything.
 ```
 
 **8. Cabinet vent sizing.** Needs three physical measurements only he can take:
