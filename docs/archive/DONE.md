@@ -17,6 +17,7 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ## Contents
 
+- [2026-09-02 — three findings that were never tasks, parked with their reopen conditions](#2026-09-02--three-findings-that-were-never-tasks-parked-with-their-reopen-conditions)
 - [2026-09-01 — vinylstreamer's wifi lockout: every software layer excluded, and parked](#2026-09-01--vinylstreamers-wifi-lockout-every-software-layer-excluded-and-parked)
 - [2026-09-01 — the health check that pages the whole fleet on the 1st of every month](#2026-09-01--the-health-check-that-pages-the-whole-fleet-on-the-1st-of-every-month)
 - [2026-08-31 — the VFIO residue that was left on purpose, and the reason it was left was wrong](#2026-08-31--the-vfio-residue-that-was-left-on-purpose-and-the-reason-it-was-left-was-wrong)
@@ -49,6 +50,117 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ---
 
+
+---
+
+## 2026-09-02 — three findings that were never tasks, parked with their reopen conditions
+
+**Decided: a fault that is diagnosed, has no acceptable fix, and is not
+currently hurting is knowledge — not work. It leaves the queue and keeps its
+exclusions.** TODO items 27, 29 and 30 were each investigated to a real
+mechanism and each ended with nothing worth building. Left in a pick-up queue
+they cost a re-read every time and invited a future session to re-derive the
+measurement; the value in them is the list of causes already ruled out, and that
+belongs here.
+
+⚠️ **The trap this closes: none of the three can be settled by asking "how often
+does it fail?"** Each is intermittent, and the only sample available for item 30
+spans a holiday period, so any rate computed from it measures absence from the
+house. **Measuring these harder does not change what gets done about them** —
+the action is identical whether the rate is high or low, which is what makes
+them notes rather than tasks. Reopen on a complaint, not on a number.
+
+📌 **Ranking consequence:** the queue drops from 25 ranked slots to 22, and
+**item 31 (PMF on the IoT SSID) moves to №2** behind item 18.
+
+### AirPlay to Baño from the VPN SSID is racy (was TODO item 30)
+
+The family uses the default (VPN) SSID on VLAN 80; Baño is on VLAN 20. Bar is
+rock solid for guests.
+
+**Mechanism, from two packet captures:** Baño sends PTP before the phone has
+bound its PTP socket; the phone answers `ICMP port 319/320 unreachable`, the
+control connection is RST, the client retries. Sometimes a retry lands in the
+right order. 8 attempts / **1** reached audio over 29 Aug 18:24 → 30 Aug 16:52.
+
+🔴 **Rebooting Baño looked like a fix and was not.** 2-of-2 in the 50 minutes
+afterwards, but the same ICMP-then-RST sequence fired again at 17:41:03, right
+after the boot. **2-of-2 over 50 minutes is not a baseline** against a prior rate
+of 1-in-8 over 24 h.
+
+⚠️ **Do not confuse this with the firewall gap fixed the same day** — see
+*"an allowlist entry that was hiding a firewall gap"* below. That one was
+`dockassist` → HomePod on a negotiated ephemeral port, and its floating rule is
+scoped to **source `10.30.100.100` only**, so it cannot have changed anything on
+the phone path. Two AirPlay faults were live at once and only one was fixed;
+that is why this one reads as resolved when it is not.
+
+**Eliminated by measurement — do not re-test:** firewall rules (0 blocked
+packets, ever), IPv6 (see below), PTP-multicast (PTP runs *unicast* and crosses
+fine), VPN policy routing (`USED_LAN_NETS` = `10.30.0.0/16`), low TTL (the only
+TTL-1 packets are IGMP reports, correctly so).
+
+**Refused, do not re-propose:** firewall rules, `igmpproxy`, UDP relays. Nothing
+is blocked and unicast UDP crosses fine.
+
+*Reopen when:* someone says AirPlay to Baño is unreliable again. Then classify
+phone ↔ `Music_Players` flows in the OPNsense filter log into sessions and
+report "N of M reached audio (UDP)", covering hifipi (`10.30.40.100`) as well as
+Baño; and capture (`vlan0.20`, host `10.30.20.52`) to see whether the
+ICMP-then-RST sequence repeats. If it does, **routed AirPlay to this HomePod is
+inherently racy and the fix is topological, not a rule** — same VLAN for the
+phones and the HomePod, or accept it.
+
+### The mDNS repeater reflects unroutable IPv6 (was TODO item 29)
+
+The repeater runs on all five VLANs and forwards records verbatim, so Baño's
+record reaches VLAN 80 advertising a link-local `fe80::` and two ULAs that
+VLAN 80 cannot reach — OPNsense carries no IPv6 routing. A *forced* connect to
+the link-local **hangs 75 s** (the client treats `fe80::` as on-link and sends
+neighbour solicitations into the void); the ULA fails instantly.
+
+🔴 **Measured NOT to be the cause of anything observed.** Every real phone→Baño
+flow on 30 Aug was IPv4 — Happy Eyeballs falls back. Latent defect only.
+
+**Refused, do not re-propose:** adding IPv6 routing to OPNsense for this.
+
+*Reopen when:* a capture shows a real client stalling on the reflected
+link-local. The fix would then be narrowing the mDNS repeater's interface list
+so Baño's records are not pushed onto VLANs that cannot route to it.
+
+### The floor lamp drops off Wi-Fi (was TODO item 27)
+
+`light.floor_lamp_new` — Shelly Duo Bulb G3 `48f6eebd40d4`, `10.30.100.238` on
+VLAN 100 — loses its RPC session and takes its five entities `unavailable` with
+it. Four occurrences in the retained HA log: 2026-08-17 01:53 and 02:34,
+2026-08-18 10:53, 2026-08-29 23:07. Every one self-recovered; only the last
+outran the 15-minute grace and paged #home-alerts (23:30, exit 5). Signature is
+always the same pair — `aioshelly.rpc_device.wsrpc: Invalid Message from host
+10.30.100.238:80` then `Error fetching … while reconnecting`.
+
+📌 **Do not touch `ha_entity_health_grace_seconds` for this.** The 29 Aug outage
+lasted ~30 minutes; 15 minutes is the correct window and it worked. This is a
+device fault, not a threshold problem, and nothing else in HA logged a single
+line in the same 90 minutes — the network was fine.
+
+**Refused, do not re-propose:** widening any grace window; flashing
+`2.0.1-beta1` (firmware is 2.0.0 and the beta is the only thing on offer — do
+not put a beta on it to chase log lines); reasoning from `sys.reset_reason`,
+whose value mapping Shelly does not document. Context already settled is in
+*"the floor lamp that switched itself on, and an alert that was simply true"*
+below — three entries share that date, so match the title, not the date.
+
+*Reopen when:* a fifth drop happens, or a longer one. Confirm there **is** a new
+event before anything else:
+
+```
+ssh dockassist-agent "sudo docker logs --since <date> home-assistant 2>&1 \
+  | grep -E '48f6eebd40d4|10\.30\.100\.238'"
+```
+
+No new pair of lines means nothing to do. If there is one: RSSI was −58 on ch 1
+with roam `rssi_thr` −80 (healthy) on 30 Aug, so re-measure it and suspect the
+AP or DHCP before the bulb.
 
 ---
 
