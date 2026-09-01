@@ -970,8 +970,35 @@ check_auto_upgrades() {
         elif [ -f "$log_file" ] && [ ! -r "$log_file" ]; then
             print_status "warning" "Upgrade log $log_file not readable as $(id -un) - cannot verify freshness"
         elif [ -f "$log_file" ]; then
-            # Find the most recent "Starting unattended upgrades" entry
+            # Find the most recent "Starting unattended upgrades" entry, in the
+            # live log or the newest rotated one.
+            #
+            # Debian ships `monthly` for this log (rotate 6, compress), so on
+            # the 1st of every month the live file is empty from just after
+            # midnight until apt-daily-upgrade.timer fires at ~06:00-07:00.
+            # Reading only the live file, this check called that window "No
+            # upgrade activity found in logs - ACTION REQUIRED" and paged:
+            # six hosts and three paid fleet investigations on 2026-09-01,
+            # for a fleet that had upgraded cleanly six hours earlier.
+            #
+            # The fallback does not blunt the check. The date it recovers is
+            # still parsed and still measured against STALE_DAYS below, so a
+            # host that genuinely stopped upgrading last month reads ~30 days
+            # and fails exactly as it did before. Only the rotation window
+            # stops lying. `.1` is tried before `.1.gz` because under
+            # `delaycompress` the uncompressed one is the newer of the two.
             last_run_line=$(grep "Starting unattended upgrades script" "$log_file" 2>/dev/null | tail -1)
+
+            if [ -z "$last_run_line" ]; then
+                for rotated in "$log_file.1" "$log_file.1.gz"; do
+                    [ -f "$rotated" ] && [ -r "$rotated" ] || continue
+                    case "$rotated" in
+                        *.gz) last_run_line=$(gzip -cd "$rotated" 2>/dev/null | grep "Starting unattended upgrades script" | tail -1) ;;
+                        *)    last_run_line=$(grep "Starting unattended upgrades script" "$rotated" 2>/dev/null | tail -1) ;;
+                    esac
+                    [ -n "$last_run_line" ] && break
+                done
+            fi
             
             if [ -n "$last_run_line" ]; then
                 # Extract date from log entry (format: 2026-01-11 06:12:56,369)

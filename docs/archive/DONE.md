@@ -17,6 +17,65 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ---
 
+## 2026-09-01 — the health check that pages the whole fleet on the 1st of every month
+
+Six hosts paged between 00:02 and 00:32 — unifi, cobra, dockassist, hifipi, cwwk,
+agent-lxc — every one otherwise green, every one failing the same line:
+`No upgrade activity found in logs - ACTION REQUIRED`.
+
+`check_auto_upgrades` measured upgrade freshness by grepping only the **live**
+`unattended-upgrades.log`. Debian rotates that log **`monthly`**
+(`rotate 6, compress`), so on the 1st it is an empty file from just after midnight
+until `apt-daily-upgrade.timer` fires at ~06:00–07:00. Every host whose `2-59/15`
+health check lands in that window reports a fault it does not have.
+
+**Fixed by falling back to the newest rotated log (`.1`, then `.1.gz`) when the live
+one has no run line yet.** The alternative — widening the window or dropping the
+check — would have silenced a probe that still has a job to do. The recovered date
+is still parsed and still measured against `STALE_DAYS`, so a host that genuinely
+stopped upgrading last month still reads ~30 days and still fails. Only the rotation
+window stops lying.
+
+### Three investigations, one cause, and all three wrong about the cadence
+
+The fleet agent investigated **three of the six hosts separately** — unifi $0.44,
+cobra $0.33, dockassist $0.22 — and reached the same non-conclusion three times, at
+**$0.99**. The other three alerted after those ran and got no investigation at all,
+so the spend did not even buy coverage.
+
+🔴 **All three summaries said the rotation was *nightly*** and framed the fix as
+stopping a daily recurrence. The config says `monthly`, and the `.gz` files are
+dated the 30th/31st of each month. That is not a detail: a nightly annoyance would
+have been caught by watching for a week, and this would have "self-cleared" every
+morning while returning on the 1st of every month. **Reading one config file changed
+the item's whole shape.** An investigation summary is a hypothesis with a price tag,
+not a measurement — verify the single fact its recommendation turns on.
+
+### Verified against the live fault, not a fixture
+
+`tests/unit/auto_upgrades_rotation_test.sh` pins both halves — the rotation window
+must cost nothing, and a 40-day-old run must still be `ACTION REQUIRED`. Run against
+the *pre-patch* script it goes red on exactly the production line, under macOS `sh`
+and under Debian `dash` on cwwk.
+
+The stronger proof came from the clock: the deploy landed at ~00:55, while the live
+log was **still 0 bytes** on every host. So the fix was exercised against the real
+fault condition rather than a fixture — cwwk, dockassist and hifipi each reported a
+green `Last upgrade: 2026-08-31`, and `system_health_check.sh` exits **0 on all seven
+Debian hosts**.
+
+📌 **Deployed with `--tags scripts --limit debian_hosts`, not the untagged playbook.**
+Untagged, `deploy_monitoring.yml` also runs the full `platform/proxmox` and
+`platform/opnsense` roles and imports SMART monitoring — a whole platform role against
+the internet SPOF to ship a one-line change to a Debian shell script. The narrowed run
+touched one file per host and nothing else; `changed=0` on the second pass.
+
+📌 Also corrected: the comment at `system_health_check.sh:953` claimed the
+infrastructure user "is not in `adm` on any host bootstrap created". Stale —
+`debian_baseline.yml:58` puts the primary user in `adm`, verified on cwwk, cobra,
+dockassist and hifipi. The permission-warning branch it justifies is dead code on
+those hosts.
+
 ## 2026-08-31 — the VFIO residue that was left on purpose, and the reason it was left was wrong
 
 **Decided:** the two VFIO lines cwwk logs once per host boot are now excluded
