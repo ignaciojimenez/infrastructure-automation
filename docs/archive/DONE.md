@@ -240,6 +240,51 @@ prediction — force the condition (here: reboot, or empty the state file) and
 watch it.**
 
 ---
+## 2026-09-01 — a redaction that was applied once and not seven times
+
+Found by the adversarial docs review, not by a fault. A household member's first
+name had been redacted from `docs/NETWORK.md` when the wireless table moved to
+`docs/local/`, but the same name was still tracked in seven other places as Home
+Assistant entity IDs.
+
+🎯 **The exposure was mild; the inconsistency was the defect.** A redaction applied
+in one file and not elsewhere reads as an *accident* rather than a policy — which is
+precisely the impression the disclosure-tiering rule exists to prevent. For a public
+repo whose author's profession is security, looking careless costs more than the
+first name did.
+
+**Split by whether the value could actually move.** The three `ha_secondary_*`
+entries in `group_vars/all/main.yml` are indirection points — the role defaults were
+already generic placeholders — so their values went into the vault with no
+downstream effect. The entity-ID globs in `group_vars/homeassistant.yml` are not:
+changing them means renaming entities in Home Assistant's registry on a live system,
+which is real risk for a first name that is already only an entity id. **They stay,
+and now carry a comment saying the asymmetry is a judgement call rather than an
+oversight** — an undocumented exception is what made this a finding in the first
+place.
+
+Also: the `ARCHITECTURE_DECISIONS` mention now describes the presence-sensor pattern
+instead of naming a person, and `docs/reference/zyxel-xgs1250-12.cfg` no longer
+carries the switch's own MAC as its MST region name (recorded in `docs/local/`; a
+factory-reset switch generates its own, so recovery never needed it). Item 33's own
+text was written without the name — an item describing a redaction should not
+reintroduce it.
+
+✅ **Verified, and the first verification was incomplete.** The vault round-tripped
+39 → 42 keys; the three variables resolved to byte-identical strings before and
+after under `connection: local`, so no consuming template could render differently
+and the HA `unique_id` was unchanged; `groups.yaml.j2` was rendered locally and
+still emitted the right `person.` entity. Then `--tags config --check --diff` came
+back `changed=0` with zero diff hunks.
+
+📌 **That last run did not cover everything, and nearly closed the item early.** The
+lovelace mobile dashboard also consumes both variables, and it is tagged `dashboard`,
+not `config` — so the passing run had never touched it. A second run with
+`--tags dashboard` was needed, and also returned `changed=0` with the
+*Deploy mobile dashboard configuration* task confirmed reached. **A green check only
+covers the tasks its tag selects; confirm the tag reaches every consumer before
+reading `changed=0` as proof.**
+
 ## 2026-09-01 — laptop-loss recovery closed out, and read_agent finally written down
 
 Follow-on from the docs audit. Every residual raised that day is now either closed

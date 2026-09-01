@@ -61,11 +61,10 @@ renders it:
 > **№4** 1c → **№5** 1d *(only after 18)* → **№6** 2 → **№7** 4 (plex) →
 > **№8** 9 → **№9** 3a/3b/3c → **№10** 5 → **№11** 19 → **№12** 12 →
 > **№13** 22 → **№14** 10 → **№15** 11 → **№16** 6 → **№17** 7 →
-> **№18** 33 *(built + locally verified — needs one `--check --diff`, 2 min)* ·
-> **№19–22** 8/13/14/16 · **№23** 32 *(git-history rewrite —
-> decision only, default is no)* · **№24** 26 *(one UI toggle, global — his
-> call)* · **№25** 27 *(watch only — needs a fifth drop before it is work at
-> all)* · **№26** 29 *(latent — measured NOT to be the cause of the 30 Aug
+> **№18–21** 8/13/14/16 · **№22** 32 *(git-history rewrite —
+> decision only, default is no)* · **№23** 26 *(one UI toggle, global — his
+> call)* · **№24** 27 *(watch only — needs a fifth drop before it is work at
+> all)* · **№25** 29 *(latent — measured NOT to be the cause of the 30 Aug
 > fault)*
 > *(decision-gated — 16 needs a purchase call, 32 needs his call on a public
 > force-push, the rest need him at the cabinet; not ranked)*
@@ -1033,58 +1032,6 @@ that forks and anything already read are unaffected.
 
 Do NOT start a rewrite on your own judgment, and do NOT treat it as a
 prerequisite for item 31 — they are independent.
-```
-
-**33. 🟢 Redaction consistency — BUILT, needs one verification run**
-The work is done and committed. **What is left is a single `--check --diff` that
-needs Touch ID**, which is why it stopped here rather than being closed.
-
-**What changed (2026-09-01):**
-- The three `ha_secondary_*` values moved from `group_vars/all/main.yml` into
-  `vault.yml` as `vault_ha_secondary_*`. The variables now reference them.
-- `ARCHITECTURE_DECISIONS.md` describes the presence-sensor *pattern* instead of
-  naming a person.
-- `group_vars/homeassistant.yml` keeps its entity-ID globs and now carries a
-  comment saying the asymmetry is a judgement call, not an oversight.
-- `docs/reference/zyxel-xgs1250-12.cfg` no longer carries the switch's MAC as its
-  MST region name; the value is in `docs/local/RECOVERY.md`.
-
-✅ **Already verified without Touch ID:**
-- Vault round-trips, 39 → 42 keys, exactly the three added.
-- The three variables resolve to **byte-identical strings** before and after
-  (`connection: local`), so no template that uses them can render differently —
-  and critically the HA `unique_id` (`<display>_presence_combined`) is unchanged.
-- The real `groups.yaml.j2` was rendered locally and still emits the correct
-  `person.` entity from the vaulted value.
-- `--syntax-check` passes on `services.yml` and `site.yml`; inventory parses.
-- Only entity IDs remain in tracked files — the decided exception.
-
-🔴 **The one thing that could not be checked here:** that a real run against
-dockassist reports **no change**. Everything above proves the *inputs* are
-identical; only `--check --diff` proves Ansible agrees.
-
-*State:* built, locally verified, awaiting one run. *Effort:* two minutes.
-*Needs:* Touch ID (SSH to dockassist).
-
-```
-Verify and close TODO item 33. The work is DONE and committed — do NOT redo it,
-and do NOT rename any Home Assistant entity.
-
-Run:
-  ansible-playbook ansible/playbooks/services.yml --limit dockassist --tags config --check --diff
-
-PASS = no changes to groups.yaml, configuration.yaml or the lovelace dashboard,
-and no HA restart queued. That is the whole test: the three ha_secondary_* values
-moved into the vault unchanged, so Ansible must see nothing to do.
-
-FAIL = any diff touching those files. Do not "fix" it by editing templates —
-it would mean a vault value does not match what group_vars had, so compare
-`ansible-vault view` against git history for group_vars/all/main.yml and correct
-the VAULT.
-
-Once it passes: remove item 33 from docs/TODO.md, write it up in
-docs/archive/DONE.md, update the dashboard, and merge docs/disclosure-policy to
-main with `git ms`.
 ```
 
 **8. Cabinet vent sizing.** Needs three physical measurements only he can take:
