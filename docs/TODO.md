@@ -61,7 +61,7 @@ renders it:
 > **№4** 1c → **№5** 1d *(only after 18)* → **№6** 2 → **№7** 4 (plex) →
 > **№8** 9 → **№9** 3a/3b/3c → **№10** 5 → **№11** 19 → **№12** 12 →
 > **№13** 22 → **№14** 10 → **№15** 11 → **№16** 6 → **№17** 7 →
-> **№18** 33 *(two loose ends left on laptop-loss recovery — (a) closed 2026-09-01)* · **№19–22** 8/13/14/16 · **№23** 32 *(git-history rewrite —
+> **№18** 33 *(the age key is single-homed — 2 min, and the only irreversible loss left)* · **№19–22** 8/13/14/16 · **№23** 32 *(git-history rewrite —
 > decision only, default is no)* · **№24** 26 *(one UI toggle, global — his
 > call)* · **№25** 27 *(watch only — needs a fifth drop before it is work at
 > all)* · **№26** 29 *(latent — measured NOT to be the cause of the 30 Aug
@@ -1034,7 +1034,7 @@ Do NOT start a rewrite on your own judgment, and do NOT treat it as a
 prerequisite for item 31 — they are independent.
 ```
 
-**33. Three small gaps left in laptop-loss recovery — all verification, no building**
+**33. Recovery residuals — one real gap (the age key), two verifications**
 The recovery path itself is **done and documented** (`BACKUP_AND_RECOVERY.md` →
 *Recovering without the laptop*): `sshd` pulls authorized keys live from GitHub, so
 a new machine gets in by enrolling one key. Verified wired on all six Linux hosts
@@ -1045,11 +1045,19 @@ several independent factors, **including a physical token that depends on neithe
 the laptop nor the Apple account**, plus recovery codes. Inventory in
 `docs/local/RECOVERY.md`. Laptop loss does not threaten fleet access.
 
-📌 **It moved the risk rather than removing it.** Almost everything else —
-vault password, age key, every console password, most GitHub factors — sits
-behind **one Apple account**. The hardware token is the only thing outside it, and
-it is a single physical object. A second registered key kept elsewhere is the
-standard answer; **not opened as work, because it is a purchase decision.**
+✅ **And account access is fully solved (2026-09-01).** Two hardware tokens are
+registered on **both** the Apple account and GitHub, so the two recovery roots
+rescue each other in either direction. Losing one token costs nothing.
+
+🔴 **(a2) NEW, and it is the sharpest thing left: the age key is single-homed.**
+Hardware tokens do not help here — the age secret key and the vault password are
+secrets to be *read*, not logins to be authenticated, and both exist only in Apple
+Passwords. Lose the Apple account and the laptop together and **every age-encrypted
+backup becomes permanently undecryptable.** That is the one loss in this estate
+that effort cannot undo, and it destroys the backups rather than blocking a door.
+**The age key is one line of text** — keep a copy independent of Apple (printed in
+a safe, or a second manager). Same for the vault password while there.
+*Effort: two minutes. Needs: Ignacio.*
 
 ⚠️ **One claim unverified:** "Sign in with Apple" for GitHub. GitHub.com is not
 known to offer it for personal accounts. Check `github.com/settings/security`

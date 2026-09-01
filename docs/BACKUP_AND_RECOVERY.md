@@ -149,11 +149,19 @@ depends on neither the laptop nor the Apple account**. Laptop loss does not thre
 it. The factor inventory is in `docs/local/RECOVERY.md` — kept out of this file because
 listing which factors guard an account is a targeting aid, not a mechanism.
 
-⚠️ **The residual risk is therefore the Apple account, not GitHub.** Most factors
-restore from iCloud, so the failure worth planning for is a lost or locked Apple ID —
-in which case the physical token is the one thing left. A second registered hardware
-key, stored elsewhere, is the standard answer to "the only independent factor is a
-single object."
+✅ **Account access is a solved problem (confirmed 2026-09-01).** Two hardware tokens
+are registered on *both* the Apple account and GitHub, so the two recovery roots can
+rescue each other: lose the Apple account and the tokens still open GitHub; lose both
+tokens and the Apple-held factors still open GitHub. Losing one token costs nothing.
+
+🔴 **The residual is not an account — it is the two secrets that are single-homed.**
+The **age secret key** and the Ansible Vault password exist only in Apple Passwords,
+and no hardware token recovers them: they are secrets to be *read*, not logins to be
+authenticated. If the Apple account and the laptop are lost together, **every
+age-encrypted backup in this document becomes permanently undecryptable** — the one
+loss here that effort cannot undo, and it destroys the backups rather than merely
+blocking a door. The age key is one line of text; keep a copy somewhere independent of
+Apple (printed, or a second manager). Detail in `docs/local/RECOVERY.md`."
 
 ### What else is only on the laptop
 
@@ -385,7 +393,7 @@ Results are logged in `docs/RESTORE_TEST_LOG.md`.
 | **cobra media files** not backed up | Loss of media library (100s of GB) | Too large for curlbin (200 MB limit). Re-downloadable content. |
 | **age secret key in password manager only** | Cannot decrypt backups without password manager access | Apple Passwords, iCloud-synced — survives the laptop. Single line, easy to duplicate |
 | **GitHub account is the root of fleet SSH access** | Losing it locks you out of every host that trusts `AuthorizedKeysCommand` | ✅ Covered — multiple factors incl. a physical token independent of both the laptop and the Apple account (inventory: `docs/local/RECOVERY.md`). OPNsense and Proxmox stay reachable by password as a further independent path |
-| **Most recovery material sits behind one Apple account** | A lost or locked Apple ID takes the vault password, the age key, every console password and most GitHub factors at once | The hardware token is the one factor outside it. A second registered key kept elsewhere would remove the last single-object dependency |
+| **The age key and vault password are single-homed in Apple Passwords** | Losing the Apple account *and* the laptop makes every age-encrypted backup permanently undecryptable — irreversible, and it destroys the backups themselves | Hardware tokens do not help: these are secrets to read, not logins. Keep an offline copy of the age key (one line) independent of Apple. **Open — see TODO item 33** |
 | **`~/.claude/plans/` is on the laptop only** | TODO item 11's source plan is lost with the machine | Outside `~/Documents`, so iCloud does not cover it. Move it into the repo or `docs/local/` if it matters |
 | **Backup URLs only in Slack** | If Slack notification is missed, URL is gone — IDs are random and not discoverable | `do_backup` also logs URLs to `/tmp/backup_url_*.txt` on the source host, but this is volatile |
 | **Tado OAuth tokens** | Need re-auth on dockassist rebuild | Recoverable via `tado_setup.sh` (interactive OAuth2 flow) |
