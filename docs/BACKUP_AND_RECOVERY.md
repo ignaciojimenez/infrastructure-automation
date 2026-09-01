@@ -123,9 +123,57 @@ connection — no Ansible run, no physical access, no SD-card surgery.
 5. **Re-establish `touchid-agent`** for day-to-day use, and let the next Ansible run
    reconcile `authorized_keys` (`exclusive: true` from `{{ gh_keys }}`). **OPNsense is
    the exception** — paste the key into its UI instead; see below.
-6. **Regenerate the agent key** — `~/.ssh/read_agent_ed25519` lives outside
-   `~/Documents`, so it is not in iCloud. It is disposable: re-create it and re-run
-   `ansible-playbook ansible/playbooks/system/agent_access.yml`.
+6. **Re-issue the laptop's `read_agent` key** — see *Porting `read_agent`* below.
+   It is not backed up anywhere, by design.
+
+### Porting `read_agent` to a new machine
+
+`read_agent` is the passphrase-free account used for unattended SSH (`ssh cobra-agent`).
+**There are two independent keys**, and only one of them is on the laptop:
+
+| Key | Private key lives | Public key declared in | Pinned to | Slack alert per use |
+|---|---|---|---|---|
+| **Laptop** | `~/.ssh/read_agent_ed25519` — **not backed up** | `vault_agent_ssh_pubkey` (vault) | `vault_agent_control_ip` | yes |
+| **agent-lxc** | on CT 103 itself | `agent_lxc_ssh_pubkey` (`group_vars/all/main.yml`, plaintext) | `agent_lxc_ip` | no — it sweeps hourly |
+
+✅ **Losing the laptop does not touch the fleet sweep.** The agent-lxc key lives on the
+container, so Tier 1/2 monitoring keeps running throughout. Only *your* unattended SSH
+from the laptop stops.
+
+🔑 **The private key is deliberately not backed up.** It is passphrase-free, so a copy
+in any sync or backup would be a standing fleet credential sitting outside the vault.
+Re-issuing costs one command, which is a better trade than storing it.
+
+**To re-issue, after step 3 above has given you normal SSH as your own user:**
+
+```bash
+# 1. New keypair. -N "" is deliberate — unattended access is the whole point.
+ssh-keygen -t ed25519 -C "read_agent@infrastructure" -f ~/.ssh/read_agent_ed25519 -N ""
+
+# 2. Put the PUBLIC key in the vault. This is the step that actually matters —
+#    regenerating the file locally on its own changes nothing on the hosts.
+ansible-vault edit ansible/inventory/group_vars/all/vault.yml   # set vault_agent_ssh_pubkey
+
+# 3. Push it. exclusive/templated authorized_keys means the old key is removed.
+ansible-playbook ansible/playbooks/system/agent_access.yml
+
+# 4. Verify as the agent, not as yourself:
+ssh cobra-agent 'echo ok'
+```
+
+⚠️ **OPNsense needs its own run and will need it again.** `read_agent` there is
+`pw`-managed and out-of-band by design — a firmware upgrade deletes it, silently
+(settled in [ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md#agent-access), which
+also explains why moving it into `config.xml` does not work). Recovery is one
+idempotent command, ~9 s from a fully wiped state:
+
+```bash
+ansible-playbook ansible/playbooks/system/agent_access.yml --limit opnsense
+```
+
+📌 **Also re-add the new laptop's own key to `~/.ssh/config`** — the `Host *-agent`
+block (`User read_agent`, `IdentityAgent none`, `ProxyCommand` stripping the suffix)
+is machine-local dotfiles, not part of this repo.
 
 ### Verified state, and the one exception
 
@@ -157,8 +205,14 @@ considers its own.
 
 **So the rule for this one host: paste the new key into the OPNsense UI**
 (System → Access → Users), where `config.xml` will keep it. Every other host takes it
-from GitHub with no action at all. *Confirming the key currently lives in that field
-rather than only on disk is TODO item 33.*
+from GitHub with no action at all.
+
+✅ **Confirmed 2026-09-01** — the infrastructure user's key is held in the UI field, so
+`config.xml` preserves it across applies and upgrades. (Note for anyone re-checking:
+*being able to SSH in does not by itself prove this* — a key sitting only in
+`~/.ssh/authorized_keys` authenticates identically, right up until the next config
+apply removes it. The discriminator is the UI field, or `grep authorizedkeys` in
+`config.xml`.)
 
 📌 **So the account that matters most is GitHub, not the laptop.**
 `authorized_key` is deployed with `exclusive: true` from `{{ gh_keys }}` *and*

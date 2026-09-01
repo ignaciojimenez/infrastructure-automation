@@ -205,6 +205,45 @@ prediction — force the condition (here: reboot, or empty the state file) and
 watch it.**
 
 ---
+## 2026-09-01 — laptop-loss recovery closed out, and read_agent finally written down
+
+Follow-on from the docs audit. Every residual raised that day is now either closed
+or correctly reclassified.
+
+**Credentials — closed.** The GitHub account that fleet SSH depends on carries
+several independent factors, including two hardware tokens stored separately and a
+third in another country. The age secret key and the vault password each gained a
+second home in a backup password manager, and **both managers unlock from memory**,
+so the redundancy is real rather than circular — the "backup that depends on the
+thing it backs up" failure does not apply. That removed the one irreversible loss in
+the estate: losing the Apple account and the laptop together no longer makes every
+age-encrypted backup permanently undecryptable.
+
+**OPNsense — the settled rule, applied.** No re-litigation: config.xml wins, verified
+against `auth.inc` and live-tested. What had not been written down was the
+*consequence for recovery*. `/usr/local/bin/update_keys` is deployed there (that task
+has no OS gate) but `sshd` is never wired to it, so there is **no live GitHub lookup
+on OPNsense**. A new laptop's key must be pasted into the UI, where `config.xml`
+keeps it — pushing it with Ansible writes to a file the platform regenerates.
+Confirmed the key is in the UI field. 📌 **Being able to SSH in does not prove that**:
+a key sitting only in `~/.ssh/authorized_keys` authenticates identically until the
+next config apply removes it. The discriminator is the UI field.
+
+**`read_agent` porting — the actual gap.** The recovery doc said the key was
+"disposable: re-create it and re-run agent_access.yml", which was true and
+incomplete: it omitted the step that matters, which is putting the **public** key
+into the vault. Regenerating the file locally changes nothing on the hosts. Now
+documented properly, along with two facts that were nowhere: there are **two
+independent read_agent keys**, and the agent-lxc one lives on CT 103 — so **losing
+the laptop does not interrupt the fleet sweep**, only the operator's own unattended
+SSH. The private key stays un-backed-up on purpose: it is passphrase-free, so any
+copy in a sync or backup would be a standing fleet credential outside the vault.
+Re-issuing is cheaper than storing it.
+
+**Dropped as over-weighted:** `~/.claude/plans/` being outside iCloud. It holds plans
+for unstarted work — losing it costs re-thinking, not recovery. The residue is repo
+hygiene (item 11 cites a file not in the repo), not a recovery concern.
+
 ## 2026-09-01 — the docs audit, and the recovery path that already existed
 
 Second and third halves of the item-24 session: once the disclosure tiering moved

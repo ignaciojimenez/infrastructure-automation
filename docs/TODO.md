@@ -61,10 +61,10 @@ renders it:
 > **№4** 1c → **№5** 1d *(only after 18)* → **№6** 2 → **№7** 4 (plex) →
 > **№8** 9 → **№9** 3a/3b/3c → **№10** 5 → **№11** 19 → **№12** 12 →
 > **№13** 22 → **№14** 10 → **№15** 11 → **№16** 6 → **№17** 7 →
-> **№18** 33 *(one command left — is OPNsense's authorized_keys snapshot still there)* · **№19–22** 8/13/14/16 · **№23** 32 *(git-history rewrite —
-> decision only, default is no)* · **№24** 26 *(one UI toggle, global — his
-> call)* · **№25** 27 *(watch only — needs a fifth drop before it is work at
-> all)* · **№26** 29 *(latent — measured NOT to be the cause of the 30 Aug
+> **№18–21** 8/13/14/16 · **№22** 32 *(git-history rewrite —
+> decision only, default is no)* · **№23** 26 *(one UI toggle, global — his
+> call)* · **№24** 27 *(watch only — needs a fifth drop before it is work at
+> all)* · **№25** 29 *(latent — measured NOT to be the cause of the 30 Aug
 > fault)*
 > *(decision-gated — 16 needs a purchase call, 32 needs his call on a public
 > force-push, the rest need him at the cabinet; not ranked)*
@@ -1032,67 +1032,6 @@ that forks and anything already read are unaffected.
 
 Do NOT start a rewrite on your own judgment, and do NOT treat it as a
 prerequisite for item 31 — they are independent.
-```
-
-**33. OPNsense needs its new-laptop key pasted into the UI, not pushed by Ansible**
-Everything else in laptop-loss recovery is closed (a, a2, a3 on 2026-09-01; (c)
-dropped as not a recovery concern). This is the last thread, and it is **not** a
-re-opening of the OPNsense/config.xml question — that is **settled** in
-[ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md#agent-access), verified
-against `auth.inc` and live-tested. **Do not re-derive it.**
-
-**Applying the settled rule to recovery gives a specific consequence nobody has
-written down.** OPNsense rebuilds state from `config.xml` on every config apply and
-upgrade. So for this host:
-
-- `/usr/local/bin/update_keys` **is** deployed (that task has no OS gate), but
-  `sshd` is never wired to it — the sshd-config task is gated
-  `os_family == "debian"`, and `openssh.inc` would regenerate it anyway. **No live
-  GitHub lookup on OPNsense.**
-- Ansible's `authorized_key` write to `~/.ssh/authorized_keys` is therefore a
-  file OPNsense considers its own to rebuild.
-
-🔑 **So the practical rule: on a new laptop, OPNsense is the one host where you
-paste the key into the OPNsense UI.** Every Debian host accepts it from GitHub
-immediately; OPNsense does not, and pushing it with Ansible is writing to a file
-the platform regenerates.
-
-⚠️ **One inference, flagged as such.** For Ansible to log in as
-`{{ infrastructure_user }}` at all, that account must have a working shell — and
-the settled decision establishes OPNsense forces `/usr/sbin/nologin` on any user
-failing `userIsAdmin()`. So it is almost certainly a **config.xml-managed admin
-user**, which means its authorized keys come from the user manager's key field.
-*That last step is reasoned, not verified.* Confirming it also confirms where the
-key must be pasted.
-
-*State:* mechanism settled; the recovery consequence needs recording once
-confirmed. *Effort:* one look at the UI. *Needs:* the OPNsense web UI —
-`read_agent`'s shell there is disabled, so this cannot be checked over SSH.
-
-```
-Settle where OPNsense's SSH key for the infrastructure user actually lives, then
-record it. Read docs/TODO.md item 33 first.
-
-🔴 Do NOT re-open the OPNsense/config.xml question. It is SETTLED in
-ARCHITECTURE_DECISIONS.md "Agent Access" — verified against auth.inc and live
-tested: config.xml wins, non-admin users get nologin, sshd_config is regenerated
-by openssh.inc, and sshd_config.d/ is the only durable override point. Do not
-re-derive any of that and do not propose making OPNsense Ansible-managed.
-
-The question is narrow: in System > Access > Users, does the infrastructure user
-carry its SSH public key in the user manager's authorized-keys field?
-
-If YES (expected): that field is the source of truth, and enrolling a new laptop
-key on OPNsense means pasting it there. Record exactly that in
-BACKUP_AND_RECOVERY.md under "Recovering without the laptop", replacing the
-inference note, and close this item.
-
-If NO — the key is only in ~/.ssh/authorized_keys on disk — then it is living
-outside config.xml and is vulnerable to the same silent wipe that deleted
-read_agent for three months. Say so plainly, put the key in the UI field, and
-note that this host has no detection for that failure.
-
-Either way this is a five-minute item. Do not build anything.
 ```
 
 **8. Cabinet vent sizing.** Needs three physical measurements only he can take:
