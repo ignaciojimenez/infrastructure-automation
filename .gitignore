@@ -24,9 +24,10 @@ vault_pass
 # subdirectory a session was started in.
 **/.claude/
 
-# Local-only operational docs. Public repo: console URLs, ports and reachability
-# are a recon shortcut and belong with the item-24 decision (operational detail
-# stays readable locally, not published). Never commit this directory.
+# Local-only operational docs — the Tier 1 of "Disclosure tiering" in
+# docs/ARCHITECTURE_DECISIONS.md. Public repo: correlations (SSID->VLAN->PMF,
+# console URLs and ports, MACs) are a recon shortcut, while the mechanisms and
+# reasoning stay in the tracked docs. See docs/local/README.md. Never commit.
 docs/local/
 
 # System

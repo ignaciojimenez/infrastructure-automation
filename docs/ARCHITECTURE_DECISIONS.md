@@ -2,6 +2,30 @@
 
 Simple log of key technical decisions made in this project.
 
+## Contents
+
+**Standing rules.** Consult before designing anything new; each entry says what was decided and why, so a settled question is not re-litigated.
+
+- [Infrastructure Strategy](#infrastructure-strategy)
+- [Hardware Configuration](#hardware-configuration)
+- [Deployment & Provisioning](#deployment--provisioning)
+- [Naming Conventions](#naming-conventions)
+- [Monitoring & Observability](#monitoring--observability)
+- [Configuration Loading Order](#configuration-loading-order)
+- [Secrets & Vault Strategy](#secrets--vault-strategy)
+- [Disclosure tiering — what goes in a public repo](#disclosure-tiering--what-goes-in-a-public-repo)
+- [LXC Container Management](#lxc-container-management)
+- [Proxmox Host Management](#proxmox-host-management)
+- [DNS Architecture (Updated November 2025)](#dns-architecture-updated-november-2025)
+- [Home Assistant Architecture (Updated November 2025)](#home-assistant-architecture-updated-november-2025)
+- [Backup Strategy](#backup-strategy)
+- [Agent Access](#agent-access)
+- [Test Environments (2026-08-18)](#test-environments-2026-08-18)
+- [Agent LXC — Fleet Observer (CT 103, 2026-07-22)](#agent-lxc--fleet-observer-ct-103-2026-07-22)
+
+---
+
+
 ## Infrastructure Strategy
 
 - **Ansible roles are self-healing** - Roles detect and fix missing configuration (e.g., hardware overlays, service configs)
@@ -81,6 +105,65 @@ Simple log of key technical decisions made in this project.
 - **Example files for onboarding** - `vault.yml.example` and `*.ini.example` files show structure without secrets
 - **No plaintext secrets** - All sensitive data (tokens, passwords, keys) in vault only
 
+## Disclosure tiering — what goes in a public repo
+
+*Adopted 2026-08-30, closing TODO item 24.*
+
+This repo is **public on purpose**: it is a portfolio as much as an automation
+tree. It is also the only written record of a real home network. Those two jobs
+pull in opposite directions, and "write less" resolves them badly — a document
+nobody can use is not a security control, it is just a worse document.
+
+The rule is therefore **not** *how sensitive is this fact*, which produces
+endless argument. It is a single discriminator:
+
+> 🎯 **Does this line shorten the path from *"stand within radio or physical
+> range"* to *"know which specific weakness to hit"*?**
+
+A fact that is already broadcast, printed on the box, or resolvable in DNS costs
+nothing to publish. A fact that **correlates** two of those — this name lands in
+that segment, that segment holds the mains-power devices, this one has the weaker
+setting — is the thing an attacker would otherwise have to be on site to learn.
+Publish the mechanism; keep the correlation local.
+
+**Tier 0 — publish.** Design intent, mechanisms, reasoning, failure modes,
+corrections. RFC1918 subnets and VLAN purposes. Host names, roles and their
+Ansible config. Decisions and the arguments behind them. Public DNS names.
+*This is the tier that makes the repo worth showing, and it should stay generous.*
+
+**Tier 1 — `docs/local/` (gitignored).** Correlations and target lists:
+- SSID → VLAN → isolation → PMF mapping, and which SSID carries which weakness
+- console URLs, ports, and their observed auth state (`docs/local/CONSOLES.md`)
+- MAC addresses and any device↔person↔room mapping
+- third parties' names, wherever they appear as identifiers
+- anything that reads as "here is the soft spot, and here is where it lives"
+
+**Tier 2 — vault only.** Keys, tokens, password hashes, PSKs, WAN addressing,
+WireGuard public keys and endpoints. Never in a tracked file, encrypted or not,
+and never in `docs/local/` either.
+
+📌 **A redaction in a Tier 0 file must say what it hid and where it went**, or
+the document rots into hints. Leave the finding, its mechanism and its severity
+in place; move only the identifier. `docs/NETWORK.md` findings 8 and 9 are the
+worked example.
+
+⚠️ **Redaction narrows future exposure only.** Anything that was ever committed
+stands in git history, in every clone and in every fork, and GitHub serves the
+old blob at its commit SHA. A history rewrite is a separate, deliberate decision
+with its own costs — it force-pushes a public repo and still cannot recall what
+has been read. **Never treat a redaction as a remediation for the underlying
+weakness**: the fix for "PMF is disabled on that SSID" is enabling PMF.
+
+🔒 **`docs/local/` is untracked, not unbacked — and the difference matters.**
+Gitignored means *out of the public repo*, not *confined to this machine*: the
+tree lives under `~/Documents`, which syncs to iCloud Drive (verified 2026-09-01
+— `docs/local/` is visible there). So the tier boundary is "never in public git",
+and iCloud is an acceptable home for correlations. **It is not an acceptable home
+for secrets** — those stay in `vault.yml`, which is encrypted before it ever
+touches any sync. If `docs/local/` ever grows something that would be expensive
+to re-derive *and* must survive an Apple-account loss, put it in the R2 backup
+set — see `docs/BACKUP_AND_RECOVERY.md`.
+
 ## LXC Container Management
 
 - **Hostname resolution fix** - Early fix in bootstrap.yml adds hostname to /etc/hosts
@@ -133,7 +216,7 @@ Simple log of key technical decisions made in this project.
 
 - **The Thread border router must be on a VLAN dockassist is on-link with** (2026-08-23)
   - dockassist has no 802.15.4 radio, so every Matter-over-Thread packet crosses
-    a border router — today the HomePod "Bano" (`40:ed:cf:4e:8e:03`)
+    a border router — today the HomePod "Bano"
   - The BR announces the route to the Thread mesh prefix in a **Router
     Advertisement**. RAs are link-local: they do not cross a VLAN boundary, and
     no firewall rule can substitute for one. OPNsense carries no IPv6 at all —
@@ -150,7 +233,9 @@ Simple log of key technical decisions made in this project.
 - **Presence detection via Companion App + Tado fallback** - Robust dual-source tracking
   - Primary: Mobile Companion App device trackers (real-time GPS)
   - Fallback: Tado device trackers (30-minute freshness window)
-  - Combined presence sensors: `binary_sensor.choco_presence`, `binary_sensor.candela_presence`
+  - Combined presence sensors: one `binary_sensor.<person>_presence` per tracked person,
+    named from `ha_*_person_display`. Those values are vaulted — see TODO item 33 for why
+    the entity IDs themselves were deliberately left alone
   - group.persons for home/away state
   - Guest mode toggle disables automatic away
   - 10-minute delay prevents false triggers
@@ -190,11 +275,11 @@ Simple log of key technical decisions made in this project.
 ## Agent Access
 
 - **Dedicated `read_agent` user** — Separate user for autonomous agent SSH access, not reusing human credentials. Read-only sudo rules, no group memberships.
-- **Password-protected SSH key outside Secretive** — Ed25519 key at `~/.ssh/read_agent_ed25519` on control machine, passphrase in Ansible Vault. Secretive blocks unattended access by design; agent key is intentionally outside it.
-- **IP-restricted authorized_keys** — `from="<control-machine-IP>"` on every host. Even if the key leaks, it's only usable from one source IP.
+- **Passphrase-free SSH key outside `touchid-agent`** — Ed25519 key at `~/.ssh/read_agent_ed25519` on the control machine. A Secure-Enclave agent blocks unattended access *by design*, so the agent key sits outside it and carries **no passphrase** — a passphrase would reintroduce the human this account exists to remove. ⚠️ This entry previously claimed the key was passphrase-encrypted via `vault_agent_ssh_passphrase`; **that was never implemented** and the claim is corrected here rather than deleted. The real compensating controls are `from=` pinning, a forced `ssh_alert.sh` command that Slack-alerts every connection, and read-only sudo. See `docs/AGENT_ACCESS.md`.
+- **IP-restricted authorized_keys** — `from=` pinning on every host, set per key in `roles/agent_access/templates/authorized_keys.j2`. ⚠️ **In practice this is `10.30.0.0/16`, not a single IP** — the laptop has no fixed address (see `docs/NETWORK.md`). So it constrains the key to the estate's RFC1918 space, not to one machine; treat it as a blast-radius limit, not an identity check. Narrowing it is TODO item 12.
 - **Phased API rollout** — Phase 2: SSH + HA API + Proxmox API. Phase 3: OPNsense/UniFi/Plex APIs. Start lean, expand once SSH-based investigation proves the pattern.
 - **No secret access for agents** — Agent cannot read vault files, `.tado_tokens`, `secrets.yaml`, `.netrc`, or any credential files belonging to other users.
-- **SSH config aliases bypass Secretive** — Generic `Host *-agent` pattern uses `ProxyCommand` to strip the `-agent` suffix and `IdentityAgent SSH_AUTH_SOCK` to override Secretive. No per-host config — `ssh anyhost-agent` works for any resolvable hostname.
+- **SSH config aliases bypass the biometric agent** — Generic `Host *-agent` pattern uses `ProxyCommand` to strip the `-agent` suffix and **`IdentityAgent none`** (not `SSH_AUTH_SOCK`) to bypass `touchid-agent` entirely, with `IdentitiesOnly yes` so only the agent key is offered. No per-host config — `ssh anyhost-agent` works for any resolvable hostname.
 - **OPNsense sshd reload, not restart** — `service openssh onereload` (SIGHUP) instead of restart. Full restart regenerates host keys and risks config overwrites by OPNsense's auto-generator.
 - **`read_agent` on OPNsense is `pw`-managed and expected to be wiped by upgrades — do not try to move it into `config.xml`** — Settled 2026-07-21 after testing the config.xml route and hitting a hard wall. A firmware upgrade (26.1.9, 2026-06-13) silently deleted the Ansible-created account, leaving agent access to the firewall broken for ~3 months: `local_sync_accounts` (`auth.inc`) enumerates accounts with uid ≥ 2000 and reconciles them against `config.xml`, deleting anything not there. The obvious fix — create the user in the OPNsense user manager so it lives in `config.xml` — **does not work for a least-privilege account**: `local_user_set` (`auth.inc:351`) forces `shell` to `/usr/sbin/nologin` for any user failing `userIsAdmin()`, which is `userHasPrivilege(…, 'page-all')` — full GUI administrator. OPNsense has no concept of a non-admin account with a login shell; the `<shell>` field in `config.xml` is ignored unless the user is an admin. Tested live: the UI-created user authenticated by key and then died on `This account is currently not available`. Worse, a config.xml-managed account gets its shell reset on *every* config apply, not just upgrades. So the account stays `pw`-managed and out-of-band by design. Mitigations: recovery is one idempotent command (`ansible-playbook ansible/playbooks/system/agent_access.yml --limit opnsense`, ~9s from a fully wiped state, verified), and detection rides on the Agent LXC's Tier 1 reachability sweep. The alternative, if the repair ever becomes annoying, is to drop SSH for opnsense and use a privilege-scoped OPNsense API key (durable in config.xml, needs no shell) at the cost of losing `service -e` / `cscli` / `pfctl` diagnostics.
 - **OPNsense sshd overrides live in `sshd_config.d/`, never in `sshd_config`** — `openssh.inc` regenerates `/usr/local/etc/ssh/sshd_config` from config.xml with a hardcoded `AllowGroups wheel`, so the role's former `lineinfile` edit was erased by upgrades *and* by any SSH settings change. The generated config `Include`s `/usr/local/etc/ssh/sshd_config.d/*.conf` at the very top and sshd takes the first value per keyword, so a fragment there wins. `agent_access` now ships `10-read_agent.conf`; `sshd_config` itself is left at OPNsense's native `AllowGroups wheel`, making a regeneration a no-op. Verified with `sshd -T` and a live login after reverting sshd_config to its native state.

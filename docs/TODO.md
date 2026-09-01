@@ -56,26 +56,42 @@ here is something to read past, every time, forever. The write-up goes to
 (numbers never move), but the order to work them is this, and the dashboard
 renders it:
 
-> **№1** 24 *(public repo, security)* → **№2** 18 *(active fault, and it gates
-> 1d)* → **№3** 30 *(the reported AirPlay fault)* → **№4** 1c →
-> **№5** 1d *(only after 18)* → **№6** 2 → **№7** 4 (plex) → **№8** 9 →
-> **№9** 3a/3b/3c → **№10** 5 → **№11** 19 → **№12** 12 → **№13** 22 →
-> **№14** 10 → **№15** 11 → **№16** 6 → **№17** 7 →
-> **№18–21** 8/13/14/16 · **№22** 26 *(one UI toggle, global — his call)* ·
-> **№24** 27 *(watch only — needs a fifth drop before it is work at all)* ·
-> **№25** 29 *(latent — measured NOT to be the cause of the 30 Aug fault)*
-> *(decision-gated — 16 needs a purchase call, the rest need him at the
-> cabinet; not ranked)*
+> **№1** 18 *(active fault, and it gates 1d)* → **№2** 30 *(the reported AirPlay
+> fault)* → **№3** 31 *(PMF — the real fix behind the closed item 24)* →
+> **№4** 1c → **№5** 1d *(only after 18)* → **№6** 2 → **№7** 4 (plex) →
+> **№8** 9 → **№9** 3a/3b/3c → **№10** 5 → **№11** 19 → **№12** 12 →
+> **№13** 22 → **№14** 10 → **№15** 11 → **№16** 6 → **№17** 7 →
+> **№18–21** 8/13/14/16 · **№22** 32 *(git-history rewrite —
+> decision only, default is no)* · **№23** 26 *(one UI toggle, global — his
+> call)* · **№24** 27 *(watch only — needs a fifth drop before it is work at
+> all)* · **№25** 29 *(latent — measured NOT to be the cause of the 30 Aug
+> fault)*
+> *(decision-gated — 16 needs a purchase call, 32 needs his call on a public
+> force-push, the rest need him at the cabinet; not ranked)*
 
-**30 enters at №3 (2026-08-30)** — the reported fault, and the only one with a stated "rock solid for guests" bar. Item 28 closed the same day (`archive/DONE.md`). 29 drops to last: measured not to be the cause of anything.
+**33 enters at №19 (2026-09-01)** — the laptop-loss recovery path turned out to
+already exist and is now documented and verified; what is left is three
+verifications, one of which (GitHub 2FA recovery codes) guards the credential the
+whole fleet now hangs off. Small, but it protects the recovery story rather than
+extending it.
+
+**24 closed 2026-08-30 and everything above it moves up one** — the redaction
+shipped and the disclosure policy behind it is now
+[a standing rule](ARCHITECTURE_DECISIONS.md#disclosure-tiering--what-goes-in-a-public-repo).
+It left two successors, deliberately unequal: **31 enters at №3** — enabling PMF
+is the change that actually removes the weakness, and it ranks below the two
+active faults because nothing is currently exploiting it — while **32 sits at
+№23**, a decision about git history whose default is *no*. Ranking them apart is
+the point: the fix is work, the rewrite is tidiness.
+
+**30 enters at №2 (2026-08-30)** — the reported fault, and the only one with a stated "rock solid for guests" bar. Item 28 closed the same day (`archive/DONE.md`). 29 drops to last: measured not to be the cause of anything.
 
 **Re-ranked 2026-08-29 on the question "is 1c really the most important?"** —
-it was not. **24 enters at №1**: it is a live disclosure in a public repo, and
-redacting a document is cheap. **18 takes №2** because it is the only thing
-actively recurring — nine NIC stalls since 11 Aug — and because it inverts the
-obvious order: **1d doubles the saturation runs, so doing it before 18 would
-knowingly make the active fault worse.** 1c is independent and stays ahead of
-1d. Nothing else was time-sensitive enough to move.
+it was not. **18 takes the top slot** because it is the only thing actively
+recurring — nine NIC stalls since 11 Aug — and because it inverts the obvious
+order: **1d doubles the saturation runs, so doing it before 18 would knowingly
+make the active fault worse.** 1c is independent and stays ahead of 1d. Nothing
+else was time-sensitive enough to move.
 
 
 
@@ -451,56 +467,49 @@ workarounds: the queue self-recovers, so there is no established harm to fix
 and no way to prove a workaround helped.
 ```
 
-**24. The public repo maps your wireless topology, including where PMF is off**
-`docs/NETWORK.md` carries a full `SSID → Network → VLAN → L2 isolation → PMF`
-table, plus a section headed *"The IoT SSID has protected management frames
-disabled"* naming `estonoesmazagon_iot` explicitly. The repo is **PUBLIC**
-(confirmed via `gh repo view` 2026-08-29).
+**31. PMF is disabled on the IoT SSID — the redaction moved the note, not the weakness**
+Item 24 closed on 2026-08-30 by moving the SSID→VLAN→isolation→PMF correlation
+out of `docs/NETWORK.md` and into `docs/local/WIRELESS.md` (see
+[`archive/DONE.md`](archive/DONE.md)). That narrowed *remote* recon. It did
+nothing to the underlying setting.
 
-📌 **Be precise about what is actually leaked**, because it decides how much of a
-hurry this is:
-- **SSID names** — broadcast in beacons. Discoverable by anyone in range, not a
-  secret, and not worth pretending otherwise.
-- **PMF disabled** — also advertised in RSN capabilities, so likewise
-  discoverable on site.
-- **VLAN mapping and L2 isolation posture** — **not** remotely discoverable.
-  This is genuine internal topology disclosure.
+One SSID runs `pmf_mode=disabled`; the other four are `optional`. Without
+802.11w, management frames are unauthenticated and clients can be
+deauthenticated by anyone in range — the precondition for forced reassociation
+and handshake capture. That SSID fronts the segment carrying the Shelly plugs,
+the BroadLink blasters and the Tado bridge: **heating and mains power**.
 
-So the cost is twofold: real disclosure of which VLAN holds what and where
-isolation is absent, plus dropping reconnaissance from *"be in RF range and
-analyse beacons"* to *"read GitHub"*. For a public portfolio repo belonging to
-someone whose profession is platform security, it is the wrong artefact to carry.
+📌 `pmf_mode` is advertised in the beacon's RSN capabilities. Anyone in RF range
+reads it off the air whether or not it is written in a public repo — which is
+exactly why redaction is not remediation here.
 
-⚠️ **Redacting HEAD does not unpublish it.** The table is in git history and in
-any clone or fork. A history rewrite is possible but is its own decision with
-its own costs, and it cannot recall what has already been read. That trade
-should be made deliberately rather than assumed.
+⚠️ **`disabled` is very likely deliberate**, not a slip. Cheap ESP32-class
+devices often cannot associate with PMF enabled, which is the obvious reason
+this one SSID differs. Treat it as a trade-off to re-confirm.
 
-🔧 **Enabling PMF on the IoT SSID is the better fix and a separate one** — it
-removes the weakness rather than hiding the note about it. Check what breaks
-first; older IoT kit often cannot associate with PMF required.
-
-*State:* diagnosed 2026-08-29 (promoted out of item 12, where it was one bullet
-of fifteen). *Effort:* small to redact, larger to decide on history.
-*Needs:* a laptop, and a decision from Ignacio on the history question.
+*State:* diagnosed, untouched. *Effort:* one controller toggle plus a watch
+period. *Needs:* the UniFi controller, and a willingness to have IoT devices
+drop off while testing. Which SSID it is: `docs/local/WIRELESS.md`.
 
 ```
-Reduce what docs/NETWORK.md discloses. Read docs/TODO.md item 24 first — the
-repo is public and the analysis of what is genuinely leaked versus merely
-broadcast is already there, do not re-derive it.
+Raise PMF from disabled to optional on the IoT SSID, and find out what breaks.
+Read docs/TODO.md item 31 first, and docs/local/WIRELESS.md for which SSID it is
+(it is gitignored and not in the repo). Do NOT re-derive the disclosure analysis
+— item 24 is closed, the redaction is done, and redacting more is not the fix.
 
-Redact the VLAN/isolation columns and the PMF section from the tracked file;
-SSID names alone are broadcast anyway, so the value is in the correlation and
-the topology, not the names. Keep the operational detail somewhere Ignacio can
-still read it — a vault-rendered doc or an untracked local file — because
-NETWORK.md exists for a reason and blanking it helps nobody.
+`optional` (not `required`) is the setting to try: PMF-incapable clients still
+associate, capable ones get 802.11w. If even `optional` breaks associations,
+that is the answer and the finding stands as an accepted trade-off — record it
+and stop.
 
-Then TELL HIM PLAINLY what redacting HEAD does and does not achieve: the table
-remains in git history, in every clone and in any fork, so this narrows future
-exposure only. Do not rewrite history without an explicit decision.
+Before touching it, enumerate what is on that segment from Home Assistant so
+there is a before-list to compare against: Shelly plugs and bulbs, the two
+BroadLink RM4 blasters, the Tado bridge. After the change, watch for at least
+24 h — ESP32 devices can associate once and drop later. A device that never
+comes back is a rollback, not a puzzle.
 
-Do NOT change wireless config as part of this. Enabling PMF on the IoT SSID is
-the better fix and belongs in its own change, after checking what fails.
+This segment controls heating and mains power. Do it when someone is home and
+can power-cycle a device, not remotely and not overnight.
 ```
 
 **29. The mDNS repeater re-advertises IPv6 addresses that are unroutable from the VLAN it repeats into**
@@ -531,7 +540,7 @@ route to it. Do NOT add IPv6 routing to OPNsense for this.
 ```
 
 **30. 🔴 AirPlay to Baño from the VPN SSID is unreliable — a setup race, not a blocked path**
-The family normally uses `estonoesmazagon` (VLAN 80); Baño is on VLAN 20. Bar is
+The family normally uses the default (VPN) SSID on VLAN 80; Baño is on VLAN 20. Bar is
 **rock solid for guests**. Audio is UDP, so the firewall log tells a session that
 reached audio from one that died in setup:
 
@@ -920,10 +929,11 @@ real failure in each and watch #home-alerts before calling any of them done.
 
 **16. The Thread mesh has exactly one border router, and it is a roaming HomePod**
 Needs a purchase decision. Every Matter-over-Thread device in the house reaches
-HA through **one** device: the HomePod "Bano" (`40:ed:cf:4e:8e:03`), on Wi-Fi.
+HA through **one** device: the HomePod "Bano" (MAC in `docs/local/WIRELESS.md`),
+on Wi-Fi.
 It is the only `_meshcop._udp` responder on the entire network.
 
-On 2026-08-17 it was moved from the IoT SSID to `estonoesmazagon_novpn` to fix
+On 2026-08-17 it was moved from the IoT SSID to the no-VPN SSID (VLAN 20) to fix
 AirPlay, and every Thread device dropped off HA for five days. dockassist now
 holds a second IPv6-only Wi-Fi leg onto that VLAN, which **restores the path
 but does not remove the dependency** — unplug the HomePod, move it again, or
@@ -956,6 +966,73 @@ cannot be confirmed. Only then price a USB 802.15.4 dongle that works with
 OTBR on a Pi 4 and report both options back — do not buy anything.
 ```
 
+
+**32. Decide whether to rewrite git history for the pre-2026-08-30 disclosures**
+Needs a decision, not work. Item 24 redacted `HEAD`. The wireless
+SSID→VLAN→isolation→PMF table, the console list and the HomePod MAC are still in
+this repo's git history, and GitHub serves those blobs at their commit SHAs to
+anyone who knows them.
+
+**What a rewrite would buy:** `git filter-repo` can drop the affected blobs, and
+GitHub garbage-collects unreferenced objects after a support request. Someone
+starting from a fresh clone tomorrow would find nothing.
+
+**What it costs, and cannot buy:**
+- It force-pushes a public repo. Every existing clone and every worktree breaks.
+- **It cannot recall what has already been read or cloned.**
+- Search-engine and archive caches are outside anyone's reach.
+
+📊 **Measured 2026-08-30, and it settles the question** (`gh api
+repos/:owner/:repo/traffic/{clones,views}`, GitHub's 14-day window):
+
+| Metric, 14 days | Count | Uniques |
+|---|---:|---:|
+| **Clones** | **222** | **85** |
+| Views | 4 | **1** |
+
+Read that pair carefully. **Nobody is browsing this repo** — one unique viewer in
+two weeks, almost certainly Ignacio. But **85 unique cloners pulled it 222
+times**, and a clone takes the *entire history*, not `HEAD`. That is automated
+traffic: crawlers, mirrors, dataset scrapers, package/CI bots. Fork count is 0,
+which would have made a rewrite technically effective — but 85 cloners in a
+fortnight, extrapolated over however long the table has existed, means the
+content is already out at scale in places no force-push reaches.
+
+🎯 **The honest framing:** a rewrite is a *tidiness* decision about what a future
+reader finds by default. It is **not** containment, and the traffic numbers make
+that concrete rather than theoretical. Weigh it against item 31 — the only action
+here that removes the weakness rather than the description of it.
+
+📌 **Default is no**, and the measurement argues for it. Do not rewrite history
+without Ignacio saying so explicitly.
+
+⚠️ **The same numbers are the strongest argument for the redaction going
+forward.** Whatever is committed to this repo tomorrow gets pulled by ~85 unique
+cloners within two weeks. That is the cost of every future line — which is why
+`docs/local/` exists and why the tiering rule is worth following.
+
+*State:* decision only. *Effort:* an hour if yes, zero if no. *Needs:* Ignacio.
+
+```
+Ignacio has decided on the git-history question for TODO item 32. Fill in:
+
+  DECISION: [rewrite history / leave it]
+
+If "leave it": delete item 32 from docs/TODO.md, record the decision and its
+reasoning in docs/archive/DONE.md, and add a one-liner to
+docs/ARCHITECTURE_DECISIONS.md so it is not re-litigated. Nothing else.
+
+If "rewrite history": this is destructive and irreversible on a public repo.
+Confirm the blob list with him BEFORE touching anything, take a full mirror
+clone as a backup first, and use `git filter-repo` (not filter-branch). Every
+other clone and worktree of this repo must be re-cloned afterwards — enumerate
+them with him first. Then open a GitHub support request for GC; a rewrite
+without it leaves the objects reachable by SHA. State plainly, in the write-up,
+that forks and anything already read are unaffected.
+
+Do NOT start a rewrite on your own judgment, and do NOT treat it as a
+prerequisite for item 31 — they are independent.
+```
 
 **8. Cabinet vent sizing.** Needs three physical measurements only he can take:
 power draw of cwwk + the Zyxel switch (**the biggest unknown — every heat figure

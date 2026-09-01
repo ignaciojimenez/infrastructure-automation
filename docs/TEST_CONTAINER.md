@@ -190,7 +190,7 @@ From the repo root on the laptop:
 tests/run_tests.sh --target 10.30.40.205
 ```
 
-See [tests/README.md](../../tests/README.md) for what the suite covers and how
+See [tests/README.md](../tests/README.md) for what the suite covers and how
 to add cases.
 
 ## 6b. Running playbooks against it

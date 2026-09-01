@@ -16,6 +16,16 @@ by hand, from memory.
 > endpoint IPs and every WireGuard public key are deliberately omitted. Only
 > RFC1918 internals and design intent appear here. Do not paste raw
 > `configctl wireguard showconf` or `config.xml` output into this file.
+>
+> 🔒 **Some detail was moved, not deleted** (2026-08-30). Wireless correlations —
+> which SSID lands in which segment, and which one carries the weaker setting —
+> now live in `docs/local/WIRELESS.md`, which is gitignored. Findings keep their
+> mechanism and severity here; only the identifiers moved, and each redaction
+> says so. The rule is [disclosure
+> tiering](ARCHITECTURE_DECISIONS.md#disclosure-tiering--what-goes-in-a-public-repo);
+> the reasoning is that SSID names are broadcast anyway, so the value an outsider
+> gets is the correlation, not the name. **This narrows future exposure only —
+> the earlier tables remain in git history.**
 
 **Everything below was read from the live firewall and the live UniFi
 controller**, not inferred, unless a line says otherwise — and where an earlier
@@ -24,6 +34,52 @@ out. Probe commands are listed under
 [Re-deriving this document](#re-deriving-this-document) and
 [Reading the UniFi controller](#reading-the-unifi-controller), so this can be
 checked rather than trusted.
+
+## Contents
+
+Sections `1.`–`13.` under *Confirmed drift and defects* are numbered findings — cite them by number.
+
+- [Segmentation](#segmentation)
+- [The circular dependency worth knowing](#the-circular-dependency-worth-knowing)
+  - [When only OPNsense is down, go wired](#when-only-opnsense-is-down-go-wired)
+- [VPN](#vpn)
+  - [Outbound — Mullvad (12 tunnels)](#outbound--mullvad-12-tunnels)
+  - [Inbound — wg1_server (road warrior)](#inbound--wg1_server-road-warrior)
+- [DNS](#dns)
+  - [Unbound is fully recursive](#unbound-is-fully-recursive)
+  - [Port 53 redirect](#port-53-redirect)
+- [⚠️ Confirmed drift and defects](#-confirmed-drift-and-defects)
+  - [1. wg9 (Mullvad US3) is dead, and Quad9 is routed through it](#1-wg9-mullvad-us3-is-dead-and-quad9-is-routed-through-it)
+  - [2. cwwk bypasses the estate resolver](#2-cwwk-bypasses-the-estate-resolver)
+  - [3. The DNS failover script's premise no longer holds](#3-the-dns-failover-scripts-premise-no-longer-holds)
+  - [4. Two wg1 peers have never connected](#4-two-wg1-peers-have-never-connected)
+  - [5. One Ubiquiti device is a firmware generation behind — RETRACTED](#5-one-ubiquiti-device-is-a-firmware-generation-behind--retracted)
+  - [6. Fleet name resolution has no fallback](#6-fleet-name-resolution-has-no-fallback)
+  - [7. Pi-hole-era naming outlived Pi-hole by nine months](#7-pi-hole-era-naming-outlived-pi-hole-by-nine-months)
+  - [8. Two guest SSIDs share one VLAN with different isolation — 🔒 detail redacted](#8-two-guest-ssids-share-one-vlan-with-different-isolation---detail-redacted)
+  - [9. One SSID has protected management frames disabled — 🔒 detail redacted](#9-one-ssid-has-protected-management-frames-disabled---detail-redacted)
+  - [10. Switch port 1 is running at 10 Mbps half-duplex](#10-switch-port-1-is-running-at-10-mbps-half-duplex)
+  - [11. Switch port 4 has a CRC error](#11-switch-port-4-has-a-crc-error)
+  - [12. The switch configuration is not backed up](#12-the-switch-configuration-is-not-backed-up)
+  - [13. The EdgeRouter X is unmanageable and unrecoverable](#13-the-edgerouter-x-is-unmanageable-and-unrecoverable)
+- [Physical layer](#physical-layer)
+  - [The backbone switch — Zyxel XGS1250-12](#the-backbone-switch--zyxel-xgs1250-12)
+  - [Access points](#access-points)
+  - [Wireless — SSID → VLAN](#wireless--ssid--vlan)
+  - [Compute](#compute)
+- [Where the fleet actually lives](#where-the-fleet-actually-lives)
+  - [IoT devices (VLAN 100)](#iot-devices-vlan-100)
+- [Name resolution runs on mDNS, not DNS](#name-resolution-runs-on-mdns-not-dns)
+- [Reading the UniFi controller](#reading-the-unifi-controller)
+- [Getting at the switch](#getting-at-the-switch)
+- [The EdgeRouter X — a known unknown](#the-edgerouter-x--a-known-unknown)
+  - [Four ways it was hunted, on 2026-08-07 — all negative](#four-ways-it-was-hunted-on-2026-08-07--all-negative)
+  - [An unexplained observation](#an-unexplained-observation)
+- [Re-deriving this document](#re-deriving-this-document)
+- [Sources](#sources)
+
+---
+
 
 ---
 
@@ -348,37 +404,47 @@ believes them.
 
 ---
 
-### 8. Two SSIDs share the guest VLAN with different isolation
+### 8. Two guest SSIDs share one VLAN with different isolation — 🔒 detail redacted
 
-`candela.gorostiza` has **L2 isolation on**. `estonoesmazagon_guest` is on the
-**same VLAN 200** with **L2 isolation off**.
-
-Because they share a broadcast domain, the isolation on the first is only as
-strong as the second: a client associated to `estonoesmazagon_guest` is not
-prevented from reaching clients on `candela.gorostiza`. Whatever the isolation
-was meant to protect, an unisolated SSID sits beside it on the same segment.
+Two SSIDs sit on the **same guest VLAN** with **different L2-isolation
+settings**. Because they share a broadcast domain, the isolation on the stricter
+one is only as strong as the looser one: a client on the unisolated SSID is not
+prevented from reaching clients on the isolated one.
 
 ⚠️ **Reasoned from the configuration, not tested.** Confirming it means
 associating a device to each SSID and attempting traffic between them. Worth
 doing before deciding whether this matters — the intent behind two guest SSIDs
-isn't recorded anywhere, and one of them is named after a person, which suggests
+isn't recorded anywhere, and one is named for a specific person, which suggests
 it was set up deliberately for someone.
 
-### 9. The IoT SSID has protected management frames disabled
+Which SSID is which is in `docs/local/WIRELESS.md`, per the [disclosure tiering
+rule](ARCHITECTURE_DECISIONS.md#disclosure-tiering--what-goes-in-a-public-repo).
 
-`estonoesmazagon_iot` is the only SSID with `pmf_mode=disabled`; the other four
-are `optional`. Without 802.11w, management frames are unauthenticated and
-clients can be deauthenticated by anyone in range — the classic precondition for
+### 9. One SSID has protected management frames disabled — 🔒 detail redacted
+
+Exactly one of the five SSIDs runs `pmf_mode=disabled`; the other four are
+`optional`. Without 802.11w, management frames are unauthenticated and clients
+can be deauthenticated by anyone in range — the classic precondition for
 forced-reassociation and handshake-capture attacks.
 
-The IoT VLAN is where the Shelly devices, the BroadLink IR blasters and the Tado
-bridge live, so this is the segment controlling **heating and mains power**.
+🔴 **The severity is not reduced by the redaction.** The affected SSID fronts the
+segment carrying the Shelly plugs, the BroadLink IR blasters and the Tado bridge
+— **heating and mains power**. This is the weakest wireless setting in the estate
+sitting in front of its most physically consequential devices.
 
 ⚠️ **`disabled` is very likely deliberate** — cheap ESP32-class devices often
-cannot associate with PMF enabled, which is exactly why this SSID would differ
-from the rest. Treat it as a documented trade-off to re-confirm, not a
-misconfiguration to go fix. Raising it to `optional` would be the test; if the
-Shelly devices drop off, the answer is no.
+cannot associate with PMF enabled. Treat it as a documented trade-off to
+re-confirm, not a misconfiguration to go fix. Raising it to `optional` is the
+test; if the affected devices drop off, the answer is no.
+
+🔒 **Which SSID it is, is in `docs/local/WIRELESS.md`.** The segment is named
+above because it is already documented throughout this file; the SSID name is
+what turns "some IoT segment" into "associate to *this* one". Redacting the name
+is not the fix and does not pretend to be one — `pmf_mode` is
+advertised in the beacon's RSN capabilities, so anyone in RF range reads it off
+the air. What redaction removes is the *remote* shortcut: knowing from GitHub,
+without ever being nearby, which SSID to go and stand next to. **Enabling PMF is
+the actual fix** and is tracked separately.
 
 ### 10. Switch port 1 is running at 10 Mbps half-duplex
 
@@ -624,28 +690,31 @@ the only wireless links carrying infrastructure traffic.
 
 ### Wireless — SSID → VLAN
 
-Five SSIDs, each bound to a network in the controller. This is the mapping that
-turns the segmentation table above into something a client actually lands in:
+🔒 **The per-SSID mapping is redacted from this file.** Five SSIDs exist, each
+bound to a network in the controller, covering the VPN, no-VPN, IoT and guest
+segments. The SSID→VLAN→isolation→PMF table lives in `docs/local/WIRELESS.md`
+(gitignored) under the [disclosure tiering
+rule](ARCHITECTURE_DECISIONS.md#disclosure-tiering--what-goes-in-a-public-repo):
+the names are broadcast in every beacon, but which one lands in which segment,
+and which one has a weaker setting, is not discoverable without being on the
+network — and that correlation is the useful half.
 
-| SSID | Network | VLAN | L2 isolation | PMF (802.11w) |
-|------|---------|-----:|--------------|---------------|
-| `estonoesmazagon` | VPN | 80 | off | optional |
-| `estonoesmazagon_novpn` | NO_VPN | 20 | off | optional |
-| `estonoesmazagon_iot` | IOT | 100 | off | ⚠️ **disabled** |
-| `estonoesmazagon_guest` | GUEST | 200 | ⚠️ **off** | optional |
-| `candela.gorostiza` | GUEST | 200 | on | optional |
+What *is* worth publishing is the design intent, because it is the part that
+catches people out:
 
-All five are WPA2-PSK. **None uses WPA3**, and none is configured as a UniFi
-"guest" network (`is_guest=false` throughout) — so guest treatment comes entirely
-from OPNsense's VLAN 200 rules, not from the controller's guest-control features.
-
-The default SSID `estonoesmazagon` lands on **VLAN 80**, meaning ordinary WiFi
-traffic egresses through Mullvad by default, and `_novpn` is the opt-out. That is
-the inverse of the usual arrangement and worth knowing before debugging anything
-that looks geo-blocked.
-
-`candela.gorostiza` and `estonoesmazagon_guest` **share VLAN 200** — see
-[finding 8](#8-two-ssids-share-the-guest-vlan-with-different-isolation).
+- **All five are WPA2-PSK. None uses WPA3.** A deliberate compatibility choice,
+  not an oversight.
+- **None is configured as a UniFi "guest" network** (`is_guest=false`
+  throughout) — guest treatment comes entirely from OPNsense's VLAN 200 rules,
+  not from the controller's guest-control features. So the guest posture is a
+  firewall property, and reading the controller alone will mislead you.
+- **The default SSID egresses through Mullvad; the opt-out is a separate SSID.**
+  Ordinary Wi-Fi traffic is tunnelled by default and you join a different SSID
+  to bypass it. That is the inverse of the usual arrangement and worth knowing
+  before debugging anything that looks geo-blocked.
+- **Two SSIDs share the guest VLAN with different L2-isolation settings** — so
+  the isolation on the stricter one is only as strong as the looser one beside
+  it. Reasoned from config, not tested. Detail in `docs/local/WIRELESS.md`.
 
 ### Compute
 

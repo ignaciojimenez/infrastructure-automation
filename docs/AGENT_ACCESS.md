@@ -9,9 +9,10 @@ investigation of any system (SSH, APIs, logs) without interactive authentication
 
 ## Problem
 
-SSH keys on this control machine are managed by [Secretive](https://github.com/maxgoedjen/secretive),
-which stores them in the macOS Secure Enclave and requires biometric (Touch ID) authentication
-for every use. This is great for human-interactive SSH but blocks any unattended access —
+SSH keys on this control machine are managed by
+[`touchid-agent`](https://github.com/ignaciojimenez/touchid-agent) (this estate's own
+agent; it replaced Secretive), which stores them in the macOS Secure Enclave and requires
+biometric (Touch ID) authentication for every use. This is great for human-interactive SSH but blocks any unattended access —
 AI agents, cron-driven scripts, or automation tools cannot SSH to hosts without a human
 physically present to authenticate. The same limitation applies to API queries routed
 through SSH tunnels.
@@ -23,7 +24,7 @@ through SSH tunnels.
 Two access channels, both read-only. Phased rollout:
 
 - **Phase 2 (this implementation):** SSH to all hosts + HA API + Proxmox API
-- **Phase 3 (future TODO):** OPNsense API, UniFi API, Plex API (see [Future: API Expansion](#future-api-expansion))
+- **Phase 3 (future TODO):** OPNsense API, UniFi API, Plex API (see [Future: API Expansion](#future-api-expansion-phase-3))
 
 ```
 Agent (Claude Code, scripts, automation tools)
@@ -59,19 +60,37 @@ Agent (Claude Code, scripts, automation tools)
 | Shell | `/bin/sh` | POSIX — works on both Debian and FreeBSD |
 | Home | `/home/read_agent` (Debian), `/usr/home/read_agent` (FreeBSD) | Minimal, no sensitive files |
 | Password | disabled (locked) | Key-only auth |
-| SSH key | Ed25519, NOT in Secretive | Unattended agent access is the whole point |
+| SSH key | Ed25519, NOT in `touchid-agent` | Unattended agent access is the whole point |
 | Groups | `read_agent` only | No membership in `sudo`, `wheel`, `docker`, or other privileged groups |
 
 ### SSH Key Management
 
 The agent's private key lives on the control machine at `~/.ssh/read_agent_ed25519`,
-outside Secretive. The key is **password-protected**; the passphrase is stored in
-Ansible Vault as `vault_agent_ssh_passphrase`.
+outside `touchid-agent`.
+
+🔑 **The key has no passphrase, and that is deliberate.** Unattended access is the
+entire point — a passphrase would reintroduce the human that this account exists to
+remove. Verified 2026-09-01: `ssh-keygen -y -P "" -f ~/.ssh/read_agent_ed25519`
+succeeds.
+
+⚠️ **An earlier version of this document claimed the key was passphrase-encrypted
+with `vault_agent_ssh_passphrase`. That was never true** — no playbook, template or
+task has ever referenced that variable. It is corrected here rather than quietly
+deleted, because a doc that overstates a control is worse than one that admits a
+trade-off.
+
+**What actually protects it** — four controls, all deployed and verifiable:
+
+| Control | Where | Effect |
+|---|---|---|
+| `from=` source pinning | `roles/agent_access/templates/authorized_keys.j2` | Key is refused from outside the pinned range |
+| Forced command | same template → `ssh_alert.sh` | **Every connection posts to Slack** (30-min cooldown) — the compensating control for the missing passphrase |
+| Read-only sudo | `/etc/sudoers.d/read_agent` | `systemctl status`, `journalctl`, `ss`, `lsof`, `crontab -l`, `agent_read`. No write verb of any kind |
+| Locked password, no groups | `roles/agent_access` | Key-only; no `sudo`/`wheel`/`docker` membership |
 
 | Artifact | Location | Protection |
 |----------|----------|------------|
-| Private key | `~/.ssh/read_agent_ed25519` on control machine | Passphrase-encrypted Ed25519 |
-| Passphrase | `vault_agent_ssh_passphrase` in Ansible Vault | AES256 vault encryption |
+| Private key | `~/.ssh/read_agent_ed25519` on control machine | `0600`, **no passphrase** — see above |
 | Public key | `vault_agent_ssh_pubkey` in Ansible Vault | Deployed to all hosts |
 
 The public key is deployed to all hosts via Ansible in `authorized_keys` for `read_agent`,
@@ -220,7 +239,7 @@ for reading states, history, and logs — not for controlling devices.
 Authorization: PVEAPIToken=read_agent@pve!readonly=<secret-uuid>
 ```
 
-### Future: API Expansion (Phase 3) {#future-api-expansion}
+### Future: API Expansion (Phase 3)
 
 The following APIs are **out of scope for Phase 2** but documented here for completeness.
 SSH access to these hosts is included in Phase 2 — API access adds richer diagnostics
@@ -276,7 +295,6 @@ visibility but broadens attack surface. Nice-to-have, not needed.
 
 | Credential | Vault Variable | Created By |
 |-----------|----------------|------------|
-| SSH passphrase | `vault_agent_ssh_passphrase` | Generated once, stored in vault |
 | SSH public key | `vault_agent_ssh_pubkey` | Generated once, deployed to all hosts |
 | HA token | `vault_ha_agent_token` | Created in HA UI, stored in vault |
 | Proxmox API token | `vault_proxmox_agent_token` | Created via `pveum`, stored in vault |
@@ -309,9 +327,11 @@ a PAM exec hook or a simple `~/.ssh/rc` script. Low effort, high visibility.
 
 ### Step 1 — Generate SSH Key Pair
 ```bash
+# -N "" is deliberate: this key must work with no human present.
+# The compensating controls are from= pinning, the forced ssh_alert.sh command,
+# and read-only sudo — see "SSH Key Management" above.
 ssh-keygen -t ed25519 -C "read_agent@infrastructure" \
-  -f ~/.ssh/read_agent_ed25519 -N "<passphrase>"
-# Store passphrase in vault as vault_agent_ssh_passphrase
+  -f ~/.ssh/read_agent_ed25519 -N ""
 # Store public key in vault as vault_agent_ssh_pubkey
 ```
 
@@ -384,12 +404,12 @@ Store all tokens in `vault.yml`.
 ### Step 4 — SSH Config on Control Machine
 
 **The problem:** If the control machine uses an SSH agent that requires interactive
-authentication (e.g., Secretive, FIDO2 keys, smartcards), the `IdentityAgent` directive
+authentication (e.g., `touchid-agent`, Secretive, FIDO2 keys, smartcards), the `IdentityAgent` directive
 in `~/.ssh/config` forces all SSH connections through that agent — including agent connections
 that need to be unattended. A normal `-i keyfile` flag is ignored when `IdentityAgent` is set.
 
 **The solution:** A generic `Host *-agent` pattern in `~/.ssh/config` that:
-1. Overrides the interactive agent with the standard `SSH_AUTH_SOCK` environment variable
+1. Disables the interactive agent for these hosts (`IdentityAgent none`)
 2. Strips the `-agent` suffix from the hostname to resolve the real target
 3. Uses a separate connection path to avoid conflicts with human SSH sessions
 
@@ -417,24 +437,17 @@ Host *-agent
 - `StrictHostKeyChecking accept-new` auto-accepts first-time host keys for `-agent` aliases
 - Adding a new host to the infrastructure requires zero SSH config changes
 
-**Agent workflow** (passphrase from Ansible Vault as `vault_agent_ssh_passphrase`):
+**Agent workflow** — no agent juggling needed, because the `Host *-agent` block sets
+`IdentityAgent none` and points `IdentityFile` straight at the key:
 ```bash
-# 1. Start a dedicated ssh-agent (isolated from the interactive agent)
-eval $(ssh-agent -s)
-
-# 2. Load the agent key (supply passphrase when prompted)
-ssh-add ~/.ssh/read_agent_ed25519
-
-# 3. Connect to any host using the -agent suffix
+# Just connect. The key has no passphrase and bypasses touchid-agent entirely.
+# 1. Connect to any host using the -agent suffix
 ssh dockassist-agent "sudo docker ps"
 ssh opnsense-agent "sudo pfctl -s info"
 ssh cwwk-agent "sudo qm list"
-
-# 4. Clean up when done
-kill $SSH_AGENT_PID
 ```
 
-**If not using Secretive:** The `Host *-agent` block still works — it's just a convenient
+**If not using a biometric agent:** The `Host *-agent` block still works — it's just a convenient
 alias pattern. The `IdentityAgent SSH_AUTH_SOCK` is a no-op when there's no conflicting
 agent override in `Host *`. The key benefit is the hostname suffix convention and
 dedicated user/key separation.
@@ -458,14 +471,16 @@ All validated 2026-04-06:
 
 ## Decisions (Resolved)
 
-1. **SSH key**: Local Ed25519 key at `~/.ssh/read_agent_ed25519`, password-protected.
-   Passphrase stored in Ansible Vault. NOT in Secretive — unattended access is the point.
+1. **SSH key**: Local Ed25519 key at `~/.ssh/read_agent_ed25519`, **no passphrase** —
+   unattended access is the point, and a passphrase would defeat it. Outside
+   `touchid-agent` for the same reason. Compensated by `from=` pinning, a forced
+   command that Slack-alerts every connection, and read-only sudo.
 
 2. **Plex API**: Out of scope. Current SSH-based monitoring (service + port check) is
    sufficient. No role-scoped tokens available. Revisit if richer monitoring is needed.
 
 3. **UniFi/OPNsense APIs**: Out of scope for Phase 2. Start with SSH-based investigation.
-   API access documented in [Future: API Expansion](#future-api-expansion) for Phase 3.
+   API access documented in [Future: API Expansion](#future-api-expansion-phase-3) for Phase 3.
 
 4. **IP scoping**: Yes. `from="10.30.0.0/16"` in all `authorized_keys` entries.
    Defense-in-depth — even if the key leaks, it's only usable from the home LAN.

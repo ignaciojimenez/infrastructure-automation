@@ -15,6 +15,41 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 > history. `git log --follow docs/TODO.md` and read the commit that removed a
 > section. Nothing here needs to reproduce it.
 
+## Contents
+
+- [2026-09-01 — vinylstreamer's wifi lockout: every software layer excluded, and parked](#2026-09-01--vinylstreamers-wifi-lockout-every-software-layer-excluded-and-parked)
+- [2026-09-01 — the health check that pages the whole fleet on the 1st of every month](#2026-09-01--the-health-check-that-pages-the-whole-fleet-on-the-1st-of-every-month)
+- [2026-08-31 — the VFIO residue that was left on purpose, and the reason it was left was wrong](#2026-08-31--the-vfio-residue-that-was-left-on-purpose-and-the-reason-it-was-left-was-wrong)
+- [2026-09-01 — laptop-loss recovery closed out, and read_agent finally written down](#2026-09-01--laptop-loss-recovery-closed-out-and-read_agent-finally-written-down)
+- [2026-09-01 — the docs audit, and the recovery path that already existed](#2026-09-01--the-docs-audit-and-the-recovery-path-that-already-existed)
+- [2026-08-30 — the public repo mapped the wireless topology (TODO item 24)](#2026-08-30--the-public-repo-mapped-the-wireless-topology-todo-item-24)
+- [2026-08-30 — an allowlist entry that was hiding a firewall gap](#2026-08-30--an-allowlist-entry-that-was-hiding-a-firewall-gap)
+- [2026-08-30 — the floor lamp that switched itself on, and an alert that was simply true](#2026-08-30--the-floor-lamp-that-switched-itself-on-and-an-alert-that-was-simply-true)
+- [2026-08-30 — CI was red for 11 days with the alarm working perfectly](#2026-08-30--ci-was-red-for-11-days-with-the-alarm-working-perfectly)
+- [2026-08-28 — HACS removed, and dockassist proves idempotency for the first time](#2026-08-28--hacs-removed-and-dockassist-proves-idempotency-for-the-first-time)
+- [2026-08-28 — the container check's self-heal, and the exit code that was an accident](#2026-08-28--the-container-checks-self-heal-and-the-exit-code-that-was-an-accident)
+- [2026-08-28 — the regression suite nobody ran](#2026-08-28--the-regression-suite-nobody-ran)
+- [2026-08-28 — a lamp being switched off is not a fault, and muting it was the wrong price](#2026-08-28--a-lamp-being-switched-off-is-not-a-fault-and-muting-it-was-the-wrong-price)
+- [2026-08-25 — a controller with every device offline used to read as green](#2026-08-25--a-controller-with-every-device-offline-used-to-read-as-green)
+- [2026-08-23 — the door sensors were fine; their only road had moved](#2026-08-23--the-door-sensors-were-fine-their-only-road-had-moved)
+- [2026-08-19 — exclude the benign line, never the pattern (cwwk's VFIO false positive)](#2026-08-19--exclude-the-benign-line-never-the-pattern-cwwks-vfio-false-positive)
+- [2026-08-19 — hifipi's amixer alerts: the fix sat in git for four months](#2026-08-19--hifipis-amixer-alerts-the-fix-sat-in-git-for-four-months)
+- [2026-08-18 — the job that stops a service announces it (cobra's 04:00 alert)](#2026-08-18--the-job-that-stops-a-service-announces-it-cobras-0400-alert)
+- [2026-08-18 — the test rig is green, and no longer root-blind](#2026-08-18--the-test-rig-is-green-and-no-longer-root-blind)
+- [2026-08-17 — opnsense is read over its API, not a shell (L-H)](#2026-08-17--opnsense-is-read-over-its-api-not-a-shell-l-h)
+- [2026-08-16 — cwwk KSM codified, and the power tuner stopped lying (L-E)](#2026-08-16--cwwk-ksm-codified-and-the-power-tuner-stopped-lying-l-e)
+- [2026-08-16 — vinylstreamer's plug automates a manual power-cycle (L-I W2)](#2026-08-16--vinylstreamers-plug-automates-a-manual-power-cycle-l-i-w2)
+- [2026-08-16 — independent monitoring tails, one diagnosed wrong (L-D)](#2026-08-16--independent-monitoring-tails-one-diagnosed-wrong-l-d)
+- [2026-08-14 — the alert flood is dead, and a dead host reads differently (L-F)](#2026-08-14--the-alert-flood-is-dead-and-a-dead-host-reads-differently-l-f)
+- [2026-08-13 — agent-lxc Tier 2 live, and the sweep had never run (L-C)](#2026-08-13--agent-lxc-tier-2-live-and-the-sweep-had-never-run-l-c)
+- [2026-08-13 — the monitoring sprint, live on all 8 hosts (L-B)](#2026-08-13--the-monitoring-sprint-live-on-all-8-hosts-l-b)
+- [2026-08-13 — system_health_check.sh could never fail, and now can](#2026-08-13--system_health_checksh-could-never-fail-and-now-can)
+- [2026-08-13 — three cron jobs, one state file (the #home-logging flood)](#2026-08-13--three-cron-jobs-one-state-file-the-home-logging-flood)
+- [Smaller closed items](#smaller-closed-items)
+
+---
+
+
 ---
 
 ## 2026-09-01 — vinylstreamer's wifi lockout: every software layer excluded, and parked
@@ -205,6 +240,208 @@ prediction — force the condition (here: reboot, or empty the state file) and
 watch it.**
 
 ---
+## 2026-09-01 — a redaction that was applied once and not seven times
+
+Found by the adversarial docs review, not by a fault. A household member's first
+name had been redacted from `docs/NETWORK.md` when the wireless table moved to
+`docs/local/`, but the same name was still tracked in seven other places as Home
+Assistant entity IDs.
+
+🎯 **The exposure was mild; the inconsistency was the defect.** A redaction applied
+in one file and not elsewhere reads as an *accident* rather than a policy — which is
+precisely the impression the disclosure-tiering rule exists to prevent. For a public
+repo whose author's profession is security, looking careless costs more than the
+first name did.
+
+**Split by whether the value could actually move.** The three `ha_secondary_*`
+entries in `group_vars/all/main.yml` are indirection points — the role defaults were
+already generic placeholders — so their values went into the vault with no
+downstream effect. The entity-ID globs in `group_vars/homeassistant.yml` are not:
+changing them means renaming entities in Home Assistant's registry on a live system,
+which is real risk for a first name that is already only an entity id. **They stay,
+and now carry a comment saying the asymmetry is a judgement call rather than an
+oversight** — an undocumented exception is what made this a finding in the first
+place.
+
+Also: the `ARCHITECTURE_DECISIONS` mention now describes the presence-sensor pattern
+instead of naming a person, and `docs/reference/zyxel-xgs1250-12.cfg` no longer
+carries the switch's own MAC as its MST region name (recorded in `docs/local/`; a
+factory-reset switch generates its own, so recovery never needed it). Item 33's own
+text was written without the name — an item describing a redaction should not
+reintroduce it.
+
+✅ **Verified, and the first verification was incomplete.** The vault round-tripped
+39 → 42 keys; the three variables resolved to byte-identical strings before and
+after under `connection: local`, so no consuming template could render differently
+and the HA `unique_id` was unchanged; `groups.yaml.j2` was rendered locally and
+still emitted the right `person.` entity. Then `--tags config --check --diff` came
+back `changed=0` with zero diff hunks.
+
+📌 **That last run did not cover everything, and nearly closed the item early.** The
+lovelace mobile dashboard also consumes both variables, and it is tagged `dashboard`,
+not `config` — so the passing run had never touched it. A second run with
+`--tags dashboard` was needed, and also returned `changed=0` with the
+*Deploy mobile dashboard configuration* task confirmed reached. **A green check only
+covers the tasks its tag selects; confirm the tag reaches every consumer before
+reading `changed=0` as proof.**
+
+## 2026-09-01 — laptop-loss recovery closed out, and read_agent finally written down
+
+Follow-on from the docs audit. Every residual raised that day is now either closed
+or correctly reclassified.
+
+**Credentials — closed.** The GitHub account that fleet SSH depends on carries
+several independent factors, including two hardware tokens stored separately and a
+third in another country. The age secret key and the vault password each gained a
+second home in a backup password manager, and **both managers unlock from memory**,
+so the redundancy is real rather than circular — the "backup that depends on the
+thing it backs up" failure does not apply. That removed the one irreversible loss in
+the estate: losing the Apple account and the laptop together no longer makes every
+age-encrypted backup permanently undecryptable.
+
+**OPNsense — the settled rule, applied.** No re-litigation: config.xml wins, verified
+against `auth.inc` and live-tested. What had not been written down was the
+*consequence for recovery*. `/usr/local/bin/update_keys` is deployed there (that task
+has no OS gate) but `sshd` is never wired to it, so there is **no live GitHub lookup
+on OPNsense**. A new laptop's key must be pasted into the UI, where `config.xml`
+keeps it — pushing it with Ansible writes to a file the platform regenerates.
+Confirmed the key is in the UI field. 📌 **Being able to SSH in does not prove that**:
+a key sitting only in `~/.ssh/authorized_keys` authenticates identically until the
+next config apply removes it. The discriminator is the UI field.
+
+**`read_agent` porting — the actual gap.** The recovery doc said the key was
+"disposable: re-create it and re-run agent_access.yml", which was true and
+incomplete: it omitted the step that matters, which is putting the **public** key
+into the vault. Regenerating the file locally changes nothing on the hosts. Now
+documented properly, along with two facts that were nowhere: there are **two
+independent read_agent keys**, and the agent-lxc one lives on CT 103 — so **losing
+the laptop does not interrupt the fleet sweep**, only the operator's own unattended
+SSH. The private key stays un-backed-up on purpose: it is passphrase-free, so any
+copy in a sync or backup would be a standing fleet credential outside the vault.
+Re-issuing is cheaper than storing it.
+
+**Dropped as over-weighted:** `~/.claude/plans/` being outside iCloud. It holds plans
+for unstarted work — losing it costs re-thinking, not recovery. The residue is repo
+hygiene (item 11 cites a file not in the repo), not a recovery concern.
+
+## 2026-09-01 — the docs audit, and the recovery path that already existed
+
+Second and third halves of the item-24 session: once the disclosure tiering moved
+operational detail out of the public repo, two questions followed — *does the rest of
+the documentation hold up to the same scrutiny*, and *if some data now lives outside
+git, how is it recovered*.
+
+### The audit found something worse than a disclosure
+
+**`docs/AGENT_ACCESS.md` and `ARCHITECTURE_DECISIONS.md` both claimed the `read_agent`
+SSH key was passphrase-encrypted, with the passphrase in `vault_agent_ssh_passphrase`.
+Neither was true.** The variable was referenced in six documentation locations and
+consumed by **zero** playbooks, templates or tasks. Verified empirically:
+`ssh-keygen -y -P "" -f ~/.ssh/read_agent_ed25519` succeeds — the key has no passphrase.
+
+🔴 **For a public repo belonging to a security professional, a doc that overstates a
+control is a worse defect than one that discloses too much.** A reader — or a future
+session — plans around a protection that is not there. The claim is now corrected
+*in place with a note saying it was wrong*, rather than quietly deleted, and replaced
+with the four controls that do exist and are verifiable: `from=` pinning, the forced
+`ssh_alert.sh` command that Slack-alerts every connection, read-only sudo, and a locked
+password with no privileged groups. The design was always sound; only the description
+was wrong. `CLAUDE.md` had it right all along ("passphrase-free"), which is what
+surfaced the contradiction.
+
+Also corrected: `from=` is documented as a single control-machine IP but is really
+`10.30.0.0/16` (blast-radius limit, not an identity check — narrowing it is item 12);
+`IdentityAgent SSH_AUTH_SOCK` is actually `IdentityAgent none`; **Secretive → this
+estate's own `touchid-agent`** across four files, which had left the repo crediting a
+third-party tool instead of the operator's own published one; two broken anchors
+(GitHub does not support kramdown `{#id}` syntax) and a relative link off by one
+directory level. `README.md`'s index listed 4 of 11 docs and omitted `NETWORK.md`, the
+best document in the tree — it is now a complete table with `NETWORK.md` as the stated
+entry point.
+
+### Losing the laptop was never a lockout — nothing said so
+
+The worry was concrete: Secure-Enclave keys are hardware-bound and non-exportable, so
+a dead Mac reads like a locked-out fleet. **It is not, and the reason was already built
+and simply undocumented.** `ssh_hardening.yml` deploys `/usr/local/bin/update_keys`
+(`curl -sf https://github.com/<profile>.keys`) wired as `AuthorizedKeysCommand` — a
+**live lookup at every authentication**, not a bootstrap snapshot. New laptop, enrol one
+key at GitHub, every host accepts it.
+
+✅ **Verified wired on all six Linux hosts** (`sudo sshd -T | grep -i
+authorizedkeyscommand`) rather than assumed from the playbook — the mechanism existing
+in source and being live on a host are different facts.
+
+⚠️ **The mechanism lives in `templates/debian/sshd_config.j2` at the repository root,
+not under `ansible/`.** A search scoped to `ansible/` misses it completely and yields
+the confident, wrong conclusion that laptop loss means physical recovery of eight hosts.
+That happened during this session and is recorded because the next reader will grep the
+same way.
+
+📌 **The real single point of failure turned out to be the GitHub account, not the
+laptop** — `exclusive: true` from `{{ gh_keys }}` *and* the live `AuthorizedKeysCommand`
+both terminate there. So the credential that must survive is the **2FA recovery codes**.
+That inversion is the finding; it is now the first residual in item 33.
+
+Also settled: `~/Documents` **does** sync to iCloud, so gitignored `docs/local/` is
+untracked but not unbacked — two claims written earlier the same week said the opposite
+and were corrected. `brctl status` and `mdls kMDItemIsCloudItem` are the wrong
+instruments for checking this; both return nothing even for genuine iCloud files, which
+a control test caught before the wrong conclusion was published.
+
+`BACKUP_AND_RECOVERY.md` gained a *Recovering without the laptop* playbook, a
+prerequisites table rewritten around *where each thing lives* rather than what it is,
+and a laptop-loss row in the quarterly restore-test schedule — the one restore path
+never yet exercised.
+
+## 2026-08-30 — the public repo mapped the wireless topology (TODO item 24)
+
+`docs/NETWORK.md` carried a full `SSID → Network → VLAN → L2 isolation → PMF`
+table plus a section headed *"The IoT SSID has protected management frames
+disabled"*, naming the SSID. The repo is public.
+
+**The distinction that decided the fix.** SSID names are broadcast in beacons and
+`pmf_mode` is advertised in RSN capabilities — both are readable by anyone in RF
+range, and pretending otherwise would have been theatre. What was *not* remotely
+discoverable was the **correlation**: which SSID lands in which VLAN, where L2
+isolation is absent, and that the weak-PMF one fronts the segment controlling
+heating and mains power. That correlation is what dropped recon from *"be on site
+and analyse beacons"* to *"read GitHub"*.
+
+**So: publish the mechanism, move the correlation.** The wireless table and
+findings 8 and 9 went to `docs/local/WIRELESS.md` (gitignored). `NETWORK.md` keeps
+both findings — mechanism, severity, the "very likely deliberate" caveat, and the
+statement that redaction is not the fix — and links to where the identifiers went.
+A redaction that leaves only hints would have been the worst of both.
+
+**Generalised into a standing rule** rather than left as a one-off:
+[*Disclosure tiering*](../ARCHITECTURE_DECISIONS.md#disclosure-tiering--what-goes-in-a-public-repo),
+which asks one question — *does this shorten the path from "be in range" to "know
+which weakness to hit"?* — and sorts into tracked / `docs/local/` / vault. It also
+gave `docs/local/` (which already held `CONSOLES.md`) a README and a reason to
+exist beyond "seemed sensitive". A holistic sweep applied the same rule to
+`TODO.md`, `archive/DONE.md` and `ARCHITECTURE_DECISIONS.md`: SSID names replaced
+by segment descriptions, the HomePod's MAC moved out. Docs stayed readable — the
+segment is what the sentences were actually about.
+
+⚠️ **This narrows future exposure only.** The tables are in git history, in every
+clone; GitHub serves the old blobs at their commit SHAs. **No history rewrite was
+performed** — that is a separate, explicit decision, now TODO item 32, whose
+default is *no*.
+
+📊 **Measured while closing this, and it reframed the whole item.** GitHub's
+14-day traffic API returned **222 clones from 85 unique cloners** against **4
+views from 1 unique viewer**. Nobody reads this repo in a browser; automation
+clones it constantly, and a clone takes the full history. So the old tables are
+already out at scale, a rewrite would recover nothing (0 forks notwithstanding) —
+*and* every future commit here is pulled by ~85 unique cloners within a
+fortnight. That second half is the real reason the tiering rule is worth
+keeping.
+
+🔧 **Redaction is not remediation.** The weakness itself — PMF disabled on that
+SSID — is untouched and is now **TODO item 31**, ranked above the rewrite
+question on purpose. Wireless config was deliberately *not* changed in this
+work: enabling PMF needs a check of what fails, and belongs in its own change.
 
 ## 2026-08-30 — an allowlist entry that was hiding a firewall gap
 
@@ -542,7 +779,7 @@ arrive — RAs are link-local, and no firewall rule substitutes for one.
 Both Eve door sensors read `unavailable` from 2026-08-17 09:37 UTC to 08-22.
 Nothing was wrong with them: they never left the Thread mesh and were still
 advertising `_matter._tcp` throughout. At 09:33:44 UTC the HomePod acting as
-border router moved from the IoT SSID (VLAN 100) to `estonoesmazagon_novpn`
+border router moved from the IoT SSID (VLAN 100) to the no-VPN SSID
 (VLAN 20) to fix AirPlay. dockassist is on VLAN 100, so its route to the mesh
 prefix `fd24:839a:223a::/64` aged out. The first sensor went unavailable 3m36s
 later. `ping6` from dockassist returned `Network is unreachable` — no route, not
