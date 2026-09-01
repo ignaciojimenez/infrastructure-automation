@@ -1056,16 +1056,19 @@ stored separately, and the third is **in another country**, which gives the Appl
 account genuine geographic separation. Its cost is *time* — retrieval means travel
 or shipping, so Apple-account recovery is days, not minutes.
 
-🟠 **(a3) Two small threads left from that, neither fatal.**
-(i) The **vault password is still single-homed** — losing it means rotating every
-token and webhook rather than losing data. It belongs in the backup manager
-alongside the age key: same two minutes.
-(ii) **Verify the backup manager's own unlock path is independent.** Ignacio
-memorises no passwords, so if its master password lives only in the primary
-manager, the second home is apparent rather than real — the redundancy would
-depend on the very thing it backs up. Registering a hardware token on it is the
-clean fix. *This decides whether recovery is minutes or days, not whether it is
-possible.*
+✅ **(a3) Also closed 2026-09-01.** The vault password joined the age key in the
+backup manager, and the independence question is answered: **both managers unlock
+from memory**, so neither routes through the other. Every credential in the
+restore chain now survives losing the laptop, the Apple account, or either
+manager.
+
+📌 **Credentials are done; the chain is untested.** Each link is individually
+recoverable, but the end-to-end path — find a backup, decrypt it, restore it, on
+a machine that is not this one — has never been walked. Two things it would
+surface: whether the R2 bucket can be enumerated when Slack history is not there
+to supply the URL, and whether the documented steps are actually followable. That
+is the laptop-loss row already in the quarterly restore-test table, and it is now
+the only thing between "should work" and "does work".
 
 ⚠️ **One claim unverified:** "Sign in with Apple" for GitHub. GitHub.com is not
 known to offer it for personal accounts. Check `github.com/settings/security`

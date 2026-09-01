@@ -160,13 +160,17 @@ an *irreversible* event: every age-encrypted backup in this document would have 
 permanently undecryptable. A copy now lives in a separate backup password manager, so
 that scenario is recoverable.
 
-🟠 **Two things still worth closing, neither fatal.** The **Ansible Vault password** is
-still single-homed — losing it means rotating every token and webhook in `vault.yml`
-rather than losing data, so it is painful, not terminal; it belongs in the backup
-manager alongside the age key. And the second manager is only genuinely independent if
-**unlocking it does not route back through the primary one** — a redundancy that
-depends on the thing it is backing up is apparent rather than real. Detail and the
-exact question in `docs/local/RECOVERY.md`."
+✅ **The vault password followed it, and the redundancy is real.** Both secrets now
+live in two managers, and **both managers unlock from memory** — so neither depends on
+the other, and the "backup that depends on the thing it backs up" failure does not
+apply here. Every credential in the restore chain now survives losing the laptop, the
+Apple account, or either password manager. Inventory in `docs/local/RECOVERY.md`.
+
+📌 **What has *not* been proven is the chain itself.** Each link is now individually
+recoverable; the end-to-end path — locate a backup, decrypt it, restore it, on a
+machine that is not this one — has never been walked. That is what the laptop-loss row
+in [Quarterly Restore Testing](#quarterly-restore-testing) is for, and it is now the
+only thing standing between "should work" and "does work"."
 
 ### What else is only on the laptop
 
@@ -398,8 +402,8 @@ Results are logged in `docs/RESTORE_TEST_LOG.md`.
 | **cobra media files** not backed up | Loss of media library (100s of GB) | Too large for curlbin (200 MB limit). Re-downloadable content. |
 | **age secret key in password manager only** | Cannot decrypt backups without password manager access | Apple Passwords, iCloud-synced — survives the laptop. Single line, easy to duplicate |
 | **GitHub account is the root of fleet SSH access** | Losing it locks you out of every host that trusts `AuthorizedKeysCommand` | ✅ Covered — multiple factors incl. a physical token independent of both the laptop and the Apple account (inventory: `docs/local/RECOVERY.md`). OPNsense and Proxmox stay reachable by password as a further independent path |
-| **The Ansible Vault password is single-homed** | Losing it means `vault.yml` cannot be decrypted — every token, webhook and PSK must be rotated | Painful, not data loss. Copy it into the backup password manager alongside the age key. **Open — see TODO item 33** |
-| **A backup password manager can depend on the thing it backs up** | If its master password lives only in the primary manager, the second home is apparent rather than real | Verify the unlock path is independent, and register a hardware token on it. **Open — see TODO item 33** |
+| **Backup discovery depends on Slack history** | Backup URLs are random and not enumerable; the Slack message is the index. Decryption is now safe, but *finding* the right object is not | Untested fallback: enumerate the R2 bucket directly via the Cloudflare account. **Confirm this works during the next restore test** |
+| **Every recovery root resolves to one person's memory** | Both password managers unlock from memory, and the off-site token holder cannot use it | Correct for secrecy, and a deliberate trade. Revisit only if continuity ever outranks it |
 | **`~/.claude/plans/` is on the laptop only** | TODO item 11's source plan is lost with the machine | Outside `~/Documents`, so iCloud does not cover it. Move it into the repo or `docs/local/` if it matters |
 | **Backup URLs only in Slack** | If Slack notification is missed, URL is gone — IDs are random and not discoverable | `do_backup` also logs URLs to `/tmp/backup_url_*.txt` on the source host, but this is volatile |
 | **Tado OAuth tokens** | Need re-auth on dockassist rebuild | Recoverable via `tado_setup.sh` (interactive OAuth2 flow) |
