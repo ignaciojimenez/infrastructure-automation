@@ -85,7 +85,11 @@ enable_cloudflare_tunnel: true  # Requires vault_cloudflare_tunnel_token
 ha_primary_person: "person.choco"
 ha_primary_person_display: "Choco"
 ha_primary_device_tracker: "device_tracker.nexuschoky"
-ha_secondary_person: "person.candela"
-ha_secondary_person_display: "Candela"
-ha_secondary_device_tracker: "device_tracker.iphone_de_candela_2"
+# Values live in vault.yml — TODO item 33. Vaulted for consistency, not secrecy:
+# the same first name was redacted from docs/NETWORK.md, and leaving it here made
+# that redaction read as an accident. Values are unchanged, so entity_ids and
+# unique_ids in Home Assistant are untouched.
+ha_secondary_person: "{{ vault_ha_secondary_person }}"
+ha_secondary_person_display: "{{ vault_ha_secondary_person_display }}"
+ha_secondary_device_tracker: "{{ vault_ha_secondary_device_tracker }}"
 ha_primary_presence_sensor: "binary_sensor.choco_presence"

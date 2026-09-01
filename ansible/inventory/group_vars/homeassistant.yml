@@ -218,7 +218,7 @@ ha_entity_health_allowlist:
   # covered by check_tado_health.sh, which watches the trackers by name.
   # ⚠️ Cover BOTH domains for BOTH phones. The first seeding had
   # sensor.+binary_sensor. for nexuschoky but only sensor. for iphone_de_candela,
-  # purely because no binary_sensor of Candela's phone happened to be offline
+  # purely because no binary_sensor of the second phone happened to be offline
   # during the sample. binary_sensor.iphone_de_candela_camera_motion then paged
   # for 45 consecutive runs on 2026-08-26. Same root cause as the TV below —
   # a snapshot cannot show you what is asleep at a different hour — but this one
@@ -251,6 +251,13 @@ ha_entity_health_allowlist:
   #
   # ⚠️ Do not collapse these back to `*nexuschoky*` — that was tried and it
   # swallowed both trackers and both notify services.
+  # 📌 These globs match REAL Home Assistant entity IDs and are deliberately NOT
+  # vaulted or renamed (TODO item 33, decided 2026-09-01). The three
+  # ha_secondary_* variables were moved to the vault because they are indirection
+  # points where the value could move with zero effect. These are not: changing
+  # them means renaming entities in HA's registry on a live system, which is real
+  # risk for a first name that is already only an entity id. The asymmetry is a
+  # judgement call, not an oversight.
   - "sensor.nexuschoky_*"
   - "binary_sensor.nexuschoky_*"
   - "sensor.iphone_de_candela_*"

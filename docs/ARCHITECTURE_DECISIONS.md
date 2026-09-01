@@ -233,7 +233,9 @@ set — see `docs/BACKUP_AND_RECOVERY.md`.
 - **Presence detection via Companion App + Tado fallback** - Robust dual-source tracking
   - Primary: Mobile Companion App device trackers (real-time GPS)
   - Fallback: Tado device trackers (30-minute freshness window)
-  - Combined presence sensors: `binary_sensor.choco_presence`, `binary_sensor.candela_presence`
+  - Combined presence sensors: one `binary_sensor.<person>_presence` per tracked person,
+    named from `ha_*_person_display`. Those values are vaulted — see TODO item 33 for why
+    the entity IDs themselves were deliberately left alone
   - group.persons for home/away state
   - Guest mode toggle disables automatic away
   - 10-minute delay prevents false triggers

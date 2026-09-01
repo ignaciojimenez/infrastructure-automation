@@ -61,7 +61,7 @@ renders it:
 > **№4** 1c → **№5** 1d *(only after 18)* → **№6** 2 → **№7** 4 (plex) →
 > **№8** 9 → **№9** 3a/3b/3c → **№10** 5 → **№11** 19 → **№12** 12 →
 > **№13** 22 → **№14** 10 → **№15** 11 → **№16** 6 → **№17** 7 →
-> **№18** 33 *(consistency — a redaction applied in one file and not seven)* ·
+> **№18** 33 *(built + locally verified — needs one `--check --diff`, 2 min)* ·
 > **№19–22** 8/13/14/16 · **№23** 32 *(git-history rewrite —
 > decision only, default is no)* · **№24** 26 *(one UI toggle, global — his
 > call)* · **№25** 27 *(watch only — needs a fifth drop before it is work at
@@ -1035,60 +1035,56 @@ Do NOT start a rewrite on your own judgment, and do NOT treat it as a
 prerequisite for item 31 — they are independent.
 ```
 
-**33. A family member's name is redacted in one file and present in seven others**
-Found by the 2026-09-01 adversarial docs review. `candela.gorostiza` was removed
-from `docs/NETWORK.md` when the wireless table moved to `docs/local/`, but the same
-first name is still tracked in **seven** places as Home Assistant entity IDs:
-`group_vars/all/main.yml` (`ha_secondary_person`, `ha_secondary_device_tracker`),
-`group_vars/homeassistant.yml` (×4 glob patterns and comments), and
-`ARCHITECTURE_DECISIONS.md` (`binary_sensor.candela_presence`).
+**33. 🟢 Redaction consistency — BUILT, needs one verification run**
+The work is done and committed. **What is left is a single `--check --diff` that
+needs Touch ID**, which is why it stopped here rather than being closed.
 
-🎯 **The problem is the inconsistency, not the exposure.** A redaction applied in
-one file and not seven others reads as an accident rather than a policy — which is
-exactly the impression the disclosure-tiering rule exists to avoid. Either the name
-is acceptable in a public repo (and NETWORK.md over-redacted) or it is not (and
-these need handling). Pick one and be consistent.
+**What changed (2026-09-01):**
+- The three `ha_secondary_*` values moved from `group_vars/all/main.yml` into
+  `vault.yml` as `vault_ha_secondary_*`. The variables now reference them.
+- `ARCHITECTURE_DECISIONS.md` describes the presence-sensor *pattern* instead of
+  naming a person.
+- `group_vars/homeassistant.yml` keeps its entity-ID globs and now carries a
+  comment saying the asymmetry is a judgement call, not an oversight.
+- `docs/reference/zyxel-xgs1250-12.cfg` no longer carries the switch's MAC as its
+  MST region name; the value is in `docs/local/RECOVERY.md`.
 
-**The cheap half is genuinely cheap.** The two `group_vars/all/main.yml` entries are
-*already variables* — moving their values into `vault.yml` as
-`vault_ha_secondary_person` / `vault_ha_secondary_device_tracker` changes nothing on
-the HA side, because the entity IDs in Home Assistant stay exactly as they are.
+✅ **Already verified without Touch ID:**
+- Vault round-trips, 39 → 42 keys, exactly the three added.
+- The three variables resolve to **byte-identical strings** before and after
+  (`connection: local`), so no template that uses them can render differently —
+  and critically the HA `unique_id` (`<display>_presence_combined`) is unchanged.
+- The real `groups.yaml.j2` was rendered locally and still emits the correct
+  `person.` entity from the vaulted value.
+- `--syntax-check` passes on `services.yml` and `site.yml`; inventory parses.
+- Only entity IDs remain in tracked files — the decided exception.
 
-⚠️ **The expensive half is not worth it.** The glob patterns in
-`homeassistant.yml` match real entity IDs. Renaming those means Home Assistant
-entity-registry surgery on a live system — high risk, low reward, for a first name.
-**Recommendation: vault the two variables, generalise the doc mention, leave the
-globs, and record the decision** so the asymmetry is deliberate and visible.
+🔴 **The one thing that could not be checked here:** that a real run against
+dockassist reports **no change**. Everything above proves the *inputs* are
+identical; only `--check --diff` proves Ansible agrees.
 
-📌 **Also in scope, one line:** `docs/reference/zyxel-xgs1250-12.cfg` carries the
-switch's own MAC as its MST region name. Under the tiering rule MACs belong in
-`docs/local/`, and the HomePod's was moved for exactly this reason. It is only
-discoverable on-LAN, so this is consistency housekeeping, not a leak.
-
-*State:* found, not started. *Effort:* ~20 min for the recommended scope.
-*Needs:* a laptop; `--check --diff` must show no HA entity changes.
+*State:* built, locally verified, awaiting one run. *Effort:* two minutes.
+*Needs:* Touch ID (SSH to dockassist).
 
 ```
-Make the third-party-name redaction consistent. Read docs/TODO.md item 33 first.
+Verify and close TODO item 33. The work is DONE and committed — do NOT redo it,
+and do NOT rename any Home Assistant entity.
 
-The DECISION is already made and is not up for redesign: vault the two variables,
-generalise the doc mention, LEAVE the entity-ID globs alone. Do NOT rename Home
-Assistant entities — that is registry surgery on a live system for a first name,
-and the reward does not justify it.
+Run:
+  ansible-playbook ansible/playbooks/services.yml --limit dockassist --tags config --check --diff
 
-1. Move the values of ha_secondary_person and ha_secondary_device_tracker from
-   group_vars/all/main.yml into vault.yml as vault_ha_secondary_person and
-   vault_ha_secondary_device_tracker, referencing them as {{ vault_* }}.
-2. Generalise the ARCHITECTURE_DECISIONS.md mention to describe the pattern
-   ("a per-person combined presence sensor") rather than naming the person.
-3. Leave group_vars/homeassistant.yml globs as-is and add a one-line comment
-   saying why, so the asymmetry reads as deliberate.
-4. Optional, same pass: strip the MAC used as the MST region name from
-   docs/reference/zyxel-xgs1250-12.cfg, matching how the admin hash was redacted.
+PASS = no changes to groups.yaml, configuration.yaml or the lovelace dashboard,
+and no HA restart queued. That is the whole test: the three ha_secondary_* values
+moved into the vault unchanged, so Ansible must see nothing to do.
 
-Verify with --check --diff against dockassist BEFORE applying: the diff must show
-NO entity-id changes and NO HA restart. Then apply and confirm changed=0 on a
-second run and that presence automations still fire.
+FAIL = any diff touching those files. Do not "fix" it by editing templates —
+it would mean a vault value does not match what group_vars had, so compare
+`ansible-vault view` against git history for group_vars/all/main.yml and correct
+the VAULT.
+
+Once it passes: remove item 33 from docs/TODO.md, write it up in
+docs/archive/DONE.md, update the dashboard, and merge docs/disclosure-policy to
+main with `git ms`.
 ```
 
 **8. Cabinet vent sizing.** Needs three physical measurements only he can take:
