@@ -61,7 +61,7 @@ renders it:
 > **№4** 1c → **№5** 1d *(only after 18)* → **№6** 2 → **№7** 4 (plex) →
 > **№8** 9 → **№9** 3a/3b/3c → **№10** 5 → **№11** 19 → **№12** 12 →
 > **№13** 22 → **№14** 10 → **№15** 11 → **№16** 6 → **№17** 7 →
-> **№18** 33 *(recovery residuals — all small now; no irreversible loss left)* · **№19–22** 8/13/14/16 · **№23** 32 *(git-history rewrite —
+> **№18** 33 *(one command left — is OPNsense's authorized_keys snapshot still there)* · **№19–22** 8/13/14/16 · **№23** 32 *(git-history rewrite —
 > decision only, default is no)* · **№24** 26 *(one UI toggle, global — his
 > call)* · **№25** 27 *(watch only — needs a fifth drop before it is work at
 > all)* · **№26** 29 *(latent — measured NOT to be the cause of the 30 Aug
@@ -1034,7 +1034,7 @@ Do NOT start a rewrite on your own judgment, and do NOT treat it as a
 prerequisite for item 31 — they are independent.
 ```
 
-**33. Recovery residuals — one real gap (the age key), two verifications**
+**33. One check left: is OPNsense's authorized_keys snapshot still there?**
 The recovery path itself is **done and documented** (`BACKUP_AND_RECOVERY.md` →
 *Recovering without the laptop*): `sshd` pulls authorized keys live from GitHub, so
 a new machine gets in by enrolling one key. Verified wired on all six Linux hosts
@@ -1075,17 +1075,44 @@ known to offer it for personal accounts. Check `github.com/settings/security`
 before counting it as a recovery path — an imagined factor is the same class of
 error this session found in `AGENT_ACCESS.md`.
 
-**b. OPNsense is unverified.** The hardened-sshd task is gated
-`when: os_family == "debian"` and OPNsense rewrites `sshd_config` from `config.xml`,
-so it almost certainly has no `AuthorizedKeysCommand`. *Reasoned from source, never
-checked on the host* — `read_agent`'s shell there is disabled. It has two
-password-based paths in, so this is a "know the answer" item, not a risk.
+**b. OPNsense gets a snapshot, not a live lookup — and upgrades are known to eat
+it.** Source settles the mechanism (re-read 2026-09-01, no host access needed):
 
-**c. `~/.claude/plans/` is on the laptop only.** Outside `~/Documents`, so iCloud
-does not cover it. `phase-c-operator-plan.md` is the stated source for item 11.
+- `ssh_hardening.yml` runs on `hosts: all`, so OPNsense **is** in scope.
+- `/usr/local/bin/update_keys` **is** deployed there — that task is gated only on
+  `gh_keys is defined`, with no OS check.
+- But `Deploy hardened sshd config` **is** gated `when: os_family == "debian"`, so
+  `sshd` is never wired to call it. OPNsense also regenerates `sshd_config` from
+  `config.xml`, which would undo it anyway.
+- `Set authorized keys for standard user from github` has no OS gate either, so
+  OPNsense's `authorized_keys` is a **snapshot written at Ansible-run time**.
 
-*State:* recovery path shipped and verified; (a) closed 2026-09-01, (b) and (c)
-remain. *Effort:* minutes each. *Needs:* a laptop.
+🔑 **So on a new laptop: every Debian host accepts a freshly-enrolled GitHub key
+immediately; OPNsense does not.** Reach it by web UI or `qm terminal 100` from
+Proxmox (both passworded, both in the managers), then one Ansible run re-syncs its
+`authorized_keys`. Not a lockout — just the one host that needs a different door.
+
+🔴 **The part actually worth checking is different from what this item first
+said.** A firmware upgrade once deleted the Ansible-created `read_agent` account
+and it went unnoticed for ~3 months (`ARCHITECTURE_DECISIONS.md`, *Agent Access*).
+The same mechanism can silently empty `authorized_keys`. **So the question is not
+"is it wired" — source answers that — it is "is the snapshot still there today".**
+One command from the console or web UI shell settles it.
+
+**c. ~~`~/.claude/plans/` is on the laptop only~~ — DROPPED as a recovery concern
+2026-09-01.** It was over-weighted here. The directory holds *plans for work that
+has not started*; losing it costs re-thinking, not recovery, and nothing in the
+running estate depends on it. It is not operational state, not a secret, and not
+in the restore chain.
+
+📌 **The residue is repo hygiene, not recovery:** item 11 cites a file that is not
+in the repo, so a session picking it up cannot read its own source. Fold the plan
+into item 11 or into `docs/` whenever item 11 is next touched. Not tracked
+separately.
+
+*State:* (a), (a2), (a3) closed 2026-09-01; (c) dropped as not a recovery concern.
+**Only (b) remains**, and it is one command. *Needs:* the OPNsense web UI or the
+Proxmox console — `read_agent`'s shell on that host is disabled.
 
 ```
 Close the three residual gaps in laptop-loss recovery. Read docs/TODO.md item 33 and
@@ -1097,14 +1124,20 @@ DONE and verified on six hosts, do NOT re-derive it and do NOT rebuild anything.
     real GitHub auth method; check github.com/settings/security and correct the
     local file either way.
 
-(b) Verify OPNsense. Expect NO AuthorizedKeysCommand there (FreeBSD, gated out).
-    Check over the OPNsense API or the console, not read_agent SSH — its shell is
-    disabled. Whatever the answer, record it in BACKUP_AND_RECOVERY.md and replace
-    the "reasoned from source, not verified" caveat with the measured result.
+(b) is the only thing left, and the source question is already answered — do NOT
+    re-derive it. OPNsense has update_keys deployed but sshd is NOT wired to it, so
+    its authorized_keys is a SNAPSHOT from the last Ansible run, not a live lookup.
+    The real question is whether that snapshot SURVIVED: a firmware upgrade once
+    deleted the Ansible-created read_agent account unnoticed for ~3 months, and the
+    same mechanism can empty authorized_keys.
 
-(c) Decide where ~/.claude/plans/phase-c-operator-plan.md should live so it survives
-    the laptop: docs/local/ (iCloud-backed) is the obvious home. Move it, then fix
-    the reference in TODO item 11 and in the memory that points at it.
+    Check from the OPNsense web UI shell or `qm terminal 100` on Proxmox — NOT
+    read_agent SSH, its shell there is disabled:
+      cat ~/.ssh/authorized_keys        (as the infrastructure user)
+    Non-empty and matching the GitHub key set = fine, record it and close the item.
+    Empty or stale = re-run `ansible-playbook ansible/playbooks/services.yml
+    --limit opnsense --tags ssh` and then consider whether this host needs a
+    freshness check, since the failure mode is silent by construction.
 
 Do NOT add a second SSH key, a break-glass credential, or anything in the vault for
 this — the GitHub path already IS the break-glass and adding another credential

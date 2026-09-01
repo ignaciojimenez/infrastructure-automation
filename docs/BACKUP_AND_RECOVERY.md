@@ -132,12 +132,25 @@ connection — no Ansible run, no physical access, no SD-card surgery.
 `cobra`, `hifipi`, `dockassist`, `vinylstreamer`, `cwwk`, `unifi-lxc` — **all six wired**.
 `agent-lxc` has the script present and fetching.
 
-⚠️ **OPNsense is the exception.** The hardened-sshd task is gated
-`when: os_family == "debian"`, and OPNsense regenerates `sshd_config` from `config.xml`
-regardless — so it almost certainly has no `AuthorizedKeysCommand`. *This is reasoned
-from the playbook, not verified on the host* (`read_agent`'s shell there is disabled).
-Two other ways in, both password-based, both in Apple Passwords: the web UI at
-`https://opnsense/`, or `qm terminal 100` from the Proxmox console.
+⚠️ **OPNsense is the exception, and the distinction matters.** `ssh_hardening.yml`
+runs on `hosts: all`, and `/usr/local/bin/update_keys` **is** deployed there — that
+task has no OS gate. But `Deploy hardened sshd config` **is** gated
+`when: os_family == "debian"`, so `sshd` is never wired to call it, and OPNsense
+regenerates `sshd_config` from `config.xml` regardless.
+
+What OPNsense gets instead is `Set authorized keys … from github` with
+`exclusive: true` — a **snapshot written at Ansible-run time**, not a live lookup. So a
+key enrolled at GitHub *after* the last run is not accepted there.
+
+**On a new laptop:** every Debian host lets you in immediately; OPNsense needs the web
+UI at `https://opnsense/` or `qm terminal 100` from the Proxmox console (both
+passworded, both in the managers). One Ansible run then re-syncs its `authorized_keys`.
+Not a lockout — one host with a different door.
+
+🔴 **The snapshot can go missing silently.** A firmware upgrade once deleted the
+Ansible-created `read_agent` account and it went unnoticed for ~3 months (see
+`ARCHITECTURE_DECISIONS.md`, *Agent Access*). The same mechanism can empty
+`authorized_keys`. Checking that it is still populated is TODO item 33.
 
 📌 **So the account that matters most is GitHub, not the laptop.**
 `authorized_key` is deployed with `exclusive: true` from `{{ gh_keys }}` *and*
@@ -177,7 +190,7 @@ only thing standing between "should work" and "does work"."
 | Artifact | Backed up by | Notes |
 |---|---|---|
 | The repo + `docs/local/` | **iCloud Drive** (`~/Documents` syncs) | Verified 2026-09-01 — `docs/local/` is visible in iCloud Drive. Gitignored ≠ unbacked |
-| `~/.claude/plans/` | ❌ nothing | Outside `~/Documents`. `phase-c-operator-plan.md` is the source for TODO item 11 |
+| `~/.claude/plans/` | ❌ nothing | Outside `~/Documents` — but it holds *plans for unstarted work*, not operational state. Losing it costs re-thinking, not recovery |
 | `~/.ssh/read_agent_ed25519` | ❌ nothing | Deliberate — disposable, regenerate per step 6 above |
 | Backup URLs | Slack history | Random IDs, not discoverable — the Slack message *is* the index |
 
