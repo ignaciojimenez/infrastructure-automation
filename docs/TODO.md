@@ -3,7 +3,7 @@
 **Improvements and fixes waiting to be worked on.** Start at *What to work on
 next*; the first item you can act on is the right one.
 
-Updated: 2026-08-30
+Updated: 2026-09-02
 
 | Where a thing lives | |
 |---|---|
@@ -56,51 +56,37 @@ here is something to read past, every time, forever. The write-up goes to
 (numbers never move), but the order to work them is this, and the dashboard
 renders it:
 
-> **№1** 18 *(active fault, and it gates 1d)* → **№2** 30 *(the reported AirPlay
-> fault)* → **№3** 31 *(PMF — the real fix behind the closed item 24)* →
-> **№4** 1c → **№5** 1d *(only after 18)* → **№6** 2 → **№7** 4 (plex) →
-> **№8** 9 → **№9** 3a/3b/3c → **№10** 5 → **№11** 19 → **№12** 12 →
-> **№13** 22 → **№14** 10 → **№15** 11 → **№16** 6 → **№17** 7 →
-> **№18–21** 8/13/14/16 · **№22** 32 *(git-history rewrite —
-> decision only, default is no)* · **№23** 26 *(one UI toggle, global — his
-> call)* · **№24** 27 *(watch only — needs a fifth drop before it is work at
-> all)* · **№25** 29 *(latent — measured NOT to be the cause of the 30 Aug
-> fault)*
+> **№1** 18 *(active fault, and it gates 1d)* → **№2** 31 *(PMF — the real fix
+> behind the closed item 24)* → **№3** 1c → **№4** 1d *(only after 18)* →
+> **№5** 2 → **№6** 4 (plex) → **№7** 9 → **№8** 3a/3b/3c → **№9** 5 →
+> **№10** 19 → **№11** 12 → **№12** 22 → **№13** 10 → **№14** 11 →
+> **№15** 6 → **№16** 7 → **№17–20** 8/13/14/16 · **№21** 32 *(git-history
+> rewrite — decision only, default is no)* · **№22** 26 *(one UI toggle,
+> global — his call)*
 > *(decision-gated — 16 needs a purchase call, 32 needs his call on a public
 > force-push, the rest need him at the cabinet; not ranked)*
 
-**33 enters at №19 (2026-09-01)** — the laptop-loss recovery path turned out to
-already exist and is now documented and verified; what is left is three
-verifications, one of which (GitHub 2FA recovery codes) guards the credential the
-whole fleet now hangs off. Small, but it protects the recovery story rather than
-extending it.
+**Three items left the queue on 2026-09-02** — 27, 29 and 30 were each
+diagnosed to a real mechanism and each ended with nothing worth building, so
+they are now
+[parked findings](archive/DONE.md#2026-09-02--three-findings-that-were-never-tasks-parked-with-their-reopen-conditions)
+with their exclusions and a reopen condition, not queue entries. 🔴 **None of
+them can be settled by measuring how often they fail** — the action is the same
+at any rate, which is what made them notes rather than tasks. Reopen on a
+complaint, not on a number.
 
-**24 closed 2026-08-30 and everything above it moves up one** — the redaction
-shipped and the disclosure policy behind it is now
+**18 holds the top slot** because it is the only thing actively recurring —
+nine NIC stalls since 11 Aug — and because it inverts the obvious order:
+**1d doubles the saturation runs, so doing it before 18 would knowingly make the
+active fault worse.** 1c is independent and stays ahead of 1d.
+
+**31 is №2, and 32 is near the bottom, on purpose.** Both descend from item 24,
+closed 2026-08-30, whose disclosure policy is now
 [a standing rule](ARCHITECTURE_DECISIONS.md#disclosure-tiering--what-goes-in-a-public-repo).
-It left two successors, deliberately unequal: **31 enters at №3** — enabling PMF
-is the change that actually removes the weakness, and it ranks below the two
-active faults because nothing is currently exploiting it — while **32 sits at
-№23**, a decision about git history whose default is *no*. Ranking them apart is
-the point: the fix is work, the rewrite is tidiness.
-
-**30 enters at №2 (2026-08-30)** — the reported fault, and the only one with a stated "rock solid for guests" bar. Item 28 closed the same day (`archive/DONE.md`). 29 drops to last: measured not to be the cause of anything.
-
-**Re-ranked 2026-08-29 on the question "is 1c really the most important?"** —
-it was not. **18 takes the top slot** because it is the only thing actively
-recurring — nine NIC stalls since 11 Aug — and because it inverts the obvious
-order: **1d doubles the saturation runs, so doing it before 18 would knowingly
-make the active fault worse.** 1c is independent and stays ahead of 1d. Nothing
-else was time-sensitive enough to move.
-
-
-
-
-**19 and 18 enter at №10 and №11** because both are small and both are about
-*seeing* — 19 restores a read path the agent tier was supposed to have, and 18
-adds the only tripwire for a fault that was invisible until 2026-08-24. The
-journal fix landed the same week and paid for itself within hours; these are
-the same trade.
+Enabling PMF is the change that actually removes the weakness — it ranks below
+18 only because nothing is currently exploiting it — while 32 is a decision
+about git history whose default is *no*. The fix is work; the rewrite is
+tidiness.
 
 📌 **Every item carries a paste-ready prompt** — including blocked ones, which
 carry *fill-in* prompts that take the physical measurement or decision as
@@ -512,78 +498,6 @@ This segment controls heating and mains power. Do it when someone is home and
 can power-cycle a device, not remotely and not overnight.
 ```
 
-**29. The mDNS repeater re-advertises IPv6 addresses that are unroutable from the VLAN it repeats into**
-The repeater runs on all five VLANs and forwards records verbatim, so Baño's
-record reaches VLAN 80 advertising a link-local `fe80::` and two ULAs that
-VLAN 80 cannot reach — OPNsense carries no IPv6 routing. A *forced* connect to
-the link-local **hangs 75 s** (the client treats `fe80::` as on-link and sends
-neighbour solicitations into the void); the ULA fails instantly.
-
-🔴 **Measured NOT to be the cause of anything observed.** Every real phone→Baño
-flow on 30 Aug was IPv4 — Happy Eyeballs falls back. Latent defect only.
-
-*State:* mechanism proven, no real client seen taking that path. *Needs:* a
-reason to care. Do not act unless a capture shows a client actually stalling on
-it — narrowing the repeater's interface list is the fix if one ever does.
-
-```
-Decide whether reflected unroutable IPv6 is worth acting on. Read docs/TODO.md
-item 29 — the measurement is DONE and so is the follow-up question it used to
-ask: a forced connect to Bano's reflected fe80:: hangs 75 s, BUT every real
-phone->Bano flow on 30 Aug was IPv4, so Happy Eyeballs masks it. Do not re-run
-either check.
-
-This is latent, not an active fault. Act ONLY if a capture shows a real client
-stalling on the link-local. If one ever does, the fix is to narrow the mDNS
-repeater's interface list so Bano's records are not pushed onto VLANs that cannot
-route to it. Do NOT add IPv6 routing to OPNsense for this.
-```
-
-**30. 🔴 AirPlay to Baño from the VPN SSID is unreliable — a setup race, not a blocked path**
-The family normally uses the default (VPN) SSID on VLAN 80; Baño is on VLAN 20. Bar is
-**rock solid for guests**. Audio is UDP, so the firewall log tells a session that
-reached audio from one that died in setup:
-
-| Window | Attempts | Reached audio |
-|---|---|---|
-| 29 Aug 18:24 → 30 Aug 16:52 | 8 | **1** |
-| after rebooting Baño, 30 Aug 17:00 → 17:50 | 2 | **2** |
-
-**Mechanism, from two packet captures:** Baño sends PTP before the phone has
-bound its PTP socket; the phone answers `ICMP port 319/320 unreachable`, the
-control connection is RST, the client retries. Sometimes a retry lands in the
-right order.
-
-🔴 **The reboot cleared state but did not remove the race** — the same ICMP
-sequence fired again at 17:41:03, right after Baño booted. ⚠️ **2-in-2 over
-50 minutes is not a baseline**; the prior rate was 1-in-8 over 24 h.
-
-**Eliminated by measurement — do not re-test:** firewall rules (0 blocked
-packets, ever), IPv6 (item 29), PTP-multicast (PTP runs *unicast* and crosses
-fine), VPN policy routing (`USED_LAN_NETS` = `10.30.0.0/16`), low TTL (the only
-TTL-1 packets are IGMP reports, correctly so).
-
-*State:* five causes eliminated, race still present. *Needs:* a **counted
-baseline over days of real use** — impressions cannot settle this.
-
-```
-Continue TODO item 30. Two captures and a session count are DONE — do not
-re-derive them, and do NOT add firewall rules, igmpproxy or UDP relays: nothing
-is blocked and unicast UDP crosses fine. Five causes are already eliminated.
-
-Bano sends PTP before the phone's PTP socket is up; the phone answers ICMP
-port 319/320 unreachable and the control connection is RST. Rebooting Bano took
-it from 1-of-8 to 2-of-2, but the same sequence still fired post-reboot.
-
-Get a counted baseline: classify phone <-> Music_Players flows in the OPNsense
-filter log into sessions and report "N of M reached audio (UDP)". Cover hifipi
-(10.30.40.100) as well as Bano. Report the rate over days, not impressions.
-
-If it degrades again, capture (vlan0.20, host 10.30.20.52) and check whether the
-ICMP-then-RST sequence repeats. If it does, routed AirPlay to this HomePod is
-inherently racy and the fix is topological, not a rule — say so plainly.
-```
-
 ### 🟢 P3 — improvements, no urgency
 
 **5. Tokens out of cron command lines.** healthchecks.io and Slack tokens sit in
@@ -836,51 +750,6 @@ Verify by FORCING both branches as read_agent over SSH, not as choco:
     -> must still work unchanged
 Then grep the .gz for a string you KNOW is in it and confirm a non-zero count —
 a reworded helper that was never grepped has not been tested.
-```
-
-**27. The new floor lamp drops off Wi-Fi — watch only, do not act on a hunch**
-`light.floor_lamp_new` — Shelly Duo Bulb G3 `48f6eebd40d4`, `10.30.100.238` on
-VLAN 100 — loses its RPC session and takes its five entities `unavailable` with
-it. Four occurrences in the retained HA log: 2026-08-17 01:53 and 02:34,
-2026-08-18 10:53, 2026-08-29 23:07. Every one self-recovered; only the last
-outran the 15-minute grace and paged #home-alerts (23:30, exit 5). Signature is
-always the same pair — `aioshelly.rpc_device.wsrpc: Invalid Message from host
-10.30.100.238:80` then `Error fetching … while reconnecting`.
-
-📌 **Do not touch `ha_entity_health_grace_seconds` for this.** The 29 Aug outage
-lasted ~30 minutes; 15 minutes is the correct window and it worked. This is a
-device fault, not a threshold problem, and nothing else in HA logged a single
-line in the same 90 minutes — the network was fine.
-
-🔴 **This item is a threshold for acting, not a task.** Four self-healing drops
-in 13 days do not justify changing anything, and the failure mode to avoid here
-is fixing a bulb that is not broken. See *&ldquo;the floor lamp that switched
-itself on&rdquo;* in [`archive/DONE.md`](archive/DONE.md) for what was already
-settled — including that `sys.reset_reason` is undocumented and must not be
-reasoned from.
-
-*State:* diagnosed 2026-08-30, nothing broken, nothing to build.
-*Effort:* none until it recurs. *Needs:* a fifth drop, or a longer one.
-
-```
-Investigate the floor-lamp Shelly drops — ONLY if a fifth has happened. Read
-docs/TODO.md item 27 and the DONE.md entry "2026-08-30 — the floor lamp that
-switched itself on, and an alert that was simply true" first (three entries
-share that date, so match the title, not the date);
-the 29 Aug alert was TRUE, the check behaved correctly, and initial_state is
-already fixed. Do not re-derive any of that, and do not "fix" this by widening
-any grace window.
-
-First confirm there IS a new event rather than assuming:
-  ssh dockassist-agent "sudo docker logs --since <date> home-assistant 2>&1 \
-    | grep -E '48f6eebd40d4|10\.30\.100\.238'"
-No new pair of lines means nothing to do — say so and stop.
-
-If there is one: RSSI was -58 on ch 1 with roam rssi_thr -80 (healthy) on
-30 Aug, so re-measure it and suspect the AP or DHCP before the bulb. Firmware
-is 2.0.0 and the only thing on offer is 2.0.1-beta1 — do not put a beta on it
-to chase log lines. Do not reason about reset_reason: the field is real (it
-read 1) but Shelly does not document the value mapping.
 ```
 
 ### 🧊 Blocked on Ignacio, not on work
