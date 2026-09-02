@@ -105,6 +105,40 @@ Simple log of key technical decisions made in this project.
 - **Example files for onboarding** - `vault.yml.example` and `*.ini.example` files show structure without secrets
 - **No plaintext secrets** - All sensitive data (tokens, passwords, keys) in vault only
 
+## Wireless — PMF on the IoT SSID is refused, not pending
+
+*Decided 2026-09-02, after testing. Do not re-propose.*
+
+The IoT SSID runs `pmf_mode=disabled` while the other four are `optional`. This is
+a real weakness — without 802.11w, management frames are unauthenticated and clients
+can be deauthenticated by anyone in RF range — and the segment it fronts carries the
+devices that switch **heating and mains power**.
+
+🔴 **It stays that way. The IoT devices cannot associate with PMF enabled** —
+verified by the operator, not assumed from the ESP32 datasheet. Enabling it does not
+harden the segment; it **removes the segment**, taking the heating and the mains
+plugs offline. A control that disables what it protects is not a control.
+
+📌 **The argument that will be made again, and why it does not reopen this.** A
+future reader will notice the weakness is still present and propose fixing it. That
+reasoning is *correct and already weighed*: the finding is accurate, the severity is
+accurate, and the fix was tested and rejected on availability grounds. **This is an
+accepted trade-off, not an oversight and not a backlog item.** It was carried as
+TODO item 31 and discarded rather than deferred, precisely so nobody schedules work
+that breaks the house.
+
+**What actually limits the residual risk**, none of which depends on PMF:
+- The IoT VLAN is the most restricted segment in the estate — its gateway does not
+  even answer ICMP from inside it (see `docs/NETWORK.md`).
+- The attack requires **RF proximity**. It is not remotely reachable.
+- `pmf_mode` is advertised in the beacon, so redacting the SSID name never hid this
+  from anyone in range — see the disclosure-tiering rule below for why the name was
+  moved anyway.
+
+**What would legitimately revisit it:** replacing the IoT devices with PMF-capable
+hardware, or moving the mains-switching devices to a different SSID that can run
+`optional`. Both are hardware/topology changes, not a toggle.
+
 ## Disclosure tiering — what goes in a public repo
 
 *Adopted 2026-08-30, closing TODO item 24.*

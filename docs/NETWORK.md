@@ -432,19 +432,25 @@ segment carrying the Shelly plugs, the BroadLink IR blasters and the Tado bridge
 — **heating and mains power**. This is the weakest wireless setting in the estate
 sitting in front of its most physically consequential devices.
 
-⚠️ **`disabled` is very likely deliberate** — cheap ESP32-class devices often
-cannot associate with PMF enabled. Treat it as a documented trade-off to
-re-confirm, not a misconfiguration to go fix. Raising it to `optional` is the
-test; if the affected devices drop off, the answer is no.
+✅ **Confirmed deliberate, and confirmed final (2026-09-02).** The operator tested
+it: these devices **cannot associate with PMF enabled**. Raising it does not harden
+the segment, it removes it — the heating and the mains plugs go offline. So this is
+an **accepted trade-off, not a misconfiguration and not a pending task**. The
+standing rule is [PMF on the IoT SSID is refused, not
+pending](ARCHITECTURE_DECISIONS.md#wireless--pmf-on-the-iot-ssid-is-refused-not-pending).
+🔴 **Do not re-open it on the grounds that the weakness is still present** — that is
+true, and it was weighed.
 
 🔒 **Which SSID it is, is in `docs/local/WIRELESS.md`.** The segment is named
 above because it is already documented throughout this file; the SSID name is
 what turns "some IoT segment" into "associate to *this* one". Redacting the name
-is not the fix and does not pretend to be one — `pmf_mode` is
+was never the fix and does not pretend to be one — `pmf_mode` is
 advertised in the beacon's RSN capabilities, so anyone in RF range reads it off
 the air. What redaction removes is the *remote* shortcut: knowing from GitHub,
-without ever being nearby, which SSID to go and stand next to. **Enabling PMF is
-the actual fix** and is tracked separately.
+without ever being nearby, which SSID to go and stand next to. **Enabling PMF would have been the
+actual fix — and it is ruled out**, because the devices cannot associate with it.
+What redaction buys here is therefore the whole of what is available: the weakness
+itself is accepted.
 
 ### 10. Switch port 1 is running at 10 Mbps half-duplex
 

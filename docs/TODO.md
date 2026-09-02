@@ -56,15 +56,23 @@ here is something to read past, every time, forever. The write-up goes to
 (numbers never move), but the order to work them is this, and the dashboard
 renders it:
 
-> **№1** 18 *(active fault, and it gates 1d)* → **№2** 31 *(PMF — the real fix
-> behind the closed item 24)* → **№3** 1c → **№4** 1d *(only after 18)* →
-> **№5** 2 → **№6** 4 (plex) → **№7** 9 → **№8** 3a/3b/3c → **№9** 5 →
-> **№10** 19 → **№11** 12 → **№12** 22 → **№13** 10 → **№14** 11 →
-> **№15** 6 → **№16** 7 → **№17–20** 8/13/14/16 · **№21** 32 *(git-history
-> rewrite — decision only, default is no)* · **№22** 26 *(one UI toggle,
+> **№1** 18 *(active fault, and it gates 1d)* → **№2** 1c → **№3** 1d *(only
+> after 18)* → **№4** 2 → **№5** 4 (plex) → **№6** 9 → **№7** 3a/3b/3c →
+> **№8** 5 → **№9** 19 → **№10** 12 → **№11** 22 → **№12** 10 → **№13** 11 →
+> **№14** 6 → **№15** 7 → **№16–19** 8/13/14/16 · **№20** 32 *(git-history
+> rewrite — decision only, default is no)* · **№21** 26 *(one UI toggle,
 > global — his call)*
 > *(decision-gated — 16 needs a purchase call, 32 needs his call on a public
 > force-push, the rest need him at the cabinet; not ranked)*
+
+**31 was discarded on 2026-09-02, not deferred.** Ignacio tested it: the IoT
+devices cannot associate with PMF enabled, so raising it is not a fix that was
+skipped — it is a fix that **breaks the segment it was meant to protect**. The
+finding stands as an *accepted trade-off* in
+[ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md#wireless--pmf-on-the-iot-ssid-is-refused-not-pending)
+so no future session re-proposes it. 🔴 **Do not re-open it on the reasoning that
+"the weakness is still there" — that reasoning is correct and was already
+weighed.**
 
 **Three items left the queue on 2026-09-02** — 27, 29 and 30 were each
 diagnosed to a real mechanism and each ended with nothing worth building, so
@@ -453,51 +461,6 @@ workarounds: the queue self-recovers, so there is no established harm to fix
 and no way to prove a workaround helped.
 ```
 
-**31. PMF is disabled on the IoT SSID — the redaction moved the note, not the weakness**
-Item 24 closed on 2026-08-30 by moving the SSID→VLAN→isolation→PMF correlation
-out of `docs/NETWORK.md` and into `docs/local/WIRELESS.md` (see
-[`archive/DONE.md`](archive/DONE.md)). That narrowed *remote* recon. It did
-nothing to the underlying setting.
-
-One SSID runs `pmf_mode=disabled`; the other four are `optional`. Without
-802.11w, management frames are unauthenticated and clients can be
-deauthenticated by anyone in range — the precondition for forced reassociation
-and handshake capture. That SSID fronts the segment carrying the Shelly plugs,
-the BroadLink blasters and the Tado bridge: **heating and mains power**.
-
-📌 `pmf_mode` is advertised in the beacon's RSN capabilities. Anyone in RF range
-reads it off the air whether or not it is written in a public repo — which is
-exactly why redaction is not remediation here.
-
-⚠️ **`disabled` is very likely deliberate**, not a slip. Cheap ESP32-class
-devices often cannot associate with PMF enabled, which is the obvious reason
-this one SSID differs. Treat it as a trade-off to re-confirm.
-
-*State:* diagnosed, untouched. *Effort:* one controller toggle plus a watch
-period. *Needs:* the UniFi controller, and a willingness to have IoT devices
-drop off while testing. Which SSID it is: `docs/local/WIRELESS.md`.
-
-```
-Raise PMF from disabled to optional on the IoT SSID, and find out what breaks.
-Read docs/TODO.md item 31 first, and docs/local/WIRELESS.md for which SSID it is
-(it is gitignored and not in the repo). Do NOT re-derive the disclosure analysis
-— item 24 is closed, the redaction is done, and redacting more is not the fix.
-
-`optional` (not `required`) is the setting to try: PMF-incapable clients still
-associate, capable ones get 802.11w. If even `optional` breaks associations,
-that is the answer and the finding stands as an accepted trade-off — record it
-and stop.
-
-Before touching it, enumerate what is on that segment from Home Assistant so
-there is a before-list to compare against: Shelly plugs and bulbs, the two
-BroadLink RM4 blasters, the Tado bridge. After the change, watch for at least
-24 h — ESP32 devices can associate once and drop later. A device that never
-comes back is a rollback, not a puzzle.
-
-This segment controls heating and mains power. Do it when someone is home and
-can power-cycle a device, not remotely and not overnight.
-```
-
 ### 🟢 P3 — improvements, no urgency
 
 **5. Tokens out of cron command lines.** healthchecks.io and Slack tokens sit in
@@ -869,8 +832,14 @@ content is already out at scale in places no force-push reaches.
 
 🎯 **The honest framing:** a rewrite is a *tidiness* decision about what a future
 reader finds by default. It is **not** containment, and the traffic numbers make
-that concrete rather than theoretical. Weigh it against item 31 — the only action
-here that removes the weakness rather than the description of it.
+that concrete rather than theoretical.
+
+🔴 **And there is no longer a "real fix" to weigh it against.** This item used to
+say: prefer item 31, because enabling PMF removes the weakness rather than its
+description. **Item 31 was tested and refused on 2026-09-02** — the IoT devices
+cannot associate with PMF. So redaction is now the *entire* available mitigation,
+and a history rewrite is still not one: it recovers nothing from 85 unique cloners
+a fortnight.
 
 📌 **Default is no**, and the measurement argues for it. Do not rewrite history
 without Ignacio saying so explicitly.
@@ -899,8 +868,9 @@ them with him first. Then open a GitHub support request for GC; a rewrite
 without it leaves the objects reachable by SHA. State plainly, in the write-up,
 that forks and anything already read are unaffected.
 
-Do NOT start a rewrite on your own judgment, and do NOT treat it as a
-prerequisite for item 31 — they are independent.
+Do NOT start a rewrite on your own judgment. And do NOT resurrect PMF (the old
+item 31) as an alternative — it was TESTED and REFUSED on 2026-09-02 because the
+IoT devices cannot associate with it; see ARCHITECTURE_DECISIONS.md.
 ```
 
 **8. Cabinet vent sizing.** Needs three physical measurements only he can take:

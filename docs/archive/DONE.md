@@ -53,6 +53,39 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ---
 
+## 2026-09-02 — PMF on the IoT SSID: tested, refused, and closed rather than deferred
+
+Item 31 was the successor to the item-24 disclosure work — the change that would
+have removed the weakness rather than the note about it. **Ignacio tested it and it
+does not work: the IoT devices cannot associate with PMF enabled.**
+
+🔴 **So it was discarded, not deferred.** That distinction is the whole entry.
+Leaving it in the queue as "the real fix, pending" would have parked a task that,
+if a future session ever executed it, takes the heating and the mains plugs offline.
+**A control that disables what it protects is not a control**, and a backlog item
+that breaks the house is worse than no backlog item.
+
+**The argument that will be made again.** Someone — human or agent — will read
+`docs/NETWORK.md` finding 9, see `pmf_mode=disabled` in front of the segment that
+switches mains power, and propose enabling it. That reasoning is *correct*: the
+finding is accurate and the severity is accurate. It does not reopen anything,
+because the fix was tested on the actual hardware and rejected on availability
+grounds. Recorded as a standing rule in `ARCHITECTURE_DECISIONS.md` precisely so the
+next reader hits the refusal before the work.
+
+**What limits the residual, none of it PMF-dependent:** the IoT VLAN is the most
+restricted segment in the estate (its gateway does not answer ICMP from inside it),
+and the attack needs RF proximity — it is not remotely reachable. What would
+legitimately revisit this is PMF-capable replacement hardware, or moving the
+mains-switching devices to an SSID that can run `optional`. Both are hardware or
+topology changes, not a toggle.
+
+📌 **This also settles what the item-24 redaction was worth.** The framing all along
+was "redaction is not remediation, PMF is the real fix." With PMF ruled out,
+redaction turns out to be the *entire* available mitigation — it narrows remote
+recon and nothing narrows the weakness. Worth stating plainly rather than leaving
+the earlier, more optimistic framing standing.
+
 ## 2026-09-02 — three findings that were never tasks, parked with their reopen conditions
 
 **Decided: a fault that is diagnosed, has no acceptable fix, and is not
