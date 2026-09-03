@@ -114,12 +114,26 @@ rock solid for guests.
 **Mechanism, from two packet captures:** Baño sends PTP before the phone has
 bound its PTP socket; the phone answers `ICMP port 319/320 unreachable`, the
 control connection is RST, the client retries. Sometimes a retry lands in the
-right order. 8 attempts / **1** reached audio over 29 Aug 18:24 → 30 Aug 16:52.
+right order. 8 attempts / **1** reached audio over 29 Aug 18:24 → 30 Aug 16:52,
+and **that one success needed 16 control connections** to get there.
+
+**The 17:15 capture caught a failure and its successful retry back to back**, which
+is the whole mechanism in six lines:
+
+```
+17:16:23.333  Baño → phone   PTP starts (unicast, 319/320)
+17:16:23.341  phone → Baño   ICMP port 320 unreachable
+17:16:23.509  phone → Baño   ICMP port 319 unreachable   ← ×5
+17:16:23.607  phone → Baño   phone finally starts its OWN PTP
+17:16:24.235  phone → Baño   TCP RST — control connection torn down
+17:16:30.094  phone → Baño   audio flows, 230 pkts, 1422 B  ← retry works
+```
 
 🔴 **Rebooting Baño looked like a fix and was not.** 2-of-2 in the 50 minutes
-afterwards, but the same ICMP-then-RST sequence fired again at 17:41:03, right
-after the boot. **2-of-2 over 50 minutes is not a baseline** against a prior rate
-of 1-in-8 over 24 h.
+afterwards, with 1435 large UDP packets of real streaming in the capture — but
+the same ICMP-then-RST sequence fired again at 17:41:03, right after the boot.
+**2-of-2 over 50 minutes is not a baseline** against a prior rate of 1-in-8
+over 24 h.
 
 ⚠️ **Do not confuse this with the firewall gap fixed the same day** — see
 *"an allowlist entry that was hiding a firewall gap"* below. That one was
@@ -152,6 +166,18 @@ VLAN 80 cannot reach — OPNsense carries no IPv6 routing. A *forced* connect to
 the link-local **hangs 75 s** (the client treats `fe80::` as on-link and sends
 neighbour solicitations into the void); the ULA fails instantly.
 
+**Measured from the laptop on VLAN 80, and the asymmetry is the point:** the usable
+IPv4 address connects on port 7000 in **~10 ms**; the ULA fails **instantly** with
+`No route to host`; the link-local **hangs 75 s**, and `-w 6` does not bound it. A
+client treats `fe80::` as on-link on whichever interface it arrived on, so it never
+consults a routing table.
+
+⚠️ **Never verified: that iOS actually sinks the full 75 s.** Happy Eyeballs should
+fall back in a few hundred ms, and the measurement above was taken from a laptop
+with a *forced* connect. Confirming it would need a capture on the phone's VLAN
+while a failure is happening — which is exactly the work this parking decision says
+not to do until a real client is seen stalling.
+
 🔴 **Measured NOT to be the cause of anything observed.** Every real phone→Baño
 flow on 30 Aug was IPv4 — Happy Eyeballs falls back. Latent defect only.
 
@@ -170,6 +196,12 @@ it. Four occurrences in the retained HA log: 2026-08-17 01:53 and 02:34,
 outran the 15-minute grace and paged #home-alerts (23:30, exit 5). Signature is
 always the same pair — `aioshelly.rpc_device.wsrpc: Invalid Message from host
 10.30.100.238:80` then `Error fetching … while reconnecting`.
+
+✅ **One thing about this lamp was fixed and is not parked:** `initial_state` was
+`"on"`, so every reboot lit it regardless of prior state — which is why it sat at
+4% all night with nobody asking. Now `restore_last` (`cfg_rev` 51 → 52, checked
+against the official CCT docs before writing), so a night-time reboot is invisible
+instead of illuminating an empty room. **The drops themselves are what is parked.**
 
 📌 **Do not touch `ha_entity_health_grace_seconds` for this.** The 29 Aug outage
 lasted ~30 minutes; 15 minutes is the correct window and it worked. This is a

@@ -88,13 +88,13 @@ nine NIC stalls since 11 Aug — and because it inverts the obvious order:
 **1d doubles the saturation runs, so doing it before 18 would knowingly make the
 active fault worse.** 1c is independent and stays ahead of 1d.
 
-**31 is №2, and 32 is near the bottom, on purpose.** Both descend from item 24,
-closed 2026-08-30, whose disclosure policy is now
+**32 sits near the bottom on purpose.** It descends from item 24, closed
+2026-08-30, whose disclosure policy is now
 [a standing rule](ARCHITECTURE_DECISIONS.md#disclosure-tiering--what-goes-in-a-public-repo).
-Enabling PMF is the change that actually removes the weakness — it ranks below
-18 only because nothing is currently exploiting it — while 32 is a decision
-about git history whose default is *no*. The fix is work; the rewrite is
-tidiness.
+A git-history rewrite is a decision whose default is *no* — tidiness, not
+containment. 🔴 **Its sibling, item 31, was the fix rather than the tidying,
+and it is now refused** (see above): redaction is the entire available
+mitigation, so nothing here is waiting on a better option.
 
 📌 **Every item carries a paste-ready prompt** — including blocked ones, which
 carry *fill-in* prompts that take the physical measurement or decision as
