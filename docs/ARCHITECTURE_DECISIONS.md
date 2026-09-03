@@ -172,6 +172,16 @@ Ansible config. Decisions and the arguments behind them. Public DNS names.
 - third parties' names, wherever they appear as identifiers
 - anything that reads as "here is the soft spot, and here is where it lives"
 
+📌 **One recorded exception, so its absence from `docs/local/` is not read as an
+oversight.** The floor-lamp bulb's MAC `48f6eebd40d4` stays in
+[`archive/DONE.md`](archive/DONE.md), in the parked floor-lamp finding and in the
+2026-08-30 entry beside it. It is the grep key for that device in Home Assistant's
+logs, so moving it breaks the one command the reopen condition depends on; and it
+correlates nothing that `Shelly Duo Bulb G3` on a stated VLAN does not already
+imply. **Exception, not precedent — every other MAC goes to `docs/local/`.** The
+rule is that an inconsistent redaction reads as an accident, so the exception is
+written down rather than left to look like one (TODO item 33, closed 2026-09-01).
+
 **Tier 2 — vault only.** Keys, tokens, password hashes, PSKs, WAN addressing,
 WireGuard public keys and endpoints. Never in a tracked file, encrypted or not,
 and never in `docs/local/` either.
@@ -186,7 +196,18 @@ stands in git history, in every clone and in every fork, and GitHub serves the
 old blob at its commit SHA. A history rewrite is a separate, deliberate decision
 with its own costs — it force-pushes a public repo and still cannot recall what
 has been read. **Never treat a redaction as a remediation for the underlying
-weakness**: the fix for "PMF is disabled on that SSID" is enabling PMF.
+weakness** — moving a finding out of the repo changes who can read it, not
+whether it is true.
+
+⚠️ **But "there is always a real fix underneath" is the wrong lesson, and this
+rule's own worked example is why.** This paragraph used to end *"the fix for
+'PMF is disabled on that SSID' is enabling PMF"* — and PMF was then tested and
+**refused** — the devices cannot associate with it enabled, so turning it on
+removes the segment it was meant to protect. See
+[Wireless — PMF on the IoT SSID is refused](#wireless--pmf-on-the-iot-ssid-is-refused-not-pending).
+So a redaction can be the *entire available mitigation*. What the rule forbids is
+redacting **instead of** asking the question — not redacting after the answer
+comes back "nothing else is available".
 
 🔒 **`docs/local/` is untracked, not unbacked — and the difference matters.**
 Gitignored means *out of the public repo*, not *confined to this machine*: the
