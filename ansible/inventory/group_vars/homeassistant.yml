@@ -37,12 +37,40 @@ homeassistant_container_name: "home-assistant"
 homeassistant_config_dir: "/home/{{ ansible_user }}/homeassistant"
 
 # Internet Speed Monitoring
+#
+# ⚠️ The volume here is deliberately small, and the reason is a measured cost,
+# not tidiness. Saturating this host's link intermittently wedges its NIC:
+# twelve `bcmgenet ... NETDEV WATCHDOG: transmit queue 0 timed out` events
+# between 11 Aug and 5 Sep 2026, every one of them 1-6 minutes into a run of
+# this check. dockassist is the Home Assistant host, so that stall is the whole
+# house's automation going quiet. See docs/TODO.md item 18.
+#
+# Sizing: this check answers "is Odido still delivering ~900 Mbps?", and the
+# only action it can prompt is phoning the ISP. That is a monthly-scale
+# question; it was being sampled 20 times a day. 3 tests twice daily is 6.
+#
+# 🔴 3 is a FLOOR, not a preference — do not lower it to 2. internet_speed_monitor
+# exits 2 unless at least TWO tests succeed (it takes a median, and a median of
+# one sample rejects no outliers). At 2 configured tests a single transient
+# failure therefore takes the whole run to exit 2 and pages #home-alerts; at 3
+# there is one spare. Caught by tests/unit/speedtest_binary_test.sh case 5,
+# which exists to keep this number honest.
+internet_speed_tests: 3
+internet_speed_delay: 75
+
 enable_internet_speed_check: true
 internet_speed_min_download: 850
 internet_speed_min_upload: 850
 internet_speed_max_ping: 15
-internet_speed_tests: 5
-internet_speed_delay: 75
+
+# Pin the server rather than letting Ookla pick per run. Ookla selects relative
+# to the EGRESS, so once item 1d measures the Mullvad path too, an unpinned
+# test would choose relative to the VPN exit and the direct test relative to
+# Odido — comparing two different measurements and calling the difference "VPN
+# slowness". 52365 is Odido Amsterdam (speedtest.ams.t-mobile.nl), verified
+# 2026-09-05 as the top-ranked server this host already auto-selects, so the
+# existing history stays comparable.
+internet_speed_server_id: 52365
 
 # Platform
 # Nothing on this host uses Bluetooth: HA's adapter discovery is dismissed

@@ -55,6 +55,10 @@ internet_speed_min_upload: 150
 internet_speed_max_ping: 100
 internet_speed_tests: 3
 internet_speed_delay: 45
+# Empty = let Ookla pick per run. Set this on any host whose numbers must be
+# comparable with another host's, or across a VPN boundary — see the note in
+# group_vars/homeassistant.yml.
+internet_speed_server_id: ""
 
 # Person entities (override with your HA entity IDs)
 ha_primary_person: "person.primary"

@@ -64,6 +64,16 @@
         - enable_cobra_scripts | default(false)
       tags: [media, cobra]
 
+    # Not in the homeassistant role, even though dockassist is the only host
+    # measuring today: item 1d needs the same binary on a VLAN 40 host to
+    # measure the VPN path, and that host has a different primary_function.
+    # The toggle means "this host takes speed measurements"; the cron that
+    # actually schedules them stays with the role that owns the check.
+    - name: Install Ookla speedtest CLI
+      ansible.builtin.import_tasks: tasks/speedtest_cli.yml
+      when: enable_internet_speed_check | default(false)
+      tags: [monitoring, network, speedtest]
+
 - name: Deploy service roles
   hosts: all
   become: true
