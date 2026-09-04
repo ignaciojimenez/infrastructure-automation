@@ -30,6 +30,22 @@
     group: root
   tags: [monitoring, network, speedtest]
 
+# `deb822_repository` needs python3-debian to run under --check (it parses the
+# existing .sources to decide whether anything changed). Declared here as an
+# explicit prerequisite rather than via the module's `install_python_debian`
+# flag, because a dry run that installs a package as a side effect is not a dry
+# run. One package on dockassist; agent-lxc already had it.
+#
+# Without it `--check --diff` fails outright on this task — which is the same
+# trap as the dearmor-in-check-mode one below it, and matters for the same
+# reason: a dry run is what gets run before touching the Home Assistant host.
+- name: Ensure python3-debian is present for deb822 repository management
+  become: true
+  ansible.builtin.apt:
+    name: python3-debian
+    state: present
+  tags: [monitoring, network, speedtest]
+
 # Debian's speedtest-cli and Ookla's speedtest both ship /usr/bin/speedtest, so
 # apt would refuse the install with a file conflict even if we did not care
 # which one won. Purge before adding the repo, not after.
@@ -74,21 +90,53 @@
     mode: '0644'
   tags: [monitoring, network, speedtest]
 
+# `deb822_repository`, not `apt_repository`, for a reason found on the VLAN 40
+# container: `apt_repository` shells out to a `gpg` or `apt-key` BINARY and
+# fails outright when neither exists. That container is a minimal trixie LXC
+# with no gpg at all, and satisfying it would mean pulling 17 packages into a
+# host whose whole point is being small — to run a tool we do not need, because
+# the keyring above ships already dearmored. (apt itself verifies fine: it
+# carries its own /usr/lib/apt/methods/gpgv.) `deb822_repository` takes the
+# keyring by path and needs no gpg. It is also the module that is NOT deprecated
+# — `apt_repository` goes away in ansible-core 2.25.
+#
 # `{{ ansible_distribution_release }}` rather than a pinned codename: dockassist
-# is bookworm and the VLAN 40 container is trixie, and packagecloud serves both
+# is bookworm and the container is trixie, and packagecloud serves both
 # (verified 2026-09-05 against dists/<suite>/Release, with a bogus suite
 # returning 404 as the control, and `speedtest` present in main/binary-amd64
 # and main/binary-arm64 for trixie).
 - name: Add Ookla speedtest repository
   become: true
-  ansible.builtin.apt_repository:
-    repo: >-
-      deb [signed-by=/etc/apt/keyrings/ookla_speedtest-cli-archive-keyring.gpg]
-      https://packagecloud.io/ookla/speedtest-cli/debian/
-      {{ ansible_distribution_release }} main
-    filename: ookla_speedtest-cli
+  ansible.builtin.deb822_repository:
+    name: ookla_speedtest-cli
+    types: [deb]
+    uris: https://packagecloud.io/ookla/speedtest-cli/debian/
+    suites: "{{ ansible_distribution_release }}"
+    components: [main]
+    signed_by: /etc/apt/keyrings/ookla_speedtest-cli-archive-keyring.gpg
+    enabled: true
     state: present
+  register: ookla_repo
+  tags: [monitoring, network, speedtest]
+
+# dockassist carries a hand-made `.list` from when packagecloud's install script
+# was run on it by hand. deb822 writes a `.sources`, so leaving the old file
+# would make apt see this repo TWICE and warn on every update. Removing it is
+# also the actual point of item 1c: that file is the unmanaged drift, and it
+# additionally pulls a `deb-src` line nothing here builds from.
+- name: Remove the hand-made Ookla .list superseded by the .sources
+  become: true
+  ansible.builtin.file:
+    path: /etc/apt/sources.list.d/ookla_speedtest-cli.list
+    state: absent
+  register: ookla_legacy_list
+  tags: [monitoring, network, speedtest]
+
+- name: Refresh apt cache when the repository definition changed
+  become: true
+  ansible.builtin.apt:
     update_cache: true
+  when: ookla_repo.changed or ookla_legacy_list.changed
   tags: [monitoring, network, speedtest]
 
 - name: Install Ookla speedtest
