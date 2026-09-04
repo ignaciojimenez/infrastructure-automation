@@ -41,34 +41,34 @@
     purge: true
   tags: [monitoring, network, speedtest]
 
-- name: Download Ookla signing key (ASCII-armored)
-  become: true
-  ansible.builtin.get_url:
-    url: https://packagecloud.io/ookla/speedtest-cli/gpgkey
-    dest: /tmp/ookla_speedtest-cli.asc
-    force: true
-    mode: '0644'
-  tags: [monitoring, network, speedtest]
-
-# Dearmor to a temp path and then `copy` it into place, rather than dearmoring
-# straight to the keyring when the download reports `changed`. The download is
-# `force: true` so it reports changed on content, not on absence — which means
-# a keyring someone deleted would never be regenerated if the dearmor were
-# gated on it. Comparing the dearmored bytes is what makes this both correct
-# and idempotent.
-- name: Dearmor Ookla signing key
-  become: true
-  ansible.builtin.command:
-    cmd: gpg --yes --dearmor -o /tmp/ookla_speedtest-cli.gpg /tmp/ookla_speedtest-cli.asc
-  changed_when: false
-  tags: [monitoring, network, speedtest]
-
+# The keyring ships in this repo, dearmored, rather than being fetched and
+# converted at deploy time. Three reasons, in order of importance:
+#
+#   1. It PINS the key. Fetching it per-deploy trusts whatever packagecloud
+#      serves that day; a committed key is trust-on-first-use and any change to
+#      it is a reviewable diff instead of a silent swap.
+#   2. It works under `--check`. The fetch/dearmor/install shape this replaces
+#      could not: `command` is skipped in check mode, so the dearmored file
+#      never appeared and the install task hard-FAILED on a missing source —
+#      aborting the play, which meant everything after it (including the cron
+#      resize this branch exists for) was never evaluated at all. A task file
+#      that cannot survive a dry run makes `--check --diff` untrustworthy
+#      exactly where this repo relies on it.
+#   3. `get_url` needed `force: true` to be correct about content, which makes
+#      it report `changed` on EVERY run — the same defect as docs/TODO.md item
+#      34, which exists because the docker role does this and has therefore
+#      destroyed `changed=0` as a convergence signal for itself.
+#
+# Verified 2026-09-05: sha256 bb3abb9a374efff3e57de52ebc16b42b4076ac802f2c7cca30902b10888c65c0,
+# byte-identical to the keyring already live on dockassist, and to
+# `curl https://packagecloud.io/ookla/speedtest-cli/gpgkey | gpg --dearmor`.
+# Fingerprint C525 F88F CF3A 7E56 CE2C  F591 31EB 3981 E723 ACAA.
+# To rotate: re-run that pipeline, commit the new file, and the diff is the review.
 - name: Install Ookla signing keyring
   become: true
   ansible.builtin.copy:
-    src: /tmp/ookla_speedtest-cli.gpg
+    src: "{{ playbook_dir }}/files/ookla_speedtest-cli-archive-keyring.gpg"
     dest: /etc/apt/keyrings/ookla_speedtest-cli-archive-keyring.gpg
-    remote_src: true
     owner: root
     group: root
     mode: '0644'
