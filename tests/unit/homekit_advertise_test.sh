@@ -154,14 +154,14 @@ cat > "$FIX/avahi" <<'EOF'
 EOF
 
 out=$(run_check); rc=$?
-[ "$rc" -eq 0 ] && pass "exits 0" || fail "expected exit 0, got $rc"
+if [ "$rc" -eq 0 ]; then pass "exits 0"; else fail "expected exit 0, got $rc"; fi
 case "$out" in
     *"2 HomeKit bridge(s) advertising a routable address"*)
         pass "counts 2 bridges, deduping the IPv4/IPv6 row pair" ;;
     *)  fail "expected 2 deduped bridges; got: $out" ;;
 esac
 case "$out" in
-    *RemoteSpeaker*|*Remote\032Bridge*|*"Remote Bridge"*) fail "remote accessory treated as ours: $out" ;;
+    *RemoteSpeaker*|*'Remote\032Bridge'*|*"Remote Bridge"*) fail "remote accessory treated as ours: $out" ;;
     *)                pass "remote accessories on 62946 and 80 ignored — not our ports" ;;
 esac
 
@@ -186,8 +186,11 @@ cat > "$FIX/avahi" <<'EOF'
 EOF
 
 out=$(run_check); rc=$?
-[ "$rc" -eq 1 ] && pass "exits 1 — the outage is DETECTED" \
-                || fail "MISSED THE OUTAGE: expected exit 1, got $rc — $out"
+if [ "$rc" -eq 1 ]; then
+    pass "exits 1 — the outage is DETECTED"
+else
+    fail "MISSED THE OUTAGE: expected exit 1, got $rc — $out"
+fi
 case "$out" in
     *"3 HomeKit bridge(s) advertising an address this host does not hold"*)
         pass "names all three bridges" ;;
@@ -233,8 +236,11 @@ rm -f "$FIX/ip_addr_docker0"
 : > "$FIX/avahi"
 
 out=$(run_check); rc=$?
-[ "$rc" -eq 0 ] && pass "exits 0 — multicast luck does not page" \
-                || fail "expected exit 0 on empty browse, got $rc"
+if [ "$rc" -eq 0 ]; then
+    pass "exits 0 — multicast luck does not page"
+else
+    fail "expected exit 0 on empty browse, got $rc"
+fi
 case "$out" in
     *"no _hap._tcp records found"*) pass "says so in the log" ;;
     *) fail "empty browse not reported: $out" ;;
@@ -244,8 +250,11 @@ esac
 printf '\n5. avahi-daemon down is a hard fault\n'
 # ==================================================================
 out=$(SYSTEMCTL_RC=3 run_check); rc=$?
-[ "$rc" -eq 1 ] && pass "exits 1 when avahi-daemon is inactive" \
-                || fail "expected exit 1, got $rc"
+if [ "$rc" -eq 1 ]; then
+    pass "exits 1 when avahi-daemon is inactive"
+else
+    fail "expected exit 1, got $rc"
+fi
 
 # ==================================================================
 printf '\n6. no routable address at all is a fault, not a pass\n'
@@ -254,8 +263,11 @@ cat > "$FIX/ip_link" <<'EOF'
 1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen 1000\    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
 EOF
 out=$(run_check); rc=$?
-[ "$rc" -eq 1 ] && pass "exits 1 rather than silently passing" \
-                || fail "expected exit 1, got $rc"
+if [ "$rc" -eq 1 ]; then
+    pass "exits 1 rather than silently passing"
+else
+    fail "expected exit 1, got $rc"
+fi
 
 # ==================================================================
 printf '\n7. a stale record that clears on recheck must NOT page\n'
@@ -274,8 +286,11 @@ cat > "$FIX/avahi" <<'EOF'
 EOF
 
 out=$(run_check); rc=$?
-[ "$rc" -eq 0 ] && pass "exits 0 — transient absorbed" \
-                || fail "restart window paged: expected 0, got $rc — $out"
+if [ "$rc" -eq 0 ]; then
+    pass "exits 0 — transient absorbed"
+else
+    fail "restart window paged: expected 0, got $rc — $out"
+fi
 case "$out" in
     *"settled after"*) pass "says it settled, so the absorption is visible" ;;
     *) fail "absorbed silently — no 'settled after' note: $out" ;;
@@ -296,8 +311,11 @@ cat > "$FIX/avahi" <<'EOF'
 EOF
 
 out=$(run_check); rc=$?
-[ "$rc" -eq 1 ] && pass "exits 1 — retry did not launder the fault" \
-                || fail "PERSISTENT FAULT SWALLOWED BY RETRY: got $rc — $out"
+if [ "$rc" -eq 1 ]; then
+    pass "exits 1 — retry did not launder the fault"
+else
+    fail "PERSISTENT FAULT SWALLOWED BY RETRY: got $rc — $out"
+fi
 case "$out" in
     *"checks over"*) pass "message states it survived the recheck window" ;;
     *) fail "no recheck window in message: $out" ;;
