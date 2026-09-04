@@ -140,8 +140,11 @@ is gone — but only by accident, and one `apt install speedtest-cli` restores
 it. The underlying faults (nothing installs the binary; the script accepted
 any `speedtest` on PATH) were both real and are what got fixed.
 
-*State:* **fixed 2026-09-05, awaiting deploy** on branch
-`feat/speedtest-sizing-and-ookla-install`. `playbooks/tasks/speedtest_cli.yml`
+*State:* ✅ **DEPLOYED AND VERIFIED 2026-09-05** on both dockassist and
+agent-lxc — `changed=0` on re-run for each, and `apt-get update` on dockassist
+reports a clean `Hit: ... ookla/speedtest-cli/debian bookworm InRelease` with no
+`W:`/`E:`/`NO_PUBKEY` lines. The hand-made `.list` is gone; a managed
+`.sources` replaces it. Left open only until item 18's stall count is read. `playbooks/tasks/speedtest_cli.yml`
 purges Debian's package, installs Ookla's from packagecloud, and asserts
 `speedtest --version` reports Ookla; `internet_speed_monitor` **re-asserts that
 at every run**, because an install-time guarantee does not survive someone
@@ -231,12 +234,14 @@ this check was doing before**. Adding the VPN path is no longer a doubling.
 `feat/speedtest-sizing-and-ookla-install` — the Ookla install task exists and
 `internet_speed_monitor` now takes `--server-id` (unit-tested: the flag reaches
 the binary, and an unset one passes no argument at all rather than an empty
-`--server-id=` that Ookla rejects). `enable_internet_speed_check` is set on
-agent-lxc so the binary installs there — **binary only, no cron, no traffic**.
-🔴 **Steps 3 and 4 are deliberately NOT built.** The saturation validation has
-to be run by hand first, and the last attempt at it failed against the wrong
-binary. *Effort:* small once validated. *Needs:* the deploy, then the
-validation run.
+`--server-id=` that Ookla rejects). ✅ **The binary is now LIVE on agent-lxc**
+(Ookla 1.2.0.84, trixie/x86_64, deployed 2026-09-05) — **binary only, no cron,
+no traffic**, and `changed=0` on a second run. **Step 3 is therefore unblocked
+and is the next action**, where it was previously waiting on a deploy.
+🔴 **Steps 3 and 4 are still deliberately NOT built.** The saturation run has
+to happen by hand and be read before anything is built on it; the last attempt
+failed against the wrong binary, which is now impossible.
+*Effort:* small once validated. *Needs:* one command, then a decision.
 
 ```
 Finish VPN-vs-direct speed monitoring. Read TODO items 1d AND 18 first. Steps 1
@@ -503,9 +508,12 @@ dockassist's crontab runs at :07. `check_ha_entities` already runs `2-59/15`
 for exactly this reason, and commit `39afd8c` was literally *"move off the :00
 boundary"* — the lesson was learned once and never applied here.
 
-*State:* **fix applied 2026-09-05, awaiting verification** on branch
-`feat/speedtest-sizing-and-ookla-install` — `--tests=5` every 6h (20 saturation
-runs/day) → `--tests=3` at 03:07 and 15:07 (6/day), server pinned. **The
+*State:* ✅ **DEPLOYED 2026-09-05, awaiting the stall count.** Live on
+dockassist and verified in its crontab: `7 3,15 * * *`, `--tests=3`,
+`--server-id=52365`. `--tests=5` every 6h (20 saturation runs/day) →
+`--tests=3` twice daily (6/day). 📌 **First scheduled run is 03:07.** One
+manual saturation test on 2026-09-05 at ~00:58 produced **no** stall, which is
+consistent with the volume hypothesis but is n=1 and proves nothing on its own. **The
 reduction is the experiment**: if the stalls stop, load was the cause and the
 schedule is also the fix; if they continue at 6 runs/day, the load hypothesis
 is wrong. Either outcome is a result, which is why no `ethtool -K` workaround
@@ -650,12 +658,15 @@ document the two-command re-key. Operator reference: docs/AGENT_LXC.md.
 One branch, tick them off. Phone-taggable lines marked 📱.
 
 - `ansible.builtin.apt_repository` is deprecated and goes away in ansible-core
-  2.25 (we run 2.21.3). Four call sites: `services/docker`,
-  `services/audio_playback`, `services/plex`, `playbooks/tasks/speedtest_cli.yml`.
-  ⚠️ Migrate all four together or not at all — `deb822_repository` writes
-  `.sources`, not `.list`, so a half-migration leaves the old `.list` in place
-  and apt then sees the repo twice. Not urgent; noted 2026-09-05 so it is not
-  rediscovered as a surprise at upgrade time.
+  2.25 (we run 2.21.3). **Three call sites left**: `services/docker`,
+  `services/audio_playback`, `services/plex`.
+  ✅ `playbooks/tasks/speedtest_cli.yml` was migrated to `deb822_repository` on
+  2026-09-05 and **is the worked example** — it also documents the two traps:
+  the old `.list` must be explicitly removed or apt sees the repo twice, and
+  `python3-debian` must be installed or `--check` fails on the task.
+  📌 There is a second, better reason than the deprecation: `apt_repository`
+  requires a `gpg` binary on the target and **fails outright without one**, which
+  is what it did on agent-lxc. Any minimal host added to the fleet hits this.
 
 - `CLAUDE.md` still says `deploy_monitoring.yml` deploys "monitoring scripts to
   all hosts" — it syncs only `scripts/common/`. That wording is what hid the
