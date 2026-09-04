@@ -7,3 +7,7 @@
 docker_key_url: "https://download.docker.com/linux/raspbian/gpg"
 docker_key_file: "/usr/share/keyrings/docker.asc"
 docker_distro_url: "https://download.docker.com/linux/debian"
+
+# Contents of /etc/docker/daemon.json, rendered as JSON. Empty means the file
+# is not managed and Docker keeps its stock configuration.
+docker_daemon_options: {}

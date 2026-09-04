@@ -10,6 +10,20 @@ enable_homeassistant: true
 # to ensure they correctly override role defaults (precedence 1). If defined here via
 # include_vars they would take precedence 17 and override main.yml (precedence 3).
 
+# Docker daemon
+# Every container on this host runs network_mode: host, so Docker's default
+# bridge (docker0, 172.17.0.1) carries no traffic. Leaving it in place is not
+# merely idle. On 2026-09-01 the host rebooted, NetworkManager reported
+# "startup complete" while eth0 was still carrier-down, network-online.target
+# fired, Docker started, and Home Assistant came up 19 seconds before eth0's
+# DHCP lease arrived. 172.17.0.1 was the only IPv4 on the box, so HA published
+# its three HomeKit bridges at that address and Apple Home lost every accessory
+# until the container was restarted two days later. bridge=none deletes the
+# address so the race has nothing wrong to latch onto. User-defined bridge
+# networks are unaffected; only the default one is suppressed.
+docker_daemon_options:
+  bridge: "none"
+
 # Hardware (auto-skipped on test environments)
 disable_modemmanager: true
 
