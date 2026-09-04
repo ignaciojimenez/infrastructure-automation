@@ -17,6 +17,7 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ## Contents
 
+- [2026-09-04 — Apple Home was dead for two days behind seven green checks](#2026-09-04--apple-home-was-dead-for-two-days-behind-seven-green-checks)
 - [2026-09-02 — three findings that were never tasks, parked with their reopen conditions](#2026-09-02--three-findings-that-were-never-tasks-parked-with-their-reopen-conditions)
 - [2026-09-01 — vinylstreamer's wifi lockout: every software layer excluded, and parked](#2026-09-01--vinylstreamers-wifi-lockout-every-software-layer-excluded-and-parked)
 - [2026-09-01 — the health check that pages the whole fleet on the 1st of every month](#2026-09-01--the-health-check-that-pages-the-whole-fleet-on-the-1st-of-every-month)
@@ -85,6 +86,134 @@ was "redaction is not remediation, PMF is the real fix." With PMF ruled out,
 redaction turns out to be the *entire* available mitigation — it narrows remote
 recon and nothing narrows the weakness. Worth stating plainly rather than leaving
 the earlier, more optimistic framing standing.
+
+## 2026-09-04 — Apple Home was dead for two days behind seven green checks
+
+**Decided: delete the wrong answer rather than narrow the race, and add the
+first check on this host that looks at what Home Assistant *publishes* rather
+than whether it is alive.**
+
+### What happened
+
+dockassist rebooted 2026-09-01 19:17. Apple Home showed every accessory as
+"No Response" until Ignacio reported it on 09-03 and the container was
+restarted. The boot journal has the whole thing:
+
+| Time | Event |
+|---|---|
+| 19:22:58.58 | NetworkManager declares `startup complete` — **eth0 still carrier-down** |
+| 19:22:58.59 | `network-online.target` reached; `NetworkManager-wait-online` finishes |
+| 19:23:02.71 | eth0 carrier comes up, DHCP transaction begins |
+| 19:23:05.72 | `docker.service` starts → HA container starts |
+| 19:23:37.39 | HA zeroconf: `Error with socket 16 (('172.17.0.1', 5353)): Network unreachable` ← **binds here** |
+| 19:23:47.85 | eth0 DHCP **fails** (`ip-config-unavailable`), retries |
+| 19:23:56.58 | eth0 gets 10.30.100.100 — **19 seconds too late** |
+
+At 19:23:37 the only IPv4 on the box was docker0's 172.17.0.1, so HA published
+all three HomeKit bridges there. Nothing re-bound them. docker0 was later
+brought DOWN, leaving the bridges advertising a dead address for two days:
+
+```
+$ avahi-resolve -n <ha-homekit-id>-hap.local
+<ha-homekit-id>-hap.local	172.17.0.1
+```
+
+*(the HomeKit instance id is redacted per the disclosure rule — it identifies
+this install and adds nothing to the finding; the finding is the address.)*
+
+🔴 **`network-online.target` is a lie on this host.** `NetworkManager-wait-online`
+is enabled and did run — NM considers a carrier-down device settled and reports
+startup complete anyway. Do not reach for it as a boot-ordering guarantee here.
+
+### The fix, and why it is not the obvious one
+
+**Chose: `{"bridge": "none"}` in `/etc/docker/daemon.json`, not tighter boot
+ordering.** Every container on dockassist runs `network_mode: host`, so the
+default bridge carried no traffic and existed only to be picked by mistake.
+Ordering fixes narrow a race; deleting the address removes the wrong answer
+from the set. Verified after apply: docker0 gone, 172.17.0.1 absent from the
+host, all four containers healthy, pairings intact (same accessory IDs, `sf=0`).
+
+`daemon.json` renders from `docker_daemon_options`, defaulting to `{}` so the
+file stays unmanaged for any other host that ever enables the role. Only the
+`homeassistant` group opts in, where all four containers are verified
+host-networked. **User-defined bridge networks are unaffected — only the
+default one is suppressed.**
+
+### Why nothing caught it — the part worth keeping
+
+**Seven checks run on dockassist and all seven were green for the full two
+days:** Docker daemon up, container up, `curl http://localhost:8123` answering,
+entities valid, trackers fresh, NIC fine, HA heartbeat flowing.
+
+📌 **They were not broken. They were all pointed inward.** Every one asks "is
+Home Assistant alive, as seen from the machine Home Assistant runs on?" The
+failure was entirely in what HA publishes to the rest of the house, so the
+suite was structurally blind to it. **The only detector in the loop was a human
+opening the Home app.**
+
+⚠️ **`check_avahi.sh` is the cautionary case.** It already existed (on the audio
+hosts) and asserts `systemctl is-active avahi-daemon`. Throughout the outage
+avahi was running perfectly, faithfully publishing the wrong address. **A
+liveness check on the component that is misbehaving correctly is worth nothing.**
+
+### The check that closes it
+
+`check_homekit_advertise.sh`, `*/15` on dockassist. One invariant:
+
+> Every `_hap._tcp` record advertising a TCP port this host is listening on must
+> resolve to an address this host currently holds on an interface whose
+> operstate is up.
+
+**Two local facts compared against each other — deliberately no ping, no TCP
+connect, no probe of anything remote.** That is the `wifi_reconnect.sh` lesson
+applied: a check whose healthy path depends on something answering is a check
+that invents outages.
+
+🔴 **The detail the whole thing turns on: operstate, not `IFF_UP`.** A bridge
+with no members reports `<NO-CARRIER,BROADCAST,MULTICAST,UP> ... state DOWN` —
+the flag is set, the link is dead. `ip link show up`, `ip addr show up` and
+plain `ip addr show scope global` all include it, so **any of them as the truth
+set would have called the Sep 1 state healthy** and the check would have been
+green through the exact outage it exists for. Only the `state UP` field
+separates a live interface from a carcass that still owns an address.
+
+⚠️ **Second trap, found only by capturing real output:** `avahi-browse -rpt`
+rows marked `IPv6` carry the **IPv4** address. The protocol column is the browse
+family, not the address family. A parser written from the field names is wrong.
+
+**Absence is reported, not paged.** "HA is advertising nothing" needs a measured
+baseline before it earns a threshold — the same discipline that made
+`check_presence_health.sh` measure 7 days before picking 18 h. A 15-second
+multicast browse can legitimately come back empty; guessing here buys a check
+that pages on luck. **Reopen if HA is ever found silently not advertising and
+nothing caught it** — that is the event, not a number.
+
+**Recheck is bounded and only applies when the check already looks bad**,
+mirroring `check_services`. A just-restarted bridge can be represented by its
+pre-restart record for one sample. A bridge still wrong after 3 checks over 30 s
+fails exactly as it would have on the first — retry must not become a way of
+never reporting.
+
+### How it was verified
+
+- 17 assertions in `tests/unit/homekit_advertise_test.sh`, under `sh` and `dash`;
+  full unit suite 13/13.
+- **Healthy path run by hand on dockassist before it was given a cron** — 3
+  bridges green, HomePod and Tado bridge correctly ignored as not-ours.
+- **Failure forced on the host against real avahi**: `avahi-publish -a -R
+  fake-hap.local 172.17.0.1` plus a `_hap._tcp` service on port 8123 (a port the
+  host listens on, so the record counts as ours). The check fired, named the
+  record, survived the full 30 s recheck window, and went green the moment the
+  fake was withdrawn.
+
+📌 **Not verified: behaviour across a real reboot.** The mechanism is
+deterministic — an address that does not exist cannot be chosen — but the boot
+path itself is untested. The next reboot of dockassist for any reason is the
+confirmation.
+
+🐛 **Also fixed in passing:** `avahi-utils` was hand-installed on dockassist and
+is now declared in the role. Same undeclared-dependency shape as TODO item 1c.
 
 ## 2026-09-02 — three findings that were never tasks, parked with their reopen conditions
 
