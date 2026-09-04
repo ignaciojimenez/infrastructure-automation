@@ -3,7 +3,7 @@
 **Improvements and fixes waiting to be worked on.** Start at *What to work on
 next*; the first item you can act on is the right one.
 
-Updated: 2026-09-02
+Updated: 2026-09-04
 
 | Where a thing lives | |
 |---|---|
@@ -59,9 +59,10 @@ renders it:
 > **№1** 18 *(active fault, and it gates 1d)* → **№2** 1c → **№3** 1d *(only
 > after 18)* → **№4** 2 → **№5** 4 (plex) → **№6** 9 → **№7** 3a/3b/3c →
 > **№8** 5 → **№9** 19 → **№10** 12 → **№11** 22 → **№12** 10 → **№13** 11 →
-> **№14** 6 → **№15** 7 → **№16–19** 8/13/14/16 · **№20** 32 *(git-history
-> rewrite — decision only, default is no)* · **№21** 26 *(one UI toggle,
-> global — his call)*
+> **№14** 6 → **№15** 7 → **№16** 34 *(small; restores `changed=0` as a
+> signal for the docker role)* → **№17–20** 8/13/14/16 · **№21** 32
+> *(git-history rewrite — decision only, default is no)* · **№22** 26 *(one UI
+> toggle, global — his call)*
 > *(decision-gated — 16 needs a purchase call, 32 needs his call on a public
 > force-push, the rest need him at the cabinet; not ranked)*
 
@@ -713,6 +714,43 @@ Verify by FORCING both branches as read_agent over SSH, not as choco:
     -> must still work unchanged
 Then grep the .gz for a string you KNOW is in it and confirm a non-zero count —
 a reworded helper that was never grepped has not been tested.
+```
+
+**34. The docker role reports `changed` on every run, so `changed=0` cannot be trusted for it**
+`Download Docker GPG key` uses `force: true`, so `get_url` re-fetches and
+reports `changed` every single run, which then drags `Add Docker repository`
+along with it. A `--tags docker` run on a fully-converged dockassist shows
+`changed=2` before any real change is made.
+
+🐛 **Why this is more than cosmetic:** `changed=0` on a second run is the only
+convergence signal this fleet has — "merged" is not a state it possesses. A
+role that can never report it removes that signal exactly where Docker config
+now lives (`docker_daemon_options`, added 2026-09-04). Any future session
+verifying a Docker change has to eyeball task names instead of trusting the
+recap.
+
+*State:* observed 2026-09-04 while shipping the daemon.json change; not
+investigated further. *Effort:* small. *Needs:* a laptop (Ansible deploy).
+
+```
+Make the docker role idempotent so `changed=0` means something. Read
+docs/TODO.md item 34 — the two offending tasks are named there, do not
+re-derive them.
+
+In roles/services/docker/tasks/main.yml, `Download Docker GPG key` has
+force: true. Establish FIRST whether it is load-bearing (git log / blame the
+line — it may have been added to recover from a corrupted key) before removing
+it. If it can go, prefer a checksum or a creates-style guard over deleting the
+force outright, so a genuinely changed upstream key is still picked up.
+
+🔴 Verify the way this repo verifies idempotency, not by reading the diff:
+run the role twice back-to-back and require changed=0 on the SECOND run —
+and note that fact caching freezes ansible_date_time for an hour, so
+back-to-back runs are NOT proof on their own for tasks that template a
+timestamp. These two tasks do not, so they are a fair test.
+
+Do not touch the daemon.json task while here; it is verified working and
+its `when` guard is deliberate.
 ```
 
 ### 🧊 Blocked on Ignacio, not on work

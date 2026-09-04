@@ -10,6 +10,11 @@
     name:
       - apparmor-utils
       - avahi-daemon
+      # avahi-browse, used by check_homekit_advertise.sh. It was already on
+      # dockassist by hand — the same undeclared-dependency shape as TODO item
+      # 1c, where internet_speed_monitor's `speedtest` is hand-installed and a
+      # rebuild would leave the check exiting quietly instead of alerting.
+      - avahi-utils
       - dbus
       - jq
       - network-manager
@@ -256,6 +261,7 @@
     - check_container.sh
     - docker_prune.sh
     - check_nic_stalls.sh
+    - check_homekit_advertise.sh
   tags: [homeassistant, monitoring]
 
 - name: Deploy Home Assistant templated monitor scripts
@@ -402,6 +408,33 @@
       {{ alert_token }}
       {{ scripts_dir }}/check_presence_health.sh
       >> {{ logs_dir }}/presence_health_check.log 2>&1
+    user: "{{ ansible_user }}"
+  when:
+    - logging_token is defined and logging_token != ''
+    - alert_token is defined and alert_token != ''
+  tags: [homeassistant, monitoring, cron]
+
+# Every other check on this host is inward-facing — container up, localhost:8123
+# answering, entities valid. All seven were green for the two days Apple Home
+# was dead (2026-09-01). This is the only one that looks at what HA PUBLISHES.
+#
+# */15, not */10: the fault it catches is persistent — HA does not re-bind on
+# its own, so the Sep 1 outage would have run until someone restarted the
+# container either way. A tighter interval buys no earlier remedy, only more
+# 15-second multicast browses.
+- name: Configure HomeKit advertisement check cron job
+  ansible.builtin.cron:
+    name: "HomeKit advertisement check"
+    minute: "*/15"
+    job: >
+      {{ scripts_dir }}/enhanced_monitoring_wrapper
+      --heartbeat-interval=daily
+      --notify-fixed=true
+      --monitoring-name=homekit_advertise
+      {{ logging_token }}
+      {{ alert_token }}
+      {{ scripts_dir }}/check_homekit_advertise.sh
+      >> {{ logs_dir }}/homekit_advertise_check.log 2>&1
     user: "{{ ansible_user }}"
   when:
     - logging_token is defined and logging_token != ''
