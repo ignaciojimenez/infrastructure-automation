@@ -66,41 +66,39 @@ renders it:
 > *(decision-gated — 16 needs a purchase call, 32 needs his call on a public
 > force-push, the rest need him at the cabinet; not ranked)*
 
-⚠️ **Item 22 — fixed and proved, but rolled out to ONE host.** `agent_read` now
-decompresses rotated logs and **refuses loudly** when it cannot, rather than
-emitting bytes a `grep` reads as "nothing found". Proved on dockassist: a `.gz`
-that returned 0 matches now returns **8**. It was found because it broke *this*
-work — the first plan for the ratio data was to read it back out of rotated
-logs.
+✅ **Item 22 CLOSED 2026-09-05, fleet-wide and verified per host.**
+`agent_read` decompresses rotated logs and **refuses loudly** when it cannot,
+rather than emitting bytes a `grep` reads as "nothing found". Deployed to all
+seven Debian hosts; `changed=0` on a second run of each.
 
-🔴 **It is NOT closed: six hosts still run the old helper**, verified
-2026-09-05 by probing each one rather than assuming:
+**Forced on every host, not inferred from the recap** — each was asked for a
+real `.gz` and checked for gzip magic in the first two bytes:
 
-| Host | `agent_read` | rotated `.gz` behind it | decompressor |
-|---|---|---|---|
-| dockassist | ✅ fixed | 95 | zcat, gunzip |
-| cobra | old | 60 | zcat, gunzip |
-| cwwk | old | 60 | zcat, gunzip |
-| hifipi | old | 41 | zcat, gunzip |
-| vinylstreamer | old | 36 | zcat, gunzip |
-| unifi | old | 24 | zcat, gunzip |
-| agent-lxc | old | 18 | zcat |
-| opnsense | **never had it** | — | n/a |
+| Host | file tested | result |
+|---|---|---|
+| dockassist | `clean_old_backups.log.2.gz` | decompressed, 15 timestamped lines |
+| cobra | `clean_old_torrents.log.2.gz` | decompressed, 18 |
+| cwwk | `proxmox_config_backup.log.2.gz` | decompressed, 46 |
+| hifipi | `audio_output_check.log.2.gz` | decompressed, 14 |
+| vinylstreamer | `detect_audio.log.2.gz` | decompressed, 418 content matches |
+| unifi-lxc | `check_unifi_service.log.2.gz` | decompressed, 1312 |
+| agent-lxc | `fleet_health_check.log.2.gz` | decompressed, 267 |
 
-**239 rotated logs across those six are unreadable through the agent path**, and
-each one answers `0 matches` to any search rather than admitting it cannot be
-read. `zcat` is present everywhere, so the fix needs no new dependency.
-
-📌 **opnsense is not a gap and never was.** The deploy task is
+📌 **opnsense was never affected** — the deploy task is
 `when: os_family == "debian"` (`roles/agent_access/tasks/main.yml:142`), so the
-helper has never existed there — an earlier note in this session worried about
-the FreeBSD path and that worry was unfounded.
+helper has never existed there.
 
-*Next:* `ansible-playbook ansible/playbooks/system/agent_access.yml --limit
-dockassist,cobra,cwwk,hifipi,vinylstreamer,unifi,agent-lxc --tags agent_access`
-— ⚠️ **`--check --diff` first.** Running this on dockassist surfaced item 19's
-helper as undeployed for 12 days; the other six have converged even less
-recently, so expect unrelated drift and read it before applying.
+⚠️ **Two traps in the verification itself, both worth remembering.**
+`--tags agent_access` filtered out **all 15 of the role's tasks** — the tag is on
+the `include_role`, and inner tasks do not inherit it, so the run reported
+`ok=2 changed=0` and looked like clean convergence while doing nothing. And
+`--limit unifi` matched **no host at all**: the inventory key is `unifi-lxc`
+(`unifi` is only its `ansible_host`), so it was silently absent from the recap
+rather than erroring. Both produced a *green* result that meant nothing.
+
+📌 A first verification pass also called 6 of 7 hosts "STILL BINARY" — the test
+was wrong, not the fix: these logs carry ANSI colour codes, and `ESC` is not in
+`[:print:]`. **Check for gzip magic, not for "looks like text".**
 
 🔀 **18, 1c and 1d stopped being three items on 2026-09-05.** They were always
 one cron line — each of their prompts opened by telling you to read the other
