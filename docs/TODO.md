@@ -66,11 +66,41 @@ renders it:
 > *(decision-gated — 16 needs a purchase call, 32 needs his call on a public
 > force-push, the rest need him at the cabinet; not ranked)*
 
-✅ **Item 22 closed 2026-09-05** — `agent_read` now decompresses rotated logs,
-and **refuses loudly** when it cannot rather than emitting bytes a `grep` reads
-as "nothing found". Proved on dockassist: a `.gz` that returned 0 matches now
-returns **8**. It was found because it broke *this* work — the first plan for
-the ratio data was to read it back out of rotated logs.
+⚠️ **Item 22 — fixed and proved, but rolled out to ONE host.** `agent_read` now
+decompresses rotated logs and **refuses loudly** when it cannot, rather than
+emitting bytes a `grep` reads as "nothing found". Proved on dockassist: a `.gz`
+that returned 0 matches now returns **8**. It was found because it broke *this*
+work — the first plan for the ratio data was to read it back out of rotated
+logs.
+
+🔴 **It is NOT closed: six hosts still run the old helper**, verified
+2026-09-05 by probing each one rather than assuming:
+
+| Host | `agent_read` | rotated `.gz` behind it | decompressor |
+|---|---|---|---|
+| dockassist | ✅ fixed | 95 | zcat, gunzip |
+| cobra | old | 60 | zcat, gunzip |
+| cwwk | old | 60 | zcat, gunzip |
+| hifipi | old | 41 | zcat, gunzip |
+| vinylstreamer | old | 36 | zcat, gunzip |
+| unifi | old | 24 | zcat, gunzip |
+| agent-lxc | old | 18 | zcat |
+| opnsense | **never had it** | — | n/a |
+
+**239 rotated logs across those six are unreadable through the agent path**, and
+each one answers `0 matches` to any search rather than admitting it cannot be
+read. `zcat` is present everywhere, so the fix needs no new dependency.
+
+📌 **opnsense is not a gap and never was.** The deploy task is
+`when: os_family == "debian"` (`roles/agent_access/tasks/main.yml:142`), so the
+helper has never existed there — an earlier note in this session worried about
+the FreeBSD path and that worry was unfounded.
+
+*Next:* `ansible-playbook ansible/playbooks/system/agent_access.yml --limit
+dockassist,cobra,cwwk,hifipi,vinylstreamer,unifi,agent-lxc --tags agent_access`
+— ⚠️ **`--check --diff` first.** Running this on dockassist surfaced item 19's
+helper as undeployed for 12 days; the other six have converged even less
+recently, so expect unrelated drift and read it before applying.
 
 🔀 **18, 1c and 1d stopped being three items on 2026-09-05.** They were always
 one cron line — each of their prompts opened by telling you to read the other
