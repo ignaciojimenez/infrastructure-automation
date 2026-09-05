@@ -56,8 +56,8 @@ here is something to read past, every time, forever. The write-up goes to
 (numbers never move), but the order to work them is this, and the dashboard
 renders it:
 
-> **№1** 18 + 1c + 1d *(**one branch, one deploy** —
-> `feat/speedtest-sizing-and-ookla-install`; see below)* → **№2** 2 →
+> **№1** 18 + 1d *(**deployed; both waiting on a reading** —
+> see below)* → **№2** 2 →
 > **№3** 4 (plex) → **№4** 9 → **№5** 3a/3b/3c → **№6** 5 → **№7** 19 →
 > **№8** 12 → **№9** 10 → **№10** 11 → **№11** 6 → **№12** 7 →
 > **№13** 34 *(small; restores `changed=0` as a signal for the docker role)* →
@@ -66,46 +66,13 @@ renders it:
 > *(decision-gated — 16 needs a purchase call, 32 needs his call on a public
 > force-push, the rest need him at the cabinet; not ranked)*
 
-✅ **Item 22 CLOSED 2026-09-05, fleet-wide and verified per host.**
-`agent_read` decompresses rotated logs and **refuses loudly** when it cannot,
-rather than emitting bytes a `grep` reads as "nothing found". Deployed to all
-seven Debian hosts; `changed=0` on a second run of each.
-
-**Forced on every host, not inferred from the recap** — each was asked for a
-real `.gz` and checked for gzip magic in the first two bytes:
-
-| Host | file tested | result |
-|---|---|---|
-| dockassist | `clean_old_backups.log.2.gz` | decompressed, 15 timestamped lines |
-| cobra | `clean_old_torrents.log.2.gz` | decompressed, 18 |
-| cwwk | `proxmox_config_backup.log.2.gz` | decompressed, 46 |
-| hifipi | `audio_output_check.log.2.gz` | decompressed, 14 |
-| vinylstreamer | `detect_audio.log.2.gz` | decompressed, 418 content matches |
-| unifi-lxc | `check_unifi_service.log.2.gz` | decompressed, 1312 |
-| agent-lxc | `fleet_health_check.log.2.gz` | decompressed, 267 |
-
-📌 **opnsense was never affected** — the deploy task is
-`when: os_family == "debian"` (`roles/agent_access/tasks/main.yml:142`), so the
-helper has never existed there.
-
-⚠️ **Two traps in the verification itself, both worth remembering.**
-`--tags agent_access` filtered out **all 15 of the role's tasks** — the tag is on
-the `include_role`, and inner tasks do not inherit it, so the run reported
-`ok=2 changed=0` and looked like clean convergence while doing nothing. And
-`--limit unifi` matched **no host at all**: the inventory key is `unifi-lxc`
-(`unifi` is only its `ansible_host`), so it was silently absent from the recap
-rather than erroring. Both produced a *green* result that meant nothing.
-
-📌 A first verification pass also called 6 of 7 hosts "STILL BINARY" — the test
-was wrong, not the fix: these logs carry ANSI colour codes, and `ESC` is not in
-`[:print:]`. **Check for gzip magic, not for "looks like text".**
-
-🔀 **18, 1c and 1d stopped being three items on 2026-09-05.** They were always
-one cron line — each of their prompts opened by telling you to read the other
-two — so they were built as one branch. What is left is a **deploy**, not three
-pickups: `services.yml --limit dockassist --tags speedtest,cron,network`, then
-the agent-lxc validation run that gates 1d's remaining half. They stay listed
-separately because their numbers are addresses used elsewhere.
+🔀 **18, 1c and 1d were one cron line, and were worked as one branch on
+2026-09-05.** 📌 **1c and 22 are closed and their sections are gone** — the
+numbers remain valid addresses, and the write-ups are in
+[archive/DONE.md](archive/DONE.md#2026-09-05--the-speedtest-that-measured-too-much-and-three-false-greens). 18 and 1d stay listed because each is
+waiting on a *reading*, not on work — see their entries for the dates. Numbers
+stay as addresses; the write-up is in
+[archive/DONE.md](archive/DONE.md#2026-09-05--the-speedtest-that-measured-too-much-and-three-false-greens).
 
 **31 was discarded on 2026-09-02, not deferred.** Ignacio tested it: the IoT
 devices cannot associate with PMF enabled, so raising it is not a fix that was
@@ -124,14 +91,6 @@ with their exclusions and a reopen condition, not queue entries. 🔴 **None of
 them can be settled by measuring how often they fail** — the action is the same
 at any rate, which is what made them notes rather than tasks. Reopen on a
 complaint, not on a number.
-
-**18 held the top slot** because it was the only thing actively recurring, and
-because it inverted the obvious order: 1d doubles the saturation runs, so doing
-it before 18 would knowingly have made the active fault worse. **That ordering
-did its job** — the volume question was answered first (2026-09-05), and 1d's
-budget was then set from the answer instead of against it. The fault is now at
-twelve events and still live; what is pending is the deploy and roughly a week
-of watching, not a decision.
 
 **32 sits near the bottom on purpose.** It descends from item 24, closed
 2026-08-30, whose disclosure policy is now
@@ -155,61 +114,6 @@ close would silently repoint them. Numbers are addresses, not ranks — the
 headings say what is urgent.
 
 ### 🟠 P2 — known risk, not currently biting
-
-**1c. The speedtest dependency is hand-installed, and two hosts run different tools under the same name**
-`internet_speed_monitor` needs Ookla's `speedtest`, and **nothing in this repo
-installs it.** It was put on dockassist by hand. Rebuild that host and the monitor
-exits 2 with "Speedtest command failed or not available" — the check goes quiet
-without ever alerting.
-
-🐛 **Worse than missing: it is ambiguous.** `speedtest` resolves to a *different
-program* on each host — Ookla 1.2.0.84 on dockassist, Debian's Python
-`speedtest-cli` 2.1.3 on agent-lxc (the `speedtest-cli` package ships
-`/usr/bin/speedtest` too). Both print plausible Mbps. Any script calling
-`speedtest` gets a different methodology depending where it lands.
-
-📌 **Re-checked 2026-09-05: agent-lxc now has *neither*.** The container was
-rebuilt at some point and `speedtest-cli` went with it, so the live divergence
-is gone — but only by accident, and one `apt install speedtest-cli` restores
-it. The underlying faults (nothing installs the binary; the script accepted
-any `speedtest` on PATH) were both real and are what got fixed.
-
-*State:* ✅ **DEPLOYED AND VERIFIED 2026-09-05** on both dockassist and
-agent-lxc — `changed=0` on re-run for each, and `apt-get update` on dockassist
-reports a clean `Hit: ... ookla/speedtest-cli/debian bookworm InRelease` with no
-`W:`/`E:`/`NO_PUBKEY` lines. The hand-made `.list` is gone; a managed
-`.sources` replaces it. Left open only until item 18's stall count is read. `playbooks/tasks/speedtest_cli.yml`
-purges Debian's package, installs Ookla's from packagecloud, and asserts
-`speedtest --version` reports Ookla; `internet_speed_monitor` **re-asserts that
-at every run**, because an install-time guarantee does not survive someone
-apt-installing the impostor later. Codename is taken from
-`ansible_distribution_release` — packagecloud serves both bookworm and trixie
-(verified against `dists/<suite>/Release` with a bogus suite 404ing as control,
-and `speedtest` present for amd64 and arm64).
-*Effort:* small. *Needs:* a laptop (Ansible deploy).
-
-```
-Deploy and verify the speedtest dependency fix. Read docs/TODO.md item 1c —
-the work is DONE on branch feat/speedtest-sizing-and-ookla-install, this is
-the deploy and the proof, not a rebuild.
-
-  ansible-playbook ansible/playbooks/services.yml --limit dockassist \
-    --tags speedtest --check --diff
-
-Expect the keyring task to be a clean no-op: the dearmored packagecloud key is
-byte-identical to what is already on dockassist (sha256 bb3abb9a...), verified
-2026-09-05. The apt_repository line should also match the hand-generated one.
-Anything else reporting `changed` on dockassist is worth reading before you
-apply — that host already has the correct binary and must not be disturbed.
-
-Then apply to agent-lxc (VLAN 40, Debian trixie) and confirm:
-  ssh 10.30.40.203 'speedtest --version'   # must say "Speedtest by Ookla"
-
-Regression cover already exists — tests/unit/speedtest_binary_test.sh case 1
-forces Debian's speedtest-cli onto PATH and asserts exit 2. Run
-tests/run_unit_tests.sh before and after; do not weaken that case.
-```
-
 
 **1d. Monitor the VPN path's speed, not just the direct one**
 Today only the **non-VPN** path is measured (dockassist, VLAN 100). VLAN 40 egresses

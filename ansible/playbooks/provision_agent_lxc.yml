@@ -292,6 +292,19 @@
     # key locks itself out, and SSH connection multiplexing hides it until
     # ControlPersist expires. Making the container key-reachable before
     # bootstrap runs removes the ordering hazard entirely.
+    # The other four places that fetch over the network guard the URL first
+    # (bootstrap.yml, tasks/ssh_hardening.yml, the docker role, the pihole
+    # role). This one did not, which made the rule look like a coincidence
+    # rather than a rule — and this is the fetch whose payload becomes an
+    # authorized_keys file, so it is the last one that should be the exception.
+    - name: Validate gh_keys uses HTTPS
+      ansible.builtin.assert:
+        that:
+          - "gh_keys is match('^https://')"
+        fail_msg: "gh_keys must use https:// — got: {{ gh_keys }}"
+      when: gh_keys is defined
+      tags: [provision, ssh]
+
     - name: Fetch authorized keys from GitHub
       ansible.builtin.uri:
         url: "{{ gh_keys }}"

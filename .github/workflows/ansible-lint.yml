@@ -26,6 +26,13 @@ on:
       - ".ansible-lint"
       - ".github/workflows/ansible-lint.yml"
 
+# The GITHUB_TOKEN is scoped down here rather than left at the repository
+# default. This workflow only lints — it never pushes, commits, or calls the
+# API — so read is all it can justify, and an explicit block means a change to
+# the repo-wide default cannot silently widen it.
+permissions:
+  contents: read
+
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -34,7 +41,15 @@ jobs:
       # macOS Keychain, which doesn't exist on the Linux runner — exits 127).
       ANSIBLE_VAULT_PASSWORD_FILE: ${{ github.workspace }}/.ansible-ci-vault-pass
     steps:
+      # persist-credentials: false — checkout otherwise writes the token
+      # into .git/config, where every later step in the job can read it.
+      # Nothing here pushes, so the credential has no purpose after the
+      # clone; leaving it behind only widens what a compromised action or
+      # dependency could reach. Complements the permissions block above:
+      # that limits what the token CAN do, this limits what can reach it.
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v7

@@ -6,7 +6,16 @@
   hosts: all
   become: true
   tasks:
+    # `apply:` is what makes `--tags agent_access` mean anything. Without it the
+    # tag sits on this include only; the role's own tasks carry no tags of their
+    # own, so a tagged run executed the include and then filtered out all
+    # fifteen of them — reporting `ok=2 changed=0` across the fleet, which is
+    # indistinguishable from "already converged". That false green cost a real
+    # rollout on 2026-09-05. `always` on the include lets it run under any tag
+    # filter so `apply` can then do the actual selecting.
     - name: Deploy agent access role
       ansible.builtin.include_role:
         name: agent_access
-      tags: [agent_access]
+        apply:
+          tags: [agent_access]
+      tags: [agent_access, always]
