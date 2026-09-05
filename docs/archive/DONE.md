@@ -260,6 +260,18 @@ the trap.
 buffer would have discarded days 1–4 before the question could be asked — the same
 failure the `speed_history.csv` note in TODO item 1d already records.
 
+🔴 **`site.yml` does not deploy the `platform/proxmox` role — found while deploying
+this.** `site.yml` imports `platform/proxmox.yml`, which contains *only* the ZFS ARC
+tasks; the role itself is included solely by `deploy_monitoring.yml` (static
+`roles:`, so play-level tags do propagate there). A
+`site.yml --limit cwwk --tags proxmox,backup,thermal` run reported `ok=28 changed=4`
+— a healthy-looking recap whose four changes were all unrelated baseline tasks, with
+**zero** of the role's tasks selected. The same command against
+`deploy_monitoring.yml` selected 52. **Everything in `roles/platform/proxmox`
+— `save_temps.sh`, `cwwk-power-tuning.service`, the backup crons — deploys only via
+`deploy_monitoring.yml`.** Another instance of the recurring lesson: count what a
+run actually touched, never trust a non-zero `changed`.
+
 **Left open as [TODO item 35](../TODO.md):** the alert thresholds. `THROTTLE_WARN=20`
 sits *inside* the 9–79 spread of the accepted nightly event and `TEMP_WARN=85` sits
 inside its 85–89 C peak band, so both fire at random on a known, accepted

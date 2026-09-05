@@ -186,7 +186,13 @@ nights you just measured. Thresholds live in
 scripts/services/proxmox/check_thermal.sh (THROTTLE_WARN=20, THROTTLE_CRIT=500,
 TEMP_WARN=85, TEMP_CRIT=95). CRIT=500 has 50x separation from normal - leave it.
 
-Deploy with: ansible-playbook ansible/playbooks/site.yml --limit cwwk
+🔴 Deploy with deploy_monitoring.yml, NOT site.yml:
+  ansible-playbook ansible/playbooks/deploy_monitoring.yml --limit cwwk --forks 1
+site.yml imports platform/proxmox.yml, which holds ONLY the ZFS ARC tasks — it
+never runs the platform/proxmox ROLE, so a site.yml run reports a healthy
+changed=N from unrelated baseline tasks while touching none of this. Verified
+2026-09-06: `site.yml --tags proxmox,backup,thermal` selected ZERO of the role's
+tasks; deploy_monitoring.yml selected 52.
 ```
 
 **1d. Monitor the VPN path's speed, not just the direct one**
