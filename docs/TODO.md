@@ -315,9 +315,11 @@ no code change.
 ```
 Set the VPN-vs-direct ratio threshold from real data. Read docs/TODO.md item 1d.
 Steps 1-4 are DONE and deployed — both paths are measured (dockassist :07,
-agent-lxc :37, same pinned server 52365). Do NOT rebuild any of it, and do NOT
-move either schedule without moving the other: they share one WAN link and
-27 minutes apart is what keeps them from measuring each other.
+agent-lxc :14, same pinned server 52365). Do NOT rebuild any of it, and do NOT
+move either schedule without moving the other: they share one WAN link, and :14
+is deliberately CLOSE to :07 — 7 minutes clears dockassist's ~190 s run, while a
+wider gap lets ordinary ISP drift leak into the ratio and be blamed on the
+tunnel. It was briefly :37 for that reason and was tightened.
 
 Only run this once there are ~2 weeks of paired runs. Pull the medians:
   ssh dockassist-agent 'sudo agent_read log internet_speed_check.log'      | grep "Speed test passed"
