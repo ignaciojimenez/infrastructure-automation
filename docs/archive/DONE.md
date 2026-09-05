@@ -17,6 +17,7 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ## Contents
 
+- [2026-09-05 — the speedtest that measured too much, and three false greens](#2026-09-05--the-speedtest-that-measured-too-much-and-three-false-greens)
 - [2026-09-04 — Apple Home was dead for two days behind seven green checks](#2026-09-04--apple-home-was-dead-for-two-days-behind-seven-green-checks)
 - [2026-09-02 — three findings that were never tasks, parked with their reopen conditions](#2026-09-02--three-findings-that-were-never-tasks-parked-with-their-reopen-conditions)
 - [2026-09-01 — vinylstreamer's wifi lockout: every software layer excluded, and parked](#2026-09-01--vinylstreamers-wifi-lockout-every-software-layer-excluded-and-parked)
@@ -214,6 +215,125 @@ confirmation.
 
 🐛 **Also fixed in passing:** `avahi-utils` was hand-installed on dockassist and
 is now declared in the role. Same undeclared-dependency shape as TODO item 1c.
+
+## 2026-09-05 — the speedtest that measured too much, and three false greens
+
+**Items 1c and 22 closed; 18 and 1d shipped but deliberately still open.**
+
+### What changed
+
+**The speedtest was oversampled against the action it could prompt.** It ran
+5 tests every 6 hours — 20 saturation runs a day, ~25 GB and ~26 min/day of
+fully saturated link — to answer "is Odido still delivering ~900 Mbps?", whose
+only action is phoning the ISP. That is a monthly-scale question. Now 3 tests
+twice daily, and moved off `0 */6`, which had been firing the job at the single
+most congested minute in dockassist's crontab: at `:00` it started alongside
+**nine** other cron entries and then immediately saturated the NIC.
+
+*We chose the reduction over `ethtool -K` because the queue self-recovers, so a
+driver workaround would suppress the symptom and leave nothing to observe.* The
+cut is therefore the experiment: if the stalls stop, load was the cause and the
+schedule is also the fix; if they persist at 6 runs/day, the hypothesis is dead.
+Run duration already fell 371 s → 190 s — ~74% less NIC exposure, which is the
+quantity the stalls actually track.
+
+**1c — the binary nothing installed.** `internet_speed_monitor` needed Ookla's
+`speedtest` and no play put it there; it had been placed by hand. Worse, the
+name is ambiguous: Debian's unrelated `speedtest-cli` ships the same
+`/usr/bin/speedtest`, prints plausible Mbps, and accepts none of the same flags.
+The install now purges the impostor **and** the monitor re-asserts the binary's
+identity at every run — *because an install-time guarantee does not survive
+someone apt-installing the impostor next week.*
+
+**1d — the VPN path, measured for the first time.** dockassist measures direct
+at `:07`, agent-lxc measures through Mullvad at `:14`, and
+`compare_speed_paths.sh` owns the comparison at `:20`. Two hosts each checking
+their own absolute thresholds is not a comparison; it is two absolute checks,
+which 1d had already rejected.
+
+**22 — `agent_read` returned gzip bytes for rotated logs.** Now decompresses,
+and **refuses loudly** when it cannot rather than emitting bytes a `grep` reads
+as "nothing found". Rolled out to all seven Debian hosts and forced on each with
+a real `.gz`. *opnsense was never affected* — the task is gated
+`os_family == "debian"`, so the helper has never existed there.
+
+### The decisions worth keeping
+
+**A ratio cannot detect a tunnel that has vanished.** If Mullvad drops,
+agent-lxc keeps measuring — it just measures the direct line. Throughput goes
+**up**, the ratio moves toward **1.0**, and every speed-based check reads a gone
+tunnel as a healthy one; the regression test pins this with a fixture whose
+ratio is **1.0002**. So the headline alert is the **egress address**, not the
+ratio: binary, certain, and needing no baseline. Whenever a check compares two
+things to infer one is working, ask what the reading looks like if that thing
+stops existing rather than merely degrading.
+
+**The ratio alert is deferred, not forgotten.** Two samples 17 days apart (94%,
+99%) cannot set a threshold, and a single 3-test run spread 935.01 / 938.16 /
+908.66 Mbps — a ~3% noise floor those two points could never have shown. A loose
+absolute floor ships instead. `speed_comparison_min_ratio` is the one variable
+that turns the real alert on, and the test pins both halves: a 0.32 ratio stays
+silent by default, and setting the variable makes the same input alert.
+
+**Durable records do not live in rotating logs.** The first plan was to read a
+fortnight of ratios back out of the monitoring logs. logrotate is
+`{{ logs_dir }}/*.log` · `daily` · `rotate 7` · `compress` — seven days, six of
+them gzipped, so the answer would have been ~one readable day. Records now go
+beside the logs as `.json`/`.csv`, deliberately outside that glob, with a
+warning left at the glob itself.
+
+**A sample count sets failure tolerance, not just cost.** The first sizing cut
+was `--tests=2`. The monitor exits 2 unless *two* tests succeed, so that
+tolerates **zero** transient failures — one flaky test and it pages. Caught by
+writing the test before trusting the number; the test now reads the production
+value from `group_vars` so it cannot drift back.
+
+### Three green results that covered nothing
+
+All in one rollout, all of which read as success:
+
+- **`--tags agent_access` filtered out all fifteen of the role's tasks.** The
+  tag sat on the `include_role` and inner tasks do not inherit it, so the run
+  reported `ok=2 changed=0` across seven hosts. Fixed with `apply: tags:` —
+  the same run now executes 15 tasks.
+- **`--limit unifi` matched no host at all.** The inventory key is `unifi-lxc`;
+  `unifi` is only its `ansible_host`. It vanished from the recap without an
+  error. **Count the hosts in the recap against the hosts you named.**
+- **A "looks like text" check called 6 of 7 decompressed files binary.** These
+  logs carry ANSI colour codes and `ESC` is not in `[:print:]`. Assert the
+  property that *defines* the transformation — gzip magic — not one that
+  correlates with it.
+
+### Also closed
+
+**A security review of three flagged findings.** Two were false positives:
+every "unencrypted outbound connection" resolves to `https://` through a Jinja
+`default()` the scanner cannot evaluate, and **no override anywhere in the
+inventory sets one to `http://`**. Four of the five fetch sites already asserted
+`^https://`; the fifth — `provision_agent_lxc.yml`, whose payload becomes an
+`authorized_keys` file — did not, and now does. *An inconsistently applied rule
+reads as a coincidence rather than a rule.*
+
+The third was real: `actions/checkout` persisted the `GITHUB_TOKEN` into
+`.git/config` where every later step could read it, in a job that only lints.
+Now `persist-credentials: false`, plus an explicit `permissions: contents: read`
+so a change to the repo-wide default cannot silently widen it.
+
+**Item 19 turned out to have been undeployed for twelve days** — merged
+2026-08-24, with both `TODO.md` and the dashboard claiming otherwise, and it
+surfaced only because an unrelated `agent_access` run reported it `changed`.
+📌 *"On `main`" is not a state this fleet has; `changed=0` against the host is.*
+
+### What stayed open, and why
+
+**18** is deployed and is now an experiment — the next stall count is the
+result, and ~11 h of quiet proves nothing (0.3 expected events). **1d** measures
+and records but does not alert on the ratio until there is enough data to set a
+threshold honestly. **19** keeps one unforced branch: the "key absent" message
+was reworded and never executed, and forcing it means mutating the live HA
+secrets file.
+
+---
 
 ## 2026-09-02 — three findings that were never tasks, parked with their reopen conditions
 
