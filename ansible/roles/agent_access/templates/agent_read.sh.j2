@@ -40,4 +40,29 @@ case "${1:-}" in
 esac
 
 [ -f "$f" ] || { echo "not found: $f" >&2; exit 1; }
-cat "$f"
+
+# Rotated logs are gzipped (logrotate: daily, rotate 7, compress). `cat`ing one
+# returns raw compressed bytes, and THAT is the bug this handles — not that it
+# fails, but that it succeeds uselessly. A grep over those bytes matches nothing
+# and exits 0, which reads exactly like "the event never happened" rather than
+# "this file is unreadable". Measured 2026-08-27: a rotated log reported 0
+# ladder starts where gunzip found 8.
+#
+# So: decompress when we can, and REFUSE loudly when we cannot. Never hand back
+# bytes the caller will silently mis-read.
+case "$f" in
+    *.gz)
+        if command -v zcat >/dev/null 2>&1; then
+            zcat "$f"
+        elif command -v gunzip >/dev/null 2>&1; then
+            gunzip -c "$f"
+        else
+            echo "cannot read $f: file is gzip-compressed and neither zcat nor gunzip is installed" >&2
+            echo "refusing to emit compressed bytes: a grep over them would return 0 matches and read as 'not found'" >&2
+            exit 1
+        fi
+        ;;
+    *)
+        cat "$f"
+        ;;
+esac
