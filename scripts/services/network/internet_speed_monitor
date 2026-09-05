@@ -3,7 +3,7 @@
 # Internet Speed Monitor
 # Monitors internet speed using Ookla Speedtest CLI and alerts on significant drops
 #
-# Usage: internet_speed_monitor [--min-download=MBPS] [--min-upload=MBPS] [--max-ping=MS] [--tests=N] [--delay=SEC] [--silent]
+# Usage: internet_speed_monitor [--min-download=MBPS] [--min-upload=MBPS] [--max-ping=MS] [--tests=N] [--delay=SEC] [--server-id=ID] [--silent]
 #
 # Parameters:
 #   --min-download=MBPS  Minimum acceptable download speed in Mbps (default: 50)
@@ -11,12 +11,13 @@
 #   --max-ping=MS        Maximum acceptable ping in milliseconds (default: 100)
 #   --tests=N            Number of tests to run and average (default: 3)
 #   --delay=SEC          Delay between tests in seconds (default: 45)
+#   --server-id=ID       Pin the Ookla server (default: let Ookla pick per run)
 #   --silent             Suppress non-error output
 #
 # Exit codes:
 #   0 - Speed test passed all thresholds
 #   1 - Speed test failed one or more thresholds
-#   2 - Speedtest command failed or not available
+#   2 - Speedtest command failed, not available, or is not Ookla's
 
 set -u
 set -o pipefail
@@ -27,6 +28,7 @@ MIN_UPLOAD=150
 MAX_PING=100
 NUM_TESTS=3
 DELAY_BETWEEN_TESTS=45
+SERVER_ID=""
 SILENT=false
 
 # Parse command line arguments
@@ -52,12 +54,16 @@ while [[ $# -gt 0 ]]; do
             DELAY_BETWEEN_TESTS="${1#*=}"
             shift
             ;;
+        --server-id=*)
+            SERVER_ID="${1#*=}"
+            shift
+            ;;
         --silent)
             SILENT=true
             shift
             ;;
         -h|--help)
-            echo "Usage: $0 [--min-download=MBPS] [--min-upload=MBPS] [--max-ping=MS] [--tests=N] [--delay=SEC] [--silent]"
+            echo "Usage: $0 [--min-download=MBPS] [--min-upload=MBPS] [--max-ping=MS] [--tests=N] [--delay=SEC] [--server-id=ID] [--silent]"
             echo ""
             echo "Default thresholds:"
             echo "  Download: ${MIN_DOWNLOAD} Mbps"
@@ -90,14 +96,45 @@ if ! command -v speedtest >/dev/null 2>&1; then
     exit 2
 fi
 
+# ...and that it is the RIGHT speedtest.
+#
+# Debian's `speedtest-cli` package (a separate Python project) also ships
+# /usr/bin/speedtest. It answers to the same name, prints plausible Mbps, and
+# accepts none of the flags below — no --format=json, no --server-id. Finding
+# *a* `speedtest` on PATH therefore proves nothing, and the failure mode if the
+# wrong one is present is not a clean error: it is numbers that look fine and
+# are not comparable with anything else we record.
+#
+# Ansible installs the correct package (playbooks/tasks/speedtest_cli.yml), but
+# an install-time guarantee does not survive someone running
+# `apt install speedtest-cli` later, so assert it here at every run too.
+if ! speedtest_version=$(speedtest --version 2>&1); then
+    error_msg "Speedtest CLI is present but 'speedtest --version' failed: $speedtest_version"
+    exit 2
+fi
+
+if [[ "$speedtest_version" != *"Speedtest by Ookla"* ]]; then
+    error_msg "Wrong speedtest on PATH: $(command -v speedtest) is not Ookla's CLI."
+    error_msg "Reported: $(echo "$speedtest_version" | head -1)"
+    error_msg "Debian's speedtest-cli package ships the same binary name; purge it and install Ookla's."
+    exit 2
+fi
+
 # Function to run a single speedtest and parse results
 run_single_speedtest() {
     local test_num=$1
     log_msg "Running speed test ${test_num}/${NUM_TESTS}..."
     
-    # Run speedtest and capture JSON output
+    # Run speedtest and capture JSON output.
+    # Built as an array so an unset SERVER_ID contributes no argument at all,
+    # rather than an empty string that Ookla's CLI rejects.
+    local speedtest_args=(--accept-license --accept-gdpr --format=json)
+    if [ -n "$SERVER_ID" ]; then
+        speedtest_args+=(--server-id="$SERVER_ID")
+    fi
+
     local speedtest_output
-    if ! speedtest_output=$(speedtest --accept-license --accept-gdpr --format=json 2>&1); then
+    if ! speedtest_output=$(speedtest "${speedtest_args[@]}" 2>&1); then
         error_msg "Speedtest ${test_num} failed: $speedtest_output"
         return 1
     fi

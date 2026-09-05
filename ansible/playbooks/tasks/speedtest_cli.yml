@@ -1,0 +1,162 @@
+---
+# Ookla Speedtest CLI — the binary `internet_speed_monitor` measures with.
+#
+# Why this file exists: the binary was hand-installed on dockassist and nothing
+# in this repo put it there. Rebuild that host and `internet_speed_monitor`
+# exits 2 with "Speedtest command failed or not available" — the check goes
+# quiet without ever alerting. See docs/TODO.md item 1c.
+#
+# ⚠️ The name `speedtest` is ambiguous, which is the worse half of the problem.
+# Debian's `speedtest-cli` package (Python, unrelated project) also ships
+# /usr/bin/speedtest, prints plausible Mbps, and takes DIFFERENT flags — it has
+# no --format=json and no --server-id. A host that has it produces numbers that
+# look fine and are not comparable with Ookla's. So this file does not just
+# install the right thing, it PURGES the impostor first; and
+# internet_speed_monitor separately asserts at runtime that the binary it found
+# really is Ookla's, because an install-time fix cannot protect a host someone
+# later runs `apt install speedtest-cli` on.
+#
+# Shared rather than role-local because item 1d needs the same binary on a
+# VLAN 40 host to measure the VPN path, and that host is not a Home Assistant
+# host.
+
+- name: Ensure apt keyring directory exists
+  become: true
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+  tags: [monitoring, network, speedtest]
+
+# `deb822_repository` needs python3-debian to run under --check (it parses the
+# existing .sources to decide whether anything changed). Declared here as an
+# explicit prerequisite rather than via the module's `install_python_debian`
+# flag, because a dry run that installs a package as a side effect is not a dry
+# run. One package on dockassist; agent-lxc already had it.
+#
+# Without it `--check --diff` fails outright on this task — which is the same
+# trap as the dearmor-in-check-mode one below it, and matters for the same
+# reason: a dry run is what gets run before touching the Home Assistant host.
+- name: Ensure python3-debian is present for deb822 repository management
+  become: true
+  ansible.builtin.apt:
+    name: python3-debian
+    state: present
+  tags: [monitoring, network, speedtest]
+
+# Debian's speedtest-cli and Ookla's speedtest both ship /usr/bin/speedtest, so
+# apt would refuse the install with a file conflict even if we did not care
+# which one won. Purge before adding the repo, not after.
+- name: Remove Debian speedtest-cli (conflicts with Ookla's /usr/bin/speedtest)
+  become: true
+  ansible.builtin.apt:
+    name: speedtest-cli
+    state: absent
+    purge: true
+  tags: [monitoring, network, speedtest]
+
+# The keyring ships in this repo, dearmored, rather than being fetched and
+# converted at deploy time. Three reasons, in order of importance:
+#
+#   1. It PINS the key. Fetching it per-deploy trusts whatever packagecloud
+#      serves that day; a committed key is trust-on-first-use and any change to
+#      it is a reviewable diff instead of a silent swap.
+#   2. It works under `--check`. The fetch/dearmor/install shape this replaces
+#      could not: `command` is skipped in check mode, so the dearmored file
+#      never appeared and the install task hard-FAILED on a missing source —
+#      aborting the play, which meant everything after it (including the cron
+#      resize this branch exists for) was never evaluated at all. A task file
+#      that cannot survive a dry run makes `--check --diff` untrustworthy
+#      exactly where this repo relies on it.
+#   3. `get_url` needed `force: true` to be correct about content, which makes
+#      it report `changed` on EVERY run — the same defect as docs/TODO.md item
+#      34, which exists because the docker role does this and has therefore
+#      destroyed `changed=0` as a convergence signal for itself.
+#
+# Verified 2026-09-05: sha256 bb3abb9a374efff3e57de52ebc16b42b4076ac802f2c7cca30902b10888c65c0,
+# byte-identical to the keyring already live on dockassist, and to
+# `curl https://packagecloud.io/ookla/speedtest-cli/gpgkey | gpg --dearmor`.
+# Fingerprint C525 F88F CF3A 7E56 CE2C  F591 31EB 3981 E723 ACAA.
+# To rotate: re-run that pipeline, commit the new file, and the diff is the review.
+- name: Install Ookla signing keyring
+  become: true
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/files/ookla_speedtest-cli-archive-keyring.gpg"
+    dest: /etc/apt/keyrings/ookla_speedtest-cli-archive-keyring.gpg
+    owner: root
+    group: root
+    mode: '0644'
+  tags: [monitoring, network, speedtest]
+
+# `deb822_repository`, not `apt_repository`, for a reason found on the VLAN 40
+# container: `apt_repository` shells out to a `gpg` or `apt-key` BINARY and
+# fails outright when neither exists. That container is a minimal trixie LXC
+# with no gpg at all, and satisfying it would mean pulling 17 packages into a
+# host whose whole point is being small — to run a tool we do not need, because
+# the keyring above ships already dearmored. (apt itself verifies fine: it
+# carries its own /usr/lib/apt/methods/gpgv.) `deb822_repository` takes the
+# keyring by path and needs no gpg. It is also the module that is NOT deprecated
+# — `apt_repository` goes away in ansible-core 2.25.
+#
+# `{{ ansible_distribution_release }}` rather than a pinned codename: dockassist
+# is bookworm and the container is trixie, and packagecloud serves both
+# (verified 2026-09-05 against dists/<suite>/Release, with a bogus suite
+# returning 404 as the control, and `speedtest` present in main/binary-amd64
+# and main/binary-arm64 for trixie).
+- name: Add Ookla speedtest repository
+  become: true
+  ansible.builtin.deb822_repository:
+    name: ookla_speedtest-cli
+    types: [deb]
+    uris: https://packagecloud.io/ookla/speedtest-cli/debian/
+    suites: "{{ ansible_distribution_release }}"
+    components: [main]
+    signed_by: /etc/apt/keyrings/ookla_speedtest-cli-archive-keyring.gpg
+    enabled: true
+    state: present
+  register: ookla_repo
+  tags: [monitoring, network, speedtest]
+
+# dockassist carries a hand-made `.list` from when packagecloud's install script
+# was run on it by hand. deb822 writes a `.sources`, so leaving the old file
+# would make apt see this repo TWICE and warn on every update. Removing it is
+# also the actual point of item 1c: that file is the unmanaged drift, and it
+# additionally pulls a `deb-src` line nothing here builds from.
+- name: Remove the hand-made Ookla .list superseded by the .sources
+  become: true
+  ansible.builtin.file:
+    path: /etc/apt/sources.list.d/ookla_speedtest-cli.list
+    state: absent
+  register: ookla_legacy_list
+  tags: [monitoring, network, speedtest]
+
+- name: Refresh apt cache when the repository definition changed
+  become: true
+  ansible.builtin.apt:
+    update_cache: true
+  when: ookla_repo.changed or ookla_legacy_list.changed
+  tags: [monitoring, network, speedtest]
+
+- name: Install Ookla speedtest
+  become: true
+  ansible.builtin.apt:
+    name: speedtest
+    state: present
+    force_apt_get: true
+  tags: [monitoring, network, speedtest]
+
+# Installing the right package is not the same as the right binary answering to
+# the name. Prove it on the host rather than assuming the purge above was
+# enough — this is the check that would have caught the ambiguity in the first
+# place.
+- name: Verify /usr/bin/speedtest is Ookla's
+  ansible.builtin.command:
+    cmd: speedtest --version
+  register: speedtest_version
+  changed_when: false
+  failed_when: >-
+    speedtest_version.rc != 0
+    or 'Speedtest by Ookla' not in speedtest_version.stdout
+  tags: [monitoring, network, speedtest]

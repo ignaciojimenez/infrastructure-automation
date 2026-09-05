@@ -616,11 +616,31 @@
   when: enable_internet_speed_check | default(false)
   tags: [homeassistant, monitoring, network]
 
+# Schedule: twice daily at :07, NOT `0 */6`.
+#
+# Two separate reasons, both measured (docs/TODO.md item 18):
+#
+# 1. Volume. Every one of the twelve NIC stalls recorded on this host landed
+#    1-6 minutes into this job's run window. Cutting 4 runs x 5 tests to
+#    2 runs x 2 tests takes the saturation runs from 20/day to 4/day. If the
+#    stalls stop, load was the cause and this schedule is also the fix; if they
+#    continue at 4/day, the load hypothesis is wrong. Either outcome is a
+#    result, which is why this is preferred over an `ethtool -K` workaround
+#    that would leave nothing to observe.
+#
+# 2. The minute. `0 */6` started this job at the single most congested instant
+#    in dockassist's crontab: at :00 it fired alongside nine other jobs (five
+#    */10, two hourly, one */30, one */15) and then immediately saturated the
+#    NIC. Nothing else in the crontab runs at :07. `check_ha_entities` already
+#    runs `2-59/15` for exactly this reason.
+#
+# 03:07 and 15:07 keep one overnight baseline and one daytime sample, so a
+# degradation that only shows under load is still visible.
 - name: Configure internet speed monitoring cron job
   ansible.builtin.cron:
     name: "Internet speed check"
-    minute: "0"
-    hour: "*/6"
+    minute: "7"
+    hour: "3,15"
     job: >
       {{ scripts_dir }}/enhanced_monitoring_wrapper
       --heartbeat-interval=daily
@@ -634,6 +654,7 @@
       --max-ping={{ internet_speed_max_ping | default(100) }}
       --tests={{ internet_speed_tests | default(3) }}
       --delay={{ internet_speed_delay | default(45) }}
+      {% if internet_speed_server_id | default('') %}--server-id={{ internet_speed_server_id }}{% endif %}
       --silent
       >> {{ logs_dir }}/internet_speed_check.log 2>&1
     user: "{{ ansible_user }}"

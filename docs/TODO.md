@@ -3,7 +3,7 @@
 **Improvements and fixes waiting to be worked on.** Start at *What to work on
 next*; the first item you can act on is the right one.
 
-Updated: 2026-09-04
+Updated: 2026-09-05
 
 | Where a thing lives | |
 |---|---|
@@ -56,15 +56,22 @@ here is something to read past, every time, forever. The write-up goes to
 (numbers never move), but the order to work them is this, and the dashboard
 renders it:
 
-> **№1** 18 *(active fault, and it gates 1d)* → **№2** 1c → **№3** 1d *(only
-> after 18)* → **№4** 2 → **№5** 4 (plex) → **№6** 9 → **№7** 3a/3b/3c →
-> **№8** 5 → **№9** 19 → **№10** 12 → **№11** 22 → **№12** 10 → **№13** 11 →
-> **№14** 6 → **№15** 7 → **№16** 34 *(small; restores `changed=0` as a
-> signal for the docker role)* → **№17–20** 8/13/14/16 · **№21** 32
-> *(git-history rewrite — decision only, default is no)* · **№22** 26 *(one UI
-> toggle, global — his call)*
+> **№1** 18 + 1c + 1d *(**one branch, one deploy** —
+> `feat/speedtest-sizing-and-ookla-install`; see below)* → **№2** 2 →
+> **№3** 4 (plex) → **№4** 9 → **№5** 3a/3b/3c → **№6** 5 → **№7** 19 →
+> **№8** 12 → **№9** 22 → **№10** 10 → **№11** 11 → **№12** 6 → **№13** 7 →
+> **№14** 34 *(small; restores `changed=0` as a signal for the docker role)* →
+> **№15–18** 8/13/14/16 · **№19** 32 *(git-history rewrite — decision only,
+> default is no)* · **№20** 26 *(one UI toggle, global — his call)*
 > *(decision-gated — 16 needs a purchase call, 32 needs his call on a public
 > force-push, the rest need him at the cabinet; not ranked)*
+
+🔀 **18, 1c and 1d stopped being three items on 2026-09-05.** They were always
+one cron line — each of their prompts opened by telling you to read the other
+two — so they were built as one branch. What is left is a **deploy**, not three
+pickups: `services.yml --limit dockassist --tags speedtest,cron,network`, then
+the agent-lxc validation run that gates 1d's remaining half. They stay listed
+separately because their numbers are addresses used elsewhere.
 
 **31 was discarded on 2026-09-02, not deferred.** Ignacio tested it: the IoT
 devices cannot associate with PMF enabled, so raising it is not a fix that was
@@ -84,10 +91,13 @@ them can be settled by measuring how often they fail** — the action is the sam
 at any rate, which is what made them notes rather than tasks. Reopen on a
 complaint, not on a number.
 
-**18 holds the top slot** because it is the only thing actively recurring —
-nine NIC stalls since 11 Aug — and because it inverts the obvious order:
-**1d doubles the saturation runs, so doing it before 18 would knowingly make the
-active fault worse.** 1c is independent and stays ahead of 1d.
+**18 held the top slot** because it was the only thing actively recurring, and
+because it inverted the obvious order: 1d doubles the saturation runs, so doing
+it before 18 would knowingly have made the active fault worse. **That ordering
+did its job** — the volume question was answered first (2026-09-05), and 1d's
+budget was then set from the answer instead of against it. The fault is now at
+twelve events and still live; what is pending is the deploy and roughly a week
+of watching, not a decision.
 
 **32 sits near the bottom on purpose.** It descends from item 24, closed
 2026-08-30, whose disclosure policy is now
@@ -124,26 +134,46 @@ program* on each host — Ookla 1.2.0.84 on dockassist, Debian's Python
 `/usr/bin/speedtest` too). Both print plausible Mbps. Any script calling
 `speedtest` gets a different methodology depending where it lands.
 
-*State:* diagnosed 2026-08-19, nothing changed yet. *Effort:* small.
-*Needs:* a laptop (Ansible deploy). Worth doing whether or not item 1d happens.
+📌 **Re-checked 2026-09-05: agent-lxc now has *neither*.** The container was
+rebuilt at some point and `speedtest-cli` went with it, so the live divergence
+is gone — but only by accident, and one `apt install speedtest-cli` restores
+it. The underlying faults (nothing installs the binary; the script accepted
+any `speedtest` on PATH) were both real and are what got fixed.
+
+*State:* ✅ **DEPLOYED AND VERIFIED 2026-09-05** on both dockassist and
+agent-lxc — `changed=0` on re-run for each, and `apt-get update` on dockassist
+reports a clean `Hit: ... ookla/speedtest-cli/debian bookworm InRelease` with no
+`W:`/`E:`/`NO_PUBKEY` lines. The hand-made `.list` is gone; a managed
+`.sources` replaces it. Left open only until item 18's stall count is read. `playbooks/tasks/speedtest_cli.yml`
+purges Debian's package, installs Ookla's from packagecloud, and asserts
+`speedtest --version` reports Ookla; `internet_speed_monitor` **re-asserts that
+at every run**, because an install-time guarantee does not survive someone
+apt-installing the impostor later. Codename is taken from
+`ansible_distribution_release` — packagecloud serves both bookworm and trixie
+(verified against `dists/<suite>/Release` with a bogus suite 404ing as control,
+and `speedtest` present for amd64 and arm64).
+*Effort:* small. *Needs:* a laptop (Ansible deploy).
 
 ```
-Fix the speedtest dependency without building the VPN monitor yet. Read
-docs/TODO.md item 1c — the verified facts are there, do not re-derive them.
+Deploy and verify the speedtest dependency fix. Read docs/TODO.md item 1c —
+the work is DONE on branch feat/speedtest-sizing-and-ookla-install, this is
+the deploy and the proof, not a rebuild.
 
-🔴 Also read item 18: the existing speedtest is intermittently wedging
-dockassist's NIC (nine stalls since 11 Aug, all inside its run window). That
-does not block this task — installing the right binary is correct either way —
-but do NOT increase test count or frequency while here, and if you touch
-agent-lxc's speedtest, note that host has no such measurement yet.
+  ansible-playbook ansible/playbooks/services.yml --limit dockassist \
+    --tags speedtest --check --diff
 
-Write the Ansible task installing Ookla's speedtest (repo
-packagecloud.io/ookla/speedtest-cli/debian/ <codename> main, keyring
-/etc/apt/keyrings/ookla_speedtest-cli-archive-keyring.gpg, package
-`speedtest`), gated on enable_internet_speed_check; purge Debian's
-`speedtest-cli` first — both ship /usr/bin/speedtest. --check --diff against
-dockassist must come back clean (it already has the right binary). Then apply
-to agent-lxc and verify `speedtest --version` reports Ookla there.
+Expect the keyring task to be a clean no-op: the dearmored packagecloud key is
+byte-identical to what is already on dockassist (sha256 bb3abb9a...), verified
+2026-09-05. The apt_repository line should also match the hand-generated one.
+Anything else reporting `changed` on dockassist is worth reading before you
+apply — that host already has the correct binary and must not be disturbed.
+
+Then apply to agent-lxc (VLAN 40, Debian trixie) and confirm:
+  ssh 10.30.40.203 'speedtest --version'   # must say "Speedtest by Ookla"
+
+Regression cover already exists — tests/unit/speedtest_binary_test.sh case 1
+forces Debian's speedtest-cli onto PATH and asserts exit 2. Run
+tests/run_unit_tests.sh before and after; do not weaken that case.
 ```
 
 
@@ -177,47 +207,86 @@ the test competes with what it measures; it is the internet SPOF; and its own tr
 does not follow the per-VLAN policy routes clients use, so it would measure a path
 nobody takes.
 
-**Cost to weigh:** ~1.25 GB and a fully saturated line per test, deployed as
-`--tests=5` every 6h (~25 GB/day, ~26 min/day saturated). A second path doubles it —
-prefer `--tests=3` twice daily across both.
+**Cost to weigh:** ~1.25 GB and a fully saturated line per test. This was
+`--tests=5` every 6h (~25 GB/day, ~26 min/day saturated) and is now
+**`--tests=3` twice daily** — which is the sizing this item already preferred,
+arrived at from the other direction by item 18. A second path brings the total
+to 12 runs/day, still below the 20/day the single path used to do.
 
 🔗 **Read item 18 before sizing this. The current test already has a measured
-cost, not just a theoretical one.** dockassist's NIC has logged **nine
-`bcmgenet` transmit-queue stalls since 11 Aug, every one 1–6 minutes into the
-`0 */6` speedtest window** — the saturation run intermittently wedges the
-Home Assistant host's link. That was invisible until 2026-08-24 and is exactly
-the "prove the host can saturate" concern in point 3, arriving from the other
-direction: dockassist *can* saturate, but not reliably without cost.
+cost, not just a theoretical one.** dockassist's NIC has logged **twelve
+`bcmgenet` transmit-queue stalls between 11 Aug and 5 Sep, every one 1–6
+minutes into the speedtest window** — the saturation run intermittently wedges
+the Home Assistant host's link. That was invisible until 2026-08-24 and is
+exactly the "prove the host can saturate" concern in point 3, arriving from the
+other direction: dockassist *can* saturate, but not reliably without cost.
 
 **So doubling the number of saturation runs is not a neutral change.** Decide
 the volume question (18) and the coverage question (1d) together, or 1d
 silently doubles a fault nobody had measured yet.
 
+📌 **That decision was taken on 2026-09-05 and it went in this item's favour.**
+Item 18 cut the direct path to 3 tests twice daily, so the budget now reads:
+6 saturation runs/day on one path, 12 across both — still **40% below the 20/day
+this check was doing before**. Adding the VPN path is no longer a doubling.
+
+*State:* **steps 1 and 2 are DONE** on branch
+`feat/speedtest-sizing-and-ookla-install` — the Ookla install task exists and
+`internet_speed_monitor` now takes `--server-id` (unit-tested: the flag reaches
+the binary, and an unset one passes no argument at all rather than an empty
+`--server-id=` that Ookla rejects). ✅ **STEP 3 PASSED 2026-09-05** — run by hand on both hosts, minutes apart
+(never concurrently), both pinned to server 52365:
+
+| Path | Host | Down / Up (Mbps) | Egress IP | ISP reported |
+|---|---|---|---|---|
+| Direct | dockassist | **940.94 / 940.11** | 87.210.114.214 | Odido Netherlands |
+| VPN | agent-lxc | **930.58 / 935.32** | 193.32.249.134 | **31173 Services AB** (Mullvad) |
+
+**agent-lxc saturates — comfortably.** The target was ~880–900 and it reached
+930/935, so it measures the tunnel and not its own NIC. 📌 **And the tunnel is
+independently confirmed for the first time**: the reported ISP is Mullvad's AS
+and the egress IP differs from dockassist's. Previously "agent-lxc is on the
+VPN path" was inferred from routing, never observed end to end.
+
+📌 **Pinning is validated, not just theorised.** Both paths measured against the
+same Amsterdam server despite egressing through different countries' exits —
+which is exactly what an unpinned test would have got wrong.
+
+⚠️ **Measured ratio is 98.9% down / 99.5% up, against a 94% baseline from
+2026-08-19.** The tunnel is performing *better* than when it was baselined.
+
+🔴 **Step 4 is still NOT built, and the reason has changed.** It is no longer
+blocked — it is that **two ratio samples (94%, 99%), taken 17 days apart by
+different methods, cannot set an alert threshold.** This repo has already paid
+for that lesson once: a "normal" baseline built from one sample produced three
+false misses in four days on the entity-health check. Collect the ratio before
+alerting on it.
+*Effort:* small. *Needs:* the decision in the prompt below.
+
 ```
-Build VPN-vs-direct speed monitoring. Read TODO items 1c, 1d AND 18 first — they
-carry every verified fact, do not re-derive them.
+Finish VPN-vs-direct speed monitoring. Read TODO items 1d AND 18 first. Steps 1
+and 2 are DONE (Ookla install task, --server-id support, server pinned to
+52365) — do not rebuild them. The sizing question that used to block this is
+also settled: 3 tests twice daily per path.
 
-Order, each step gating the next:
-1. Ansible task installing Ookla's speedtest, gated on enable_internet_speed_check.
-   Repo: packagecloud.io/ookla/speedtest-cli/debian/ <codename> main, keyring
-   /etc/apt/keyrings/ookla_speedtest-cli-archive-keyring.gpg, package `speedtest`.
-   A trixie suite EXISTS (queried directly) — do not pin bookworm. Purge Debian's
-   `speedtest-cli` first; both claim /usr/bin/speedtest. Run --check --diff against
-   dockassist first: it already has the right binary, so it must come back clean.
-2. Add --server-id to internet_speed_monitor. Pin 52365 (Odido Amsterdam) — that is
-   what it already auto-selects, so history stays comparable.
-3. THEN validate agent-lxc can saturate: speedtest --server-id=52365. Want ~880-900.
-   If it cannot, pick another VLAN 40 host — do not ship a monitor that measures a
-   container's NIC.
-4. THEN the ratio check: both paths sequentially, alert when VPN/direct drops below
-   ~75% for two consecutive runs, plus a loose absolute floor.
+Step 3 FIRST, and it gates everything after it. On agent-lxc, once the branch
+is deployed:
+  ssh 10.30.40.203 'speedtest --version'          # must say "Speedtest by Ookla"
+  ssh 10.30.40.203 'speedtest --server-id=52365'  # want ~880-900 Mbps
 
-🔴 Item 18 constrains this one. dockassist's NIC has logged nine bcmgenet
-transmit-queue stalls since 11 Aug, EVERY one 1-6 min into the existing
-`0 */6` speedtest window — the saturation run intermittently wedges the Home
-Assistant host's link. Adding a second measured path DOUBLES the number of
-saturation runs, so decide the volume question (18) before or alongside the
-coverage question. Do not simply add a second `--tests=5` job.
+🔴 If it cannot saturate, STOP and pick another VLAN 40 host. A host that
+cannot reach line rate measures its own NIC and reports the shortfall as "VPN
+slowness" — that is the failure this whole item is designed around, and the
+previous attempt at this validation already failed once (on the wrong binary).
+Run it once, by hand, and read the number before building anything.
+
+THEN step 4, the ratio check: both paths SEQUENTIALLY, never concurrently
+(concurrent tests through one gateway measure each other — that is what
+produced the bogus 250 Mbps reading on 2026-08-19). Alert when VPN/direct
+drops below ~75% for two consecutive runs, plus a loose absolute floor.
+Baseline is 94% (VPN 886/906 vs direct 943/940, measured 2026-08-19).
+
+Budget: 3 tests twice daily per path. Do not raise it — see item 18.
 ```
 
 
@@ -404,20 +473,29 @@ Acceptance is a forced failure: peg one core on cwwk with
 #home-alerts. Then record a fresh idle + pegged-core thermal baseline.
 ```
 
-**18. dockassist's NIC stalls under the speedtest, nine times so far**
+**18. dockassist's NIC stalls under the speedtest, twelve times so far**
 `bcmgenet` logs a transmit-queue hang whenever the link is driven flat out:
 
 ```
 bcmgenet fd580000.ethernet eth0: NETDEV WATCHDOG: CPU: 1: transmit queue 0 timed out 2024 ms
 ```
 
-⚠️ **Not one event — nine, and they are not random.** Every single one lands
+⚠️ **Not one event — twelve, and they are not random.** Every single one lands
 1–6 minutes past an hour divisible by six:
 
 ```
 Aug 11 00:03 · Aug 12 06:03 · Aug 12 18:04 · Aug 13 12:03 · Aug 14 00:06
-Aug 16 06:01 · Aug 22 12:04 · Aug 22 18:06 · Aug 23 18:03
+Aug 16 06:01 · Aug 22 12:04 · Aug 22 18:06 · Aug 23 18:03 · Aug 30 06:03
+Sep 04 00:06 · Sep 05 00:03
 ```
+
+📌 **Re-measured 2026-09-05: it is not decaying.** The last three are new since
+this item was written. Rate was 9 in 13 days to 23 Aug (0.69/day) and is 2 in
+the 3.2 days of the current boot (0.63/day) — flat, not fading.
+
+⚠️ **The evidence is perishable.** The journal holds two boots (back to
+19 Aug); the Aug 11–16 events are already gone from the host and now survive
+only in this list. Do not expect to re-derive them.
 
 dockassist has exactly one 6-hourly cron: `0 */6 * * *`
 `internet_speed_monitor --min-download=850 --min-upload=850 --tests=5
@@ -443,23 +521,54 @@ itself and the link recovers, so the observed impact so far is a brief stall,
 not an outage — a driver workaround would be a change with no way to tell
 afterwards whether it helped.
 
-*State:* cause identified 2026-08-24, detection deployed, **no fix applied and
-possibly none needed** — the open question is whether to soften the speedtest.
-*Effort:* small. *Needs:* a decision, then a laptop.
+🔎 **Found 2026-09-05: `0 */6` was the worst possible minute.** At :00 this job
+fired alongside **nine other cron entries** (five `*/10`, two hourly, one
+`*/30`, one `*/15`) and then immediately saturated the NIC. Nothing else in
+dockassist's crontab runs at :07. `check_ha_entities` already runs `2-59/15`
+for exactly this reason, and commit `39afd8c` was literally *"move off the :00
+boundary"* — the lesson was learned once and never applied here.
+
+*State:* ✅ **DEPLOYED 2026-09-05, awaiting the stall count.** Live on
+dockassist and verified in its crontab: `7 3,15 * * *`, `--tests=3`,
+`--server-id=52365`. `--tests=5` every 6h (20 saturation runs/day) →
+`--tests=3` twice daily (6/day). 📌 **First scheduled run landed 03:07** — exit 0, 190 s,
+941.02/940.23 Mbps, and **no stall**. Two manual saturation tests either side of
+it also produced none; the count sits at 2, both pre-change.
+
+⚠️ **That is not yet evidence, and it is worth being precise about why.** At the
+0.65/day baseline, ~11 h of clean running is an expected 0.3 events — seeing
+zero has a ~74% chance even if the change did nothing at all. **A week is what
+makes it a result**: ~4.5 expected events, so zero would land near 1%.
+
+📈 One thing did improve immediately and is not statistical: **run duration fell
+371 s → 190 s**, so saturated seconds per day went from ~24.7 min to ~6.3 min —
+a **74% cut in NIC exposure**, which is the quantity the stalls actually track. **The
+reduction is the experiment**: if the stalls stop, load was the cause and the
+schedule is also the fix; if they continue at 6 runs/day, the load hypothesis
+is wrong. Either outcome is a result, which is why no `ethtool -K` workaround
+was applied — that would have left nothing to observe.
+*Effort:* small. *Needs:* the deploy, then ~a week of watching.
 
 ```
-Decide what to do about dockassist's NIC stalls. Read docs/TODO.md item 18
-first — the diagnosis is DONE, do not re-derive it. Nine bcmgenet NETDEV
-WATCHDOG events since 11 Aug, every one 1-6 min into the `0 */6 * * *`
-internet_speed_monitor run (5 saturation tests, ~850+ Mbps), intermittent
-rather than every run. Detection already ships as check_nic_stalls.sh.
+Check whether the speedtest resize stopped dockassist's NIC stalls. Read
+docs/TODO.md item 18 — the diagnosis and the fix are DONE, do not re-derive
+either. The change (deployed 2026-09-05) cut 4 runs x 5 tests to 2 runs x 3
+tests and moved them off the :00 boundary to 03:07 / 15:07.
 
-The question is NOT how to silence the driver. It is whether a bandwidth test
-that occasionally wedges the Home Assistant host's NIC is worth its current
-cost — consider fewer --tests, or folding this into the item 1c/1d decision
-about what that speedtest is even measuring. Do NOT apply offload/driver
-workarounds: the queue self-recovers, so there is no established harm to fix
-and no way to prove a workaround helped.
+Count NETDEV WATCHDOG events since the deploy:
+  ssh dockassist-agent 'sudo journalctl --no-pager -k | grep -c "NETDEV WATCHDOG"'
+and check them against the 12 pre-change events listed in the item. Note the
+journal only holds two boots — if the host rebooted, `-b -1` too.
+
+Baseline to beat: ~0.65 events/day, i.e. roughly 2 per 3 days. Zero over a
+week is the fix landing; a rate near 0.2/day is proportional to the 70%
+volume cut and means load is confirmed but not eliminated; an unchanged rate
+falsifies the load hypothesis entirely.
+
+🔴 Whatever the answer, do NOT reach for `ethtool -K eth0 tso off` or another
+driver workaround. The queue self-recovers, so there is no established harm to
+fix and no way to tell afterwards whether the workaround helped. If load is
+falsified, the next step is diagnosis, not suppression.
 ```
 
 ### 🟢 P3 — improvements, no urgency
@@ -576,6 +685,17 @@ document the two-command re-key. Operator reference: docs/AGENT_LXC.md.
 
 **12. Small-fix batch — none worth its own slot, all real**
 One branch, tick them off. Phone-taggable lines marked 📱.
+
+- `ansible.builtin.apt_repository` is deprecated and goes away in ansible-core
+  2.25 (we run 2.21.3). **Three call sites left**: `services/docker`,
+  `services/audio_playback`, `services/plex`.
+  ✅ `playbooks/tasks/speedtest_cli.yml` was migrated to `deb822_repository` on
+  2026-09-05 and **is the worked example** — it also documents the two traps:
+  the old `.list` must be explicitly removed or apt sees the repo twice, and
+  `python3-debian` must be installed or `--check` fails on the task.
+  📌 There is a second, better reason than the deprecation: `apt_repository`
+  requires a `gpg` binary on the target and **fails outright without one**, which
+  is what it did on agent-lxc. Any minimal host added to the fleet hits this.
 
 - `CLAUDE.md` still says `deploy_monitoring.yml` deploys "monitoring scripts to
   all hosts" — it syncs only `scripts/common/`. That wording is what hid the
