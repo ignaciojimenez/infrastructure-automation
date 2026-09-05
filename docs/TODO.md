@@ -255,38 +255,51 @@ which is exactly what an unpinned test would have got wrong.
 ⚠️ **Measured ratio is 98.9% down / 99.5% up, against a 94% baseline from
 2026-08-19.** The tunnel is performing *better* than when it was baselined.
 
-🔴 **Step 4 is still NOT built, and the reason has changed.** It is no longer
-blocked — it is that **two ratio samples (94%, 99%), taken 17 days apart by
-different methods, cannot set an alert threshold.** This repo has already paid
-for that lesson once: a "normal" baseline built from one sample produced three
-false misses in four days on the entity-health check. Collect the ratio before
-alerting on it.
-*Effort:* small. *Needs:* the decision in the prompt below.
+✅ **STEP 4 — MEASUREMENT SHIPPED 2026-09-05; the ratio alert is deliberately
+deferred.** The VPN path is now measured on agent-lxc at **03:37 / 15:37**,
+3 tests, same pinned server, logging to `internet_speed_check_vpn.log`.
+
+🔴 **:37, not :07.** dockassist runs at :07 and the two share one WAN link —
+concurrent saturation tests measure each other, which is what produced the bogus
+250 Mbps reading on 2026-08-19. Runs take ~190 s, so the 27-minute gap is ample.
+**Never move either schedule without moving the other.**
+
+⚠️ **A loose absolute floor (700/700/30) is the only alert, on purpose.** The
+ratio threshold item 1d specifies cannot be set from two samples 17 days apart,
+and a one-sample baseline has burned this repo before. 700 Mbps is ~75% of line
+rate and catches a genuinely broken tunnel from day one — strictly better than
+today, where nothing watches this path at all.
+
+📊 **First real variance data, from the hand-run of the production invocation
+(2026-09-05 12:13, 3 tests):** 935.01 · 938.16 · **908.66** Mbps down — a ~3%
+spread *within a single run*. That is the number a ratio threshold has to
+tolerate, and it is why 94%-vs-99% could not have set one.
+
+*State:* measuring. *Effort:* small. *Needs:* **~a fortnight of data, then set
+the ratio threshold from observed variance** — compare the medians in
+`internet_speed_check.log` (dockassist) and `internet_speed_check_vpn.log`
+(agent-lxc) at matching times.
 
 ```
-Finish VPN-vs-direct speed monitoring. Read TODO items 1d AND 18 first. Steps 1
-and 2 are DONE (Ookla install task, --server-id support, server pinned to
-52365) — do not rebuild them. The sizing question that used to block this is
-also settled: 3 tests twice daily per path.
+Set the VPN-vs-direct ratio threshold from real data. Read docs/TODO.md item 1d.
+Steps 1-4 are DONE and deployed — both paths are measured (dockassist :07,
+agent-lxc :37, same pinned server 52365). Do NOT rebuild any of it, and do NOT
+move either schedule without moving the other: they share one WAN link and
+27 minutes apart is what keeps them from measuring each other.
 
-Step 3 FIRST, and it gates everything after it. On agent-lxc, once the branch
-is deployed:
-  ssh 10.30.40.203 'speedtest --version'          # must say "Speedtest by Ookla"
-  ssh 10.30.40.203 'speedtest --server-id=52365'  # want ~880-900 Mbps
+Only run this once there are ~2 weeks of paired runs. Pull the medians:
+  ssh dockassist-agent 'sudo agent_read log internet_speed_check.log'      | grep "Speed test passed"
+  ssh 10.30.40.203     'grep "Final results (median)" ~/.logs/internet_speed_check_vpn.log'
 
-🔴 If it cannot saturate, STOP and pick another VLAN 40 host. A host that
-cannot reach line rate measures its own NIC and reports the shortfall as "VPN
-slowness" — that is the failure this whole item is designed around, and the
-previous attempt at this validation already failed once (on the wrong binary).
-Run it once, by hand, and read the number before building anything.
+Pair them by date, compute VPN/direct per day, and report the DISTRIBUTION —
+min, median, spread — before proposing a number. Known so far: 94% (19 Aug),
+99% (5 Sep), and ~3% spread WITHIN a single 3-test run, so any threshold must
+clear that noise floor comfortably.
 
-THEN step 4, the ratio check: both paths SEQUENTIALLY, never concurrently
-(concurrent tests through one gateway measure each other — that is what
-produced the bogus 250 Mbps reading on 2026-08-19). Alert when VPN/direct
-drops below ~75% for two consecutive runs, plus a loose absolute floor.
-Baseline is 94% (VPN 886/906 vs direct 943/940, measured 2026-08-19).
-
-Budget: 3 tests twice daily per path. Do not raise it — see item 18.
+Then replace the loose absolute floor with a ratio alert: fire when VPN/direct
+drops below the chosen figure for TWO consecutive runs, keeping a loose absolute
+floor underneath it. 🔴 Do not pick the threshold from the two historical points
+alone — that is exactly what this step was deferred to avoid.
 ```
 
 

@@ -160,3 +160,55 @@
     speedtest_version.rc != 0
     or 'Speedtest by Ookla' not in speedtest_version.stdout
   tags: [monitoring, network, speedtest]
+
+# ============================================================
+# The measurement itself
+# ============================================================
+# Script and cron live here, next to the binary install they depend on, rather
+# than in the homeassistant role where they started. Measuring the WAN link is
+# not a property of the host that runs Home Assistant, and item 1d needs the
+# same measurement from a VLAN 40 host that has no HA on it at all.
+
+- name: Deploy internet speed monitor script
+  become: true
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../scripts/services/network/internet_speed_monitor"
+    dest: "{{ scripts_dir }}/internet_speed_monitor"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0755'
+  tags: [monitoring, network, speedtest]
+
+# ⚠️ Schedule is per-host and the two hosts MUST NOT overlap. dockassist and
+# agent-lxc share one WAN link, so two concurrent saturation tests measure each
+# other rather than the line — that is exactly what produced the bogus 250 Mbps
+# reading on 2026-08-19. dockassist runs at :07, the VPN path at :37.
+#
+# 📌 The minute matters for a second reason on dockassist — see item 18. `:00`
+# is where every */10, */15, */30 and hourly job coincides.
+- name: Configure internet speed monitoring cron job
+  ansible.builtin.cron:
+    name: "{{ internet_speed_cron_name | default('Internet speed check') }}"
+    minute: "{{ internet_speed_minute | default('7') }}"
+    hour: "{{ internet_speed_hour | default('3,15') }}"
+    job: >
+      {{ scripts_dir }}/enhanced_monitoring_wrapper
+      --heartbeat-interval=daily
+      --notify-fixed=true
+      --monitoring-name={{ internet_speed_monitoring_name | default('internet_speed_check') }}
+      {{ logging_token }}
+      {{ alert_token }}
+      {{ scripts_dir }}/internet_speed_monitor
+      --min-download={{ internet_speed_min_download | default(300) }}
+      --min-upload={{ internet_speed_min_upload | default(150) }}
+      --max-ping={{ internet_speed_max_ping | default(100) }}
+      --tests={{ internet_speed_tests | default(3) }}
+      --delay={{ internet_speed_delay | default(45) }}
+      {% if internet_speed_server_id | default('') %}--server-id={{ internet_speed_server_id }}{% endif %}
+      --silent
+      >> {{ logs_dir }}/{{ internet_speed_monitoring_name | default('internet_speed_check') }}.log 2>&1
+    user: "{{ ansible_user }}"
+  when:
+    - logging_token is defined and logging_token != ''
+    - alert_token is defined and alert_token != ''
+  tags: [monitoring, network, speedtest, cron]
