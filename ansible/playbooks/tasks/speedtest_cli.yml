@@ -204,11 +204,62 @@
       --max-ping={{ internet_speed_max_ping | default(100) }}
       --tests={{ internet_speed_tests | default(3) }}
       --delay={{ internet_speed_delay | default(45) }}
+      --state-dir={{ logs_dir }}
       {% if internet_speed_server_id | default('') %}--server-id={{ internet_speed_server_id }}{% endif %}
       --silent
       >> {{ logs_dir }}/{{ internet_speed_monitoring_name | default('internet_speed_check') }}.log 2>&1
     user: "{{ ansible_user }}"
   when:
+    - logging_token is defined and logging_token != ''
+    - alert_token is defined and alert_token != ''
+  tags: [monitoring, network, speedtest, cron]
+
+# ============================================================
+# Cross-path comparison (docs/TODO.md item 1d)
+# ============================================================
+# Only the VPN-side host runs this. It reads the peer's speed_last.json over the
+# existing read-only fleet SSH and owns the comparison, because two hosts each
+# checking their own absolute thresholds is not a comparison — it is two
+# absolute checks, which is what item 1d already rejected.
+
+- name: Deploy the cross-path speed comparison script
+  become: true
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../scripts/services/network/compare_speed_paths.sh"
+    dest: "{{ scripts_dir }}/compare_speed_paths.sh"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0755'
+  when: enable_speed_path_comparison | default(false)
+  tags: [monitoring, network, speedtest]
+
+# Scheduled AFTER both measurements have finished, not alongside them: this job
+# compares two records that already exist and makes no network measurement of
+# its own. With runs starting :07 and :14 and taking ~190 s, :20 is clear of
+# both.
+- name: Configure cross-path speed comparison cron job
+  ansible.builtin.cron:
+    name: "Internet speed path comparison"
+    minute: "{{ speed_comparison_minute | default('20') }}"
+    hour: "{{ speed_comparison_hour | default('3,15') }}"
+    job: >
+      {{ scripts_dir }}/enhanced_monitoring_wrapper
+      --heartbeat-interval=daily
+      --notify-fixed=true
+      --monitoring-name=speed_path_comparison
+      {{ logging_token }}
+      {{ alert_token }}
+      {{ scripts_dir }}/compare_speed_paths.sh
+      --state-dir={{ logs_dir }}
+      --peer={{ speed_comparison_peer | default('dockassist-agent') }}
+      --peer-label={{ speed_comparison_peer_label | default('direct') }}
+      --local-label={{ speed_comparison_local_label | default('vpn') }}
+      --max-age={{ speed_comparison_max_age | default(60) }}
+      {% if speed_comparison_min_ratio | default('') %}--min-ratio={{ speed_comparison_min_ratio }}{% endif %}
+      >> {{ logs_dir }}/speed_path_comparison.log 2>&1
+    user: "{{ ansible_user }}"
+  when:
+    - enable_speed_path_comparison | default(false)
     - logging_token is defined and logging_token != ''
     - alert_token is defined and alert_token != ''
   tags: [monitoring, network, speedtest, cron]

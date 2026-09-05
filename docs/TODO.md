@@ -59,12 +59,18 @@ renders it:
 > **№1** 18 + 1c + 1d *(**one branch, one deploy** —
 > `feat/speedtest-sizing-and-ookla-install`; see below)* → **№2** 2 →
 > **№3** 4 (plex) → **№4** 9 → **№5** 3a/3b/3c → **№6** 5 → **№7** 19 →
-> **№8** 12 → **№9** 22 → **№10** 10 → **№11** 11 → **№12** 6 → **№13** 7 →
-> **№14** 34 *(small; restores `changed=0` as a signal for the docker role)* →
-> **№15–18** 8/13/14/16 · **№19** 32 *(git-history rewrite — decision only,
-> default is no)* · **№20** 26 *(one UI toggle, global — his call)*
+> **№8** 12 → **№9** 10 → **№10** 11 → **№11** 6 → **№12** 7 →
+> **№13** 34 *(small; restores `changed=0` as a signal for the docker role)* →
+> **№14–17** 8/13/14/16 · **№18** 32 *(git-history rewrite — decision only,
+> default is no)* · **№19** 26 *(one UI toggle, global — his call)*
 > *(decision-gated — 16 needs a purchase call, 32 needs his call on a public
 > force-push, the rest need him at the cabinet; not ranked)*
+
+✅ **Item 22 closed 2026-09-05** — `agent_read` now decompresses rotated logs,
+and **refuses loudly** when it cannot rather than emitting bytes a `grep` reads
+as "nothing found". Proved on dockassist: a `.gz` that returned 0 matches now
+returns **8**. It was found because it broke *this* work — the first plan for
+the ratio data was to read it back out of rotated logs.
 
 🔀 **18, 1c and 1d stopped being three items on 2026-09-05.** They were always
 one cron line — each of their prompts opened by telling you to read the other
@@ -255,14 +261,33 @@ which is exactly what an unpinned test would have got wrong.
 ⚠️ **Measured ratio is 98.9% down / 99.5% up, against a 94% baseline from
 2026-08-19.** The tunnel is performing *better* than when it was baselined.
 
-✅ **STEP 4 — MEASUREMENT SHIPPED 2026-09-05; the ratio alert is deliberately
-deferred.** The VPN path is now measured on agent-lxc at **03:37 / 15:37**,
-3 tests, same pinned server, logging to `internet_speed_check_vpn.log`.
+✅ **STEP 4 — SHIPPED 2026-09-05, with the comparison owned by one job.** The
+VPN path is measured on agent-lxc at **03:14 / 15:14** and
+`compare_speed_paths.sh` runs at **03:20 / 15:20**, reading dockassist's record
+over the existing read-only fleet SSH.
 
-🔴 **:37, not :07.** dockassist runs at :07 and the two share one WAN link —
+🔴 **The headline alert is NOT the ratio — it is that the two paths egress from
+different addresses.** If the tunnel drops, agent-lxc keeps measuring and simply
+measures the direct line: throughput goes **up** and the ratio moves toward 1.0,
+so every speed-based check reads a *vanished* tunnel as a healthy one. The unit
+test pins this with a fixture whose ratio is **1.0002**. The exit address is the
+only signal that separates those states, and unlike a ratio it needs no
+baseline.
+
+📂 **The data now survives.** `speed_last.json`, `speed_history.csv` and
+`speed_ratio_history.csv` live in `logs_dir` but are deliberately not `*.log` —
+logrotate is `{{ logs_dir }}/*.log { daily; rotate 7; compress }`, which would
+have left **one readable day** of a fortnight-long question. That is how the
+first version of this plan failed. There is a matching warning at the glob in
+`playbooks/system/baseline.yml`.
+
+🔴 **:14, not :07.** dockassist runs at :07 and the two share one WAN link —
 concurrent saturation tests measure each other, which is what produced the bogus
-250 Mbps reading on 2026-08-19. Runs take ~190 s, so the 27-minute gap is ample.
-**Never move either schedule without moving the other.**
+250 Mbps reading on 2026-08-19. Runs take ~190 s, so :14 starts four minutes
+clear. ⚠️ It was briefly :37; that was safe but **too loose** — a 30-minute gap
+lets ordinary ISP variation between :07 and :40 leak into the ratio and be
+blamed on the tunnel, reintroducing the very confound the ratio exists to
+remove. **Never move either schedule without moving the other.**
 
 ⚠️ **A loose absolute floor (700/700/30) is the only alert, on purpose.** The
 ratio threshold item 1d specifies cannot be set from two samples 17 days apart,
@@ -275,10 +300,11 @@ today, where nothing watches this path at all.
 spread *within a single run*. That is the number a ratio threshold has to
 tolerate, and it is why 94%-vs-99% could not have set one.
 
-*State:* measuring. *Effort:* small. *Needs:* **~a fortnight of data, then set
-the ratio threshold from observed variance** — compare the medians in
-`internet_speed_check.log` (dockassist) and `internet_speed_check_vpn.log`
-(agent-lxc) at matching times.
+*State:* measuring, and the egress check is live. *Effort:* one line.
+*Needs:* **~a fortnight of pairs, then set `speed_comparison_min_ratio`** in
+`group_vars/agent.yml` from the observed distribution in
+`~/.logs/speed_ratio_history.csv` on agent-lxc. Turning it on is that variable;
+no code change.
 
 ```
 Set the VPN-vs-direct ratio threshold from real data. Read docs/TODO.md item 1d.
@@ -782,9 +808,24 @@ retract all of it once `sudo` was tried. **An error that misidentifies its own
 cause is worse than a vague one**, because it is confidently actionable in the
 wrong direction.
 
-*State:* **fix is on `main`** (merged `d650d1d`, 2026-08-24) — the helper now
-distinguishes "cannot read the file, run with sudo" from "key absent". Deployed
-to dockassist. Open only because both branches have not been force-verified.
+*State:* **deployed and mostly verified 2026-09-05.**
+
+⚠️ **This entry said "Deployed to dockassist" and that was wrong.** The fix was
+merged on 2026-08-24 and sat **undeployed for 12 days**; a `--check` run of
+`agent_access.yml` on 2026-09-05 reported the helper as `changed`, with the
+sudo-branch block showing as an *addition*. It only surfaced because an
+unrelated run happened to touch that role. 📌 **"On `main`" is not a state this
+fleet has** — `changed=0` against the host is; see the standing note at the top
+of this file.
+
+Now genuinely deployed, and two of three branches forced on dockassist as
+`read_agent`: without `sudo` it names the unreadable file and says to use sudo;
+with `sudo` it returns JSON.
+
+🔴 **The third branch is still unforced** — "key absent from `secrets.yaml`".
+Its wording changed too ("monitor token not found" → "key ha_monitor_token is
+absent"), so that text has never been executed. Forcing it means mutating the
+live HA secrets file, which is why it was skipped rather than faked.
 
 ```
 Verify the ha_state error-message fix on dockassist. Read docs/TODO.md item 19
@@ -794,60 +835,14 @@ Force BOTH branches as read_agent over SSH, not as choco:
     -> must now say it cannot read the file and to use sudo
   ssh dockassist-agent 'sudo ha_state binary_sensor.vinylstreamer_online'
     -> must return JSON
-Then point it at a real file with the key removed to confirm the "key absent"
-branch still fires. A message that is merely reworded but never forced down
-both paths has not been tested.
+🔴 The sudo/no-sudo branches were forced on 2026-09-05 and both behave. What
+is LEFT is only the "key absent" branch: point the helper at a COPY of
+secrets.yaml with ha_monitor_token removed — do NOT edit the live file on the
+HA host. If the helper has no path override, add one for the test rather than
+mutating production. A message that is merely reworded but never executed has
+not been tested.
 ```
 
-
-**22. `agent_read` returns gzip bytes for rotated logs instead of saying it cannot help**
-Reading a rotated log through the agent helper returns the raw compressed file:
-
-```
-$ sudo agent_read log wifi_reconnect.log.2.gz
-<binary gzip>
-```
-
-🐛 **The danger is that grep still "works".** A search over those bytes matches
-nothing and returns `0` — which reads exactly like *"the event never happened"*
-rather than *"this file is unreadable"*. Measured 2026-08-27 while answering
-"has the W1 ladder ever fired?": the current log covered only ~15 h of a ~57 h
-uptime because it rotates often, and the rotated `.gz` reported **0 ladder
-starts**. Piping it through `gunzip` locally recovered the missing 25 hours —
-which contained **8**. (They turned out to be a known self-inflicted burst, but
-the tool had no way to tell me that; it just said zero.)
-
-📌 **Same failure family as item 19**, and the third instance this month: a
-tool built for the unattended tier that returns something *useless* rather than
-refusing. The pattern is now explicit in `AGENT_INSTRUCTIONS.md` — the fix here
-is one line of `zcat`, but the value is closing a silent blind spot in every
-future investigation that reads history.
-
-⚠️ **Any past investigation that read a rotated log through `agent_read` may
-have concluded "nothing found" from unreadable bytes.** Worth remembering before
-trusting an old negative result about anything older than a rotation.
-
-*State:* diagnosed 2026-08-27, not fixed. *Effort:* small.
-*Needs:* a laptop (edit `agent_read.sh.j2`, redeploy `agent_access.yml`).
-
-```
-Make agent_read handle rotated logs. Read docs/TODO.md item 22 first — this is
-NOT "add a feature", it is closing a silent blind spot: today it cats .gz files
-raw, so grep over them returns 0 matches and an investigation reads that as
-"the event never happened".
-
-In roles/agent_access/templates/agent_read.sh.j2, detect a .gz suffix and use
-zcat/gunzip -c; leave plain files alone. Keep it read-only and keep the
-existing path confinement — do not widen what it can open.
-
-Verify by FORCING both branches as read_agent over SSH, not as choco:
-  ssh vinylstreamer-agent 'sudo agent_read log wifi_reconnect.log.2.gz | head -3'
-    -> must print readable timestamped lines, not binary
-  ssh vinylstreamer-agent 'sudo agent_read log wifi_reconnect.log | head -3'
-    -> must still work unchanged
-Then grep the .gz for a string you KNOW is in it and confirm a non-zero count —
-a reworded helper that was never grepped has not been tested.
-```
 
 **34. The docker role reports `changed` on every run, so `changed=0` cannot be trusted for it**
 `Download Docker GPG key` uses `force: true`, so `get_url` re-fetches and

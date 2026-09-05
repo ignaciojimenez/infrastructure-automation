@@ -103,11 +103,16 @@ agent_small_model: "anthropic/claude-haiku-4-5"
 # 87.210.114.214). It saturates, so it measures the tunnel and not its own NIC.
 enable_internet_speed_check: true
 
-# 🔴 :37, NOT :07 — dockassist runs at :07 and the two share one WAN link.
+# 🔴 :14, NOT :07 — dockassist runs at :07 and the two share one WAN link.
 # Concurrent saturation tests measure each other rather than the line; that is
-# what produced the bogus 250 Mbps reading on 2026-08-19. Thirty minutes apart
-# is comfortably clear of a ~190 s run.
-internet_speed_minute: "37"
+# what produced the bogus 250 Mbps reading on 2026-08-19.
+#
+# Runs take ~190 s, so dockassist is finished by ~:10 and this starts four
+# minutes clear of it. It was briefly :37, which was safe but far too loose: a
+# 30-minute gap lets ordinary variation in the ISP line between :07 and :40 leak
+# into the ratio and be attributed to the tunnel — reintroducing a version of
+# the very confound the ratio exists to remove. Tight coupling is the point.
+internet_speed_minute: "14"
 internet_speed_hour: "3,15"
 
 # Same server as dockassist, on purpose. Ookla picks relative to the EGRESS, so
@@ -140,3 +145,25 @@ internet_speed_max_ping: 30
 # wrapper's state files, and so each keeps its own log.
 internet_speed_cron_name: "Internet speed check (VPN path)"
 internet_speed_monitoring_name: "internet_speed_check_vpn"
+
+
+# ============================================================
+# Cross-path comparison — this host owns it
+# ============================================================
+# Reads dockassist's speed_last.json over the existing read-only fleet SSH,
+# records the pair, and alerts. It runs here rather than on dockassist because
+# this is the host whose path is in question.
+enable_speed_path_comparison: true
+speed_comparison_minute: "20"
+speed_comparison_hour: "3,15"
+speed_comparison_peer: "dockassist-agent"
+speed_comparison_peer_label: "direct"
+speed_comparison_local_label: "vpn"
+speed_comparison_max_age: 60
+
+# 🔴 DELIBERATELY UNSET. With this empty the ratio is recorded every run and
+# never alerted on; the only alert is the egress-identity check, which needs no
+# baseline. Set it once speed_ratio_history.csv holds ~2 weeks of pairs — the
+# noise floor is ~3% WITHIN a single 3-test run, so any value must clear that
+# comfortably. Turning it on is this one line.
+speed_comparison_min_ratio: ""

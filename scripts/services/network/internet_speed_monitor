@@ -12,6 +12,8 @@
 #   --tests=N            Number of tests to run and average (default: 3)
 #   --delay=SEC          Delay between tests in seconds (default: 45)
 #   --server-id=ID       Pin the Ookla server (default: let Ookla pick per run)
+#   --state-dir=PATH     Where to write speed_last.json and speed_history.csv
+#                        (default: $HOME/.logs — see the note by write_state)
 #   --silent             Suppress non-error output
 #
 # Exit codes:
@@ -29,6 +31,7 @@ MAX_PING=100
 NUM_TESTS=3
 DELAY_BETWEEN_TESTS=45
 SERVER_ID=""
+STATE_DIR="${HOME}/.logs"
 SILENT=false
 
 # Parse command line arguments
@@ -56,6 +59,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --server-id=*)
             SERVER_ID="${1#*=}"
+            shift
+            ;;
+        --state-dir=*)
+            STATE_DIR="${1#*=}"
             shift
             ;;
         --silent)
@@ -158,6 +165,13 @@ run_single_speedtest() {
         server_name=$(echo "$result_json" | jq -r '.server.name // "Unknown"')
         server_location=$(echo "$result_json" | jq -r '.server.location // "Unknown"')
         isp=$(echo "$result_json" | jq -r '.isp // "Unknown"')
+        # The EGRESS identity, and it is not bookkeeping. If a VPN tunnel drops
+        # and traffic starts leaving through the normal WAN, throughput goes UP
+        # and a speed-ratio comparison reads that as perfectly healthy — the
+        # tunnel being GONE is indistinguishable from the tunnel being fine.
+        # Only the exit address and ISP can tell those apart.
+        server_id=$(echo "$result_json" | jq -r '.server.id // 0')
+        external_ip=$(echo "$result_json" | jq -r '.interface.externalIp // "unknown"')
     else
         # Fallback parsing without jq (basic regex extraction)
         # Extract only the result line to avoid parsing log lines
@@ -178,6 +192,8 @@ run_single_speedtest() {
         server_name="Unknown"
         server_location="Unknown"
         isp="Unknown"
+        server_id=0
+        external_ip="unknown"
     fi
     
     # Validate parsed values
@@ -196,6 +212,8 @@ run_single_speedtest() {
         final_server_name="$server_name"
         final_server_location="$server_location"
         final_isp="$isp"
+        final_server_id="$server_id"
+        final_external_ip="$external_ip"
     fi
     
     log_msg "Test ${test_num} results: Download ${download_mbps} Mbps, Upload ${upload_mbps} Mbps, Ping ${ping_ms} ms"
@@ -256,6 +274,8 @@ ping_results=()
 final_server_name="Unknown"
 final_server_location="Unknown"
 final_isp="Unknown"
+final_server_id=0
+final_external_ip="unknown"
 
 # Run multiple speed tests
 successful_tests=0
@@ -319,6 +339,67 @@ if [ "$ping_int" -gt "$MAX_PING" ]; then
     issues+=("Ping ${ping_ms} ms is above threshold of ${MAX_PING} ms")
     status="FAIL"
 fi
+
+# ------------------------------------------------------------------
+# Durable result records
+# ------------------------------------------------------------------
+# Two files, both written on every completed run regardless of PASS/FAIL:
+#
+#   speed_last.json  — the latest result, overwritten. This is what another
+#                      host reads to compare paths, so it must be one line and
+#                      cheap to parse.
+#   speed_history.csv — append-only, one row per run. This is the record a
+#                      threshold gets set from later.
+#
+# ⚠️ They live in the LOG directory but are deliberately NOT named `*.log`.
+# logrotate is configured (playbooks/system/baseline.yml) as
+# `{{ logs_dir }}/*.log { daily; rotate 7; compress }` — so a `.log` here would
+# survive 7 days and spend 6 of them gzipped. History that expires in a week
+# cannot answer a question asked over a fortnight, which is exactly how the
+# first plan for this data failed. The `.json`/`.csv` extensions are what keeps
+# them out of that glob. 🔴 If that glob is ever widened to `*`, these go with
+# it — there is a matching warning in baseline.yml.
+write_state() {
+    [ -n "$STATE_DIR" ] || return 0
+    mkdir -p "$STATE_DIR" 2>/dev/null || { error_msg "cannot create state dir $STATE_DIR"; return 1; }
+
+    local ts host json_f csv_f isp_csv
+    ts=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+    host=$(hostname)
+    # The ISP string is vendor-controlled free text. A single comma in it would
+    # shift every column to its right and corrupt the history silently — the
+    # analysis would still parse, just wrongly. Strip separators rather than
+    # quote, because a reader doing `cut -d,` should not need a CSV parser.
+    isp_csv=$(printf '%s' "$final_isp" | tr ',' ' ')
+    json_f="${STATE_DIR}/speed_last.json"
+    csv_f="${STATE_DIR}/speed_history.csv"
+
+    # Written to a temp file and moved into place: a reader on another host may
+    # be fetching this at any moment, and a half-written record parses as
+    # garbage rather than failing cleanly.
+    if printf '{"timestamp":"%s","host":"%s","status":"%s","download_mbps":%s,"upload_mbps":%s,"ping_ms":%s,"server_id":%s,"isp":"%s","external_ip":"%s"}\n' \
+        "$ts" "$host" "$status" "$download_mbps" "$upload_mbps" "$ping_ms" \
+        "$final_server_id" "$final_isp" "$final_external_ip" > "${json_f}.tmp" 2>/dev/null; then
+        mv -f "${json_f}.tmp" "$json_f" 2>/dev/null || error_msg "cannot install $json_f"
+    else
+        error_msg "cannot write $json_f"
+        rm -f "${json_f}.tmp" 2>/dev/null
+    fi
+
+    if [ ! -f "$csv_f" ]; then
+        echo "timestamp,host,status,download_mbps,upload_mbps,ping_ms,server_id,isp,external_ip" > "$csv_f" 2>/dev/null \
+            || { error_msg "cannot create $csv_f"; return 1; }
+    fi
+    printf '%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
+        "$ts" "$host" "$status" "$download_mbps" "$upload_mbps" "$ping_ms" \
+        "$final_server_id" "$isp_csv" "$final_external_ip" >> "$csv_f" 2>/dev/null \
+        || error_msg "cannot append $csv_f"
+}
+
+# Never let a bookkeeping failure change the check's verdict: the measurement
+# either met its thresholds or it did not, and an unwritable disk is a different
+# fault reported by a different check.
+write_state || true
 
 # Generate report
 if [ "$SILENT" = "false" ]; then

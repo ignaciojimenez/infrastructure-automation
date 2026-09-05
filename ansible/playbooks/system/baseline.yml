@@ -90,6 +90,15 @@
     # Enforcing 0755 on the directory would also work, but only until the next
     # host whose logs_dir arrives by some other route. `su` removes the coupling
     # between two unrelated tasks instead of restating it.
+    # 🔴 The glob is `*.log` and that is load-bearing, not incidental.
+    # internet_speed_monitor and compare_speed_paths.sh deliberately write
+    # speed_last.json, speed_history.csv and speed_ratio_history.csv into this
+    # same directory precisely BECAUSE they are not `.log` and so survive here.
+    # They hold the accumulating record a VPN-vs-direct ratio threshold gets set
+    # from, which is a question asked over weeks — `rotate 7` plus `compress`
+    # would leave one readable day of it. Widening this to `*` silently destroys
+    # that data. If you need to rotate them, give them their own stanza with a
+    # horizon that suits the question they answer.
     - name: Set up log rotation for user logs
       ansible.builtin.copy:
         dest: "/etc/logrotate.d/{{ primary_user }}"
