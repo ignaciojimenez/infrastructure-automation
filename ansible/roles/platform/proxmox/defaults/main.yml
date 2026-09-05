@@ -18,6 +18,30 @@ proxmox_cpu_governor: powersave   # intel_pstate dynamic mode; still boosts to m
 # many near-identical VMs. See docs/ARCHITECTURE_DECISIONS.md.
 proxmox_disable_ksm: true
 
+# vzdump nightly backup -- I/O bandwidth cap (see docs/ARCHITECTURE_DECISIONS.md).
+# The 03:00 job reads VM 100's full 64 GiB disk. Uncapped it sustains ~288 MiB/s and
+# finishes in ~4 min, but holds the package at a 78-79 C mean and spends ~125 s above
+# 80 C. Capped at 100 MiB/s it takes ~11 min at a 64 C mean and ~15 s above 80 C --
+# an 8x cut in time-at-high-temperature, measured A/B on 2026-09-05.
+#
+# 📌 The PEAK barely moves (86 -> 85 C). What falls is time AT temperature, which is
+# what actually drives throttling; do not expect this knob to lower the maximum.
+#
+# ⚠️ Do NOT tune this by throttle-event count. Two IDENTICAL uncapped control runs
+# scored 48 and 79 events, so single-run resolution is ~+/-30 -- finer tuning is
+# below the instrument's noise floor. Judge it on time-above-80 C instead.
+#
+# 0 disables the cap. Set on the host in /etc/vzdump.conf, which PVE reads as
+# defaults for every vzdump invocation including scheduled jobs
+# (PVE::VZDump::read_vzdump_defaults, applied for any key the job does not define).
+proxmox_vzdump_bwlimit_kib: 102400   # 100 MiB/s
+
+# The backup dataset holds vzdump's own zstd archives, so ZFS compression has nothing
+# left to find: measured compressratio was exactly 1.00x, i.e. a pointless pass over
+# ~17 GB every night. Empty string skips the ZFS change entirely.
+proxmox_backup_dataset: rpool/var-lib-vz
+proxmox_backup_dataset_compression: "off"
+
 # Journald: explicit persistence + size cap (see docs/ARCHITECTURE_DECISIONS.md).
 # 4G matches systemd's implicit ceiling and keeps ~3 months of forensic history
 # at the observed ~1.2G/month; cwwk is the host where journal forensics matter most.

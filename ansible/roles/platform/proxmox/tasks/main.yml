@@ -104,6 +104,61 @@
   become_user: "{{ infrastructure_user }}"
   when: vault_healthcheck_backup_proxmox is defined
 
+# --- vzdump thermal load ---
+#
+# The nightly guest-image backup is the single largest thermal event on this box.
+# See docs/ARCHITECTURE_DECISIONS.md for the measured A/B; the short version is that
+# capping backup I/O cuts time-above-80 C by ~8x at the cost of a longer job.
+
+- name: Configure vzdump defaults
+  ansible.builtin.template:
+    src: vzdump.conf.j2
+    dest: /etc/vzdump.conf
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+  tags: [proxmox, backup, thermal]
+
+# A per-job bwlimit takes precedence over /etc/vzdump.conf, so a value left on the
+# job would silently override the file above and make future edits to it no-ops.
+# Strip it so the templated file is the only place this is set.
+- name: Read vzdump job definitions
+  ansible.builtin.command: pvesh get /cluster/backup --output-format json
+  register: proxmox_vzdump_jobs
+  changed_when: false
+  check_mode: false
+  become: true
+  tags: [proxmox, backup, thermal]
+
+- name: Remove per-job bwlimit so /etc/vzdump.conf stays authoritative
+  ansible.builtin.command: pvesh set /cluster/backup/{{ item.id }} --delete bwlimit
+  loop: "{{ proxmox_vzdump_jobs.stdout | from_json | selectattr('bwlimit', 'defined') | list }}"
+  loop_control:
+    label: "{{ item.id }}"
+  become: true
+  tags: [proxmox, backup, thermal]
+
+- name: Read current compression on the backup dataset
+  ansible.builtin.command: zfs get -H -o value compression {{ proxmox_backup_dataset }}
+  register: proxmox_backup_compression_now
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  become: true
+  when: proxmox_backup_dataset | default('') != ''
+  tags: [proxmox, backup, thermal]
+
+- name: Disable ZFS compression on the backup dataset
+  ansible.builtin.command: zfs set compression={{ proxmox_backup_dataset_compression }} {{ proxmox_backup_dataset }}
+  become: true
+  when:
+    - proxmox_backup_dataset | default('') != ''
+    - proxmox_backup_dataset_compression | default('') != ''
+    - proxmox_backup_compression_now.rc | default(1) == 0
+    - proxmox_backup_compression_now.stdout | default('') != proxmox_backup_dataset_compression
+  tags: [proxmox, backup, thermal]
+
 # --- USB Recovery Drive ---
 
 - name: Create USB recovery mount point

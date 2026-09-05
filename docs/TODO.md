@@ -3,7 +3,7 @@
 **Improvements and fixes waiting to be worked on.** Start at *What to work on
 next*; the first item you can act on is the right one.
 
-Updated: 2026-09-05
+Updated: 2026-09-06
 
 | Where a thing lives | |
 |---|---|
@@ -56,7 +56,7 @@ here is something to read past, every time, forever. The write-up goes to
 (numbers never move), but the order to work them is this, and the dashboard
 renders it:
 
-> **№1** 18 + 1d *(**deployed; both waiting on a reading** —
+> **№1** 18 + 1d + 35 *(**deployed; all three waiting on a reading** —
 > see below)* → **№2** 2 →
 > **№3** 4 (plex) → **№4** 9 → **№5** 3a/3b/3c → **№6** 5 → **№7** 19 →
 > **№8** 12 → **№9** 10 → **№10** 11 → **№11** 6 → **№12** 7 →
@@ -114,6 +114,86 @@ close would silently repoint them. Numbers are addresses, not ranks — the
 headings say what is urgent.
 
 ### 🟠 P2 — known risk, not currently biting
+
+**35. Set cwwk's thermal alert thresholds from a week of real backup nights**
+`check_thermal.sh` alerts on a **known and accepted** event. Its thresholds sit
+*inside* the normal variation of that event, so they fire at random.
+
+📊 **Measured A/B on 2026-09-05** (three runs, VM 100 only, ~2 h apart, KSM off,
+PL1/PL2 20 W/35 W, door untouched):
+
+| Run | Rate | Duration | Peak | Mean | time >80 C | Throttle events |
+|---|---|---|---|---|---|---|
+| A1 uncapped | 287 MiB/s | 230 s | 86 C | 78.6 C | 125 s | 48 |
+| A2 uncapped | ~280 MiB/s | 260 s | 89 C | 79.1 C | 165 s | **79** |
+| **B capped 100 MiB/s** | 99.8 MiB/s | 655 s | 85 C | **64.0 C** | **15 s** | **9** |
+
+🔴 **A1 and A2 were IDENTICAL settings and scored 48 vs 79.** Single-run
+resolution on throttle count is ~±30 events. `THROTTLE_WARN=20` is therefore
+*below the noise floor of the accepted nightly backup* — it cannot not fire.
+`TEMP_WARN=85` has the same defect from the other side: normal backup peaks are
+85–89 C, so it fires whenever a 5-minute sample happens to land on one, and the
+script's own header says instantaneous readings are unreliable.
+
+⚠️ **`THROTTLE_CRIT=500` is fine — do not touch it.** The one genuinely bad night
+(2026-08-29) scored **4,017**. That is 50× the worst normal night, so CRIT has
+real separation and is the only threshold currently earning its place.
+
+📌 **Proposed shape, NOT yet validated — the point of this item is to check it
+against real data before shipping:** make sensitivity time-of-day aware rather
+than uniformly looser. Inside the backup window (02:55–03:20) only CRIT applies,
+because a WARN there drives no action. Outside it, tighten WARN well *below* 20 —
+the box should be at zero, and today's threshold could miss a real daytime event
+like the 2026-08-07 runaway process that held 94–96 C for 9 h 40 m. Net effect
+should be *more* sensitive to genuine faults and silent on the accepted one.
+
+🔴 **A threshold change that only makes alerts stop is indistinguishable from one
+that breaks the check.** Any new set must be replayed against the 2026-08-29
+CRITICAL night (4,017 events, 89 C) and the 2026-08-07 runaway — **both must
+still fire** — and against normal nights, which must be silent.
+
+📂 **The data now survives.** `save_temps.sh` self-rotated at `MAX_LINES=2160`
+(~3 days), which would have discarded days 1–4 of this very question. Raised to
+**7200 (~10 days)** on 2026-09-06 in the same branch. 10 rather than 7 so a
+review that slips a couple of days still has the full week.
+
+*State:* **measuring since 2026-09-06.** `bwlimit` is deployed and codified;
+nothing else to build until there is a week of nights. *Effort:* thresholds are
+four constants in `scripts/services/proxmox/check_thermal.sh`, plus whatever the
+window logic needs. *Needs:* **~7 nights, i.e. review on or after 2026-09-13.**
+
+```
+Set cwwk's thermal alert thresholds from real data. Read docs/TODO.md item 35.
+
+Do NOT re-run the bwlimit experiment and do NOT tune bwlimit further — that is
+settled: 100 MiB/s is deployed, codified in roles/platform/proxmox, and finer
+tuning is below the instrument's noise floor (two identical runs scored 48 vs
+79 throttle events). Judge thermal load by time-above-80C, never by event count.
+
+Pull the week of backup windows (thermal-history.log holds ~10 days, 2-min
+resolution, world-readable):
+  ssh cwwk-agent "grep -v 'throttle_delta=0 ' /var/log/diagnostics/thermal-history.log"
+  ssh cwwk-agent "awk '\$1 ~ /T0[23]:/' /var/log/diagnostics/thermal-history.log"
+
+For each night 03:00-03:20 report: peak pkg, mean pkg, seconds above 80C, and
+total throttle delta. Then separately report every throttle event OUTSIDE that
+window - those are the ones that should still page.
+
+Then propose the threshold set. Before shipping it you MUST show it still fires
+on the 2026-08-29 CRITICAL night (4,017 events, 89C peak) and the 2026-08-07
+runaway process (94-96C sustained, daytime), and stays silent on the normal
+nights you just measured. Thresholds live in
+scripts/services/proxmox/check_thermal.sh (THROTTLE_WARN=20, THROTTLE_CRIT=500,
+TEMP_WARN=85, TEMP_CRIT=95). CRIT=500 has 50x separation from normal - leave it.
+
+🔴 Deploy with deploy_monitoring.yml, NOT site.yml:
+  ansible-playbook ansible/playbooks/deploy_monitoring.yml --limit cwwk --forks 1
+site.yml imports platform/proxmox.yml, which holds ONLY the ZFS ARC tasks — it
+never runs the platform/proxmox ROLE, so a site.yml run reports a healthy
+changed=N from unrelated baseline tasks while touching none of this. Verified
+2026-09-06: `site.yml --tags proxmox,backup,thermal` selected ZERO of the role's
+tasks; deploy_monitoring.yml selected 52.
+```
 
 **1d. Monitor the VPN path's speed, not just the direct one**
 Today only the **non-VPN** path is measured (dockassist, VLAN 100). VLAN 40 egresses
@@ -241,9 +321,11 @@ no code change.
 ```
 Set the VPN-vs-direct ratio threshold from real data. Read docs/TODO.md item 1d.
 Steps 1-4 are DONE and deployed — both paths are measured (dockassist :07,
-agent-lxc :37, same pinned server 52365). Do NOT rebuild any of it, and do NOT
-move either schedule without moving the other: they share one WAN link and
-27 minutes apart is what keeps them from measuring each other.
+agent-lxc :14, same pinned server 52365). Do NOT rebuild any of it, and do NOT
+move either schedule without moving the other: they share one WAN link, and :14
+is deliberately CLOSE to :07 — 7 minutes clears dockassist's ~190 s run, while a
+wider gap lets ordinary ISP drift leak into the ratio and be blamed on the
+tunnel. It was briefly :37 for that reason and was tightened.
 
 Only run this once there are ~2 weeks of paired runs. Pull the medians:
   ssh dockassist-agent 'sudo agent_read log internet_speed_check.log'      | grep "Speed test passed"
