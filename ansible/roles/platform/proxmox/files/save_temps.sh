@@ -22,7 +22,14 @@ LOG_DIR="${SAVE_TEMPS_LOG_DIR:-/var/log/diagnostics}"
 LOG_FILE="$LOG_DIR/thermal-history.log"
 STATE_FILE="$LOG_DIR/.thermal-throttle.prev"
 THROTTLE_NODE=/sys/devices/system/cpu/cpu0/thermal_throttle/package_throttle_count
-MAX_LINES=2160   # ~3 days at one sample every 2 minutes
+# ~10 days at one sample every 2 minutes (~650 KB).
+#
+# Was 2160 (~3 days). Raised 2026-09-06: answering "is the nightly vzdump thermal
+# load acceptable?" needs a week of backup windows, and a 3-day buffer silently
+# discards days 1-4 of any such question before it can be asked. The same failure
+# already cost this repo once -- see the speed_history.csv note in TODO item 1d.
+# 10 days rather than 7 so a review that slips a day or two still has full data.
+MAX_LINES=7200
 
 mkdir -p "$LOG_DIR"
 

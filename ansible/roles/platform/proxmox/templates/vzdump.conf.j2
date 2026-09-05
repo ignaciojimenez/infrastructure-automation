@@ -1,0 +1,16 @@
+{{ ansible_managed | comment }}
+# vzdump defaults. PVE reads this for EVERY vzdump invocation -- scheduled jobs
+# included -- and fills in any key the job itself does not define
+# (PVE::VZDump::read_vzdump_defaults, merged in PVE::VZDump::new).
+#
+# That precedence is the reason this file is the single source of truth for
+# bwlimit: a per-job bwlimit set through the web GUI silently WINS over this
+# file, so changing the value here would appear to do nothing. The role removes
+# any per-job bwlimit for exactly that reason.
+{% if proxmox_vzdump_bwlimit_kib | int > 0 %}
+
+# Cap backup I/O at {{ (proxmox_vzdump_bwlimit_kib | int / 1024) | round | int }} MiB/s. Measured A/B on cwwk 2026-09-05:
+# uncapped ~288 MiB/s, 4 min, 78-79 C mean, 125 s above 80 C
+# capped    ~100 MiB/s, 11 min, 64 C mean, 15 s above 80 C
+bwlimit: {{ proxmox_vzdump_bwlimit_kib }}
+{% endif %}

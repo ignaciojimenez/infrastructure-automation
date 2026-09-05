@@ -17,6 +17,7 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ## Contents
 
+- [2026-09-06 — the nightly backup's heat, and the wear argument that did not survive arithmetic](#2026-09-06--the-nightly-backups-heat-and-the-wear-argument-that-did-not-survive-arithmetic)
 - [2026-09-05 — the speedtest that measured too much, and three false greens](#2026-09-05--the-speedtest-that-measured-too-much-and-three-false-greens)
 - [2026-09-04 — Apple Home was dead for two days behind seven green checks](#2026-09-04--apple-home-was-dead-for-two-days-behind-seven-green-checks)
 - [2026-09-02 — three findings that were never tasks, parked with their reopen conditions](#2026-09-02--three-findings-that-were-never-tasks-parked-with-their-reopen-conditions)
@@ -215,6 +216,57 @@ confirmation.
 
 🐛 **Also fixed in passing:** `avahi-utils` was hand-installed on dockassist and
 is now declared in the role. Same undeclared-dependency shape as TODO item 1c.
+
+## 2026-09-06 — the nightly backup's heat, and the wear argument that did not survive arithmetic
+
+**The 03:00 `vzdump` job is capped at 100 MiB/s** (`/etc/vzdump.conf`, codified in
+`roles/platform/proxmox`), and ZFS compression is off on the backup dataset.
+Measured A/B on cwwk, three runs ~2 h apart with KSM off and the door untouched.
+
+**Why: it cuts time above 80 C by 8x** — 125 s uncapped, 15 s capped — at the cost
+of an 11-minute job instead of 4. That is headroom against the failure mode that
+actually bites this box: 2026-08-29's CRITICAL night happened when the backup's
+thermal demand met degraded airflow.
+
+📌 **The peak barely moved: 86 → 85 C.** The mechanism is *time at temperature*,
+not maximum temperature. An earlier prediction in-session that the cap would lower
+the peak was wrong; do not reason from it.
+
+🔴 **Do not tune this by throttle-event count.** Two runs with **identical**
+settings scored **48 and 79**. Single-run resolution is ~±30 events, so anything
+finer than this is below the instrument's noise floor. Time-above-80 C is the
+usable metric.
+
+🔴 **The long-term-wear argument for backing up less often is dead — it was off by
+about two orders of magnitude.** Arrhenius over the full day (Ea swept 0.5–0.9 eV,
+ranking stable across the range): the backup runs 1.8–2.8x idle wear rate but for
+12 minutes, so it adds **0.6–1.4% to a day**, and moving nightly → weekly would
+save **0.5–2.1% of a week**. cwwk idles at 53 C for 99.2% of its life and that
+floor dominates everything. **If long-term wear is the goal, the lever is the idle
+temperature — the vent-sizing project — not the backup.** Stage 2 (weekly images)
+was proposed on thermal grounds in this session and **withdrawn on this
+arithmetic**; Ignacio declined it separately on storage grounds (261 G used, 120 G
+free, steady-state under `keep-daily=15`). Do not re-propose it as a thermal fix.
+
+⚠️ **`/etc/vzdump.conf` is the single source of truth, and that is load-bearing.**
+PVE merges it as *defaults* — `PVE::VZDump::read_vzdump_defaults`, applied only for
+keys the job does not define — so a per-job `bwlimit` set through the web GUI
+**silently wins** and would make edits to the file look like no-ops. The role
+therefore strips `bwlimit` from every `/cluster/backup` job. A GUI edit re-creates
+the trap.
+
+📂 **`save_temps.sh` retention 2160 → 7200 lines (~3 → ~10 days).** The question
+"is the nightly load acceptable?" needs a week of backup windows, and the 3-day
+buffer would have discarded days 1–4 before the question could be asked — the same
+failure the `speed_history.csv` note in TODO item 1d already records.
+
+**Left open as [TODO item 35](../TODO.md):** the alert thresholds. `THROTTLE_WARN=20`
+sits *inside* the 9–79 spread of the accepted nightly event and `TEMP_WARN=85` sits
+inside its 85–89 C peak band, so both fire at random on a known, accepted
+condition. `THROTTLE_CRIT=500` is sound (the real bad night scored 4,017 — 50x
+separation) and stays. Deliberately **not** changed without a week of data, because
+a threshold change that merely stops alerts is indistinguishable from one that
+breaks the check.
 
 ## 2026-09-05 — the speedtest that measured too much, and three false greens
 
