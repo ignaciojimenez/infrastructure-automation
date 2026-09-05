@@ -234,14 +234,34 @@ this check was doing before**. Adding the VPN path is no longer a doubling.
 `feat/speedtest-sizing-and-ookla-install` — the Ookla install task exists and
 `internet_speed_monitor` now takes `--server-id` (unit-tested: the flag reaches
 the binary, and an unset one passes no argument at all rather than an empty
-`--server-id=` that Ookla rejects). ✅ **The binary is now LIVE on agent-lxc**
-(Ookla 1.2.0.84, trixie/x86_64, deployed 2026-09-05) — **binary only, no cron,
-no traffic**, and `changed=0` on a second run. **Step 3 is therefore unblocked
-and is the next action**, where it was previously waiting on a deploy.
-🔴 **Steps 3 and 4 are still deliberately NOT built.** The saturation run has
-to happen by hand and be read before anything is built on it; the last attempt
-failed against the wrong binary, which is now impossible.
-*Effort:* small once validated. *Needs:* one command, then a decision.
+`--server-id=` that Ookla rejects). ✅ **STEP 3 PASSED 2026-09-05** — run by hand on both hosts, minutes apart
+(never concurrently), both pinned to server 52365:
+
+| Path | Host | Down / Up (Mbps) | Egress IP | ISP reported |
+|---|---|---|---|---|
+| Direct | dockassist | **940.94 / 940.11** | 87.210.114.214 | Odido Netherlands |
+| VPN | agent-lxc | **930.58 / 935.32** | 193.32.249.134 | **31173 Services AB** (Mullvad) |
+
+**agent-lxc saturates — comfortably.** The target was ~880–900 and it reached
+930/935, so it measures the tunnel and not its own NIC. 📌 **And the tunnel is
+independently confirmed for the first time**: the reported ISP is Mullvad's AS
+and the egress IP differs from dockassist's. Previously "agent-lxc is on the
+VPN path" was inferred from routing, never observed end to end.
+
+📌 **Pinning is validated, not just theorised.** Both paths measured against the
+same Amsterdam server despite egressing through different countries' exits —
+which is exactly what an unpinned test would have got wrong.
+
+⚠️ **Measured ratio is 98.9% down / 99.5% up, against a 94% baseline from
+2026-08-19.** The tunnel is performing *better* than when it was baselined.
+
+🔴 **Step 4 is still NOT built, and the reason has changed.** It is no longer
+blocked — it is that **two ratio samples (94%, 99%), taken 17 days apart by
+different methods, cannot set an alert threshold.** This repo has already paid
+for that lesson once: a "normal" baseline built from one sample produced three
+false misses in four days on the entity-health check. Collect the ratio before
+alerting on it.
+*Effort:* small. *Needs:* the decision in the prompt below.
 
 ```
 Finish VPN-vs-direct speed monitoring. Read TODO items 1d AND 18 first. Steps 1
@@ -511,9 +531,18 @@ boundary"* — the lesson was learned once and never applied here.
 *State:* ✅ **DEPLOYED 2026-09-05, awaiting the stall count.** Live on
 dockassist and verified in its crontab: `7 3,15 * * *`, `--tests=3`,
 `--server-id=52365`. `--tests=5` every 6h (20 saturation runs/day) →
-`--tests=3` twice daily (6/day). 📌 **First scheduled run is 03:07.** One
-manual saturation test on 2026-09-05 at ~00:58 produced **no** stall, which is
-consistent with the volume hypothesis but is n=1 and proves nothing on its own. **The
+`--tests=3` twice daily (6/day). 📌 **First scheduled run landed 03:07** — exit 0, 190 s,
+941.02/940.23 Mbps, and **no stall**. Two manual saturation tests either side of
+it also produced none; the count sits at 2, both pre-change.
+
+⚠️ **That is not yet evidence, and it is worth being precise about why.** At the
+0.65/day baseline, ~11 h of clean running is an expected 0.3 events — seeing
+zero has a ~74% chance even if the change did nothing at all. **A week is what
+makes it a result**: ~4.5 expected events, so zero would land near 1%.
+
+📈 One thing did improve immediately and is not statistical: **run duration fell
+371 s → 190 s**, so saturated seconds per day went from ~24.7 min to ~6.3 min —
+a **74% cut in NIC exposure**, which is the quantity the stalls actually track. **The
 reduction is the experiment**: if the stalls stop, load was the cause and the
 schedule is also the fix; if they continue at 6 runs/day, the load hypothesis
 is wrong. Either outcome is a result, which is why no `ethtool -K` workaround
