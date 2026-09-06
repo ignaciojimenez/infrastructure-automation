@@ -83,7 +83,7 @@ def main():
     # One package generates one alert PER CVE (Pillow: 8 in one minute).
     # The fix is identical for all of them, so the unit of human attention
     # is (repo, package), not the alert.
-    actions = sorted({(r["repo"], str(r["pkg"]).lower()) for r in escalated})
+    actions = sorted({(r["repo"], str(r["pkg"]).casefold()) for r in escalated})
     print(f"\nWould have reached Ignacio: {len(escalated)} of {len(rows)} alerts "
           f"({len(escalated) / max(len(rows), 1):.0%})")
     print(f"...collapsed to {len(actions)} distinct ACTIONS "

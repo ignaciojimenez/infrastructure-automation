@@ -28,7 +28,11 @@ from collections import defaultdict
 EXPOSURE = {
     "pastebin-worker": [("", "public")],                    # Cloudflare Worker
     "ignaciojimenezpi.github.io": [
-        ("photography/utils", "local"),                     # laptop-only helper
+        # NOT laptop-only: .github/workflows/{process,remove}_album.yml
+        # pip-install these requirements and run the code, in a job with write
+        # access to a public repo — and Pillow's attack surface is precisely
+        # the image files it is fed. Verified 2026-09-07.
+        ("photography/utils", "supplychain"),
         ("", "public"),                                     # Cloudflare Pages
     ],
     "recordsdelmundo-site-static": [("", "public")],
@@ -79,10 +83,16 @@ def route(item):
     if item["kind"] == "secret":
         return "page", "a live credential is exposed"
 
-    epss_pct = item.get("epss_percentile") or 0.0
+    epss_raw = item.get("epss_percentile")
+    epss_pct = epss_raw or 0.0
     exp = item.get("exposure", "local")
 
     if item["kind"] == "dependabot":
+        # A CVE published minutes ago has no EPSS score yet — which is exactly
+        # when it is least safe to assume nobody is exploiting it. Absence of a
+        # score is not evidence of a low one, so it never routes to silent.
+        if epss_raw is None and exp != "local":
+            return "plan", "no EPSS score yet (new CVE) — exploitation unknown"
         if epss_pct >= EPSS_PAGE_PERCENTILE:
             return "page", f"EPSS {epss_pct:.0%}ile — actively exploited in the wild"
         if item.get("scope") == "development":
@@ -104,9 +114,12 @@ def route(item):
     return "plan", "unclassified — defaulting to human review"
 
 
-def collect(owner):
+def collect(owner, repo_list=None):
+    """Return findings. Pass repo_list to avoid re-listing (and to keep the
+    reported repo count consistent with what was actually swept — a repo
+    archived mid-run would otherwise change the number)."""
     items = []
-    for repo in repos(owner):
+    for repo in (repo_list if repo_list is not None else repos(owner)):
         for a in gh(f"repos/{owner}/{repo}/dependabot/alerts?state=open&per_page=100"):
             adv = a.get("security_advisory", {})
             items.append({
@@ -151,14 +164,15 @@ def collect(owner):
 
 def main():
     owner = sys.argv[1] if len(sys.argv) > 1 else "ignaciojimenez"
-    items = collect(owner)
+    repo_list = repos(owner)
+    items = collect(owner, repo_list)
     lanes = defaultdict(list)
     for it in items:
         lane, reason = route(it)
         it["reason"] = reason
         lanes[lane].append(it)
 
-    print(f"\nswept: {len(repos(owner))} repos · found: {len(items)} open findings")
+    print(f"\nswept: {len(repo_list)} repos · found: {len(items)} open findings")
     print(f"page: {len(lanes['page'])} · plan: {len(lanes['plan'])} "
           f"· silent: {len(lanes['silent'])}\n")
 
