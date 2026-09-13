@@ -120,10 +120,20 @@ run() {
     RC=$?
 }
 
-expect_rc()     { [ "$RC" = "$1" ] && pass "$2: exit $1" || fail "$2: expected exit $1, got $RC — output: $OUT"; }
-expect_out()    { printf '%s' "$OUT" | grep -q -- "$1" && pass "$2" || fail "$2 — output: $OUT"; }
-expect_notify() { grep -q -- "$1" "$S/notify" && pass "$2" || fail "$2 — notify: $(cat "$S/notify")"; }
-expect_state()  { [ "$(cat "$S/state/wifi_reconnect.fails")" = "$1" ] && pass "$2" || fail "$2 — counter is $(cat "$S/state/wifi_reconnect.fails")"; }
+# if/then/else rather than `A && pass || fail`: in that form fail also runs when
+# pass itself returns non-zero (ShellCheck SC2015), which CI rejects.
+expect_rc() {
+    if [ "$RC" = "$1" ]; then pass "$2: exit $1"; else fail "$2: expected exit $1, got $RC — output: $OUT"; fi
+}
+expect_out() {
+    if printf '%s' "$OUT" | grep -q -- "$1"; then pass "$2"; else fail "$2 — output: $OUT"; fi
+}
+expect_notify() {
+    if grep -q -- "$1" "$S/notify"; then pass "$2"; else fail "$2 — notify: $(cat "$S/notify")"; fi
+}
+expect_state() {
+    if [ "$(cat "$S/state/wifi_reconnect.fails")" = "$1" ]; then pass "$2"; else fail "$2 — counter is $(cat "$S/state/wifi_reconnect.fails")"; fi
+}
 
 # ── 1. Healthy: nothing happens, counter and outage clock reset. ─────────────
 scenario up 5 break 0 0
@@ -131,16 +141,16 @@ echo 1000 > "$S/state/wifi_reconnect.since"
 run
 expect_rc 0 "healthy"
 expect_state 0 "healthy: counter reset"
-[ ! -e "$S/state/wifi_reconnect.since" ] && pass "healthy: outage clock cleared" || fail "healthy: outage clock left behind"
-[ ! -s "$S/calls" ] && pass "healthy: no recovery action taken" || fail "healthy: acted on a healthy link — $(cat "$S/calls")"
+if [ ! -e "$S/state/wifi_reconnect.since" ]; then pass "healthy: outage clock cleared"; else fail "healthy: outage clock left behind"; fi
+if [ ! -s "$S/calls" ]; then pass "healthy: no recovery action taken"; else fail "healthy: acted on a healthy link — $(cat "$S/calls")"; fi
 
 # ── 2. First bad sample: record, never act. ──────────────────────────────────
 scenario down 0 connect 0 0
 run
 expect_rc 0 "first observation"
 expect_state 1 "first observation: counter 1"
-[ -s "$S/state/wifi_reconnect.since" ] && pass "first observation: outage clock started" || fail "first observation: no outage clock"
-[ ! -s "$S/calls" ] && pass "first observation: no action" || fail "first observation: acted on one sample — $(cat "$S/calls")"
+if [ -s "$S/state/wifi_reconnect.since" ]; then pass "first observation: outage clock started"; else fail "first observation: no outage clock"; fi
+if [ ! -s "$S/calls" ]; then pass "first observation: no action"; else fail "first observation: acted on one sample — $(cat "$S/calls")"; fi
 
 # ── 3. THE 2026-09-13 REGRESSION ─────────────────────────────────────────────
 # Layers 1 and 2 cannot connect; the driver reload lets NM connect on its own;
@@ -175,9 +185,11 @@ touch "$S/reload_arms_conup"
 run
 expect_rc 0 "reload needs a forced con up"
 expect_out "recovered at layer 3" "reports layer 3"
-sed -n '/driver_load/,$p' "$S/calls" | grep -q con_up \
-    && pass "forced con up used when NM did not auto-activate" \
-    || fail "never forced con up although NM stayed down"
+if sed -n '/driver_load/,$p' "$S/calls" | grep -q con_up; then
+    pass "forced con up used when NM did not auto-activate"
+else
+    fail "never forced con up although NM stayed down"
+fi
 
 # ── 5. Layer 1 works; the message carries the OUTAGE, not the run. ───────────
 scenario down 29 connect 0 0
@@ -194,7 +206,7 @@ run
 expect_rc 1 "all layers fail"
 expect_out "all three recovery layers failed" "says so"
 expect_state 2 "counter kept"
-[ ! -s "$S/notify" ] && pass "no false recovery message" || fail "posted a recovery that did not happen"
+if [ ! -s "$S/notify" ]; then pass "no false recovery message"; else fail "posted a recovery that did not happen"; fi
 
 printf '\n'
 if [ "$failures" -eq 0 ]; then
