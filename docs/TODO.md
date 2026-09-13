@@ -3,7 +3,7 @@
 **Improvements and fixes waiting to be worked on.** Start at *What to work on
 next*; the first item you can act on is the right one.
 
-Updated: 2026-09-06
+Updated: 2026-09-13
 
 | Where a thing lives | |
 |---|---|
@@ -56,13 +56,16 @@ here is something to read past, every time, forever. The write-up goes to
 (numbers never move), but the order to work them is this, and the dashboard
 renders it:
 
-> **№1** 18 + 1d + 35 *(**deployed; all three waiting on a reading** —
-> see below)* → **№2** 2 →
-> **№3** 4 (plex) → **№4** 9 → **№5** 3a/3b/3c → **№6** 5 → **№7** 19 →
-> **№8** 12 → **№9** 10 → **№10** 11 → **№11** 6 → **№12** 7 →
-> **№13** 34 *(small; restores `changed=0` as a signal for the docker role)* →
-> **№14–17** 8/13/14/16 · **№18** 32 *(git-history rewrite — decision only,
-> default is no)* · **№19** 26 *(one UI toggle, global — his call)*
+> **№1** 36 *(deploy — Tier 2 is still billing item 38 hourly)* →
+> **№2** 37 *(deploy — vinylstreamer's recovery undoes itself)* →
+> **№3** 38 *(his call — Spotify refuses the Mullvad exit)* →
+> **№4** 18 + 1d + 35 *(**deployed; all three waiting on a reading** —
+> see below)* → **№5** 2 →
+> **№6** 4 (plex) → **№7** 9 → **№8** 3a/3b/3c → **№9** 39 → **№10** 5 →
+> **№11** 19 → **№12** 12 → **№13** 10 → **№14** 11 → **№15** 6 → **№16** 7 →
+> **№17** 34 *(small; restores `changed=0` as a signal for the docker role)* →
+> **№18** 40 → **№19–22** 8/13/14/16 · **№23** 32 *(git-history rewrite —
+> decision only, default is no)* · **№24** 26 *(one UI toggle, global — his call)*
 > *(decision-gated — 16 needs a purchase call, 32 needs his call on a public
 > force-push, the rest need him at the cabinet; not ranked)*
 
@@ -104,9 +107,156 @@ mitigation, so nothing here is waiting on a better option.
 carry *fill-in* prompts that take the physical measurement or decision as
 input. An item without a prompt is an item that has not been triaged properly.
 
-### 🔴 P1 — actively producing false alerts
+### 🔴 P1 — hurting now
 
-**Nothing here right now.**
+**36. Tier 2 billed one fault six times overnight — fix built, not deployed**
+On the night of 2026-09-12/13 agent-lxc ran **6 paid investigations ($1.57)**,
+every one about the same fault: raspotify on hifipi (item 38). That fault is
+**still failing hourly**, so the spend continues until this deploys or 38 is
+resolved.
+
+Three dedup keys, each defeated by the same fault:
+- **The Slack watch keyed on message text.** One fault produced three texts
+  (`system_health_check`, `check_raspotify`, the STILL FAILING reminder) → three runs.
+- **Anomaly mode keyed on the whole finding set.** vinylstreamer joining the
+  findings at 06:50 and leaving at 09:48 re-billed hifipi twice.
+- **The two modes shared no state**, so each paid for what the other had just
+  investigated.
+
+✅ **Built** on `fix/agent-tier2-incident-dedup`: one incident per host, shared by
+both modes, open until the host goes unmentioned for 26 h — longer than the
+wrapper's 24 h maximum reminder gap, so a backed-off fault is not mistaken for a
+recovery; one fresh look after 7 days; a **$2.00/day cap** as backstop (the
+digest counts toward it but is never blocked). Replay of the night: **2 runs,
+≤ $0.61**. `incident_dedup_test.sh` passes 34 checks under dash; the same test
+against `main` fails 22, including all four repeat runs. A new host, a recurrence
+after 27 h and a failed run are all still investigated.
+
+⚠️ **Not verified:** nothing has run on CT 103; mawk's `match()` on Debian;
+timed-out runs are logged as $0, so the cap undercounts. ✅ unifi reports its
+hostname as `unifi` (checked 2026-09-13), so it maps to one incident key.
+
+*State:* built and tested, not merged. *Effort:* deploy + one observed alert.
+*Needs:* laptop.
+
+```
+Deploy and verify the Tier 2 incident dedup. Read docs/TODO.md item 36 — the
+design is settled (host-keyed incidents shared by both modes, 26 h quiet
+window, 7-day refresh, $2/day cap). Do NOT redesign it, and do NOT add a
+"still ongoing" Slack post: the wrapper's STILL FAILING reminder already says it.
+
+  git ms fix/agent-tier2-incident-dedup
+  ansible-playbook ansible/playbooks/services.yml --limit agent-lxc --tags agent --check --diff
+  ansible-playbook ansible/playbooks/services.yml --limit agent-lxc --tags agent
+
+Count the recap: agent-lxc must be listed and "Deploy the investigate script"
+must show changed — a --tags run that selects nothing still looks green. Run it
+again and require changed=0.
+
+On the box: `dash -n` the deployed investigate.sh. Then read investigate.log
+across the next real alert: ONE paid run per host incident, repeats logged as
+covered, and the daily spend ledger written. If item 38 is still failing, its
+hourly alerts are the live test.
+```
+
+**37. vinylstreamer's wifi recovery undid its own fix every 5 minutes — fix built, not deployed**
+On 2026-09-13 wlan0 dropped at 06:31 (the usual lockout; the host itself stayed
+up) and stayed off the network until 09:00. `wifi_reconnect.sh` ran the whole
+time. Its layer 3 (driver reload) **worked every time** — associated, with an
+address, 2 s later — but 8 s after that the script ran `nmcli con up` anyway,
+which tears down an already-active connection. The retry was rejected and the
+script reported *all three layers failed*, **27 times**. At 09:00 layer 1 won and
+#home-logging said *recovered after 11s* — that run's duration, not the outage's.
+
+🔴 **Nothing you received described the fault.** What should have come: the
+script's *all layers failed* alert at ~06:41, then HA power-cycling the plug at
+~06:46. What came: agent-lxc's hourly *UNREACHABLE*, and a $0.42 investigation
+that concluded the Pi was off. The script's own alert was sent over the wifi
+that was down (item 40); the HA watchdog never fired (item 39).
+
+✅ **Built** on `fix/wifi-reconnect-self-disconnect`: layers 2 and 3 wait (8 s /
+20 s) for NetworkManager to activate on its own and force `con up` only if it
+did not; the recovery message reports how long wlan0 was down and after how many
+attempts. Worst case ~120 s, well inside the plug's 15-minute window.
+`wifi_reconnect_ladder_test.sh` passes under sh and dash; the old script fails it
+with that night's exact sequence.
+
+⚠️ **Not verified on the host.** The healthy path is unchanged but must be run by
+hand after deploy — this is the script whose ping gate once broke the host.
+🔴 **Do not force a wifi drop remotely to test the ladder:** wlan0 is the host's
+only link. The host-level proof is the next natural lockout.
+
+*State:* built and tested, not merged. *Effort:* deploy + hand-run. *Needs:* laptop.
+
+```
+Deploy and verify the vinylstreamer wifi_reconnect fix. Read docs/TODO.md item
+37. The diagnosis is settled: layer 3 recovered, then a forced `nmcli con up`
+tore the fresh connection down. Do not redesign the ladder.
+
+  git ms fix/wifi-reconnect-self-disconnect
+  ansible-playbook ansible/playbooks/services.yml --limit vinylstreamer --check --diff
+  ansible-playbook ansible/playbooks/services.yml --limit vinylstreamer
+
+Count the recap: vinylstreamer listed, the script copy changed. Then run the
+HEALTHY path by hand on the host before trusting the cron:
+  ssh vinylstreamer "~/.scripts/wifi_reconnect.sh x"   -> must print wlan0 healthy
+and require changed=0 on a second deploy.
+
+🔴 Never force a wifi drop remotely — wlan0 is the only link. The failure path
+is proven by the stub test; on the host, by the next real lockout: read the
+journal around it for which layer won, and whether the recovery message reports
+the true outage length.
+```
+
+**38. hifipi's Spotify Connect is dead — Spotify returns 403 to the VLAN 40 Mullvad exit**
+Since the weekly `restart_audio_services.sh` at 00:00 on 2026-09-13, every
+raspotify start dies in under a second with `could not initialize spirc:
+Permission denied { 403 Forbidden }`. **Not librespot, not credentials:** plain
+`curl` to Spotify's endpoints returns 403 from hifipi and from cobra (same VLAN,
+same exit) and 200 from a host egressing direct. The host is otherwise healthy.
+Recovery (`Restart=` plus the hourly `check_raspotify.sh`) works and cannot help:
+**a restart or reboot does not change the egress address.**
+
+Reasoned, not verified: the block began between 9 and 13 Sep and sat latent — a
+long-running librespot did not need to re-resolve, and the weekly restart turned
+it into an outage. A similar 403 on 2026-08-23 cleared by itself within an hour.
+
+Alerting was correct (*Script Failed* at 00:02 and 01:00, then STILL FAILING on
+backoff). It is also what item 36 billed six times.
+
+📌 **Recommendation: a host-scoped OPNsense policy exception sending hifipi out
+WAN direct.** One audio host loses tunnel privacy. 🔴 **Scope it to hifipi, never
+to VLAN 40.** agent-lxc sits on VLAN 40 and *is* item 1d's VPN path: a VLAN-wide
+exception would move that measurement onto the direct line, and the ratio would
+read ~1.0 — healthy. OPNsense rules are not managed in this repo.
+
+Then, in the repo (small): `check_raspotify.sh` recognises the 403 and reports
+*Spotify refuses this egress IP* instead of restarting pointlessly, and raspotify
+leaves the weekly restart. (`NETWORK.md`'s VLAN 40 row said *WAN direct*; corrected
+2026-09-13.)
+
+*State:* diagnosed; decision pending. *Needs:* Ignacio's call — a firewall change.
+
+```
+Ignacio has decided item 38 (hifipi Spotify 403 via Mullvad). Fill in:
+
+  DECISION: [host-scoped direct egress for hifipi / accept Spotify Connect down]
+
+Read docs/TODO.md item 38 first — the diagnosis is CONFIRMED (403 from hifipi
+and cobra via the Mullvad exit, 200 direct); do not re-diagnose librespot.
+
+If direct egress: the exception must match hifipi's address ONLY — never VLAN
+40, which carries agent-lxc, item 1d's VPN measurement path. After the rule:
+  ssh hifipi "curl -s https://am.i.mullvad.net/json | grep -o '\"mullvad_exit_ip\":[a-z]*'; curl -s -o /dev/null -w '%{http_code}\n' 'https://apresolve.spotify.com/?type=accesspoint'"
+  -> expect false, then 200
+  ssh hifipi "sudo systemctl restart raspotify && sleep 5 && systemctl is-active raspotify"
+and confirm agent-lxc STILL egresses via Mullvad (same am.i.mullvad.net check).
+
+Either way, then: make check_raspotify.sh detect the 403 in the unit's journal
+and report "Spotify refuses this egress IP" without restarting, and remove
+raspotify from restart_audio_services.sh. Force the 403 branch with a stubbed
+journal line and watch the message fire — a check that goes quiet is not tested.
+```
 
 📌 **Numbering is deliberately not compacted.** Several prompts below and in
 git history say "read docs/TODO.md item 2" or "item 3a"; renumbering on every
@@ -624,6 +774,40 @@ fix and no way to tell afterwards whether the workaround helped. If load is
 falsified, the next step is diagnosis, not suppression.
 ```
 
+**39. The HA plug watchdog cannot fire through a flapping ping**
+vinylstreamer was off the network for 2.5 h on 2026-09-13, yet HA recorded it
+offline only 08:57–09:00, and the *offline 15 min → power-cycle the plug*
+automation never fired. Reasoned, not verified (the full HA history needs the
+primary user): item 37's bug reconnected wlan0 for ~8 s every 5 minutes, the ping
+sensor caught those windows, and each one reset the *continuous* 15-minute timer.
+
+📌 **Item 37 removes that night's flap source, not the class.** Any fault that
+blips reachability inside the window defeats a `for: 15 min` trigger — and this
+watchdog is the last resort for a hung Pi.
+
+Proposed shape: trigger on *offline for most of the last 15 minutes*, not
+*offline continuously for 15*. ⚠️ `history_stats` counts entries from any state,
+including `unavailable` — use a time-weighted ratio, and check what the sensor
+does across an HA restart. 🔴 A watchdog that power-cycles a host is a
+consequential actuator: prove it fires on a flapping fixture **and** stays silent
+through a normal HA restart before deploying.
+
+*State:* diagnosed from partial history. *Effort:* small–medium. *Needs:* laptop.
+
+```
+Fix the vinylstreamer plug watchdog so a flapping ping cannot defeat it. Read
+docs/TODO.md item 39. FIRST confirm the mechanism from HA's recorder (read-only
+sqlite, --become): list binary_sensor.vinylstreamer_online state changes for
+2026-09-13 06:30-09:05. If it did NOT flap, stop and report — the design below
+rests on it.
+
+If it flapped: change the trigger from "offline continuously 15 min" to
+"offline for most of the last 15 min" (time-weighted, not history_stats entry
+counts, which include unavailable). Before deploying, show it (a) fires on the
+06:30-09:00 flap pattern and (b) does not fire across an HA restart. Deploy with
+--tags config AND check which other tags consume the same entities.
+```
+
 ### 🟢 P3 — improvements, no urgency
 
 **5. Tokens out of cron command lines.** healthchecks.io and Slack tokens sit in
@@ -893,6 +1077,30 @@ timestamp. These two tasks do not, so they are a fair test.
 
 Do not touch the daemon.json task while here; it is verified working and
 its `when` guard is deliberate.
+```
+
+**40. An alert that fails to send is never retried**
+On 2026-09-13 vinylstreamer's `wifi_reconnect.sh` tried to post *all layers
+failed* to #home-alerts over the wifi that was down. The send failed (logged on
+the host), and repeat suppression then held every later failure back as
+*unchanged*, so the one alert describing the outage never arrived. Wifi-only hosts
+are the ones most likely to hit this.
+
+Proposed shape, simplest first: **do not record an alert as sent unless delivery
+succeeded**, so the next run retries it — no queue needed. ⚠️ First confirm which
+layer suppressed it; `enhanced_monitoring_wrapper` is the likely one, which is
+the same file as item 5 — do them in sequence, not in parallel.
+
+*State:* diagnosed. *Effort:* small. *Needs:* laptop.
+
+```
+Make an undelivered alert retry. Read docs/TODO.md item 40. First confirm where
+the 2026-09-13 suppression happened (wrapper state vs the script itself). Then
+make the suppression state advance only when the Slack POST actually succeeded
+(curl exit AND HTTP status). Force it on CT 199: point the webhook at an
+unreachable address, run a failing script twice — the first send fails, the
+second run must SEND, not suppress. Restore the webhook and confirm a steady
+fault still backs off exactly as before. Coordinate with item 5 (same file).
 ```
 
 ### 🧊 Blocked on Ignacio, not on work

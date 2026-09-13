@@ -92,7 +92,7 @@ each.
 | VLAN | Subnet | OPNsense descr | Purpose | Egress |
 |-----:|--------|----------------|---------|--------|
 | 20 | `10.30.20.0/24` | `VLAN20_NO_VPN` | Hosts that must **not** be tunnelled — anything geo-locked or VPN-hostile | WAN direct |
-| 40 | `10.30.40.0/24` | `VLAN40_Native` | Core infrastructure services; **native VLAN for cabled hosts** | WAN direct |
+| 40 | `10.30.40.0/24` | `VLAN40_Native` | Core infrastructure services; **native VLAN for cabled hosts** | Mullvad — *corrected 2026-09-13: this row said WAN direct, but every VLAN 40 host checked (agent-lxc 2026-09-05, hifipi and cobra 2026-09-13) egresses via Mullvad* |
 | 80 | `10.30.80.0/24` | `VLAN80_VPN` | WiFi clients that egress via VPN | Mullvad |
 | 100 | `10.30.100.0/24` | `VLAN100_IoT` | IoT / home automation | — |
 | 200 | `10.30.200.0/24` | `VLAN200_Guest` | Guest network | — |
