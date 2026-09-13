@@ -181,6 +181,17 @@ attempts. Worst case ~120 s, well inside the plug's 15-minute window.
 `wifi_reconnect_ladder_test.sh` passes under sh and dash; the old script fails it
 with that night's exact sequence.
 
+📊 **Confirmed from the host journal (2026-09-13).** The teardown signature —
+*Activation: successful*, then this script's own `con up` logging *disconnecting
+for new activation request* within 15 s — appears **26× on 13 Sep and 4× on
+9 Sep**, and the 9 Sep run ended in HA's plug power-cycle at 18:58, which is the
+host's current boot. **The bug has already cost at least one reboot, so the fix
+should reduce power cycles, not add any:** the script never reboots anything;
+only HA's plug does (15 min continuously offline, at most once per hour,
+escalating past 3 cycles in 7 days). The journal reaches back only to 2026-09-08.
+The AP rejecting association (`ASSOC-REJECT`) is still the open root cause
+underneath.
+
 ⚠️ **Not verified on the host.** The healthy path is unchanged but must be run by
 hand after deploy — this is the script whose ping gate once broke the host.
 🔴 **Do not force a wifi drop remotely to test the ladder:** wlan0 is the host's
@@ -224,11 +235,21 @@ it into an outage. A similar 403 on 2026-08-23 cleared by itself within an hour.
 Alerting was correct (*Script Failed* at 00:02 and 01:00, then STILL FAILING on
 backoff). It is also what item 36 billed six times.
 
-📌 **Recommendation: a host-scoped OPNsense policy exception sending hifipi out
-WAN direct.** One audio host loses tunnel privacy. 🔴 **Scope it to hifipi, never
-to VLAN 40.** agent-lxc sits on VLAN 40 and *is* item 1d's VPN path: a VLAN-wide
-exception would move that measurement onto the direct line, and the ratio would
-read ~1.0 — healthy. OPNsense rules are not managed in this repo.
+✅ **Verified 2026-09-13 from the laptop — and narrower than "Mullvad".** Same
+laptop, same curl, same Spotify edge address, only the exit changed: tunnelled
+out through hifipi → **403**; through dockassist → **200**. Then from hifipi
+through Mullvad's per-relay SOCKS proxies (still inside the tunnel, different
+exit addresses): the connected relay's own proxy and four other relays (two NL,
+one DE, one BE) all → **200**. **Spotify refuses one exit address — the WireGuard
+exit hifipi and cobra currently share — not Mullvad as a whole.**
+
+📌 **Recommendation: move hifipi's policy route to another NL Mullvad tunnel.** It
+keeps the VPN. Direct egress is the fallback if the new exit gets refused too.
+🔴 **Scope it to hifipi, never to VLAN 40.** agent-lxc sits on VLAN 40 and *is*
+item 1d's VPN path: moving it changes that measurement mid-baseline, and a
+VLAN-wide *direct* rule would make the ratio read ~1.0 — healthy. OPNsense rules
+are not managed in this repo; which of the NL tunnels maps to the refused exit is
+**not verified**.
 
 Then, in the repo (small): `check_raspotify.sh` recognises the 403 and reports
 *Spotify refuses this egress IP* instead of restarting pointlessly, and raspotify
@@ -240,17 +261,19 @@ leaves the weekly restart. (`NETWORK.md`'s VLAN 40 row said *WAN direct*; correc
 ```
 Ignacio has decided item 38 (hifipi Spotify 403 via Mullvad). Fill in:
 
-  DECISION: [host-scoped direct egress for hifipi / accept Spotify Connect down]
+  DECISION: [move hifipi to another Mullvad tunnel / direct egress for hifipi / accept Spotify Connect down]
 
-Read docs/TODO.md item 38 first — the diagnosis is CONFIRMED (403 from hifipi
-and cobra via the Mullvad exit, 200 direct); do not re-diagnose librespot.
+Read docs/TODO.md item 38 first — the diagnosis is CONFIRMED (same client,
+only the exit changed: 403 via hifipi's exit, 200 direct, 200 via four other
+Mullvad exits); do not re-diagnose librespot.
 
-If direct egress: the exception must match hifipi's address ONLY — never VLAN
-40, which carries agent-lxc, item 1d's VPN measurement path. After the rule:
-  ssh hifipi "curl -s https://am.i.mullvad.net/json | grep -o '\"mullvad_exit_ip\":[a-z]*'; curl -s -o /dev/null -w '%{http_code}\n' 'https://apresolve.spotify.com/?type=accesspoint'"
-  -> expect false, then 200
+Either rule must match hifipi's address ONLY — never VLAN 40, which carries
+agent-lxc, item 1d's VPN measurement path. After the rule:
+  ssh hifipi "curl -s https://am.i.mullvad.net/json | tr ',' '\n' | grep -E 'mullvad_exit_ip|organization'; curl -s -o /dev/null -w '%{http_code}\n' 'https://apresolve.spotify.com/?type=accesspoint'"
+  -> tunnel move: exit true with a DIFFERENT exit hostname, then 200
+  -> direct: exit false, then 200
   ssh hifipi "sudo systemctl restart raspotify && sleep 5 && systemctl is-active raspotify"
-and confirm agent-lxc STILL egresses via Mullvad (same am.i.mullvad.net check).
+and confirm agent-lxc's egress did NOT change (same am.i.mullvad.net check).
 
 Either way, then: make check_raspotify.sh detect the 403 in the unit's journal
 and report "Spotify refuses this egress IP" without restarting, and remove
@@ -792,7 +815,14 @@ does across an HA restart. 🔴 A watchdog that power-cycles a host is a
 consequential actuator: prove it fires on a flapping fixture **and** stays silent
 through a normal HA restart before deploying.
 
-*State:* diagnosed from partial history. *Effort:* small–medium. *Needs:* laptop.
+🔴 **Hold this until item 37 has been through a real lockout.** A flap-tolerant
+trigger fires *more* often than today's, and with a 1 h cooldown a persistent
+outage could cycle the plug every hour. With 37 fixed, software recovery should
+win before the plug is ever needed — measure that first, then decide this and the
+cooldown together.
+
+*State:* diagnosed from partial history; **deliberately held behind 37**.
+*Effort:* small–medium. *Needs:* laptop.
 
 ```
 Fix the vinylstreamer plug watchdog so a flapping ping cannot defeat it. Read
