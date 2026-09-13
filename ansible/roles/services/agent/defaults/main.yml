@@ -195,14 +195,34 @@ agent_failure_alert_cooldown_seconds: 21600  # 6h
 agent_slack_channel: "C01J36V2FPE"  # #home-alerts (channel IDs are not secret)
 agent_slack_watch_minute: "7"
 
-# Content-dedup window: a signature (e.g. "script failed on hifipi") is
-# investigated at most once per this many days, so a nightly-recurring failure
-# produces one plan a week, not one a night.
-agent_slack_dedup_days: 7
-
-# Safety cap: never launch more than this many investigations in a single poll,
-# so a burst of distinct alerts can't spiral cost or saturate the box.
+# A poll launches at most ONE investigation, covering every new incident in it.
+# This caps how many distinct incidents that one run is handed, so a burst of
+# alerts cannot grow the prompt without bound.
 agent_slack_max_per_run: 3
+
+# ------------------------------------------------------------
+# Incidents — how long one paid investigation covers a host
+# ------------------------------------------------------------
+# Shared by the anomaly and Slack modes, keyed by host (investigate.sh explains
+# why not by message or by check). A host named again within the quiet window
+# is the same incident and is not re-investigated.
+#
+# ⚠️ Must exceed the wrapper's --alert-repeat-max (24h). A still-failing check
+# re-posts at least that often, and each post is what keeps the incident open;
+# shorter, and a fault whose reminders have backed off looks resolved and is
+# re-billed. 26 matches agent_wrapper_max_age_hours for the same reason.
+agent_incident_quiet_hours: 26
+
+# Even an incident that never goes quiet is re-investigated once past this age,
+# so an unfixed fault gets a fresh look weekly and a second, unrelated fault on
+# the same host cannot hide behind the first indefinitely.
+agent_incident_max_age_days: 7
+
+# Backstop, not the control: past this much Tier 2 spend in one UTC day the
+# anomaly and Slack modes stop until midnight UTC (the weekly digest still
+# runs). The worst real day measured so far would have been ~$1.11 under the
+# incident dedup, digest included; this sits above it. 0 disables.
+agent_daily_spend_cap_usd: 2.00
 
 # Weekly digest — Sunday morning, offset from the hourly sweep.
 agent_digest_weekday: "0"
