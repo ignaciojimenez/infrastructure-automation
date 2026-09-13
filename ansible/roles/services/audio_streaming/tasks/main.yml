@@ -368,7 +368,11 @@
 # claimed here. `nmcli -w 20` now bounds it to ~60-90 s:
 #
 #   */5, ladder 264 s (before) -> acts by ~14.5 min  (plug at 15 min — 30 s!)
-#   */5, ladder  ~90 s (now)   -> acts by ~11.5 min  (plug at 15 min — 3.5 min)
+#   */5, ladder ~120 s (now)   -> acts by ~12 min    (plug at 15 min — 3 min)
+#
+# (~120 s worst case since 2026-09-13: layers 2 and 3 now wait up to
+# SETTLE/DRIVER_WAIT for NetworkManager's own auto-activation before forcing
+# one, because a forced `con up` was tearing down the reload's working link.)
 #
 # Software recovery MUST land before the plug, or the plug reboots a host
 # mid-ladder and the layer diagnostic — the only thing that tells us whether
