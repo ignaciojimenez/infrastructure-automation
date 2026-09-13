@@ -3,12 +3,12 @@
 #
 # Modes:
 #   (no args)   anomaly-triggered. Runs only when Tier 1 wrote a NEWER anomaly
-#               snapshot than the last one handled. Free on the vast majority
-#               of ticks.
-#   --slack     poll #home-alerts, investigate NEW failure alerts the hourly
-#               sweep can't see (per-service script failures, HA alerts), with
-#               content-dedup so a nightly-recurring failure is investigated
-#               once, not every night.
+#               snapshot than the last one handled, and then only for findings
+#               no open (host, subject) incident already explains. Free on the
+#               vast majority of ticks.
+#   --slack     poll #home-alerts, investigate failure alerts the hourly sweep
+#               can't see (per-service script failures, HA alerts) — again only
+#               for new (host, subject) incidents, all of a poll's in ONE run.
 #   --digest    weekly fleet summary, posted to #home-logging.
 #
 # Deliberately separate from fleet_health_check.sh: Tier 1 must keep working —
@@ -36,10 +36,16 @@ MONITOR_AGENT="infra-monitor"
 
 # Slack watch
 SLACK_CHANNEL="{{ agent_slack_channel }}"
-SLACK_DEDUP_DAYS={{ agent_slack_dedup_days }}
 SLACK_MAX_PER_RUN={{ agent_slack_max_per_run }}
 SLACK_TS_FILE="$AGENT_DIR/.last_slack_ts"
-SLACK_SEEN_DIR="$AGENT_DIR/slack_seen"
+
+# Incidents and spend — see the sections of the same names below.
+INCIDENT_DIR="$AGENT_DIR/incidents"
+INCIDENT_QUIET_SECONDS=$(( {{ agent_incident_quiet_hours }} * 3600 ))
+INCIDENT_MAX_AGE_SECONDS=$(( {{ agent_incident_max_age_days }} * 86400 ))
+SPEND_DIR="$AGENT_DIR/spend"
+DAILY_SPEND_CAP="{{ agent_daily_spend_cap_usd }}"
+FLEET_HOSTS="{% for h in agent_fleet_hosts %}{{ h.name }} {% endfor %}"
 
 # Slack timestamps are decimal strings ("1754230021.123456"), which POSIX test
 # cannot compare numerically — `[ "$ts" -gt 0 ]` errors on the decimal point,
@@ -54,7 +60,7 @@ ts_is_positive() {
 # way). The lock makes any second caller a clean no-op — anomaly, slack, and
 # digest modes all share it, so they serialize rather than pile up.
 LOCK="$AGENT_DIR/.investigate.lock"
-mkdir -p "$AGENT_DIR" "$SLACK_SEEN_DIR"
+mkdir -p "$AGENT_DIR" "$INCIDENT_DIR" "$SPEND_DIR"
 
 # Prompts are assembled into a file rather than piped, because run_and_report
 # must run in THIS shell — it sets AGENT_RC/AGENT_COST that the callers read
@@ -84,6 +90,10 @@ export ANTHROPIC_API_KEY
 
 mkdir -p "$PLANS_DIR"
 
+# Closed incidents and old ledger days are dead weight; anything this old is
+# past every window below.
+find "$INCIDENT_DIR" "$SPEND_DIR" -type f -mtime +30 -exec rm -f {} + 2>/dev/null
+
 # ============================================================
 # SSH auth back-off — the hosts this agent must not touch
 #
@@ -106,13 +116,6 @@ backed_off_hosts() {
         [ -f "$_f" ] || continue
         printf '%s\n' "${_f##*/}"
     done
-}
-
-# Hosts named by the findings in a Tier 1 snapshot. Findings are written as
-# "<host>: <message>" strings, one per line; the surrounding JSON keys carry a
-# quote immediately before their colon and so never match.
-anomaly_finding_hosts() {
-    sed -n 's/^[[:space:]]*"\([^":]*\):.*/\1/p' "$ANOMALY_FILE"
 }
 
 # Appended to every prompt. Emits nothing when no host is backed off, so the
@@ -149,6 +152,202 @@ compose_prompt() {
 }
 
 # ============================================================
+# Incidents — one paid investigation per problem, not per message
+#
+# Measured 2026-09-13: one fault (raspotify on hifipi) bought SIX
+# investigations in ten hours, $1.57, all reaching the same conclusion. Three
+# separate keys each let it through:
+#   * the Slack watch deduped on message TEXT, and one fault speaks in several
+#     voices — system_health_check's failure, check_raspotify's failure, and
+#     the wrapper's "STILL FAILING" reminder are three texts, so three
+#     signatures and three investigations;
+#   * anomaly mode deduped on the WHOLE finding set, so vinylstreamer joining
+#     it re-billed hifipi, and vinylstreamer leaving re-billed it again;
+#   * the two modes shared no state, so each paid for what the other had just
+#     explained.
+#
+# The key is (HOST, SUBJECT) — "hifipi.raspotify" — shared by both modes. The
+# subject is WHAT is failing, read deterministically from the alert itself (see
+# SUBJECT_PY): a check script's own name (check_raspotify.sh → raspotify), the
+# units and services a generic health check names (raspotify.service →
+# raspotify), "reachability" for a host that is gone, else a normalised
+# signature of the failing line. So the three hifipi messages of 2026-09-13 —
+# system_health_check naming raspotify, check_raspotify, and their reminders —
+# are one key, while a DIFFERENT fault on the same host is a new key and is
+# investigated.
+#
+# That second point is the reason this is not host-scoped. Keying on the host
+# alone also collapsed the six runs, but it withheld the plan for any unrelated
+# fault on a host that already had one open. A new subject on such a host buys
+# its own run, and its prompt lists the host's open incidents and their plans,
+# so the agent can still say "same cause" when it is.
+#
+# Anything that names the key again — a reminder, a changed snapshot — keeps
+# the incident open. It closes when nothing has named it for
+# INCIDENT_QUIET_SECONDS, so a fault that clears and later comes back is
+# investigated afresh; and an incident older than INCIDENT_MAX_AGE_SECONDS is
+# looked at again even if it never went quiet.
+#
+# ⚠️ The quiet window must outlast the wrapper's longest reminder gap
+# (--alert-repeat-max, 24h). A still-failing check posts at least that often,
+# and each post is what keeps its incident open; shorter, and a fault that has
+# merely backed off its reminders looks resolved and is re-billed.
+#
+# ⚠️ The price of a finer key: one fault that two checks describe in words this
+# parser cannot link (no shared unit name) costs a second run. The daily spend
+# cap below bounds that; a hidden fault would be unbounded.
+#
+# State: one file per key holding "<opened_epoch> <last_seen_epoch> <plan>".
+# ============================================================
+
+now_epoch() { date +%s; }
+
+# incident_key <text> — "hifipi.raspotify" or "alert-<signature>", safe as a
+# filename. Hosts never contain a dot (the parsers strip any domain), so the
+# host is everything before the first one.
+incident_key() {
+    printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9.-' '-' \
+        | sed 's/^-*//;s/-*$//' | cut -c1-80
+}
+
+# incident_covered <key> — true while an open incident already explains key.
+incident_covered() {
+    [ -f "$INCIDENT_DIR/$1" ] || return 1
+    read -r _opened _seen _rest < "$INCIDENT_DIR/$1" || return 1
+    case "$_opened" in ''|*[!0-9]*) return 1 ;; esac
+    case "$_seen" in ''|*[!0-9]*) return 1 ;; esac
+    _now=$(now_epoch)
+    [ $((_now - _seen)) -lt "$INCIDENT_QUIET_SECONDS" ] &&
+        [ $((_now - _opened)) -lt "$INCIDENT_MAX_AGE_SECONDS" ]
+}
+
+# incident_seen <key> — the host was named again; keep its incident open.
+# Only an OPEN incident is refreshed. Refreshing a lapsed one would revive it,
+# and the recurrence it exists to catch would never be investigated.
+incident_seen() {
+    incident_covered "$1" || return 0
+    read -r _opened _seen _rest < "$INCIDENT_DIR/$1"
+    printf '%s %s %s\n' "$_opened" "$(now_epoch)" "${_rest:--}" > "$INCIDENT_DIR/$1.tmp" &&
+        mv -f "$INCIDENT_DIR/$1.tmp" "$INCIDENT_DIR/$1"
+}
+
+# incident_open <key> <plan> — a paid investigation has just explained it.
+incident_open() {
+    _t=$(now_epoch)
+    printf '%s %s %s\n' "$_t" "$_t" "${2:--}" > "$INCIDENT_DIR/$1.tmp" &&
+        mv -f "$INCIDENT_DIR/$1.tmp" "$INCIDENT_DIR/$1"
+}
+
+incident_plan() {
+    read -r _o _s _p < "$INCIDENT_DIR/$1" 2>/dev/null
+    printf '%s' "${_p:--}"
+}
+
+# open_incidents_on "<hosts>" "<keys to leave out>" — one "- <key> — plan:
+# <file>" line per OPEN incident on those hosts. This is what lets a run paid
+# for a new subject see what is already known about the same host.
+open_incidents_on() {
+    for _oh in $1; do
+        for _of in "$INCIDENT_DIR/$_oh".*; do
+            [ -f "$_of" ] || continue
+            _ok=${_of##*/}
+            case "$_ok" in *.tmp) continue ;; esac
+            case " $2 " in *" $_ok "*) continue ;; esac
+            incident_covered "$_ok" || continue
+            printf -- '- %s — plan: %s\n' "$_ok" "$(incident_plan "$_ok")"
+        done
+    done
+}
+
+# SUBJECT_PY — the one definition of "what is failing", prepended to both
+# python parsers below (the Slack watch and the anomaly snapshot), so the two
+# modes cannot drift into keying the same fault differently.
+#
+#   subjects(host, script, title, body) -> ["raspotify", ...]
+#
+#   1. A specific check script names its subject: check_raspotify.sh →
+#      raspotify. Generic multi-check scripts are NOT a subject.
+#   2. Otherwise, the ❌ lines of the output: "Service X: not running", a
+#      "- X.service" failed-unit line, "N failed systemd unit(s): X.service"
+#      (Tier 1's wording) → X; a reachability failure → "reachability"; any
+#      other ❌ line → its normalised signature.
+#   3. Otherwise the title: reachability, else its signature, else
+#      "unspecified" — never empty, so every alert keys somewhere.
+#
+# Lines cut off by the wrapper's 1500-char output limit ("- raspo...") are
+# ignored rather than keyed as a bogus subject.
+#
+# NOTE: no apostrophes — this is a single-quoted shell string.
+SUBJECT_PY='
+import re
+GENERIC_SCRIPTS = ("system_health_check", "fleet_health_check")
+ANSI = re.compile(r"\x1b\[[0-9;]*m|\[[0-9;]*m")
+UNIT = r"[A-Za-z0-9@_.-]+?\.(?:service|timer|socket|mount|path)"
+REACH = re.compile(r"unreachable|\boffline\b|no response|not responding|\bis down\b|went down")
+HEADERS = re.compile(r":[a-z_]+:|alert:|still failing|script failed|script execution|unchanged failure.*", re.I)
+STOP = ("on", "the", "is", "at", "of", "and", "to", "for", "in", "not")
+
+def slug(s):
+    return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")[:40]
+
+def unit_name(u):
+    return slug(re.sub(r"\.(?:service|timer|socket|mount|path)$", "", u))
+
+def signature(line, host):
+    s = HEADERS.sub(" ", ANSI.sub("", line).lower())
+    if host:
+        s = re.sub(r"(?<![a-z0-9-])" + re.escape(host) + r"(?![a-z0-9-])", " ", s)
+    words = [w for w in re.sub(r"[^a-z]+", " ", s).split() if len(w) > 1 and w not in STOP]
+    return slug("-".join(words[:6]))
+
+def body_subjects(body, host):
+    out = []
+    def add(x):
+        if x and x not in out:
+            out.append(x)
+    for raw in body.splitlines():
+        line = ANSI.sub("", raw).strip().strip("`").strip()
+        if not line or line.startswith(":repeat:") or line.endswith("...") or "truncated" in line.lower():
+            continue
+        m = re.search(r"failed systemd unit\(s\):\s*(.+)$", line)
+        if m:
+            for u in re.findall(UNIT, m.group(1)):
+                add(unit_name(u))
+            continue
+        m = re.match(r"^-\s+(" + UNIT + r")\s*$", line)
+        if m:
+            add(unit_name(m.group(1)))
+            continue
+        if "❌" not in line:
+            continue
+        m = re.search(r"Service ([A-Za-z0-9@_.-]+): not running", line)
+        if m:
+            add(unit_name(m.group(1)))
+        elif re.search(r"\d+ failed unit\(s\)", line):
+            continue
+        elif REACH.search(line.lower()):
+            add("reachability")
+        else:
+            add(signature(line, host))
+    return out
+
+def subjects(host, script, title, body):
+    base = ""
+    if script:
+        base = re.sub(r"\.[A-Za-z0-9]+$", "", script.split()[0].rsplit("/", 1)[-1]).lower()
+        base = re.sub(r"^check_", "", base)
+        if base and base not in GENERIC_SCRIPTS:
+            return [slug(base)]
+    found = body_subjects(body, host)
+    if found:
+        return found
+    t = ANSI.sub("", title)
+    if REACH.search(t.lower()):
+        return ["reachability"]
+    return [signature(t, host) or slug(base) or "unspecified"]
+'
+
+# ============================================================
 # Helpers
 # ============================================================
 
@@ -175,6 +374,46 @@ alert_failure_throttled() {
     else
         echo "failure alert suppressed (cooldown active)" >&2
     fi
+}
+
+# ============================================================
+# Daily spend cap — the backstop, not the dedup
+#
+# Every run's cost goes into a per-UTC-day ledger, the digest's included. Past
+# the cap, anomaly and Slack investigations stop until the day rolls over; the
+# digest still runs, because skipping it loses a whole week. The incidents
+# above are the control. This exists for the key that churns in a way nobody
+# has seen yet, so it sits well above a real bad day. 0 disables it.
+#
+# ⚠️ It undercounts: a run that times out or fails is recorded as $0, though
+# it may have spent tokens before it died.
+# ============================================================
+
+spend_file() { printf '%s/%s' "$SPEND_DIR" "$(date -u +%Y-%m-%d)"; }
+
+spend_today() {
+    _sf=$(spend_file)
+    if [ -f "$_sf" ]; then
+        awk 'NR == 1 { v = $1 } END { printf "%.4f\n", v + 0 }' "$_sf"
+    else
+        echo "0.0000"
+    fi
+}
+
+spend_add() {
+    _sf=$(spend_file)
+    awk -v a="$(spend_today)" -v b="${1:-0}" 'BEGIN { printf "%.4f\n", a + b }' > "$_sf.tmp" &&
+        mv -f "$_sf.tmp" "$_sf"
+}
+
+# over_spend_cap <what> — true, and says so (throttled), once today's spend
+# has reached the cap.
+over_spend_cap() {
+    awk -v s="$(spend_today)" -v c="$DAILY_SPEND_CAP" \
+        'BEGIN { exit !(c + 0 > 0 && s + 0 >= c + 0) }' || return 1
+    echo "daily spend cap \$${DAILY_SPEND_CAP} reached (\$$(spend_today) today); not investigating $1" >&2
+    alert_failure_throttled ":warning: Tier 2 daily spend cap (\$${DAILY_SPEND_CAP}) reached on agent-lxc — investigations paused until 00:00 UTC. See ~/.logs/investigate.log"
+    return 0
 }
 
 # run_agent — prompt on stdin. Uses --format json (text mode dumps the whole
@@ -245,14 +484,17 @@ $(printf '%s' "$_raw" | head -c 500)"
 # on success, extracts the marker-bounded plan, writes it to a dated file, and
 # posts the clean summary to <slack_channel>. On failure, throttled-alerts to
 # the watched channel (always #home-alerts, whatever the success channel is).
-# Returns the agent rc. Used by all three modes so the marker-split, plan-write
-# and cost-log logic lives in exactly one place — the digest previously posted
-# AGENT_OUTPUT raw, which leaked the ===PLAN===/===SUMMARY=== markers to Slack.
+# Returns the agent rc and sets REPORT_PLAN to the plan file written. Used by
+# all three modes so the marker-split, plan-write, cost-log and ledger logic
+# lives in exactly one place — the digest previously posted AGENT_OUTPUT raw,
+# which leaked the ===PLAN===/===SUMMARY=== markers to Slack.
 run_and_report() {
     _channel="$1"
     _header="$2"
+    REPORT_PLAN=""
     run_agent
     echo "run cost: \$${AGENT_COST}"
+    spend_add "$AGENT_COST"
     if [ "$AGENT_RC" -ne 0 ]; then
         echo "run failed (rc=$AGENT_RC): $AGENT_OUTPUT" >&2
         alert_failure_throttled ":warning: ${_header} failed on agent-lxc (rc=$AGENT_RC). See ~/.logs/investigate.log"
@@ -280,6 +522,7 @@ run_and_report() {
     _file="$PLANS_DIR/$(date -u +%Y-%m-%d)-${_slug}.md"
     if printf '%s\n' "$_plan" > "$_file"; then
         _note="Plan: \`$_file\`"
+        REPORT_PLAN="$_file"
     else
         _note="(Could not write the plan file — check the log.)"
     fi
@@ -350,10 +593,11 @@ if [ "${1:-}" = "--slack" ]; then
         -H "Authorization: Bearer ${SLACK_READ_TOKEN}" \
         "$_url")
 
-    # Filter to genuine, un-seen failure alerts. Excludes our own posts and the
-    # channel's non-failure noise so we never investigate ourselves into a loop.
-    _parsed=$(printf '%s' "$_resp" | python3 -c '
-import json, sys, re
+    # Filter to genuine failure alerts and key each one to its incident.
+    # Excludes our own posts and the channel's non-failure noise so we never
+    # investigate ourselves into a loop.
+    _parsed=$(printf '%s' "$_resp" | python3 -c "$SUBJECT_PY"'
+import json, sys
 try:
     d = json.load(sys.stdin)
 except ValueError:
@@ -370,6 +614,7 @@ try:
     maxts = float(sys.argv[1]) if len(sys.argv) > 1 else 0.0
 except ValueError:
     maxts = 0.0
+fleet = sys.argv[2].split() if len(sys.argv) > 2 else []
 rows = []
 for m in d.get("messages", []):
     try:
@@ -377,9 +622,17 @@ for m in d.get("messages", []):
     except ValueError:
         tsf = 0.0
     maxts = max(maxts, tsf)
-    text = m.get("text", "") or ""
+    title = m.get("text", "") or ""
+    # The wrapper puts its Output in the attachment text and Host/Script in
+    # the attachment FIELDS, which an earlier version of this parser never
+    # read — so it could see which host failed, but not which check.
+    body = ""
+    fields = {}
     for a in m.get("attachments", []) or []:
-        text += " " + (a.get("text", "") or a.get("fallback", "") or "")
+        body += "\n" + (a.get("text", "") or a.get("fallback", "") or "")
+        for f in a.get("fields", []) or []:
+            fields[(f.get("title") or "").strip().lower()] = (f.get("value") or "").strip()
+    text = title + " " + body
     low = text.lower()
     t = text.strip()
     # A genuine alert STARTS with an alert emoji (wrapper uses :x:, HA uses
@@ -401,16 +654,47 @@ for m in d.get("messages", []):
     if any(w in low for w in ("agent key in use", "trains to", "away mode",
                               "back to normal", "heartbeat")):
         continue
-    sig = re.sub(r"[^a-z0-9 ]", " ", low)
-    sig = re.sub(r"\b\d+\b", " ", sig)
-    sig = re.sub(r"\s+", " ", sig).strip()[:60]
-    slug = re.sub(r"[^a-z0-9]+", "-", sig).strip("-")[:50] or "alert"
-    rows.append((tsf, slug, " ".join(text.split())))
+    # The host: the wrapper Host field, else "Host: <name>" in the output
+    # (system_health_check prints it), else a wrapper title ending "on <name>",
+    # else the fleet host an HA alert leads with.
+    host = ""
+    if re.match(r"^[A-Za-z0-9][A-Za-z0-9.-]*$", fields.get("host", "")):
+        host = fields["host"].lower()
+    else:
+        hm = re.search(r"\bHost: *([A-Za-z0-9][A-Za-z0-9.-]*)", text)
+        if not hm:
+            hm = re.search(r"(?:STILL FAILING|Script Failed) on ([A-Za-z0-9][A-Za-z0-9.-]*)", text)
+        if hm:
+            host = hm.group(1).lower()
+        else:
+            first = (t.splitlines() or [""])[0].lower()
+            for h in fleet:
+                if re.search(r"(?<![a-z0-9-])" + re.escape(h.lower()) + r"(?![a-z0-9-])", first):
+                    host = h.lower()
+                    break
+    host = host.split(".")[0]
+    script = fields.get("script", "")
+    context = " ".join(text.split())
+    if script:
+        context += " [Script: " + script + "]"
+    if host:
+        # One row per subject: a health check naming two failed units is two
+        # incidents, each of which may already be open.
+        for s in subjects(host, script, title, body):
+            rows.append((tsf, host + "." + s, context[:1500]))
+    else:
+        # No host to be found: fall back to a content signature, so an alert
+        # that names nothing is still deduped against its own repeats.
+        sig = re.sub(r"[^a-z0-9 ]", " ", low)
+        sig = re.sub(r"\b\d+\b", " ", sig)
+        sig = re.sub(r"\s+", " ", sig).strip()[:60]
+        key = "alert-" + (re.sub(r"[^a-z0-9]+", "-", sig).strip("-")[:50] or "alert")
+        rows.append((tsf, key, context[:1500]))
 
 print(f"OK {maxts:.6f}")
-for tsf, slug, text in sorted(rows):
-    print(f"{tsf}\t{slug}\t{text}")
-' "${_oldest:-0}" 2>/dev/null)
+for tsf, key, text in sorted(rows):
+    print(f"{tsf}\t{key}\t{text}")
+' "${_oldest:-0}" "$FLEET_HOSTS" 2>/dev/null)
 
     _status=$(printf '%s\n' "$_parsed" | head -1)
     case "$_status" in
@@ -425,43 +709,78 @@ for tsf, slug, text in sorted(rows):
     esac
 
     _tmp=$(mktemp)
+    _batch=$(mktemp)
     printf '%s\n' "$_parsed" | tail -n +2 > "$_tmp"
 
+    # Every new incident in this poll goes into ONE investigation. Alerts that
+    # arrive together usually share a cause, and one run that sees them all is
+    # both cheaper and better placed to notice it than N runs that each see one.
+    _keys=""
+    _hosts=""
+    _last_tsf=""
     _count=0
+    _investigated=0
     _tab=$(printf '\t')
-    while IFS="$_tab" read -r _tsf _slug _text; do
-        [ -z "$_slug" ] && continue
-        _seen="$SLACK_SEEN_DIR/$_slug"
-        # Content-dedup: a nightly-recurring failure is investigated once, not
-        # every night. Skip if this signature was investigated recently.
-        if [ -f "$_seen" ]; then
-            _age_d=$(( ( $(date +%s) - $(stat -c %Y "$_seen") ) / 86400 ))
-            if [ "$_age_d" -lt "$SLACK_DEDUP_DAYS" ]; then
-                echo "dedup: '$_slug' investigated ${_age_d}d ago (< ${SLACK_DEDUP_DAYS}d); skipping" >&2
-                continue
-            fi
+    while IFS="$_tab" read -r _tsf _key _text; do
+        [ -z "$_key" ] && continue
+        _key=$(incident_key "$_key")
+        if incident_covered "$_key"; then
+            incident_seen "$_key"
+            echo "open incident '$_key' already investigated (plan: $(incident_plan "$_key")); not re-billing" >&2
+            continue
         fi
+        case " $_keys " in *" $_key "*) continue ;; esac
         if [ "$_count" -ge "$SLACK_MAX_PER_RUN" ]; then
-            echo "reached SLACK_MAX_PER_RUN=$SLACK_MAX_PER_RUN; remaining alerts next run" >&2
-            break
+            echo "reached SLACK_MAX_PER_RUN=$SLACK_MAX_PER_RUN; '$_key' not investigated (its alert still paged)" >&2
+            continue
         fi
-        echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] investigating slack alert: $_text"
-        compose_prompt <<PROMPT
-A failure alert was posted to the Slack channel #home-alerts:
-
-"$_text"
-
-The hourly Tier 1 sweep did not surface this — it is likely a per-service
-monitoring-script failure or a Home Assistant alert. Investigate the underlying
-cause on the affected host and produce a plan following your output contract.
-Confirm the failure is still current before proposing a fix; these alerts often
-fire on a schedule and may have self-cleared.
-PROMPT
-        run_and_report "${AGENT_SLACK_ALERT:-}" ":mag: *Fleet investigation*" < "$PROMPT_FILE"
-        touch "$_seen"
+        _keys="$_keys $_key"
         _count=$((_count + 1))
+        case "$_key" in
+            *.*) case " $_hosts " in *" ${_key%%.*} "*) ;; *) _hosts="$_hosts ${_key%%.*}" ;; esac ;;
+        esac
+        if [ "$_tsf" = "$_last_tsf" ]; then
+            printf '* [%s] — the same alert as above\n\n' "$_key" >> "$_batch"
+        else
+            printf '* [%s] "%s"\n\n' "$_key" "$_text" >> "$_batch"
+        fi
+        _last_tsf=$_tsf
     done < "$_tmp"
-    rm -f "$_tmp"
+
+    if [ "$_count" -gt 0 ] && ! over_spend_cap "$_count Slack incident(s):$_keys"; then
+        echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] investigating $_count new Slack incident(s):$_keys"
+        _open=$(open_incidents_on "$_hosts" "$_keys")
+        _open_note=""
+        [ -n "$_open" ] && _open_note="
+The same host(s) ALSO have open incidents that were already investigated. Do
+not investigate those again: read their plans, and say whether the alerts above
+share a cause with them or are a separate fault.
+
+$_open
+"
+        compose_prompt <<PROMPT
+New failure alerts were posted to the Slack channel #home-alerts, each tagged
+with the incident (host.subject) it belongs to:
+
+$(cat "$_batch")
+$_open_note
+The hourly Tier 1 sweep did not surface these — they are likely per-service
+monitoring-script failures or Home Assistant alerts. Investigate the underlying
+cause on the affected host(s) and produce ONE plan following your output
+contract. If several alerts share a root cause, say so and treat them as one
+problem. Confirm each failure is still current before proposing a fix; these
+alerts often fire on a schedule and may have self-cleared.
+PROMPT
+        # Opened only on success: a failed run leaves the incident unexplained,
+        # so the next alert about it is investigated instead of skipped.
+        if run_and_report "${AGENT_SLACK_ALERT:-}" ":mag: *Fleet investigation*" < "$PROMPT_FILE"; then
+            for _k in $_keys; do
+                incident_open "$_k" "$REPORT_PLAN"
+            done
+            _investigated=$_count
+        fi
+    fi
+    rm -f "$_tmp" "$_batch"
 
     # Advance the watermark only after a successful fetch, so a failed poll
     # retries the same window rather than skipping alerts.
@@ -475,7 +794,7 @@ PROMPT
     else
         echo "poll returned no usable watermark ('$_maxts'); preserving $SLACK_TS_FILE" >&2
     fi
-    echo "slack watch done; investigated $_count alert(s)"
+    echo "slack watch done; investigated $_investigated incident(s)"
     exit 0
 fi
 
@@ -485,50 +804,129 @@ fi
 
 [ -f "$ANOMALY_FILE" ] || { echo "no anomaly snapshot; nothing to do"; exit 0; }
 
-# Only investigate a snapshot newer than the last one handled, so a persistent
-# fault isn't re-investigated (and re-billed) every hour.
+# Only look at a snapshot newer than the last one handled. Free, and it keeps
+# the incident refresh below honest: Tier 1 leaves the snapshot in place after
+# the fleet recovers, so only a CHANGED snapshot is evidence the findings in it
+# are current. Refreshing from an unchanged one would hold a healed host's
+# incident open forever.
 if [ -f "$MARKER" ] && [ ! "$ANOMALY_FILE" -nt "$MARKER" ]; then
     echo "anomaly snapshot unchanged since last investigation; skipping"
     exit 0
 fi
 
-# If every finding names a host Tier 1 has stopped probing, there is nothing to
-# investigate: the agent's only access to those hosts is the SSH that is being
-# refused. Running anyway means paying an agent to rediscover an auth failure by
-# reproducing it — which is what banned this container. The marker is left
-# alone deliberately: the snapshot's mtime no longer advances while the findings
-# hold, so this stays free and re-evaluates the moment they change.
+# Key every finding to its (host, subject) incident, with the same SUBJECT_PY
+# the Slack watch uses, and split them into those an open incident already
+# explains and those nobody has looked at yet. Only the second group is paid
+# for — which is what stops a host joining or leaving the finding set from
+# re-billing every finding that was already in it.
+#
+# Rows are "<key>\t<host>\t<finding>". Findings are "<host>: <message>".
+anomaly_rows=$(python3 -c "$SUBJECT_PY"'
+import json, sys
+try:
+    findings = json.load(open(sys.argv[1])).get("findings", [])
+except (ValueError, OSError):
+    findings = []
+for f in findings:
+    host, sep, msg = str(f).partition(": ")
+    if not sep or not re.match(r"^[A-Za-z0-9][A-Za-z0-9.-]*$", host):
+        continue
+    h = host.lower().split(".")[0]
+    for s in subjects(h, "", "", "❌ " + msg):
+        print(h + "." + s + "\t" + h + "\t" + " ".join(str(f).split()))
+' "$ANOMALY_FILE" 2>/dev/null)
+
+new_keys=""
+new_hosts=""
+open_keys=""
+findings=""
+named=0
+_tab=$(printf '\t')
+while IFS="$_tab" read -r _ak _ah _aline; do
+    [ -z "$_ak" ] && continue
+    named=$((named + 1))
+    _ak=$(incident_key "$_ak")
+    if incident_covered "$_ak"; then
+        incident_seen "$_ak"
+        case " $open_keys " in *" $_ak "*) ;; *) open_keys="$open_keys $_ak" ;; esac
+        continue
+    fi
+    case " $new_keys " in *" $_ak "*) ;; *) new_keys="$new_keys $_ak" ;; esac
+    case " $new_hosts " in *" $_ah "*) ;; *) new_hosts="$new_hosts $_ah" ;; esac
+    case "$findings" in
+        *"- $_aline
+"*) ;;
+        *) findings="${findings}- $_aline
+" ;;
+    esac
+done <<ROWS
+$anomaly_rows
+ROWS
+new_keys=${new_keys# }
+new_hosts=${new_hosts# }
+open_keys=${open_keys# }
+
+# A snapshot yielding no key at all means its format moved under this parser.
+# That falls through to investigating the whole thing: an unparsed finding must
+# cost money, never vanish.
+if [ "$named" -gt 0 ] && [ -z "$new_keys" ]; then
+    echo "every finding belongs to an open incident ($open_keys); not re-billing"
+    date -u +%Y-%m-%dT%H:%M:%SZ > "$MARKER"
+    exit 0
+fi
+
+# If every NEW finding names a host Tier 1 has stopped probing, there is
+# nothing to investigate: the agent's only access to those hosts is the SSH
+# that is being refused. Running anyway means paying an agent to rediscover an
+# auth failure by reproducing it — which is what banned this container. The
+# marker is left alone deliberately: the snapshot's mtime no longer advances
+# while the findings hold, so this stays free and re-evaluates the moment they
+# change.
 blocked=$(backed_off_hosts | tr '\n' ' ' | sed 's/[[:space:]]*$//')
-if [ -n "$blocked" ]; then
+if [ -n "$blocked" ] && [ -n "$new_hosts" ]; then
     investigable=0
-    named=0
-    for h in $(anomaly_finding_hosts); do
-        named=$((named + 1))
+    for h in $new_hosts; do
         case " $blocked " in
             *" $h "*) ;;
             *) investigable=1 ;;
         esac
     done
-    if [ "$named" -gt 0 ] && [ "$investigable" -eq 0 ]; then
-        echo "every finding concerns a host in SSH back-off ($blocked); nothing this agent can reach — skipping"
+    if [ "$investigable" -eq 0 ]; then
+        echo "every new finding concerns a host in SSH back-off ($blocked); nothing this agent can reach — skipping"
         exit 0
     fi
 fi
 
-echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] investigating new anomaly"
-anomaly=$(cat "$ANOMALY_FILE")
+# Marker untouched: under the cap this retries, free, every hour until the day
+# rolls over.
+over_spend_cap "anomaly (${new_keys:-unparsed snapshot})" && exit 0
+
+if [ "$named" -eq 0 ]; then
+    findings=$(cat "$ANOMALY_FILE")
+fi
+
+# Open incidents on every host this snapshot names — the ones it re-confirmed
+# and any other open subject on a host with a new finding.
+_hosts="$new_hosts"
+for _k in $open_keys; do
+    case " $_hosts " in *" ${_k%%.*} "*) ;; *) _hosts="$_hosts ${_k%%.*}" ;; esac
+done
+_open=$(open_incidents_on "$_hosts" "$new_keys")
+
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] investigating new anomaly: ${new_keys:-unparsed snapshot}"
 
 compose_prompt <<PROMPT
-The hourly Tier 1 fleet sweep reported the anomaly below. Investigate it and
+The hourly Tier 1 fleet sweep reported the findings below. Investigate them and
 produce a plan following your output contract.
 
 Treat these findings as a starting point, not as ground truth: the sweep is
 deliberately shallow and ran up to an hour ago. Confirm the symptom still
 holds before reasoning about causes.
 
-\`\`\`json
-$anomaly
 \`\`\`
+$findings
+\`\`\`
+$(if [ -n "$_open" ]; then printf '\nThese incidents on the same host(s) are already investigated and still open.\nDo not investigate them again; read their plans, and mention them only if\nthey turn out to share a cause with the findings above:\n\n%s\n' "$_open"; fi)
 PROMPT
 run_and_report "${AGENT_SLACK_ALERT:-}" ":mag: *Fleet investigation*" < "$PROMPT_FILE"
 rc=$?
@@ -536,6 +934,9 @@ rc=$?
 # Mark handled only on success, so a transient failure retries next hour rather
 # than silently swallowing the anomaly.
 if [ "$rc" -eq 0 ]; then
+    for _k in $new_keys; do
+        incident_open "$_k" "$REPORT_PLAN"
+    done
     date -u +%Y-%m-%dT%H:%M:%SZ > "$MARKER"
     rm -f "$FAIL_MARKER"
 fi

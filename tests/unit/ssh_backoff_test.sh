@@ -75,8 +75,11 @@ python3 "$REPO_ROOT/tests/lib/render_j2.py" "$INVESTIGATE_TMPL" "$WORK/investiga
     agent_failure_alert_cooldown_seconds=21600 \
     agent_run_timeout_seconds=600 \
     agent_slack_channel=C_TEST \
-    agent_slack_dedup_days=7 \
     agent_slack_max_per_run=3 \
+    agent_incident_quiet_hours=26 \
+    agent_incident_max_age_days=7 \
+    agent_daily_spend_cap_usd=0 \
+    agent_fleet_hosts=cobra:linux,opnsense:linux \
     opencode_bin="$WORK/bin/opencode" || exit 1
 
 # ------------------------------------------------------------------
@@ -285,7 +288,9 @@ else
 fi
 
 # --- and with nothing backed off, the prompt is unchanged ----------
-rm -f "$BACKOFF_DIR"/* "$STUB_DIR/opnsense" "$ANOMALY" "$MARKER"
+# Incidents too: the run above opened one for cobra, and a covered host is
+# (correctly) not re-investigated — which would leave nothing here to inspect.
+rm -f "$BACKOFF_DIR"/* "$STUB_DIR/opnsense" "$ANOMALY" "$MARKER" "$AGENT_DIR"/incidents/*
 sweep
 rm -f "$PROMPT_RECORD"
 sh "$WORK/investigate.sh" > "$WORK/inv_out" 2>&1

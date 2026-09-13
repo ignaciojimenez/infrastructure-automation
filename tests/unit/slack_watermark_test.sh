@@ -39,11 +39,14 @@ import re, sys
 src = open(sys.argv[1]).read()
 # Dummy-render the Jinja placeholders; none of them affect this logic.
 src = re.sub(r"\{\{\s*([a-z_0-9]+)\s*\}\}", "0", src)
-blocks = re.findall(r"python3 -c '\n(.*?)\n'", src, re.S)
+blocks = re.findall(r"python3 -c (?:\"\$SUBJECT_PY\")?'\n(.*?)\n'", src, re.S)
 hits = [b for b in blocks if "ERR json" in b]
 if len(hits) != 1:
     sys.exit("expected exactly one Slack parser block, found %d" % len(hits))
-open(sys.argv[2], "w").write(hits[0])
+# The parser is run as "$SUBJECT_PY" + its own block; prepend the shared
+# subject helpers the same way, or it would not run at all.
+subject = re.search(r"^SUBJECT_PY='\n(.*?)\n'$", src, re.S | re.M)
+open(sys.argv[2], "w").write((subject.group(1) + "\n" if subject else "") + hits[0])
 PY
 [ -f "$WORK/parse.py" ] || { printf '   ✗ could not extract the parser\n'; exit 1; }
 

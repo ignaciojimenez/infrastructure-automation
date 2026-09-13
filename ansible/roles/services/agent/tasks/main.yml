@@ -265,6 +265,17 @@
         creates: "{{ agent_state_dir }}/.last_slack_ts"
       tags: [agent, investigate, slack]
 
+    # The Slack watch's per-message-text markers, retired 2026-09-13 for the
+    # (host, subject) incidents investigate.sh now shares between both modes. Left
+    # in place they would be inert, but a directory nothing reads is a false
+    # lead for whoever next debugs why an alert was or was not investigated.
+    - name: Remove the retired Slack dedup markers
+      become: true
+      ansible.builtin.file:
+        path: "{{ agent_state_dir }}/slack_seen"
+        state: absent
+      tags: [agent, investigate, slack]
+
     - name: Check the installed OpenCode version
       ansible.builtin.command:
         cmd: "{{ opencode_bin }} --version"
