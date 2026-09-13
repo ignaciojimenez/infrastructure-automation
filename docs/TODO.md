@@ -63,8 +63,8 @@ renders it:
 > **№5** 2 → **№6** 4 (plex) → **№7** 9 → **№8** 3a/3b/3c → **№9** 39 →
 > **№10** 5 → **№11** 19 → **№12** 12 → **№13** 10 → **№14** 11 → **№15** 6 →
 > **№16** 7 → **№17** 34 *(small; restores `changed=0` as a signal for the docker role)* →
-> **№18** 40 → **№19–22** 8/13/14/16 · **№23** 42 *(rotate two WireGuard PSKs — his action)* ·
-> **№24** 32 *(git-history rewrite — decision only, default is no)* · **№25** 26 *(one UI toggle, global — his call)*
+> **№18** 40 → **№19–22** 8/13/14/16 · **№23** 32 *(git-history rewrite —
+> decision only, default is no)* · **№24** 26 *(one UI toggle, global — his call)*
 > *(decision-gated — 16 needs a purchase call, 32 needs his call on a public
 > force-push, the rest need him at the cabinet; not ranked)*
 
@@ -121,9 +121,16 @@ headings say what is urgent.
 VLAN 40 and 80 route through the gateway group `Mullvad_failover_nl` (NL1 →
 NL2 → NL3). NL1 (`wg0`) and NL2 (`wg2`) point at relays Mullvad now lists as
 **inactive**. Their last WireGuard handshake was ~80 h before 2026-09-13 20:00,
-and dpinger shows both `down, 100% loss`. The group failed over to NL3, whose exit
+and dpinger shows both `down, 100% loss`. ✅ **Verified 2026-09-13:** both relays
+are `active=false` in Mullvad's web *and* app relay APIs, and their endpoints do
+not answer ping while NL3's does. The group failed over to NL3, whose exit
 Spotify refuses (item 38). **Those VLANs have no failover left**, and three days of
 two dead gateways produced no alert anywhere.
+
+⚠️ **NL3's own relay is not in Mullvad's relay list at all** — not by hostname,
+not by address — although its DNS name still resolves and the tunnel works. Why
+is unverified, but the one tunnel carrying VLAN 40/80 may be the next to go,
+which makes restoring failover more urgent, not less.
 
 Two separate actions:
 1. **Replace the dead peers** with active NL relays, so failover exists again.
@@ -131,7 +138,11 @@ Two separate actions:
    rather than loudly.
 2. **Alert when a gateway goes down.** agent-lxc already sweeps opnsense over
    its API; gateway status is the question it never asks. A sweep that only asks
-   "is traffic flowing?" cannot see a group running on its last member.
+   "is traffic flowing?" cannot see a group running on its last member. The
+   same sweep can cheaply ask a second question — *is each peer's relay still
+   listed and active in Mullvad's relay API?* — which warns before a retired
+   relay stops answering. That is the secondary signal; a down gateway is the
+   one that must page, whatever the cause.
 
 ⚠️ Item 1d's VPN baseline straddles this: its VPN egress moved from NL1 to NL3
 at 2026-09-10 13:20. Note the relay when reading the ratio distribution.
@@ -157,7 +168,7 @@ fixed — and go quiet once they are. Check that the API key's ACL covers the
 gateway-status endpoint before building on it.
 
 🔴 When reading /conf/config.xml, WHITELIST the fields you print. A blacklist
-filter leaked two PSKs on 2026-09-13 (item 42).
+filter printed two PSKs into a session on 2026-09-13.
 ```
 
 **36. Tier 2 billed one fault six times overnight — DEPLOYED, waiting on a real alert**
@@ -820,7 +831,6 @@ hifipi still reaches Home Assistant, MQTT and DNS; raspotify is active with no 4
    it in `timeout`.
 2. `check_raspotify.sh` should recognise the 403 in the journal and report
    *Spotify refuses this egress IP* instead of restarting pointlessly.
-3. Delete the unused `Spotify_URLs` alias on OPNsense (Ignacio).
 
 *State:* resolved; follow-ups open. *Effort:* small. *Needs:* laptop.
 
@@ -1136,26 +1146,6 @@ fault still backs off exactly as before. Coordinate with item 5 (same file).
 ```
 
 ### 🧊 Blocked on Ignacio, not on work
-
-**42. Rotate two WireGuard road-warrior PSKs exposed in a session transcript**
-On 2026-09-13 an agent session read `/conf/config.xml` on opnsense with a
-*blacklist* filter that stopped `key>` lines but not `<psk>`, printing the
-pre-shared keys of two road-warrior peers on the `wg1` server into the session
-output. The values were not committed anywhere. A WireGuard PSK is mixed in on
-top of the peer key pair, so the exposure alone does not open the tunnel — but a
-leaked secret gets rotated, not weighed. 📌 **Rule for next time: whitelist the
-fields you print from config.xml, never blacklist.**
-
-*State:* needs Ignacio (OPNsense and each device). *Effort:* small.
-
-```
-Ignacio has rotated the two wg1 road-warrior PSKs, on OPNsense and on both
-devices: [yes/no]. Read docs/TODO.md item 42. Verify without printing any key:
-  ssh opnsense "sudo wg show wg1 latest-handshakes"
-Both peers must show a fresh handshake after the rotation. Then delete item 42
-and record the whitelist-not-blacklist rule in docs/ARCHITECTURE_DECISIONS.md
-under Disclosure tiering. Never print a <psk>, <privkey> or <pubkey> line.
-```
 
 **26. The CI failure email now duplicates the #home-alerts message**
 A red `main` announces itself twice: the Slack alert added 2026-08-30, and
