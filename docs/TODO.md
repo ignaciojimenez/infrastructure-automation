@@ -123,13 +123,17 @@ Three dedup keys, each defeated by the same fault:
 - **The two modes shared no state**, so each paid for what the other had just
   investigated.
 
-✅ **Built** on `fix/agent-tier2-incident-dedup`: one incident per host, shared by
-both modes, open until the host goes unmentioned for 26 h — longer than the
+✅ **Built** on `fix/agent-tier2-incident-dedup`: one incident per **host + subject**
+(`hifipi.raspotify` — the check script, failed unit, or reachability the alert
+names), shared by both modes. A second, unrelated fault on the same host is still
+investigated, and its prompt lists the host's open incidents so causes can be
+linked. Each incident stays open until unmentioned for 26 h — longer than the
 wrapper's 24 h maximum reminder gap, so a backed-off fault is not mistaken for a
 recovery; one fresh look after 7 days; a **$2.00/day cap** as backstop (the
 digest counts toward it but is never blocked). Replay of the night: **2 runs,
-≤ $0.61**. `incident_dedup_test.sh` passes 34 checks under dash; the same test
-against `main` fails 22, including all four repeat runs. A new host, a recurrence
+≤ $0.61**. `incident_dedup_test.sh` passes 45 checks under sh and dash, and the full unit
+suite 16/16; the host-only first version fails 14 of them, including all three
+forced unrelated-fault cases (`check_mpd`, a new failed unit, a full disk). A new host, a recurrence
 after 27 h and a failed run are all still investigated.
 
 ⚠️ **Not verified:** nothing has run on CT 103; mawk's `match()` on Debian;
@@ -141,7 +145,7 @@ hostname as `unifi` (checked 2026-09-13), so it maps to one incident key.
 
 ```
 Deploy and verify the Tier 2 incident dedup. Read docs/TODO.md item 36 — the
-design is settled (host-keyed incidents shared by both modes, 26 h quiet
+design is settled (host+subject incidents shared by both modes, 26 h quiet
 window, 7-day refresh, $2/day cap). Do NOT redesign it, and do NOT add a
 "still ongoing" Slack post: the wrapper's STILL FAILING reminder already says it.
 
