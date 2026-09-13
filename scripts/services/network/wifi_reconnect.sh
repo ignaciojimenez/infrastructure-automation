@@ -64,10 +64,21 @@ SETI="${WIFI_RECONNECT_SETTLE:-8}"
 # plug's window or the plug reboots a host mid-recovery and the layer
 # diagnostic is lost. 20 s is ample: a working association completes in ~2 s.
 NMWAIT="${WIFI_RECONNECT_NMWAIT:-20}"
+# How long to watch for NetworkManager's OWN auto-activation after a disruptive
+# step, before forcing one. Measured 2026-09-13: after a brcmfmac reload NM had
+# the host associated, with a lease, 2 s after `modprobe`. See wait_healthy().
+DRIVER_WAIT="${WIFI_RECONNECT_DRIVER_WAIT:-20}"
+POLL="${WIFI_RECONNECT_POLL:-1}"
+# Pause between the halves of a link bounce and a module reload.
+PAUSE="${WIFI_RECONNECT_PAUSE:-2}"
 CURL="${WIFI_RECONNECT_CURL:-curl}"
 
 STATE_DIR="${WIFI_RECONNECT_STATE_DIR:-/var/log/monitoring-state}"
 STATE_FILE="$STATE_DIR/wifi_reconnect.fails"
+# Epoch of the first bad observation of the current outage. The recovery message
+# used to report only the successful run's own runtime — "recovered after 11s"
+# for an outage that had lasted 2.5 h through 27 failed ladders (2026-09-13).
+SINCE_FILE="$STATE_DIR/wifi_reconnect.since"
 mkdir -p "$STATE_DIR" 2>/dev/null || true
 
 # 🔴 NO STATE, NO ACTION. The consecutive-failure counter below is the only
@@ -113,6 +124,43 @@ health_is_ok() {
     return 0
 }
 
+# Poll health for up to $1 checks, one every $POLL seconds.
+wait_healthy() {
+    _n="$1"
+    while [ "$_n" -gt 0 ]; do
+        health_is_ok && return 0
+        sleep "$POLL"
+        _n=$((_n - 1))
+    done
+    health_is_ok
+}
+
+# 🔴 NEVER `nmcli con up` ON TOP OF A CONNECTION NM ALREADY BROUGHT UP.
+#
+# `con up` is not idempotent: against an active connection it logs
+# "disconnecting for new activation request", deauthenticates (reason=3,
+# locally generated) and starts over. On 2026-09-13 that is what kept
+# vinylstreamer dark for 2.5 hours. Every ladder, the brcmfmac reload WORKED —
+# NM auto-activated and the host was associated with a lease within 2 s — and
+# then this script's own unconditional `con up`, 8 s later, tore the fresh
+# association down. The re-association was rejected by the AP, the health
+# check failed, and the ladder reported "all three recovery layers failed".
+# 27 times in a row, each one a layer-3 success the script destroyed and then
+# reported as a failure. The layer diagnostic this script exists to produce was
+# inverted.
+#
+# So after any disruptive step: give NM's own autoconnect a window first, and
+# force an activation only if it did not arrive.
+con_up_unless_healthy() {
+    if wait_healthy "$1"; then
+        echo "   NetworkManager auto-activated on its own — not forcing con up"
+        return 0
+    fi
+    echo "   still down after ${1} checks — forcing ${NMCLI} con up ${CONN}"
+    $NMCLI -w "$NMWAIT" con up "$CONN" >/dev/null 2>&1
+    wait_healthy "$SETI"
+}
+
 # Diagnostic only. Recorded in the notification so we learn whether the link was
 # carrying traffic, but it must never gate an action — that is the mistake above.
 peer_note() {
@@ -132,9 +180,28 @@ notify() {
         "https://hooks.slack.com/services/$WEBHOOK" >/dev/null 2>&1 || true
 }
 
+# How long the OUTAGE lasted, not this run. Empty when the start is unknown.
+outage_note() {
+    _since=$(cat "$SINCE_FILE" 2>/dev/null || echo "")
+    case "$_since" in ''|*[!0-9]*) return 0 ;; esac
+    _mins=$(( ($(date +%s) - _since) / 60 ))
+    echo " — wlan0 had been down ~${_mins} min across ${FAILS} checks"
+}
+
+recovered() {
+    ELAPSED=$(( $(date +%s) - START ))
+    _outage=$(outage_note)
+    echo "✅ recovered at layer $1 ($2) after ${ELAPSED}s${_outage}"
+    notify ":arrows_counterclockwise: vinylstreamer wifi recovered at *layer $1* ($2) after ${ELAPSED}s${_outage}. $3"
+    echo "0" > "$STATE_FILE" 2>/dev/null || true
+    rm -f "$SINCE_FILE" 2>/dev/null || true
+    exit 0
+}
+
 # --- Healthy path: reset the counter, say nothing. ----------------------------
 if health_is_ok; then
     echo "0" > "$STATE_FILE" 2>/dev/null || true
+    rm -f "$SINCE_FILE" 2>/dev/null || true
     echo "✅ ${IFACE} healthy (NM connected, default route present)"
     exit 0
 fi
@@ -147,6 +214,7 @@ FAILS=$(cat "$STATE_FILE" 2>/dev/null || echo 0)
 case "$FAILS" in ''|*[!0-9]*) FAILS=0 ;; esac
 FAILS=$(( FAILS + 1 ))
 echo "$FAILS" > "$STATE_FILE" 2>/dev/null || true
+[ -s "$SINCE_FILE" ] || date +%s > "$SINCE_FILE" 2>/dev/null || true
 
 if [ "$FAILS" -lt 2 ]; then
     echo "⚠️  ${IFACE} looks down (observation ${FAILS}/2) — waiting for confirmation before acting"
@@ -157,31 +225,21 @@ echo "⚠️  ${IFACE} down on ${FAILS} consecutive checks ($(peer_note)) — st
 START=$(date +%s)
 
 # --- Layer 1: NetworkManager gave up; ask it again. ---------------------------
+# Unconditional on purpose: the healthy path above already proved the link is
+# down, so there is no fresh activation here for `con up` to tear down.
 echo "→ layer 1: ${NMCLI} con up ${CONN}"
 $NMCLI -w "$NMWAIT" con up "$CONN" >/dev/null 2>&1
-sleep "$SETI"
-if health_is_ok; then
-    echo "0" > "$STATE_FILE" 2>/dev/null || true
-    ELAPSED=$(( $(date +%s) - START ))
-    echo "✅ recovered at layer 1 (nmcli con up) after ${ELAPSED}s"
-    notify ":arrows_counterclockwise: vinylstreamer wifi recovered at *layer 1* (\`nmcli con up\`) after ${ELAPSED}s — NetworkManager had given up but the driver was fine. W1 remediation, root cause still open."
-    exit 0
+if wait_healthy "$SETI"; then
+    recovered 1 "\`nmcli con up\`" "NetworkManager had given up but the driver was fine. W1 remediation, root cause still open."
 fi
 
 # --- Layer 2: the link layer needs a kick. ------------------------------------
 echo "→ layer 2: bounce ${IFACE}"
 $IPCMD link set "$IFACE" down >/dev/null 2>&1
-sleep 2
+sleep "$PAUSE"
 $IPCMD link set "$IFACE" up >/dev/null 2>&1
-sleep 2
-$NMCLI -w "$NMWAIT" con up "$CONN" >/dev/null 2>&1
-sleep "$SETI"
-if health_is_ok; then
-    echo "0" > "$STATE_FILE" 2>/dev/null || true
-    ELAPSED=$(( $(date +%s) - START ))
-    echo "✅ recovered at layer 2 (interface bounce) after ${ELAPSED}s"
-    notify ":arrows_counterclockwise: vinylstreamer wifi recovered at *layer 2* (interface bounce) after ${ELAPSED}s — \`nmcli con up\` alone was NOT enough, the link layer needed resetting. Record this against W1."
-    exit 0
+if con_up_unless_healthy "$SETI"; then
+    recovered 2 "interface bounce" "\`nmcli con up\` alone was NOT enough, the link layer needed resetting. Record this against W1."
 fi
 
 # --- Layer 3: the driver itself. ----------------------------------------------
@@ -203,21 +261,14 @@ _wcc=$($MODPROBE -r brcmfmac_wcc 2>&1) \
 _rm=$($MODPROBE -r brcmfmac 2>&1) \
     && echo "   rmmod brcmfmac: ok" \
     || echo "   rmmod brcmfmac: FAILED (${_rm:-no message}) — layer 3 did NOT run"
-sleep 3
+sleep "$PAUSE"
 _ld=$($MODPROBE brcmfmac 2>&1) \
     && echo "   modprobe brcmfmac: ok" \
     || echo "   modprobe brcmfmac: FAILED (${_ld:-no message})"
-# The interface has to reappear and NM has to adopt it before a connect can
-# possibly succeed; 5 s was optimistic for a cold driver.
-sleep 10
-$NMCLI -w "$NMWAIT" con up "$CONN" >/dev/null 2>&1
-sleep "$SETI"
-if health_is_ok; then
-    echo "0" > "$STATE_FILE" 2>/dev/null || true
-    ELAPSED=$(( $(date +%s) - START ))
-    echo "✅ recovered at layer 3 (brcmfmac reload) after ${ELAPSED}s"
-    notify ":arrows_counterclockwise: vinylstreamer wifi recovered at *layer 3* (brcmfmac reload) after ${ELAPSED}s — NM and an interface bounce both failed, so the DRIVER was wedged. This reframes W1: the fault is below NetworkManager."
-    exit 0
+# The interface has to reappear and NM has to adopt it — and when it does, NM
+# auto-activates by itself. DRIVER_WAIT is that window.
+if con_up_unless_healthy "$DRIVER_WAIT"; then
+    recovered 3 "brcmfmac reload" "NM and an interface bounce both failed, so the DRIVER was wedged. This reframes W1: the fault is below NetworkManager."
 fi
 
 ELAPSED=$(( $(date +%s) - START ))
