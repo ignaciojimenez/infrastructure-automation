@@ -92,7 +92,7 @@ each.
 | VLAN | Subnet | OPNsense descr | Purpose | Egress |
 |-----:|--------|----------------|---------|--------|
 | 20 | `10.30.20.0/24` | `VLAN20_NO_VPN` | Hosts that must **not** be tunnelled — anything geo-locked or VPN-hostile | WAN direct |
-| 40 | `10.30.40.0/24` | `VLAN40_Native` | Core infrastructure services; **native VLAN for cabled hosts** | Mullvad — *corrected 2026-09-13: this row said WAN direct, but every VLAN 40 host checked (agent-lxc 2026-09-05, hifipi and cobra 2026-09-13) egresses via Mullvad* |
+| 40 | `10.30.40.0/24` | `VLAN40_Native` | Core infrastructure services; **native VLAN for cabled hosts** | Mullvad — *corrected 2026-09-13: this row said WAN direct, but every VLAN 40 host checked (agent-lxc 2026-09-05, hifipi and cobra 2026-09-13) egressed via Mullvad*. **Exception:** hifipi egresses WAN direct via a floating policy rule, because Spotify refuses Mullvad exits (TODO 38) |
 | 80 | `10.30.80.0/24` | `VLAN80_VPN` | WiFi clients that egress via VPN | Mullvad |
 | 100 | `10.30.100.0/24` | `VLAN100_IoT` | IoT / home automation | — |
 | 200 | `10.30.200.0/24` | `VLAN200_Guest` | Guest network | — |
@@ -192,8 +192,8 @@ single always-on tunnel.
 
 | Interface | OPNsense descr | Region | State |
 |-----------|----------------|--------|-------|
-| `wg0` | `wg0_mullvad_nl1` | NL | up |
-| `wg2` | `wg0_mullvad_nl2` | NL | up |
+| `wg0` | `wg0_mullvad_nl1` | NL | ⚠️ **down since ~2026-09-10** — relay retired by Mullvad; see TODO 41 |
+| `wg2` | `wg0_mullvad_nl2` | NL | ⚠️ **down since ~2026-09-10** — relay retired by Mullvad; see TODO 41 |
 | `wg3` | `wg0_mullvad_nl3` | NL | up |
 | `wg4` | `wg0_mullvad_es1` | ES | up |
 | `wg5` | `wg0_mullvad_es2` | ES | up |

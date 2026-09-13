@@ -56,16 +56,15 @@ here is something to read past, every time, forever. The write-up goes to
 (numbers never move), but the order to work them is this, and the dashboard
 renders it:
 
-> **№1** 36 *(deploy — Tier 2 is still billing item 38 hourly)* →
-> **№2** 37 *(deploy — vinylstreamer's recovery undoes itself)* →
-> **№3** 38 *(his call — Spotify refuses the Mullvad exit)* →
-> **№4** 18 + 1d + 35 *(**deployed; all three waiting on a reading** —
-> see below)* → **№5** 2 →
-> **№6** 4 (plex) → **№7** 9 → **№8** 3a/3b/3c → **№9** 39 → **№10** 5 →
-> **№11** 19 → **№12** 12 → **№13** 10 → **№14** 11 → **№15** 6 → **№16** 7 →
-> **№17** 34 *(small; restores `changed=0` as a signal for the docker role)* →
-> **№18** 40 → **№19–22** 8/13/14/16 · **№23** 32 *(git-history rewrite —
-> decision only, default is no)* · **№24** 26 *(one UI toggle, global — his call)*
+> **№1** 36 + 37 *(deployed 13 Sep — waiting on a real alert / a real lockout)* →
+> **№2** 41 *(two of three NL tunnels dead; VLAN 40/80 have no failover)* →
+> **№3** 18 + 1d + 35 *(**deployed; all three waiting on a reading** —
+> see below)* → **№4** 38 *(small follow-ups: MQTT timeout, 403 detection)* →
+> **№5** 2 → **№6** 4 (plex) → **№7** 9 → **№8** 3a/3b/3c → **№9** 39 →
+> **№10** 5 → **№11** 19 → **№12** 12 → **№13** 10 → **№14** 11 → **№15** 6 →
+> **№16** 7 → **№17** 34 *(small; restores `changed=0` as a signal for the docker role)* →
+> **№18** 40 → **№19–22** 8/13/14/16 · **№23** 42 *(rotate two WireGuard PSKs — his action)* ·
+> **№24** 32 *(git-history rewrite — decision only, default is no)* · **№25** 26 *(one UI toggle, global — his call)*
 > *(decision-gated — 16 needs a purchase call, 32 needs his call on a public
 > force-push, the rest need him at the cabinet; not ranked)*
 
@@ -107,183 +106,9 @@ mitigation, so nothing here is waiting on a better option.
 carry *fill-in* prompts that take the physical measurement or decision as
 input. An item without a prompt is an item that has not been triaged properly.
 
-### 🔴 P1 — hurting now
+### 🔴 P1 — actively hurting
 
-**36. Tier 2 billed one fault six times overnight — fix built, not deployed**
-On the night of 2026-09-12/13 agent-lxc ran **6 paid investigations ($1.57)**,
-every one about the same fault: raspotify on hifipi (item 38). That fault is
-**still failing hourly**, so the spend continues until this deploys or 38 is
-resolved.
-
-Three dedup keys, each defeated by the same fault:
-- **The Slack watch keyed on message text.** One fault produced three texts
-  (`system_health_check`, `check_raspotify`, the STILL FAILING reminder) → three runs.
-- **Anomaly mode keyed on the whole finding set.** vinylstreamer joining the
-  findings at 06:50 and leaving at 09:48 re-billed hifipi twice.
-- **The two modes shared no state**, so each paid for what the other had just
-  investigated.
-
-✅ **Built** on `fix/agent-tier2-incident-dedup`: one incident per **host + subject**
-(`hifipi.raspotify` — the check script, failed unit, or reachability the alert
-names), shared by both modes. A second, unrelated fault on the same host is still
-investigated, and its prompt lists the host's open incidents so causes can be
-linked. Each incident stays open until unmentioned for 26 h — longer than the
-wrapper's 24 h maximum reminder gap, so a backed-off fault is not mistaken for a
-recovery; one fresh look after 7 days; a **$2.00/day cap** as backstop (the
-digest counts toward it but is never blocked). Replay of the night: **2 runs,
-≤ $0.61**. `incident_dedup_test.sh` passes 45 checks under sh and dash, and the full unit
-suite 16/16; the host-only first version fails 14 of them, including all three
-forced unrelated-fault cases (`check_mpd`, a new failed unit, a full disk). A new host, a recurrence
-after 27 h and a failed run are all still investigated.
-
-⚠️ **Not verified:** nothing has run on CT 103; mawk's `match()` on Debian;
-timed-out runs are logged as $0, so the cap undercounts. ✅ unifi reports its
-hostname as `unifi` (checked 2026-09-13), so it maps to one incident key.
-
-*State:* built and tested, not merged. *Effort:* deploy + one observed alert.
-*Needs:* laptop.
-
-```
-Deploy and verify the Tier 2 incident dedup. Read docs/TODO.md item 36 — the
-design is settled (host+subject incidents shared by both modes, 26 h quiet
-window, 7-day refresh, $2/day cap). Do NOT redesign it, and do NOT add a
-"still ongoing" Slack post: the wrapper's STILL FAILING reminder already says it.
-
-  git ms fix/agent-tier2-incident-dedup
-  ansible-playbook ansible/playbooks/services.yml --limit agent-lxc --tags agent --check --diff
-  ansible-playbook ansible/playbooks/services.yml --limit agent-lxc --tags agent
-
-Count the recap: agent-lxc must be listed and "Deploy the investigate script"
-must show changed — a --tags run that selects nothing still looks green. Run it
-again and require changed=0.
-
-On the box: `dash -n` the deployed investigate.sh. Then read investigate.log
-across the next real alert: ONE paid run per host incident, repeats logged as
-covered, and the daily spend ledger written. If item 38 is still failing, its
-hourly alerts are the live test.
-```
-
-**37. vinylstreamer's wifi recovery undid its own fix every 5 minutes — fix built, not deployed**
-On 2026-09-13 wlan0 dropped at 06:31 (the usual lockout; the host itself stayed
-up) and stayed off the network until 09:00. `wifi_reconnect.sh` ran the whole
-time. Its layer 3 (driver reload) **worked every time** — associated, with an
-address, 2 s later — but 8 s after that the script ran `nmcli con up` anyway,
-which tears down an already-active connection. The retry was rejected and the
-script reported *all three layers failed*, **27 times**. At 09:00 layer 1 won and
-#home-logging said *recovered after 11s* — that run's duration, not the outage's.
-
-🔴 **Nothing you received described the fault.** What should have come: the
-script's *all layers failed* alert at ~06:41, then HA power-cycling the plug at
-~06:46. What came: agent-lxc's hourly *UNREACHABLE*, and a $0.42 investigation
-that concluded the Pi was off. The script's own alert was sent over the wifi
-that was down (item 40); the HA watchdog never fired (item 39).
-
-✅ **Built** on `fix/wifi-reconnect-self-disconnect`: layers 2 and 3 wait (8 s /
-20 s) for NetworkManager to activate on its own and force `con up` only if it
-did not; the recovery message reports how long wlan0 was down and after how many
-attempts. Worst case ~120 s, well inside the plug's 15-minute window.
-`wifi_reconnect_ladder_test.sh` passes under sh and dash; the old script fails it
-with that night's exact sequence.
-
-📊 **Confirmed from the host journal (2026-09-13).** The teardown signature —
-*Activation: successful*, then this script's own `con up` logging *disconnecting
-for new activation request* within 15 s — appears **26× on 13 Sep and 4× on
-9 Sep**, and the 9 Sep run ended in HA's plug power-cycle at 18:58, which is the
-host's current boot. **The bug has already cost at least one reboot, so the fix
-should reduce power cycles, not add any:** the script never reboots anything;
-only HA's plug does (15 min continuously offline, at most once per hour,
-escalating past 3 cycles in 7 days). The journal reaches back only to 2026-09-08.
-The AP rejecting association (`ASSOC-REJECT`) is still the open root cause
-underneath.
-
-⚠️ **Not verified on the host.** The healthy path is unchanged but must be run by
-hand after deploy — this is the script whose ping gate once broke the host.
-🔴 **Do not force a wifi drop remotely to test the ladder:** wlan0 is the host's
-only link. The host-level proof is the next natural lockout.
-
-*State:* built and tested, not merged. *Effort:* deploy + hand-run. *Needs:* laptop.
-
-```
-Deploy and verify the vinylstreamer wifi_reconnect fix. Read docs/TODO.md item
-37. The diagnosis is settled: layer 3 recovered, then a forced `nmcli con up`
-tore the fresh connection down. Do not redesign the ladder.
-
-  git ms fix/wifi-reconnect-self-disconnect
-  ansible-playbook ansible/playbooks/services.yml --limit vinylstreamer --check --diff
-  ansible-playbook ansible/playbooks/services.yml --limit vinylstreamer
-
-Count the recap: vinylstreamer listed, the script copy changed. Then run the
-HEALTHY path by hand on the host before trusting the cron:
-  ssh vinylstreamer "~/.scripts/wifi_reconnect.sh x"   -> must print wlan0 healthy
-and require changed=0 on a second deploy.
-
-🔴 Never force a wifi drop remotely — wlan0 is the only link. The failure path
-is proven by the stub test; on the host, by the next real lockout: read the
-journal around it for which layer won, and whether the recovery message reports
-the true outage length.
-```
-
-**38. hifipi's Spotify Connect is dead — Spotify returns 403 to the VLAN 40 Mullvad exit**
-Since the weekly `restart_audio_services.sh` at 00:00 on 2026-09-13, every
-raspotify start dies in under a second with `could not initialize spirc:
-Permission denied { 403 Forbidden }`. **Not librespot, not credentials:** plain
-`curl` to Spotify's endpoints returns 403 from hifipi and from cobra (same VLAN,
-same exit) and 200 from a host egressing direct. The host is otherwise healthy.
-Recovery (`Restart=` plus the hourly `check_raspotify.sh`) works and cannot help:
-**a restart or reboot does not change the egress address.**
-
-Reasoned, not verified: the block began between 9 and 13 Sep and sat latent — a
-long-running librespot did not need to re-resolve, and the weekly restart turned
-it into an outage. A similar 403 on 2026-08-23 cleared by itself within an hour.
-
-Alerting was correct (*Script Failed* at 00:02 and 01:00, then STILL FAILING on
-backoff). It is also what item 36 billed six times.
-
-✅ **Verified 2026-09-13 from the laptop — and narrower than "Mullvad".** Same
-laptop, same curl, same Spotify edge address, only the exit changed: tunnelled
-out through hifipi → **403**; through dockassist → **200**. Then from hifipi
-through Mullvad's per-relay SOCKS proxies (still inside the tunnel, different
-exit addresses): the connected relay's own proxy and four other relays (two NL,
-one DE, one BE) all → **200**. **Spotify refuses one exit address — the WireGuard
-exit hifipi and cobra currently share — not Mullvad as a whole.**
-
-📌 **Recommendation: move hifipi's policy route to another NL Mullvad tunnel.** It
-keeps the VPN. Direct egress is the fallback if the new exit gets refused too.
-🔴 **Scope it to hifipi, never to VLAN 40.** agent-lxc sits on VLAN 40 and *is*
-item 1d's VPN path: moving it changes that measurement mid-baseline, and a
-VLAN-wide *direct* rule would make the ratio read ~1.0 — healthy. OPNsense rules
-are not managed in this repo; which of the NL tunnels maps to the refused exit is
-**not verified**.
-
-Then, in the repo (small): `check_raspotify.sh` recognises the 403 and reports
-*Spotify refuses this egress IP* instead of restarting pointlessly, and raspotify
-leaves the weekly restart. (`NETWORK.md`'s VLAN 40 row said *WAN direct*; corrected
-2026-09-13.)
-
-*State:* diagnosed; decision pending. *Needs:* Ignacio's call — a firewall change.
-
-```
-Ignacio has decided item 38 (hifipi Spotify 403 via Mullvad). Fill in:
-
-  DECISION: [move hifipi to another Mullvad tunnel / direct egress for hifipi / accept Spotify Connect down]
-
-Read docs/TODO.md item 38 first — the diagnosis is CONFIRMED (same client,
-only the exit changed: 403 via hifipi's exit, 200 direct, 200 via four other
-Mullvad exits); do not re-diagnose librespot.
-
-Either rule must match hifipi's address ONLY — never VLAN 40, which carries
-agent-lxc, item 1d's VPN measurement path. After the rule:
-  ssh hifipi "curl -s https://am.i.mullvad.net/json | tr ',' '\n' | grep -E 'mullvad_exit_ip|organization'; curl -s -o /dev/null -w '%{http_code}\n' 'https://apresolve.spotify.com/?type=accesspoint'"
-  -> tunnel move: exit true with a DIFFERENT exit hostname, then 200
-  -> direct: exit false, then 200
-  ssh hifipi "sudo systemctl restart raspotify && sleep 5 && systemctl is-active raspotify"
-and confirm agent-lxc's egress did NOT change (same am.i.mullvad.net check).
-
-Either way, then: make check_raspotify.sh detect the 403 in the unit's journal
-and report "Spotify refuses this egress IP" without restarting, and remove
-raspotify from restart_audio_services.sh. Force the 403 branch with a stubbed
-journal line and watch the message fire — a check that goes quiet is not tested.
-```
+**Nothing here right now.**
 
 📌 **Numbering is deliberately not compacted.** Several prompts below and in
 git history say "read docs/TODO.md item 2" or "item 3a"; renumbering on every
@@ -291,6 +116,125 @@ close would silently repoint them. Numbers are addresses, not ranks — the
 headings say what is urgent.
 
 ### 🟠 P2 — known risk, not currently biting
+
+**41. Two of VLAN 40/80's three NL tunnels have been dead since ~10 Sep, and nothing alerted**
+VLAN 40 and 80 route through the gateway group `Mullvad_failover_nl` (NL1 →
+NL2 → NL3). NL1 (`wg0`) and NL2 (`wg2`) point at relays Mullvad now lists as
+**inactive**. Their last WireGuard handshake was ~80 h before 2026-09-13 20:00,
+and dpinger shows both `down, 100% loss`. The group failed over to NL3, whose exit
+Spotify refuses (item 38). **Those VLANs have no failover left**, and three days of
+two dead gateways produced no alert anywhere.
+
+Two separate actions:
+1. **Replace the dead peers** with active NL relays, so failover exists again.
+   The peers point at relay *hostnames*, so a retired relay fails silently
+   rather than loudly.
+2. **Alert when a gateway goes down.** agent-lxc already sweeps opnsense over
+   its API; gateway status is the question it never asks. A sweep that only asks
+   "is traffic flowing?" cannot see a group running on its last member.
+
+⚠️ Item 1d's VPN baseline straddles this: its VPN egress moved from NL1 to NL3
+at 2026-09-10 13:20. Note the relay when reading the ratio distribution.
+
+*State:* diagnosed 2026-09-13. *Effort:* peers small (OPNsense, Ignacio);
+alerting small–medium. *Needs:* OPNsense access for the peers; laptop for the sweep.
+
+```
+Restore VLAN 40/80's Mullvad failover and make a dead gateway page. Read
+docs/TODO.md item 41 first.
+
+(1) Peers: list Mullvad's ACTIVE NL WireGuard relays
+    curl -s https://api.mullvad.net/www/relays/wireguard/ | python3 -c 'import json,sys; [print(r["hostname"], r["provider"]) for r in json.load(sys.stdin) if r["country_code"]=="nl" and r["active"]]'
+and propose two to replace NL1 and NL2's retired relays (their hostnames are in
+the OPNsense peer config). Prefer a different provider from NL3's, so one
+provider outage cannot take all three. Ignacio applies them on OPNsense.
+Verify: recent `wg show all latest-handshakes` for wg0/wg2/wg3, and dpinger
+showing all three members up.
+(2) Alerting: extend the agent-lxc opnsense API sweep to read gateway status and
+report any failover-group member that is down. Force it: it must fire on the
+current state (NL1 and NL2 down) — capture that output BEFORE the peers are
+fixed — and go quiet once they are. Check that the API key's ACL covers the
+gateway-status endpoint before building on it.
+
+🔴 When reading /conf/config.xml, WHITELIST the fields you print. A blacklist
+filter leaked two PSKs on 2026-09-13 (item 42).
+```
+
+**36. Tier 2 billed one fault six times overnight — DEPLOYED, waiting on a real alert**
+On the night of 2026-09-12/13 agent-lxc ran **6 paid investigations ($1.57)**,
+all about one fault (raspotify on hifipi, item 38). The Slack watch keyed on
+message text, and one fault produced three texts; anomaly mode keyed on the whole
+finding set, so another host joining and leaving re-billed it; and the two modes
+shared no state.
+
+✅ **Deployed 2026-09-13** (`44cf961`, pushed): incidents keyed by **host +
+subject** (`hifipi.raspotify` — the check script, failed unit, or reachability
+the alert names), shared by both modes. A second, unrelated fault on the same host
+is still investigated, and its prompt lists the host's open incidents. 26 h quiet
+window (longer than the wrapper's 24 h maximum reminder gap), 7-day refresh,
+**$2/day cap**. Replay of the night: **2 runs, ≤ $0.61**. 45 dedup checks and the
+unit suite 16/16 pass; the host-only first version failed the forced
+unrelated-fault cases. On the box: the script parses under dash, all three Tier 2
+crons are present, the retired Slack markers are gone, and the first run created
+`incidents/`.
+
+⚠️ **Not verified:** behaviour on a real alert — item 38 was fixed the same
+evening, so no live alert was left to test it. Also unverified: mawk's `match()`;
+timed-out runs log $0, so the cap undercounts; a fault whose checks name it
+differently still costs a second run.
+
+*State:* deployed; **waiting on the next real alert**. *Needs:* nothing to build.
+
+```
+Verify the Tier 2 host+subject dedup against a real alert. Read docs/TODO.md
+item 36 — it is DEPLOYED; do not redesign or redeploy it.
+
+  ssh 10.30.40.203 'tail -n 40 ~/.logs/investigate.log; ls -la ~/.agent/incidents ~/.agent'
+
+For the first alert since 2026-09-13 21:00: exactly ONE paid run per
+host.subject, later reminders logged as covered (no new run), and today's spend
+ledger written. If two checks described one fault under different subjects and
+it cost two runs, report both subject strings — that is the one known gap.
+Then move item 36 to docs/archive/DONE.md.
+```
+
+**37. vinylstreamer's wifi recovery undid its own fix — DEPLOYED, waiting on a lockout**
+On 2026-09-13 wlan0 dropped at 06:31 and stayed off until 09:00; the host itself
+stayed up. Layer 3 of `wifi_reconnect.sh` (driver reload) recovered the link on
+every run, and 8 s later the script's unconditional `nmcli con up` tore it down.
+The journal shows that self-teardown **26× on 13 Sep and 4× on 9 Sep**, and 9 Sep
+ended in HA's plug power-cycle at 18:58 — the host's current boot. What should
+have alerted did not: the script's own alert went out over the dead wifi (item
+40), and the brief reconnects kept resetting the plug watchdog's continuous
+15-minute timer (item 39).
+
+✅ **Deployed 2026-09-13** (`ab766fa`, pushed): layers 2 and 3 wait for
+NetworkManager's own activation and force `con up` only if it does not arrive;
+the recovery message reports the real outage length. The stub test passes under
+sh and dash, and the old script fails it with that night's sequence. On the host:
+the healthy path was run by hand (`✅ wlan0 healthy`), the script and cron are in
+place, and `update_keys` still returns keys. **The script never reboots
+anything** — only HA's plug does (15 min offline, at most once an hour) — so the
+fix should mean fewer power cycles, not more.
+
+🔴 **Never force a wifi drop remotely to test it:** wlan0 is the only link. The
+ladder's host-level proof is the next natural lockout. The AP rejecting
+association (`ASSOC-REJECT`) is still the open root cause underneath.
+
+*State:* deployed; **waiting on the next natural lockout**. *Needs:* nothing to build.
+
+```
+Read the first vinylstreamer wifi lockout since 2026-09-13. Read docs/TODO.md
+item 37 — the fix is DEPLOYED; do not redesign the ladder or force an outage.
+
+  ssh vinylstreamer-agent "sudo journalctl --no-pager -S '<lockout start>' -U '<+1h>' | grep -E 'wifi_reconnect|new activation request|Activation: successful|modprobe brcmfmac'"
+
+Report which layer recovered it; whether any "disconnecting for new activation
+request" still follows a successful activation within 15 s (it must not); the
+recovery message in #home-logging (does it give the true outage length?); and
+whether HA's plug power-cycled. Then move item 37 to docs/archive/DONE.md,
+keeping 39 and 40 open.
+```
 
 **35. Set cwwk's thermal alert thresholds from a week of real backup nights**
 `check_thermal.sh` alerts on a **known and accepted** event. Its thresholds sit
@@ -842,6 +786,60 @@ counts, which include unavailable). Before deploying, show it (a) fires on the
 --tags config AND check which other tags consume the same entities.
 ```
 
+**38. Spotify refuses Mullvad exits — hifipi now egresses direct; two small follow-ups**
+✅ **Resolved 2026-09-13.** raspotify on hifipi died at the weekly 00:00
+restart with `403 Forbidden`. A same-client test settled it (laptop curl
+tunnelled out through hifipi → 403, through dockassist → 200), and so did
+Mullvad's per-relay proxies: Spotify refused the one exit VLAN 40 was on, not
+Mullvad as a whole. It landed on that exit because VLAN 40/80's failover group
+lost NL1 and NL2 around 10 Sep (item 41).
+
+**Fix, on OPNsense (not managed in this repo):** a floating rule, interface
+VLAN 40, `from hifipi to ! USED_LAN_NETS`, gateway WAN. Verified: hifipi egresses
+direct and gets 200; cobra (the control, same VLAN) still egresses via Mullvad;
+hifipi still reaches Home Assistant, MQTT and DNS; raspotify is active with no 403.
+
+🔴 **Three traps hit on the way — read before touching this rule again:**
+- **A *URL Table (IPs)* alias downloads a file of IP addresses.** Pointed at
+  `https://*.spotify.com` it yields an empty table and a rule that matches
+  nothing. Hostnames need a *Host(s)* alias (re-resolved every 300 s; no
+  wildcards). A true wildcard needs dnsmasq's IPset feature, which requires
+  dnsmasq in the DNS path — rejected as too invasive for one service.
+- **`to any` on a route-to rule sends inter-VLAN traffic to the WAN gateway.** It
+  broke hifipi → dockassist (HA, MQTT) and TCP DNS. The destination must be
+  `! USED_LAN_NETS`, exactly like the VLAN rule it overrides.
+- **Rules covering several interfaces load before single-interface rules,
+  whatever their sequence** (observed on 26.7.2: a sequence-126 single-interface
+  rule loaded after a sequence-131 VLAN 40+80 rule). Floating rules load before
+  both, which is why the override is floating.
+
+**Follow-ups (small, laptop):**
+1. `spotify_event.sh` calls `mosquitto_pub` with **no timeout**, from raspotify's
+   `ExecStartPre`. With the broker unreachable it hung past systemd's 90 s start
+   limit, so raspotify never started — any MQTT outage would do the same. Wrap
+   it in `timeout`.
+2. `check_raspotify.sh` should recognise the 403 in the journal and report
+   *Spotify refuses this egress IP* instead of restarting pointlessly.
+3. Delete the unused `Spotify_URLs` alias on OPNsense (Ignacio).
+
+*State:* resolved; follow-ups open. *Effort:* small. *Needs:* laptop.
+
+```
+Close the item 38 follow-ups. Read docs/TODO.md item 38 — the routing fix is
+DONE on OPNsense and verified; do not touch the firewall rule.
+
+(1) In roles/services/audio_playback/files/spotify_event.sh, bound every
+mosquitto_pub with `timeout` (a few seconds), so an unreachable broker can never
+block raspotify's ExecStartPre. Force it: point the broker at an unroutable
+address (a unit-test stub is enough) and show the reset path returns within the
+timeout instead of hanging.
+(2) Make check_raspotify.sh detect "403 Forbidden" in the unit's recent journal
+and report "Spotify refuses this egress IP" without restarting. Force the branch
+with a stubbed journal line and watch the message fire.
+Deploy with services.yml --limit hifipi --check --diff first, and count the
+recap. Then move item 38 to docs/archive/DONE.md.
+```
+
 ### 🟢 P3 — improvements, no urgency
 
 **5. Tokens out of cron command lines.** healthchecks.io and Slack tokens sit in
@@ -1138,6 +1136,26 @@ fault still backs off exactly as before. Coordinate with item 5 (same file).
 ```
 
 ### 🧊 Blocked on Ignacio, not on work
+
+**42. Rotate two WireGuard road-warrior PSKs exposed in a session transcript**
+On 2026-09-13 an agent session read `/conf/config.xml` on opnsense with a
+*blacklist* filter that stopped `key>` lines but not `<psk>`, printing the
+pre-shared keys of two road-warrior peers on the `wg1` server into the session
+output. The values were not committed anywhere. A WireGuard PSK is mixed in on
+top of the peer key pair, so the exposure alone does not open the tunnel — but a
+leaked secret gets rotated, not weighed. 📌 **Rule for next time: whitelist the
+fields you print from config.xml, never blacklist.**
+
+*State:* needs Ignacio (OPNsense and each device). *Effort:* small.
+
+```
+Ignacio has rotated the two wg1 road-warrior PSKs, on OPNsense and on both
+devices: [yes/no]. Read docs/TODO.md item 42. Verify without printing any key:
+  ssh opnsense "sudo wg show wg1 latest-handshakes"
+Both peers must show a fresh handshake after the rotation. Then delete item 42
+and record the whitelist-not-blacklist rule in docs/ARCHITECTURE_DECISIONS.md
+under Disclosure tiering. Never print a <psk>, <privkey> or <pubkey> line.
+```
 
 **26. The CI failure email now duplicates the #home-alerts message**
 A red `main` announces itself twice: the Slack alert added 2026-08-30, and
