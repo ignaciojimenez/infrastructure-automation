@@ -33,8 +33,8 @@ All on `agent-lxc`, via cron:
 | When | Job | Spends? | Output |
 |---|---|---|---|
 | Hourly **:37** | `fleet_health_check.sh` (Tier 1 sweep) | never | On a finding: `#home-alerts` + writes `~/.agent/last_anomaly.json` |
-| Hourly **:47** | `investigate.sh` (anomaly) | only for a host with no open incident | `#home-alerts`: summary + plan file |
-| Hourly **:07** | `investigate.sh --slack` | only for a host with no open incident; one run per poll | `#home-alerts`: summary + plan file |
+| Hourly **:47** | `investigate.sh` (anomaly) | only for a finding with no open incident | `#home-alerts`: summary + plan file |
+| Hourly **:07** | `investigate.sh --slack` | only for an alert with no open incident; one run per poll | `#home-alerts`: summary + plan file |
 | Sundays **09:17** | `investigate.sh --digest` | weekly | `#home-logging`: fleet-health summary + plan file |
 
 The three Tier-2 jobs share a **`flock`**, so they never run concurrently (which would saturate
@@ -50,12 +50,16 @@ failures and Home Assistant alerts (heating offline, Shelly, etc.) appear only i
 The watcher reads that channel, filters to genuine failure alerts (excluding its own posts and
 noise), and investigates **new incidents** — all of a poll's new ones in a single run.
 
-**Incidents are keyed by host and shared by both modes.** Once a host has been investigated, no
-alert, reminder or sweep finding about that host is paid for again until nothing has named it for
-`agent_incident_quiet_hours` (26h — longer than the wrapper's 24h maximum reminder gap), or the
-incident is older than `agent_incident_max_age_days` (7). A second, unrelated fault on the same
-host inside that window still pages, but gets no plan of its own. `investigate.sh` logs every skip
-as `open incident … not re-billing`.
+**Incidents are keyed by host *and subject*, and shared by both modes** — `hifipi.raspotify`. The
+subject is what is failing, read from the alert: a check script's name (`check_raspotify.sh` →
+`raspotify`), the units/services a health check names (`raspotify.service` → `raspotify`),
+`reachability` for a host that is gone, else a normalised signature of the failing line. Once an
+incident has been investigated, no alert, reminder or sweep finding with the same key is paid for
+again until nothing has named it for `agent_incident_quiet_hours` (26h — longer than the wrapper's
+24h maximum reminder gap), or it is older than `agent_incident_max_age_days` (7). A **different**
+fault on the same host is a new key and **is** investigated; its prompt lists the host's open
+incidents and their plans, so the agent can still say "same cause". `investigate.sh` logs every
+skip as `open incident … not re-billing` / `belongs to an open incident`.
 
 ---
 
@@ -88,10 +92,11 @@ this"* when the agent lacks access, with specific next steps, instead of a guess
 
 - **Healthy fleet ≈ the weekly digest only, ~$2/month.** Tier 1 and the anomaly/Slack triggers
   are free when nothing is wrong.
-- **Each genuinely-new problem: ~$0.20–0.45, once per host** (Sonnet 5), however many checks,
-  reminders and sweeps report it. Measured: the 2026-09-13 raspotify outage cost 6 runs / $1.57
-  under the old text-keyed dedup; replayed against the incident dedup it is 2 runs / $0.61 (one
-  for hifipi, one for vinylstreamer joining later).
+- **Each genuinely-new problem: ~$0.20–0.45, once per (host, subject)** (Sonnet 5), however many
+  checks, reminders and sweeps report it. Measured: the 2026-09-13 raspotify outage cost 6 runs /
+  $1.57 under the old text-keyed dedup; replayed against the incident dedup it is 2 runs / $0.61
+  (one for hifipi.raspotify, one for vinylstreamer.reachability joining later). The price of the
+  finer key: one fault that two checks describe without a shared unit name costs a second run.
 - **Daily cap** `agent_daily_spend_cap_usd` ($2.00): past it, anomaly and Slack investigations
   pause until 00:00 UTC (the digest still runs) with one throttled `#home-alerts` warning. It is a
   backstop and undercounts: timed-out runs are recorded as $0.
@@ -162,8 +167,8 @@ watch additionally needs `vault_slack_read_token`; without it the cron isn't eve
 **Trigger on demand** (e.g. from your phone over the VPN): `ssh agent-lxc "~/.scripts/investigate.sh --digest"`.
 
 **Troubleshoot:** logs are in `~/.logs/fleet_health_check.log` and `~/.logs/investigate.log` on
-the box. `~/.agent/` holds `last_anomaly.json`, `plans/`, `incidents/<key>` (`<opened> <last seen>
-<plan>`, epoch seconds — delete one to force a re-investigation), `spend/<UTC date>`, and the Slack
+the box. `~/.agent/` holds `last_anomaly.json`, `plans/`, `incidents/<host>.<subject>` (`<opened> <last
+seen> <plan>`, epoch seconds — delete one to force a re-investigation), `spend/<UTC date>`, and the Slack
 watermark.
 
 ---

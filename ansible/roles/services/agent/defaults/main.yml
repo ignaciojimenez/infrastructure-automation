@@ -201,11 +201,12 @@ agent_slack_watch_minute: "7"
 agent_slack_max_per_run: 3
 
 # ------------------------------------------------------------
-# Incidents — how long one paid investigation covers a host
+# Incidents — how long one paid investigation covers a (host, subject)
 # ------------------------------------------------------------
-# Shared by the anomaly and Slack modes, keyed by host (investigate.sh explains
-# why not by message or by check). A host named again within the quiet window
-# is the same incident and is not re-investigated.
+# Shared by the anomaly and Slack modes, keyed by host AND what is failing on it
+# (investigate.sh explains why neither by message nor by host alone). The same
+# key named again within the quiet window is the same incident and is not
+# re-investigated; a different subject on the same host is.
 #
 # ⚠️ Must exceed the wrapper's --alert-repeat-max (24h). A still-failing check
 # re-posts at least that often, and each post is what keeps the incident open;

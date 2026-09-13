@@ -266,7 +266,7 @@
       tags: [agent, investigate, slack]
 
     # The Slack watch's per-message-text markers, retired 2026-09-13 for the
-    # host-keyed incidents investigate.sh now shares between both modes. Left
+    # (host, subject) incidents investigate.sh now shares between both modes. Left
     # in place they would be inert, but a directory nothing reads is a false
     # lead for whoever next debugs why an alert was or was not investigated.
     - name: Remove the retired Slack dedup markers

@@ -1,10 +1,12 @@
 #!/bin/sh
-# Regression test: one fault buys one Tier 2 investigation, not one per message.
+# Regression test: one fault buys one Tier 2 investigation, not one per message —
+# and a DIFFERENT fault on the same host is still investigated.
 #
 # Runs on the laptop — no container, no Slack, no network, no spend. The real
 # investigate.sh is rendered and driven against stubbed Slack and opencode.
 #
 #   tests/unit/incident_dedup_test.sh
+#   TEMPLATE=<other investigate.sh.j2> tests/unit/incident_dedup_test.sh   # control
 #
 # The night this pins (2026-09-12/13): raspotify died on hifipi at ~00:00 CEST
 # and agent-lxc paid for SIX investigations of it in ten hours — $1.5701, every
@@ -15,7 +17,12 @@
 #     it re-billed hifipi, and vinylstreamer leaving re-billed it again;
 #   * the two modes shared no state.
 #
-# Part 1 replays that night, in order, with the real alert texts and findings.
+# Keying on the host alone fixed that night and broke something else: a second,
+# unrelated fault on hifipi would have paged with no plan. So incidents are keyed
+# (host, subject), and Part 1b forces exactly that case.
+#
+# Part 1 replays that night, in order, with real-shaped messages (title in
+# `text`, Output in the attachment text, Host/Script in attachment fields).
 # Part 2 forces the failures a dedup is most likely to introduce — silence is
 # not a fix, so every "did not run" below is paired with a "still runs".
 
@@ -23,7 +30,7 @@ set -u
 
 CDPATH=''
 REPO_ROOT=$(cd -- "$(dirname -- "$0")/../.." && pwd)
-TEMPLATE="$REPO_ROOT/scripts/services/agent/investigate.sh.j2"
+TEMPLATE=${TEMPLATE:-"$REPO_ROOT/scripts/services/agent/investigate.sh.j2"}
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 SH=${SH:-sh}
@@ -101,13 +108,22 @@ export PATH
 
 runs() { wc -l < "$CALLS" | tr -d ' '; }
 last_prompt() { cat "$PROMPTS/$(runs).txt"; }
+has_incident() { ls "$INCIDENTS/$1".* >/dev/null 2>&1; }
+incident_list() {
+    for _f in "$INCIDENTS"/*; do
+        [ -f "$_f" ] && printf '%s ' "${_f##*/}"
+    done
+}
 
 # poll <fixture> — one --slack run whose history returns the messages in
 # <fixture>: blocks separated by a "---" line, first line the title, the rest
-# the attachment text.
+# the attachment. Lines AFTER the Output block's closing ``` that look like
+# "Host: …" / "Script: …" become attachment FIELDS, as the wrapper sends them;
+# a "Host:" inside the Output (system_health_check prints one) stays text.
 poll() {
     python3 - "$1" "$SLACK_FIXTURE" <<'PY'
-import json, sys, time
+import json, re, sys, time
+FIELD = re.compile(r"^(Host|Script|Started|Duration|Status|Exit Code): (.*)$")
 msgs = []
 for i, block in enumerate(open(sys.argv[1]).read().split("\n---\n")):
     block = block.strip("\n")
@@ -116,7 +132,19 @@ for i, block in enumerate(open(sys.argv[1]).read().split("\n---\n")):
     title, _, att = block.partition("\n")
     m = {"ts": "%.6f" % (time.time() + i), "text": title}
     if att:
-        m["attachments"] = [{"text": att}]
+        cut = att.rfind("```")
+        head, tail = (att[:cut + 3], att[cut + 3:]) if cut >= 0 else ("", att)
+        text_lines, fields = [], []
+        for line in tail.split("\n"):
+            f = FIELD.match(line)
+            if f:
+                fields.append({"title": f.group(1), "value": f.group(2), "short": True})
+            elif line:
+                text_lines.append(line)
+        a = {"text": "\n".join([head] + text_lines).strip("\n")}
+        if fields:
+            a["fields"] = fields
+        m["attachments"] = [a]
     msgs.append(m)
 json.dump({"ok": True, "messages": msgs}, open(sys.argv[2], "w"))
 PY
@@ -160,8 +188,8 @@ age_incident() {
 }
 
 # ------------------------------------------------------------------
-# Real alert texts, 2026-09-13 (long health-check bodies trimmed; the lines
-# that identify host and check are verbatim).
+# Real-shaped alerts, 2026-09-13 (long health-check bodies trimmed; the lines
+# that identify host, check and unit are verbatim, ANSI colour codes included).
 # ------------------------------------------------------------------
 cat > "$WORK/fx/0007" <<'EOF'
 :x: ALERT: Script Failed on hifipi
@@ -179,6 +207,10 @@ Date: Sun 13 Sep 00:02:01 CEST 2026
 [0;31m❌[0m 1 failed unit(s)
      - raspotify.service
 ```
+Host: hifipi
+Script: /home/choco/.scripts/system_health_check.sh
+Status: FAILED
+Exit Code: 1
 EOF
 cat > "$WORK/fx/0107" <<'EOF'
 :x: ALERT: Script Failed on hifipi
@@ -199,6 +231,8 @@ System Health Check
 Host: hifipi
 [0;31m❌[0m Service raspotify: not running (4 checks over 36s)
 ```
+Host: hifipi
+Script: /home/choco/.scripts/system_health_check.sh
 ---
 :x: STILL FAILING on agent-lxc
 *Output:*
@@ -216,13 +250,23 @@ Script: /home/choco/.scripts/fleet_health_check.sh
 Host: hifipi
 Script: /home/choco/.scripts/check_raspotify.sh
 EOF
+# The wrapper cuts Output at 1500 chars, which lands inside the failed-unit
+# list on a real health check (seen 01:17: "- raspo..."). The cut line must be
+# ignored, not keyed as a bogus subject called "raspo".
 cat > "$WORK/fx/0307" <<'EOF'
 :x: STILL FAILING on hifipi
 *Output:*
 ```:repeat: Unchanged failure — 14 consecutive failing runs over 195 minute(s). Next reminder in 240 minute(s) unless the failure changes or clears.
 System Health Check
 Host: hifipi
+[0;32m✅[0m Service shairport-sync: running
+[0;31m❌[0m Service raspotify: not running (4 checks over 36s)
+=== Failed systemd Units ===
+[0;31m❌[0m 1 failed unit(s)
+     - raspo...
 ```
+Host: hifipi
+Script: /home/choco/.scripts/system_health_check.sh
 EOF
 HIFIPI="hifipi: 1 failed systemd unit(s): raspotify.service"
 VINYL="vinylstreamer: UNREACHABLE — no response at all (host down, or off the network)"
@@ -234,15 +278,15 @@ printf "\n── Part 1: replay of 2026-09-12/13 (was 6 runs, \$1.5701)\n"
 b=$(runs); echo 0.1862 > "$COST_FILE"
 poll "$WORK/fx/0007"
 expect 1 "$b" "00:07 first alert about hifipi is investigated (was \$0.1862)"
-if [ -f "$INCIDENTS/host-hifipi" ]; then
-    pass "the investigation opens a host-keyed incident"
+if [ -f "$INCIDENTS/hifipi.raspotify" ]; then
+    pass "the health check's named unit opens incident hifipi.raspotify"
 else
-    fail "no incident recorded — nothing downstream can dedup against it"
+    fail "no hifipi.raspotify incident: $(incident_list)"
 fi
 
 b=$(runs); echo 0.2345 > "$COST_FILE"
 sweep_found "$HIFIPI"
-expect 0 "$b" "00:47 Tier 1 finding on the same host is not re-billed across modes (was \$0.2345)"
+expect 0 "$b" "00:47 Tier 1 finding naming the same unit is not re-billed across modes (was \$0.2345)"
 if grep -q 'belongs to an open incident' "$WORK/out"; then
     pass "the skip is logged with its reason"
 else
@@ -251,7 +295,7 @@ fi
 
 b=$(runs); echo 0.2176 > "$COST_FILE"
 poll "$WORK/fx/0107"
-expect 0 "$b" "01:07 a DIFFERENT check (check_raspotify) on the same host is the same incident (was \$0.2176)"
+expect 0 "$b" "01:07 check_raspotify is the same subject as the health check's raspotify.service (was \$0.2176)"
 
 b=$(runs); echo 0.2421 > "$COST_FILE"
 poll "$WORK/fx/0207"
@@ -259,7 +303,12 @@ expect 0 "$b" "02:07 STILL FAILING reminders are the same incident (was \$0.2421
 
 b=$(runs)
 poll "$WORK/fx/0307"
-expect 0 "$b" "03:07 later reminders stay free"
+expect 0 "$b" "03:07 a reminder whose unit list was truncated stays free"
+if [ -f "$INCIDENTS/hifipi.raspo" ]; then
+    fail "the truncated '- raspo...' line was keyed as a subject"
+else
+    pass "the truncated unit line is ignored, not keyed"
+fi
 
 b=$(runs); echo 0.4194 > "$COST_FILE"
 sweep_found "$HIFIPI" "$VINYL"
@@ -270,14 +319,19 @@ else
     fail "the new finding is missing from the prompt"
 fi
 if last_prompt | grep -q '^- hifipi:'; then
-    fail "the already-explained host was handed to the agent again"
+    fail "the already-explained finding was handed to the agent again"
 else
-    pass "the already-explained host's finding is not re-investigated"
+    pass "the already-explained finding is not re-investigated"
 fi
-if last_prompt | grep -q 'also named hifipi'; then
-    pass "the agent is told hifipi is already covered, so it can still correlate"
+if last_prompt | grep -q 'hifipi.raspotify — plan: '; then
+    pass "the agent is told hifipi.raspotify is already covered, with its plan, so it can still correlate"
 else
-    fail "the prompt does not mention the covered host at all"
+    fail "the prompt does not list the covered incident"
+fi
+if [ -f "$INCIDENTS/vinylstreamer.reachability" ]; then
+    pass "the unreachable finding opens vinylstreamer.reachability"
+else
+    fail "no vinylstreamer.reachability incident: $(incident_list)"
 fi
 
 b=$(runs); echo 0.2703 > "$COST_FILE"
@@ -290,6 +344,92 @@ if [ "$ledger" = "0.6056" ]; then
 else
     fail "ledger reads '$ledger', expected 0.6056"
 fi
+
+# ==================================================================
+printf '\n── Part 1b: a DIFFERENT fault on the same host is not hidden\n'
+# ==================================================================
+# hifipi.raspotify is open from Part 1. Each case below is a fault on hifipi
+# that has nothing to do with raspotify, and must buy its own plan.
+echo 0.25 > "$COST_FILE"
+
+cat > "$WORK/fx/mpd" <<'EOF'
+:x: ALERT: Script Failed on hifipi
+*Output:*
+```❌ MPD is not running - attempting restart```
+Host: hifipi
+Script: /home/choco/.scripts/check_mpd.sh
+EOF
+b=$(runs)
+poll "$WORK/fx/mpd"
+expect 1 "$b" "an UNRELATED check failing on hifipi while hifipi.raspotify is open is investigated"
+if last_prompt | grep -q 'hifipi.raspotify — plan: '; then
+    pass "its prompt lists the open raspotify incident and plan, so a shared cause can still be named"
+else
+    fail "the prompt does not mention the host's open incident"
+fi
+if last_prompt | grep -q 'hifipi.mpd — plan'; then
+    fail "the new incident was listed as already covered"
+else
+    pass "the new incident is not listed as covered"
+fi
+if [ -f "$INCIDENTS/hifipi.mpd" ]; then
+    pass "it opens hifipi.mpd"
+else
+    fail "no hifipi.mpd incident"
+fi
+
+cat > "$WORK/fx/shairport" <<'EOF'
+:x: ALERT: Script Failed on hifipi
+*Output:*
+```System Health Check
+Host: hifipi
+[0;31m❌[0m Service raspotify: not running (4 checks over 36s)
+[0;31m❌[0m Service shairport-sync: not running (4 checks over 36s)
+=== Failed systemd Units ===
+[0;31m❌[0m 2 failed unit(s)
+     - raspotify.service
+     - shairport-sync.service
+```
+Host: hifipi
+Script: /home/choco/.scripts/system_health_check.sh
+EOF
+b=$(runs)
+poll "$WORK/fx/shairport"
+expect 1 "$b" "a health check adding a second failed unit to hifipi investigates the new unit"
+if last_prompt | grep -q '\[hifipi.shairport-sync\]'; then
+    pass "that run is about hifipi.shairport-sync"
+else
+    fail "the new unit's incident is not what was investigated"
+fi
+if last_prompt | grep -q '\[hifipi.raspotify\]'; then
+    fail "the already-open raspotify unit was re-investigated alongside it"
+else
+    pass "the already-open raspotify unit is not re-investigated alongside it"
+fi
+
+b=$(runs)
+poll "$WORK/fx/shairport"
+expect 0 "$b" "...and its repeat, naming both open units, is free"
+b=$(runs)
+sweep_found "hifipi: 2 failed systemd unit(s): raspotify.service shairport-sync.service"
+expect 0 "$b" "...as is a Tier 1 finding naming both units"
+
+cat > "$WORK/fx/disk" <<'EOF'
+:x: ALERT: Script Failed on hifipi
+*Output:*
+```System Health Check
+Host: hifipi
+[0;31m❌[0m Disk /: 97%
+```
+Host: hifipi
+Script: /home/choco/.scripts/system_health_check.sh
+EOF
+b=$(runs)
+poll "$WORK/fx/disk"
+expect 1 "$b" "a health check failing on something that is not a unit (disk) is its own incident"
+
+# Part 1b spent past what Part 2 assumes; start Part 2 from an empty ledger.
+rm -f "$AGENT_DIR/spend/$(date -u +%Y-%m-%d)"
 
 # ==================================================================
 printf '\n── Part 2: the dedup must still let real signal through\n'
@@ -306,23 +446,23 @@ b=$(runs)
 poll "$WORK/fx/cobra"
 expect 1 "$b" "a different host's alert is investigated"
 
-age_incident host-hifipi 97200 97200   # opened and last named 27h ago
+age_incident hifipi.raspotify 97200 97200   # opened and last named 27h ago
 b=$(runs)
 poll "$WORK/fx/0307"
-expect 1 "$b" "hifipi recurring after the quiet window is re-investigated"
+expect 1 "$b" "hifipi.raspotify recurring after the quiet window is re-investigated"
 
-age_incident host-hifipi 90000 90000   # 25h: reminders backed off, not resolved
+age_incident hifipi.raspotify 90000 90000   # 25h: reminders backed off, not resolved
 b=$(runs)
 poll "$WORK/fx/0307"
 expect 0 "$b" "a reminder 25h into a fault is still the same incident"
-seen=$(cut -d' ' -f2 "$INCIDENTS/host-hifipi")
+seen=$(cut -d' ' -f2 "$INCIDENTS/hifipi.raspotify")
 if [ $(( $(date +%s) - seen )) -lt 60 ]; then
     pass "that reminder refreshed the incident's last-seen time"
 else
     fail "a reminder did not refresh the incident — it lapses mid-fault and re-bills"
 fi
 
-age_incident host-hifipi 691200 3600   # 8 days old, named an hour ago
+age_incident hifipi.raspotify 691200 3600   # 8 days old, named an hour ago
 b=$(runs)
 poll "$WORK/fx/0307"
 expect 1 "$b" "an incident past max age gets a fresh look even though it never went quiet"
@@ -337,12 +477,12 @@ EOF
 b=$(runs)
 poll "$WORK/fx/burst"
 expect 1 "$b" "two new hosts in one poll share ONE investigation"
-if last_prompt | grep -q 'host-dockassist' && last_prompt | grep -q 'host-unifi'; then
+if last_prompt | grep -q '\[dockassist\.' && last_prompt | grep -q '\[unifi\.'; then
     pass "that one prompt carries both incidents"
 else
     fail "an incident was dropped from the batched prompt"
 fi
-if [ -f "$INCIDENTS/host-dockassist" ] && [ -f "$INCIDENTS/host-unifi" ]; then
+if has_incident dockassist && has_incident unifi; then
     pass "both incidents are opened by the one run"
 else
     fail "a batched incident was not opened — it would be re-billed next poll"
@@ -353,7 +493,7 @@ cat > "$WORK/fx/ha_vinyl" <<'EOF'
 EOF
 b=$(runs)
 poll "$WORK/fx/ha_vinyl"
-expect 0 "$b" "an HA alert naming a fleet host joins that host's open incident"
+expect 0 "$b" "an HA 'offline' alert joins Tier 1's open vinylstreamer.reachability incident"
 
 cat > "$WORK/fx/ha_heating" <<'EOF'
 :rotating_light: Heating offline — 3 thermostats unavailable
@@ -374,7 +514,7 @@ b=$(runs)
 poll "$WORK/fx/cwwk"
 expect 1 "$b" "a failing agent run is attempted"
 rm -f "$FAIL_FILE"
-if [ -f "$INCIDENTS/host-cwwk" ]; then
+if has_incident cwwk; then
     fail "a FAILED run opened the incident — the fault would never be explained"
 else
     pass "a failed run leaves the incident unopened"
