@@ -36,6 +36,7 @@ All on `agent-lxc`, via cron:
 | Hourly **:47** | `investigate.sh` (anomaly) | only for a finding with no open incident | `#home-alerts`: summary + plan file |
 | Hourly **:07** | `investigate.sh --slack` | only for an alert with no open incident; one run per poll | `#home-alerts`: summary + plan file |
 | Sundays **09:17** | `investigate.sh --digest` | weekly | `#home-logging`: fleet-health summary + plan file |
+| Hourly **:29** | `mullvad_relay_signal.sh` | never | `#home-logging` only, and only when a relay changes state (plus a weekly reminder) |
 
 The three Tier-2 jobs share a **`flock`**, so they never run concurrently (which would saturate
 the 1-CPU/2GB box). Each exits immediately and free when there is nothing new to do.
@@ -60,6 +61,16 @@ again until nothing has named it for `agent_incident_quiet_hours` (26h — longe
 fault on the same host is a new key and **is** investigated; its prompt lists the host's open
 incidents and their plans, so the agent can still say "same cause". `investigate.sh` logs every
 skip as `open incident … not re-billing` / `belongs to an open incident`.
+
+**Mullvad relay signal** (TODO item 41) watches the relays OPNsense's WireGuard peers point at
+(`agent_mullvad_relays` in `group_vars/agent.yml`) in Mullvad's public relay list. It is a **signal,
+not a check**: it posts to `#home-logging` when a relay turns inactive, drops out of the list, or
+recovers — quoting Mullvad's own `status_messages` when there are any, with a link to
+mullvad.net/en/servers — and never exits non-zero because a relay is down. A relay that stays down
+gets one reminder a week; from 14 days the reminder says retirement is *possible* and that this is
+inferred from the duration, not stated by Mullvad. It never calls the OPNsense API, so it needs no
+new privilege. ⚠️ It watches the relay list, not the tunnels: if a peer is repointed on OPNsense and
+not here, it silently watches the wrong relay.
 
 ---
 

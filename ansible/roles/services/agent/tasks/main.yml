@@ -223,6 +223,65 @@
     - alert_token is defined and alert_token != ''
   tags: [agent, monitoring, cron]
 
+# ============================================================
+# Mullvad relay signal (docs/TODO.md item 41)
+#
+# A signal, not a check: it posts to #home-logging when a relay one of
+# OPNsense's WireGuard peers uses changes state in Mullvad's own relay list,
+# and never fails because a relay is down. It reads a public API and nothing
+# else — no OPNsense API call, so no new privilege on the read-only key.
+# ============================================================
+
+- name: Deploy the Mullvad relay list
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ agent_mullvad_relays_file }}"
+    content: "# Managed by Ansible (agent_mullvad_relays): <hostname> <label>\n{% for r in agent_mullvad_relays %}{{ r.hostname }} {{ r.label | default('') }}\n{% endfor %}"
+    owner: "{{ primary_user }}"
+    group: "{{ infrastructure_group }}"
+    mode: '0644'
+  when: enable_mullvad_relay_signal | bool
+  tags: [agent, monitoring, mullvad]
+
+- name: Deploy the Mullvad relay signal script
+  become: true
+  ansible.builtin.copy:
+    src: "{{ inventory_dir }}/../../scripts/services/agent/mullvad_relay_signal.sh"
+    dest: "{{ scripts_dir }}/mullvad_relay_signal.sh"
+    owner: "{{ primary_user }}"
+    group: "{{ infrastructure_group }}"
+    mode: '0755'
+  when: enable_mullvad_relay_signal | bool
+  tags: [agent, monitoring, mullvad, scripts]
+
+# The relay signal itself goes to the logging webhook (first script argument).
+# The wrapper still gets the alert webhook, but it only uses it if the script
+# exits non-zero — which it does solely on a usage error, i.e. a broken deploy.
+- name: Configure the Mullvad relay signal cron job
+  become: true
+  ansible.builtin.cron:
+    name: "Mullvad relay signal"
+    minute: "{{ agent_mullvad_signal_minute }}"
+    hour: "{{ agent_mullvad_signal_hour }}"
+    job: >
+      {{ scripts_dir }}/enhanced_monitoring_wrapper
+      --monitoring-name=mullvad_relay_signal
+      --heartbeat-interval=daily
+      --notify-fixed=true
+      {{ logging_token }}
+      {{ alert_token }}
+      {{ scripts_dir }}/mullvad_relay_signal.sh
+      {{ logging_token }}
+      {{ agent_mullvad_relays_file }}
+      {{ agent_state_dir }}
+      >> {{ logs_dir }}/mullvad_relay_signal.log 2>&1
+    user: "{{ primary_user }}"
+    state: "{{ 'present' if enable_mullvad_relay_signal | bool else 'absent' }}"
+  when:
+    - logging_token is defined and logging_token != ''
+    - alert_token is defined and alert_token != ''
+  tags: [agent, monitoring, mullvad, cron]
+
 - name: Report agent deployment status
   ansible.builtin.debug:
     msg: |

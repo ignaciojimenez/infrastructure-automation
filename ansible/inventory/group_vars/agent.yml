@@ -167,3 +167,44 @@ speed_comparison_max_age: 60
 # noise floor is ~3% WITHIN a single 3-test run, so any value must clear that
 # comfortably. Turning it on is this one line.
 speed_comparison_min_ratio: ""
+
+
+# ============================================================
+# Mullvad relay signal (docs/TODO.md item 41)
+# ============================================================
+# The relays OPNsense's WireGuard peers point at, read from the firewall on
+# 2026-09-13. A SIGNAL to #home-logging when one changes state in Mullvad's own
+# relay list — never a failure, never #home-alerts. Around 2026-09-10 two of the
+# three NL relays went inactive and nothing noticed for three days.
+#
+# Disclosure tiering: these are Mullvad's public relay hostnames, published in
+# its own relay list. No endpoint IPs, no keys.
+#
+# ⚠️ The UK peers' wg10/wg11/wg12 mapping was NOT verified, so they carry no
+# label rather than a guessed one.
+#
+# Keep in sync with OPNsense's WireGuard peers: a relay changed on the firewall
+# and not here is a relay this signal silently stops watching.
+enable_mullvad_relay_signal: true
+agent_mullvad_relays:
+  - hostname: nl-ams-wg-001
+    label: "NL1, wg0"
+  - hostname: nl-ams-wg-002
+    label: "NL2, wg2"
+  - hostname: nl-ams-wg-101
+    label: "NL3, wg3"
+  - hostname: es-bcn-wg-001
+    label: "ES1, wg4"
+  - hostname: es-bcn-wg-002
+    label: "ES2, wg5"
+  - hostname: es-bcn-wg-101
+    label: "ES3, wg6"
+  - hostname: us-nyc-wg-301
+    label: "US1, wg7"
+  - hostname: us-nyc-wg-501
+    label: "US2, wg8"
+  - hostname: us-nyc-wg-701
+    label: "US3, wg9"
+  - hostname: gb-lon-wg-001
+  - hostname: gb-lon-wg-003
+  - hostname: gb-lon-wg-201

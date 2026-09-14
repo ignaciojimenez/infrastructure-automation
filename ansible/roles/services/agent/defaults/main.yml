@@ -38,6 +38,16 @@ agent_sweep_healthcheck_url: "{{ vault_healthcheck_agent_sweep | default('') }}"
 agent_disk_threshold: 85
 agent_wrapper_max_age_hours: 26
 agent_ssh_timeout: 15
+
+# Mullvad relay signal (docs/TODO.md item 41). Off until the relay list is set
+# in group_vars/agent.yml. Hourly at :29 — clear of this role's :07/:14/:17/:20/
+# :37/:47 jobs, and of the fleet's */5, */10 and */15 crons, which all land on
+# multiples of five.
+enable_mullvad_relay_signal: false
+agent_mullvad_relays: []
+agent_mullvad_signal_minute: "29"
+agent_mullvad_signal_hour: "*"
+agent_mullvad_relays_file: "{{ agent_state_dir }}/mullvad_relays.list"
 agent_fleet_hosts: []
 
 # ------------------------------------------------------------
