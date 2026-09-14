@@ -57,7 +57,7 @@ here is something to read past, every time, forever. The write-up goes to
 renders it:
 
 > **№1** 36 + 37 *(deployed 13 Sep — waiting on a real alert / a real lockout)* →
-> **№2** 41 *(two of three NL tunnels dead; VLAN 40/80 have no failover)* →
+> **№2** 41 *(two of three NL tunnels down; build the relay signal, no peer changes)* →
 > **№3** 18 + 1d + 35 *(**deployed; all three waiting on a reading** —
 > see below)* → **№4** 38 *(small follow-ups: MQTT timeout, 403 detection)* →
 > **№5** 2 → **№6** 4 (plex) → **№7** 9 → **№8** 3a/3b/3c → **№9** 39 →
@@ -132,43 +132,55 @@ not by address — although its DNS name still resolves and the tunnel works. Wh
 is unverified, but the one tunnel carrying VLAN 40/80 may be the next to go,
 which makes restoring failover more urgent, not less.
 
-Two separate actions:
-1. **Replace the dead peers** with active NL relays, so failover exists again.
-   The peers point at relay *hostnames*, so a retired relay fails silently
-   rather than loudly.
-2. **Alert when a gateway goes down.** agent-lxc already sweeps opnsense over
-   its API; gateway status is the question it never asks. A sweep that only asks
-   "is traffic flowing?" cannot see a group running on its last member. The
-   same sweep can cheaply ask a second question — *is each peer's relay still
-   listed and active in Mullvad's relay API?* — which warns before a retired
-   relay stops answering. That is the secondary signal; a down gateway is the
-   one that must page, whatever the cause.
+**Decided 2026-09-13 (Ignacio):**
+- **Do not replace NL1/NL2's peers yet.** Mullvad marks a relay inactive for
+  maintenance as well as before retirement, and nothing available says which:
+  neither relay API exposes it, the servers page does not, and nothing public was
+  found. Replace them only on evidence they are gone for good.
+- **Surface it as a signal, not a failure:** #home-logging, never #home-alerts,
+  and never a failing check.
+
+**Design:**
+1. **Relay signal — no new OPNsense privilege.** agent-lxc polls Mullvad's relay
+   API for the relays OPNsense's peers use and posts on state change (listed or
+   not, active or not): the relay, since when, Mullvad's own `status_messages`
+   text and timestamp when there is one (real example from 2026-09-13: *"xTom
+   servers in LAX will be moved. Please use other servers in LAX in the
+   meanwhile."*), otherwise "no status message", plus a pointer to
+   https://mullvad.net/en/servers. While a relay stays down, a weekly reminder;
+   past 14 days it says so — **duration is the only available evidence of
+   permanence**, and the message must call it inference.
+2. **Gateway state — needs a privilege decision first.** `api/routes/gateway/status`
+   is granted only by *System: Gateways*, which also grants `api/routing/settings/*`
+   (write access to gateways) — **do not give that to the read-only key.** *VPN:
+   WireGuard: Status* grants `api/wireguard/service/*`, which includes service
+   control — also no. The one narrow read-only option is *Diagnostics: Logs:
+   Gateways* (`api/diagnostics/log/core/gateways/*`), if dpinger's alarms land in
+   that log on 26.7 — unverified.
 
 ⚠️ Item 1d's VPN baseline straddles this: its VPN egress moved from NL1 to NL3
 at 2026-09-10 13:20. Note the relay when reading the ratio distribution.
 
-*State:* diagnosed 2026-09-13. *Effort:* peers small (OPNsense, Ignacio);
-alerting small–medium. *Needs:* OPNsense access for the peers; laptop for the sweep.
+*State:* decided 2026-09-13; relay signal being built on `feat/mullvad-relay-signal`,
+not deployed. *Effort:* small–medium. *Needs:* laptop to deploy; Ignacio's call on
+the gateway-log privilege.
 
 ```
-Restore VLAN 40/80's Mullvad failover and make a dead gateway page. Read
-docs/TODO.md item 41 first.
+Finish item 41's relay signal. Read docs/TODO.md item 41 — the decisions are
+settled: do NOT replace any OPNsense peer, and this is a SIGNAL to #home-logging,
+never a failing check or #home-alerts.
 
-(1) Peers: list Mullvad's ACTIVE NL WireGuard relays
-    curl -s https://api.mullvad.net/www/relays/wireguard/ | python3 -c 'import json,sys; [print(r["hostname"], r["provider"]) for r in json.load(sys.stdin) if r["country_code"]=="nl" and r["active"]]'
-and propose two to replace NL1 and NL2's retired relays (their hostnames are in
-the OPNsense peer config). Prefer a different provider from NL3's, so one
-provider outage cannot take all three. Ignacio applies them on OPNsense.
-Verify: recent `wg show all latest-handshakes` for wg0/wg2/wg3, and dpinger
-showing all three members up.
-(2) Alerting: extend the agent-lxc opnsense API sweep to read gateway status and
-report any failover-group member that is down. Force it: it must fire on the
-current state (NL1 and NL2 down) — capture that output BEFORE the peers are
-fixed — and go quiet once they are. Check that the API key's ACL covers the
-gateway-status endpoint before building on it.
+If branch feat/mullvad-relay-signal exists, review and deploy it:
+  ansible-playbook ansible/playbooks/services.yml --limit agent-lxc --tags agent --check --diff --forks 1
+count the recap (agent-lxc listed, the new script and cron changed), deploy, and
+confirm the first run posts ONE summary to #home-logging naming every relay that
+is not active (on 2026-09-13: NL1 and NL2 inactive, NL3 not listed). Before any
+push, run the CI workflow's checks locally.
 
-🔴 When reading /conf/config.xml, WHITELIST the fields you print. A blacklist
-filter printed two PSKs into a session on 2026-09-13.
+Gateway state is a separate decision: only add Ignacio's approved privilege
+(the read-only "Diagnostics: Logs: Gateways" is the candidate). Never grant
+"System: Gateways" or "VPN: WireGuard: Status" to the read-only key — both can
+change things. When reading /conf/config.xml, WHITELIST the fields you print.
 ```
 
 **36. Tier 2 billed one fault six times overnight — DEPLOYED, waiting on a real alert**
