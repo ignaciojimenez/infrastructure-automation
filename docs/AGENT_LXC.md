@@ -64,11 +64,14 @@ skip as `open incident … not re-billing` / `belongs to an open incident`.
 
 **Mullvad relay signal** (TODO item 41) watches the relays OPNsense's WireGuard peers point at
 (`agent_mullvad_relays` in `group_vars/agent.yml`) in Mullvad's public relay list. It is a **signal,
-not a check**: it posts to `#home-logging` when a relay turns inactive, drops out of the list, or
-recovers — quoting Mullvad's own `status_messages` when there are any, with a link to
-mullvad.net/en/servers — and never exits non-zero because a relay is down. A relay that stays down
-gets one reminder a week; from 14 days the reminder says retirement is *possible* and that this is
-inferred from the duration, not stated by Mullvad. It never calls the OPNsense API, so it needs no
+not a check**: it posts to **`#home-alerts`** when a relay turns inactive, drops out of the list, or
+recovers (and once on a fresh box, as a summary) — worded as needing attention, quoting Mullvad's
+own `status_messages` when there are any, with a link to mullvad.net/en/servers — and never exits
+non-zero because a relay is down. Everything that is not news goes to `#home-logging`: a relay
+that stays down gets one reminder a week there, and from 14 days the reminder says retirement is
+*possible* and that this is inferred from the duration, not stated by Mullvad; the signal's own
+trouble reading Mullvad's list is reported there too, once. A post Slack refuses is retried next
+run, per channel. It never calls the OPNsense API, so it needs no
 new privilege. ⚠️ It watches the relay list, not the tunnels: if a peer is repointed on OPNsense and
 not here, it silently watches the wrong relay.
 

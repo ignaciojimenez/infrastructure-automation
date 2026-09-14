@@ -1,21 +1,32 @@
 #!/bin/sh
-# mullvad_relay_signal.sh — tell #home-logging when a Mullvad relay that one of
+# mullvad_relay_signal.sh — tell Slack when a Mullvad relay that one of
 # OPNsense's WireGuard peers points at changes state in Mullvad's own relay list.
 #
-#   mullvad_relay_signal.sh <slack_webhook_path> <relay_list_file> [state_dir]
+#   mullvad_relay_signal.sh <logging_webhook> <relay_list_file> [state_dir] [alert_webhook]
 #
 # relay_list_file: one relay per line, "<hostname> <label>", label optional.
+# alert_webhook: where state changes go. Without it they fall back to the
+# logging webhook, so a cron line written before the alert channel existed keeps
+# working through a deploy instead of failing on a usage error.
 #
 # ── Why this exists (docs/TODO.md item 41) ────────────────────────────────────
 # Around 2026-09-10 two of the three NL relays behind VLAN 40/80's failover
 # group went inactive. The group quietly fell over to the last one — whose exit
 # Spotify refuses — and nothing anywhere said so for three days.
 #
-# ── A SIGNAL, not a check ─────────────────────────────────────────────────────
-# A relay being down is Mullvad's business and usually temporary; nothing here
-# can fix it, so it must never page. Relay state only ever goes to the logging
-# webhook, and this script never exits non-zero because a relay is down. The
-# only non-zero exit is a usage error, which is a bug in the deploy.
+# ── Two channels, and still not a check ───────────────────────────────────────
+# A relay changing state is something to act on: a peer may need swapping, by
+# hand. So CHANGES — a relay going inactive, dropping out of the list, coming
+# back, and the first-run summary — go to the alert webhook (#home-alerts),
+# worded as needing attention. What is not news goes to the logging webhook
+# (#home-logging): the weekly reminders while a relay stays down, and this
+# script's own trouble reading Mullvad's list, which says nothing about a relay.
+# (Until 2026-09-14 everything went to #home-logging, which nobody watches — a
+# change nobody sees is no better than no signal.)
+#
+# It still never exits non-zero because a relay is down: a failing exit makes
+# the wrapper post "Script Failed", the wrong message for a third party's server
+# being in maintenance. The only non-zero exit is a usage error — a bad deploy.
 #
 # ── What it will NOT claim ────────────────────────────────────────────────────
 # Mullvad's list says `active` and carries `status_messages`; it does not say
@@ -27,30 +38,32 @@
 #     and says outright that this is inferred from duration.
 #
 # ── It posts on change, never on repetition ───────────────────────────────────
-# One message per run at most. A state change posts once; a relay that stays
-# inactive or unlisted gets one reminder every REMIND_DAYS. An unreadable API is
-# its own state and is reported once, the same way.
+# At most one message per channel per run. A state change posts once; a relay
+# that stays inactive or unlisted gets one reminder every REMIND_DAYS. An
+# unreadable API is its own state and is reported once, the same way.
 #
-# 🔴 State advances only after Slack accepted the post. A message that failed to
-# send is retried next run instead of being recorded as sent — the exact bug
-# that swallowed vinylstreamer's only useful alert on 2026-09-13 (item 40).
+# 🔴 State advances only after Slack accepted the post — per channel, so a
+# refused alert is retried next run without re-sending a reminder that did get
+# through. Recording a failed send as sent is the exact bug that swallowed
+# vinylstreamer's only useful alert on 2026-09-13 (item 40).
 #
 # No OPNsense API call: this reads Mullvad's public list and nothing else, so
 # it needs no new privilege on the read-only key.
 
 set -u
 
-WEBHOOK="${1:-}"
+WEBHOOK_LOG="${1:-}"
 RELAYS="${2:-}"
 STATE_ROOT="${3:-${HOME:-/tmp}/.agent}"
+WEBHOOK_ALERT="${4:-$WEBHOOK_LOG}"
 CURL="${MULLVAD_SIGNAL_CURL:-curl}"
 API="${MULLVAD_SIGNAL_API:-https://api.mullvad.net/www/relays/wireguard/}"
 REMIND_DAYS="${MULLVAD_SIGNAL_REMIND_DAYS:-7}"
 RETIRE_DAYS="${MULLVAD_SIGNAL_RETIRE_DAYS:-14}"
 SERVERS_URL="https://mullvad.net/en/servers"
 
-if [ -z "$WEBHOOK" ] || [ ! -r "$RELAYS" ]; then
-    echo "usage: $0 <slack_webhook_path> <relay_list_file> [state_dir]" >&2
+if [ -z "$WEBHOOK_LOG" ] || [ ! -r "$RELAYS" ]; then
+    echo "usage: $0 <logging_webhook> <relay_list_file> [state_dir] [alert_webhook]" >&2
     exit 2
 fi
 if ! command -v jq >/dev/null 2>&1; then
@@ -63,8 +76,10 @@ SD="$STATE_ROOT/mullvad_relays"
 mkdir -p "$SD" || exit 2
 WORK=$(mktemp -d) || exit 2
 trap 'rm -rf "$WORK"' EXIT
-mkdir "$WORK/next"
-: > "$WORK/lines"
+# Each channel stages its own state, committed only when its own post lands.
+mkdir "$WORK/next_alert" "$WORK/next_log"
+: > "$WORK/lines_alert"
+: > "$WORK/lines_log"
 
 # Epoch -> 2026-09-14T08:29:00Z. jq rather than date(1): GNU and BSD date
 # disagree on the flag, and the unit tests run on macOS.
@@ -84,7 +99,8 @@ describe() {
     esac
 }
 
-add() { printf '%s\n' "$1" >> "$WORK/lines"; }
+add_alert() { printf '%s\n' "$1" >> "$WORK/lines_alert"; }
+add_log()   { printf '%s\n' "$1" >> "$WORK/lines_log"; }
 
 # read_state <file> -> _st _since _lp ("<state> <since_epoch> <last_post_epoch>")
 read_state() {
@@ -94,27 +110,27 @@ read_state() {
     fi
 }
 
-# Moves this run's staged state into place. Called only once the message (if
-# any) has been delivered.
+# commit <staging_dir> <mode>: move a channel's staged state into place.
 commit() {
-    for _f in "$WORK/next"/* "$WORK/next"/.api; do
+    for _f in "$1"/* "$1"/.api; do
         [ -e "$_f" ] && mv -f "$_f" "$SD/"
     done
-    if [ "$1" = initialise ]; then
+    if [ "$2" = initialise ]; then
         : > "$SD/.initialised"
     fi
 }
 
-# deliver <text> <commit-mode>: post, then commit; on a failed post, commit
-# nothing so the same message is attempted again next run.
+# deliver <alert|log> <text> <staging_dir> <mode>: post, then commit that
+# channel's state; on a failed post commit nothing, so it is retried next run.
 deliver() {
-    _payload=$(jq -n --arg text "$1" '{text: $text}')
+    if [ "$1" = alert ]; then _hook=$WEBHOOK_ALERT; else _hook=$WEBHOOK_LOG; fi
+    _payload=$(jq -n --arg text "$2" '{text: $text}')
     if "$CURL" -sS -f -m 15 -X POST -H 'Content-type: application/json' \
-        --data "$_payload" "https://hooks.slack.com/services/$WEBHOOK" >/dev/null 2>"$WORK/post.err"; then
-        commit "$2"
-        echo "posted to Slack"
+        --data "$_payload" "https://hooks.slack.com/services/$_hook" >/dev/null 2>"$WORK/post.err"; then
+        commit "$3" "$4"
+        echo "posted to Slack ($1)"
     else
-        echo "Slack post failed ($(tr '\n' ' ' < "$WORK/post.err")); state not advanced, will retry next run"
+        echo "Slack post to $1 failed ($(tr '\n' ' ' < "$WORK/post.err")); its state not advanced, will retry next run"
     fi
 }
 
@@ -130,24 +146,26 @@ elif ! jq -e 'type == "array" and length > 0 and (.[0] | has("hostname") and has
     reason="the response is not Mullvad's relay list"
 fi
 
+# The signal's own health is logging-channel material: it says nothing about
+# any relay, and the relay states it knows stay untouched until it recovers.
 read_state "$SD/.api"
 if [ "$api_ok" -eq 0 ]; then
     if [ "$_st" != broken ]; then
-        printf 'broken %s %s\n' "$NOW" "$NOW" > "$WORK/next/.api"
-        deliver "⚠️ Mullvad relay signal could not read Mullvad's relay list (${reason}). Relay states are unknown until it recovers — this is the signal failing, not a relay. Check: ${SERVERS_URL}" keep
+        printf 'broken %s %s\n' "$NOW" "$NOW" > "$WORK/next_log/.api"
+        deliver log "⚠️ Mullvad relay signal could not read Mullvad's relay list (${reason}). Relay states are unknown until it recovers — this is the signal failing, not a relay. Check: ${SERVERS_URL}" "$WORK/next_log" keep
     elif [ $((NOW - _lp)) -ge $((REMIND_DAYS * 86400)) ]; then
-        printf 'broken %s %s\n' "$_since" "$NOW" > "$WORK/next/.api"
-        deliver "⚠️ Still: Mullvad relay signal has been unable to read Mullvad's relay list for $(ago "$_since") (since $(iso "$_since")). Latest: ${reason}." keep
+        printf 'broken %s %s\n' "$_since" "$NOW" > "$WORK/next_log/.api"
+        deliver log "⚠️ Still: Mullvad relay signal has been unable to read Mullvad's relay list for $(ago "$_since") (since $(iso "$_since")). Latest: ${reason}." "$WORK/next_log" keep
     else
         echo "relay list still unreadable (${reason}); already reported"
     fi
     exit 0
 fi
 if [ "$_st" = broken ]; then
-    add "✅ Mullvad relay signal can read Mullvad's relay list again (unreadable for $(ago "$_since"), since $(iso "$_since"))."
+    add_log "✅ Mullvad relay signal can read Mullvad's relay list again (unreadable for $(ago "$_since"), since $(iso "$_since"))."
 fi
 if [ "$_st" != ok ]; then
-    printf 'ok %s %s\n' "$NOW" "$NOW" > "$WORK/next/.api"
+    printf 'ok %s %s\n' "$NOW" "$NOW" > "$WORK/next_log/.api"
 fi
 
 # ── Per relay ─────────────────────────────────────────────────────────────────
@@ -182,9 +200,9 @@ while read -r host label; do
     read_state "$SD/$host"
 
     if [ "$fresh" -eq 1 ]; then
-        printf '%s %s %s\n' "$state" "$NOW" "$NOW" > "$WORK/next/$host"
+        printf '%s %s %s\n' "$state" "$NOW" "$NOW" > "$WORK/next_alert/$host"
         if [ "$state" != active ]; then
-            add "• ${name} is $(describe "$state") (first seen $(iso "$NOW")).${says}"
+            add_alert "• ${name} is $(describe "$state") (first seen $(iso "$NOW")).${says}"
         fi
         continue
     fi
@@ -196,11 +214,11 @@ while read -r host label; do
     fi
 
     if [ "$state" != "$_st" ]; then
-        printf '%s %s %s\n' "$state" "$NOW" "$NOW" > "$WORK/next/$host"
+        printf '%s %s %s\n' "$state" "$NOW" "$NOW" > "$WORK/next_alert/$host"
         if [ "$state" = active ]; then
-            add "✅ Mullvad relay ${name} is active again (was $(describe "$_st") for $(ago "$_since"), first seen $(iso "$_since"))."
+            add_alert "✅ Mullvad relay ${name} is back: active again (was $(describe "$_st") for $(ago "$_since"), first seen $(iso "$_since"))."
         else
-            add "🛈 Mullvad relay ${name} is $(describe "$state") (first seen $(iso "$NOW")).${says}"
+            add_alert "⚠️ Mullvad relay ${name} is $(describe "$state") — needs attention (first seen $(iso "$NOW")).${says}"
         fi
     elif [ "$state" != active ] && [ $((NOW - _lp)) -ge $((REMIND_DAYS * 86400)) ]; then
         days=$(( (NOW - _since) / 86400 ))
@@ -208,8 +226,8 @@ while read -r host label; do
         if [ "$days" -ge "$RETIRE_DAYS" ]; then
             line="${line} After ${days} days this may mean the relay has been retired — an inference from how long it has lasted, not something Mullvad states."
         fi
-        add "$line"
-        printf '%s %s %s\n' "$state" "$_since" "$NOW" > "$WORK/next/$host"
+        add_log "$line"
+        printf '%s %s %s\n' "$state" "$_since" "$NOW" > "$WORK/next_log/$host"
     fi
 done < "$RELAYS"
 
@@ -218,19 +236,27 @@ echo "checked ${total} relays: ${unhealthy} not active"
 mode=keep
 [ "$fresh" -eq 1 ] && mode=initialise
 
-if [ ! -s "$WORK/lines" ]; then
-    commit "$mode"
-    exit 0
-fi
-
-if [ "$fresh" -eq 1 ] && [ "$unhealthy" -gt 0 ]; then
-    text="🛈 Mullvad relay signal is now watching the ${total} relays OPNsense's WireGuard peers use. ${unhealthy} of them are not healthy in Mullvad's relay list:
-$(cat "$WORK/lines")
+# ── Changes → #home-alerts ────────────────────────────────────────────────────
+if [ -s "$WORK/lines_alert" ]; then
+    if [ "$fresh" -eq 1 ]; then
+        text="⚠️ Mullvad relay signal needs attention: it is now watching the ${total} relays OPNsense's WireGuard peers use, and ${unhealthy} of them are not healthy in Mullvad's relay list:
+$(cat "$WORK/lines_alert")
 Check: ${SERVERS_URL}"
+    else
+        text="$(cat "$WORK/lines_alert")
+Check: ${SERVERS_URL}"
+    fi
+    deliver alert "$text" "$WORK/next_alert" "$mode"
 else
-    text="$(cat "$WORK/lines")
-Check: ${SERVERS_URL}"
+    commit "$WORK/next_alert" "$mode"
 fi
 
-deliver "$text" "$mode"
+# ── Reminders and the signal's own health → #home-logging ─────────────────────
+if [ -s "$WORK/lines_log" ]; then
+    deliver log "$(cat "$WORK/lines_log")
+Check: ${SERVERS_URL}" "$WORK/next_log" keep
+else
+    commit "$WORK/next_log" keep
+fi
+
 exit 0

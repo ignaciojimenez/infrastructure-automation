@@ -226,10 +226,11 @@
 # ============================================================
 # Mullvad relay signal (docs/TODO.md item 41)
 #
-# A signal, not a check: it posts to #home-logging when a relay one of
-# OPNsense's WireGuard peers uses changes state in Mullvad's own relay list,
-# and never fails because a relay is down. It reads a public API and nothing
-# else — no OPNsense API call, so no new privilege on the read-only key.
+# A signal, not a check: when a relay one of OPNsense's WireGuard peers uses
+# changes state in Mullvad's own relay list, it posts to #home-alerts; weekly
+# reminders and its own trouble reading the list go to #home-logging. It never
+# fails because a relay is down. It reads a public API and nothing else — no
+# OPNsense API call, so no new privilege on the read-only key.
 # ============================================================
 
 - name: Deploy the Mullvad relay list
@@ -254,9 +255,11 @@
   when: enable_mullvad_relay_signal | bool
   tags: [agent, monitoring, mullvad, scripts]
 
-# The relay signal itself goes to the logging webhook (first script argument).
-# The wrapper still gets the alert webhook, but it only uses it if the script
-# exits non-zero — which it does solely on a usage error, i.e. a broken deploy.
+# The script posts relay CHANGES to the alert webhook (its last argument) and
+# reminders to the logging webhook (its first). The wrapper gets both as well,
+# but only alerts if the script exits non-zero — which it does solely on a
+# usage error, i.e. a broken deploy. Both tokens are required below, so the job
+# is skipped rather than written with a missing webhook.
 - name: Configure the Mullvad relay signal cron job
   become: true
   ansible.builtin.cron:
@@ -274,6 +277,7 @@
       {{ logging_token }}
       {{ agent_mullvad_relays_file }}
       {{ agent_state_dir }}
+      {{ alert_token }}
       >> {{ logs_dir }}/mullvad_relay_signal.log 2>&1
     user: "{{ primary_user }}"
     state: "{{ 'present' if enable_mullvad_relay_signal | bool else 'absent' }}"

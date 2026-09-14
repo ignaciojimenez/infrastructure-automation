@@ -173,9 +173,11 @@ speed_comparison_min_ratio: ""
 # Mullvad relay signal (docs/TODO.md item 41)
 # ============================================================
 # The relays OPNsense's WireGuard peers point at, read from the firewall on
-# 2026-09-13. A SIGNAL to #home-logging when one changes state in Mullvad's own
-# relay list — never a failure, never #home-alerts. Around 2026-09-10 two of the
-# three NL relays went inactive and nothing noticed for three days.
+# 2026-09-13; NL1's peer was moved from nl-ams-wg-001 to nl-ams-wg-301 on
+# 2026-09-14. When one changes state in Mullvad's own relay list the change goes
+# to #home-alerts and the weekly reminders to #home-logging — never a failing
+# check. Around 2026-09-10 two of the three NL relays went inactive and nothing
+# noticed for three days.
 #
 # Disclosure tiering: these are Mullvad's public relay hostnames, published in
 # its own relay list. No endpoint IPs, no keys.
@@ -187,7 +189,7 @@ speed_comparison_min_ratio: ""
 # and not here is a relay this signal silently stops watching.
 enable_mullvad_relay_signal: true
 agent_mullvad_relays:
-  - hostname: nl-ams-wg-001
+  - hostname: nl-ams-wg-301
     label: "NL1, wg0"
   - hostname: nl-ams-wg-002
     label: "NL2, wg2"
