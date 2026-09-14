@@ -57,7 +57,7 @@ here is something to read past, every time, forever. The write-up goes to
 renders it:
 
 > **№1** 36 + 37 *(deployed 13 Sep — waiting on a real alert / a real lockout)* →
-> **№2** 41 *(relay signal deployed; write the manual runbook, answer the all-down question)* →
+> **№2** 41 *(NL1 restored on 301; write the manual runbook, answer the all-down question)* →
 > **№3** 18 + 1d + 35 *(**deployed; all three waiting on a reading** —
 > see below)* → **№4** 38 *(small follow-ups: MQTT timeout, 403 detection)* →
 > **№5** 2 → **№6** 4 (plex) → **№7** 9 → **№8** 3a/3b/3c → **№9** 39 →
@@ -137,8 +137,9 @@ which makes restoring failover more urgent, not less.
   maintenance as well as before retirement, and nothing available says which:
   neither relay API exposes it, the servers page does not, and nothing public was
   found. Replace them only on evidence they are gone for good.
-- **Surface it as a signal, not a failure:** #home-logging, never #home-alerts,
-  and never a failing check.
+- **Surface it as a signal, not a failure** — never a failing check. *Revised
+  2026-09-14:* relay state **changes** go to #home-alerts (#home-logging is where
+  a change goes to be missed); weekly reminders stay in #home-logging.
 
 **Design:**
 1. **Relay signal — no new OPNsense privilege.** agent-lxc polls Mullvad's relay
@@ -180,21 +181,44 @@ settings (whitelisted fields) rather than testing it live.
 ⚠️ Item 1d's VPN baseline straddles this: its VPN egress moved from NL1 to NL3
 at 2026-09-10 13:20. Note the relay when reading the ratio distribution.
 
-*State:* **relay signal deployed 2026-09-14** (`bdc2cf7`, agent-lxc, hourly at :29);
-its first run posted the 5-relay summary to #home-logging. **Still open:** the
-manual runbook, and the all-members-down question. *Effort:* small. *Needs:* laptop.
+✅ **2026-09-14: NL1 restored.** Ignacio moved `wg0`'s peer from the inactive
+`nl-ams-wg-001` to `nl-ams-wg-301` (an active relay). Two traps, both for the
+runbook:
+- **Changing a peer does not re-add the gateway's routes.** The tunnel
+  handshaked, but NL1's far-gateway (`10.64.0.1`) and monitor routes pointed at
+  the WAN, so dpinger pinged from the tunnel address out the wrong interface and
+  marked NL1 down at 100% loss. Re-applying routing (`/usr/local/etc/rc.routing_configure`,
+  the gateway-apply path — unlike `configctl interface reconfigure`, it does not
+  also reload DHCP and DNS) put both routes back on `wg0`.
+- **Deleting a WireGuard instance leaves its `wgN` interface behind** — `wg13`
+  was up with no config, peers or routes until `ifconfig wg13 destroy`.
+
+Verified afterwards: NL1 `0% loss`, VLAN 40/80 routed via `wg0`, agent-lxc
+egressing through `nl-ams-wg-301`, and the relay signal's list updated to 301
+(`3564698`), which switched over silently because 301 is active.
+
+Also seen, not yet acted on: ES1/ES2 showed ~56% monitor loss at one reading;
+US3 and UK3 are down (both relays unlisted).
+
+*State:* **relay signal deployed** (changes → #home-alerts since `3564698`); NL1
+restored. **Still open:** the manual runbook, and the all-members-down question.
+*Effort:* small. *Needs:* laptop.
 
 ```
 Finish item 41. Read docs/TODO.md item 41 — the relay signal is DEPLOYED; do not
 rebuild it. Settled: no automatic peer replacement, NO new OPNsense API
 privilege (healthchecks already monitors reachability — do not re-propose it),
-and relay problems are a signal to #home-logging, never a failing check.
+and relay changes alert #home-alerts (reminders in #home-logging), never as a
+failing check.
 
 (1) Write a MANUAL peer-replacement runbook in docs/NETWORK.md: choose an active
 relay from a different provider than the surviving members, replace the peer on
-OPNsense, update agent_mullvad_relays in group_vars/agent.yml and redeploy the
-agent role (or the signal watches the old relay), then verify the handshake,
-dpinger, the egress check and Spotify from hifipi.
+OPNsense, RE-APPLY ROUTING (/usr/local/etc/rc.routing_configure — a peer swap
+leaves the gateway's routes on the WAN and dpinger marks it down), destroy any
+leftover wgN interface from a deleted instance, update agent_mullvad_relays in
+group_vars/agent.yml and redeploy the agent role, then verify: route -n get
+<monitor IP> is the tunnel, dpinger 0% loss, the VLAN rule's route-to, the
+egress check, and Spotify from hifipi. 2026-09-14's NL1 swap is the worked example.
 (2) Answer from config (whitelisted fields only, no live test): when every member
 of Mullvad_failover_nl is down, does VLAN 40/80 traffic stop, or fall back to WAN?
 Run the CI workflow's checks locally before any push.
