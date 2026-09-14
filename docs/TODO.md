@@ -150,20 +150,38 @@ which makes restoring failover more urgent, not less.
    https://mullvad.net/en/servers. While a relay stays down, a weekly reminder;
    past 14 days it says so — **duration is the only available evidence of
    permanence**, and the message must call it inference.
-2. **Gateway state — needs a privilege decision first.** `api/routes/gateway/status`
+2. **Gateway state: NOT added (decided 2026-09-14).** `api/routes/gateway/status`
    is granted only by *System: Gateways*, which also grants `api/routing/settings/*`
-   (write access to gateways) — **do not give that to the read-only key.** *VPN:
-   WireGuard: Status* grants `api/wireguard/service/*`, which includes service
-   control — also no. The one narrow read-only option is *Diagnostics: Logs:
-   Gateways* (`api/diagnostics/log/core/gateways/*`), if dpinger's alarms land in
-   that log on 26.7 — unverified.
+   (write access to gateways); *VPN: WireGuard: Status* grants service control; and
+   even the read-only *Diagnostics: Logs: Gateways* widens what the key can read.
+   Not worth the risk: **internet reachability is already monitored by
+   healthchecks**, and the relay signal covers the failure mode actually seen.
+3. **Fixing stays manual.** Swapping a peer is a firewall change on the internet
+   single point of failure; an automated swap that picks wrong takes VLAN 40/80
+   offline. The signal tells a human, and a runbook in `docs/NETWORK.md` (to
+   write) says how: pick an active relay (a different provider from the
+   surviving members), replace the peer, then verify the handshake, dpinger, the
+   egress check and Spotify from hifipi's control host.
+
+📋 **All 12 peers checked 2026-09-14** against Mullvad's relay API and servers
+page: NL1 and NL2 **offline** (the page shows 001–003 offline, 004–008 and
+301–303 online); **three relays are not listed at all** — NL3 (`wg3`, the one
+VLAN 40/80 run on, still working), US3 (its hostname no longer resolves; NETWORK.md
+finding 1 already has `wg9` dead) and one UK relay (no ping reply; tunnel state
+unchecked). Neither the API nor the page distinguishes maintenance from
+retirement.
+
+❓ **Open question worth answering before NL3 goes too:** when every member of
+`Mullvad_failover_nl` is down, does VLAN 40/80 traffic stop, or fall back to the
+default WAN route unencrypted? Item 1d's egress check would catch a silent fall
+back to direct; healthchecks would catch a stop. Read the group's and the rule's
+settings (whitelisted fields) rather than testing it live.
 
 ⚠️ Item 1d's VPN baseline straddles this: its VPN egress moved from NL1 to NL3
 at 2026-09-10 13:20. Note the relay when reading the ratio distribution.
 
-*State:* decided 2026-09-13; relay signal being built on `feat/mullvad-relay-signal`,
-not deployed. *Effort:* small–medium. *Needs:* laptop to deploy; Ignacio's call on
-the gateway-log privilege.
+*State:* decided 2026-09-14; relay signal being built on `feat/mullvad-relay-signal`,
+not deployed; runbook not written. *Effort:* small–medium. *Needs:* laptop to deploy.
 
 ```
 Finish item 41's relay signal. Read docs/TODO.md item 41 — the decisions are
@@ -177,10 +195,10 @@ confirm the first run posts ONE summary to #home-logging naming every relay that
 is not active (on 2026-09-13: NL1 and NL2 inactive, NL3 not listed). Before any
 push, run the CI workflow's checks locally.
 
-Gateway state is a separate decision: only add Ignacio's approved privilege
-(the read-only "Diagnostics: Logs: Gateways" is the candidate). Never grant
-"System: Gateways" or "VPN: WireGuard: Status" to the read-only key — both can
-change things. When reading /conf/config.xml, WHITELIST the fields you print.
+Gateway state is DECIDED: no new OPNsense privilege on the read-only key —
+healthchecks already monitors reachability. Do not re-propose it. Fixes stay
+MANUAL: write the peer-replacement runbook in docs/NETWORK.md, never automate the
+swap. When reading /conf/config.xml, WHITELIST the fields you print.
 ```
 
 **36. Tier 2 billed one fault six times overnight — DEPLOYED, waiting on a real alert**
