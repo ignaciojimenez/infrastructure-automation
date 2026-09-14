@@ -57,7 +57,7 @@ here is something to read past, every time, forever. The write-up goes to
 renders it:
 
 > **№1** 36 + 37 *(deployed 13 Sep — waiting on a real alert / a real lockout)* →
-> **№2** 41 *(two of three NL tunnels down; build the relay signal, no peer changes)* →
+> **№2** 41 *(relay signal deployed; write the manual runbook, answer the all-down question)* →
 > **№3** 18 + 1d + 35 *(**deployed; all three waiting on a reading** —
 > see below)* → **№4** 38 *(small follow-ups: MQTT timeout, 403 detection)* →
 > **№5** 2 → **№6** 4 (plex) → **№7** 9 → **№8** 3a/3b/3c → **№9** 39 →
@@ -180,25 +180,24 @@ settings (whitelisted fields) rather than testing it live.
 ⚠️ Item 1d's VPN baseline straddles this: its VPN egress moved from NL1 to NL3
 at 2026-09-10 13:20. Note the relay when reading the ratio distribution.
 
-*State:* decided 2026-09-14; relay signal being built on `feat/mullvad-relay-signal`,
-not deployed; runbook not written. *Effort:* small–medium. *Needs:* laptop to deploy.
+*State:* **relay signal deployed 2026-09-14** (`bdc2cf7`, agent-lxc, hourly at :29);
+its first run posted the 5-relay summary to #home-logging. **Still open:** the
+manual runbook, and the all-members-down question. *Effort:* small. *Needs:* laptop.
 
 ```
-Finish item 41's relay signal. Read docs/TODO.md item 41 — the decisions are
-settled: do NOT replace any OPNsense peer, and this is a SIGNAL to #home-logging,
-never a failing check or #home-alerts.
+Finish item 41. Read docs/TODO.md item 41 — the relay signal is DEPLOYED; do not
+rebuild it. Settled: no automatic peer replacement, NO new OPNsense API
+privilege (healthchecks already monitors reachability — do not re-propose it),
+and relay problems are a signal to #home-logging, never a failing check.
 
-If branch feat/mullvad-relay-signal exists, review and deploy it:
-  ansible-playbook ansible/playbooks/services.yml --limit agent-lxc --tags agent --check --diff --forks 1
-count the recap (agent-lxc listed, the new script and cron changed), deploy, and
-confirm the first run posts ONE summary to #home-logging naming every relay that
-is not active (on 2026-09-13: NL1 and NL2 inactive, NL3 not listed). Before any
-push, run the CI workflow's checks locally.
-
-Gateway state is DECIDED: no new OPNsense privilege on the read-only key —
-healthchecks already monitors reachability. Do not re-propose it. Fixes stay
-MANUAL: write the peer-replacement runbook in docs/NETWORK.md, never automate the
-swap. When reading /conf/config.xml, WHITELIST the fields you print.
+(1) Write a MANUAL peer-replacement runbook in docs/NETWORK.md: choose an active
+relay from a different provider than the surviving members, replace the peer on
+OPNsense, update agent_mullvad_relays in group_vars/agent.yml and redeploy the
+agent role (or the signal watches the old relay), then verify the handshake,
+dpinger, the egress check and Spotify from hifipi.
+(2) Answer from config (whitelisted fields only, no live test): when every member
+of Mullvad_failover_nl is down, does VLAN 40/80 traffic stop, or fall back to WAN?
+Run the CI workflow's checks locally before any push.
 ```
 
 **36. Tier 2 billed one fault six times overnight — DEPLOYED, waiting on a real alert**
