@@ -17,6 +17,7 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ## Contents
 
+- [2026-09-14 — two dead Mullvad relays found three days late, and a peer swap that looked broken](#2026-09-14--two-dead-mullvad-relays-found-three-days-late-and-a-peer-swap-that-looked-broken)
 - [2026-09-06 — the nightly backup's heat, and the wear argument that did not survive arithmetic](#2026-09-06--the-nightly-backups-heat-and-the-wear-argument-that-did-not-survive-arithmetic)
 - [2026-09-05 — the speedtest that measured too much, and three false greens](#2026-09-05--the-speedtest-that-measured-too-much-and-three-false-greens)
 - [2026-09-04 — Apple Home was dead for two days behind seven green checks](#2026-09-04--apple-home-was-dead-for-two-days-behind-seven-green-checks)
@@ -55,6 +56,43 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 
 ---
+
+## 2026-09-14 — two dead Mullvad relays found three days late, and a peer swap that looked broken
+
+**What happened.** Around 2026-09-10 Mullvad marked the relays behind NL1 and NL2
+inactive. VLAN 40/80's failover group fell to NL3, whose exit Spotify refuses — which
+is what killed raspotify on hifipi (item 38). **Nothing alerted for three days.**
+
+**Decided: relay state is an alert on change, never a failing check** — because
+otherwise a retired relay fails silently (the peers point at relay hostnames), and
+`#home-logging`, the first home for the signal, is where a change goes to be missed.
+agent-lxc polls Mullvad's public relay API hourly for the relays the peers use and
+posts transitions to `#home-alerts`, weekly reminders to `#home-logging`, quoting
+Mullvad's own `status_messages` when there are any (`bdc2cf7`, `3564698`).
+
+**Decided: no OPNsense API privilege for gateway state** — because every privilege
+that exposes it also grants something the read-only key must not have: *System:
+Gateways* grants write access to routing settings, *VPN: WireGuard: Status* grants
+service control. healthchecks already watches reachability. Recorded in
+`ARCHITECTURE_DECISIONS.md`; do not re-propose it.
+
+**Decided: fixes stay manual, and not on the first alert** — because an automated swap
+on the internet single point of failure that picks wrong takes two VLANs offline, and
+because Mullvad never says whether an inactive relay is in maintenance or retired
+(not in either relay API, not on its servers page, nothing public). The runbook is
+[NETWORK.md → Replacing a Mullvad peer](../NETWORK.md#replacing-a-mullvad-peer-runbook).
+
+**The trap that made a correct swap look broken:** after NL1's peer moved to
+`nl-ams-wg-301` the tunnel handshook, but dpinger showed 100% loss — changing a peer
+does not re-add the gateway's routes, so the monitor pinged out the WAN. Re-applying
+routing fixed it; deleting a WireGuard instance had also left a dead `wg13` behind.
+Both are steps in the runbook.
+
+**Left as is, by decision:** NL2 (relay inactive), NL3 (relay unlisted but working),
+and the ES/US/UK gateways — Ignacio monitors them. **If every NL member is down,
+VLAN 40/80 fall back to the WAN unencrypted** (`skip_rules_gw_down` unset, OPNsense's
+documented default); the one-field mitigation, UK1 as tier 4, is described in
+[NETWORK.md → Failover](../NETWORK.md#failover--and-what-happens-when-a-group-runs-out).
 
 ## 2026-09-02 — PMF on the IoT SSID: tested, refused, and closed rather than deferred
 

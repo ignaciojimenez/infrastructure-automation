@@ -44,6 +44,8 @@ Sections `1.`–`13.` under *Confirmed drift and defects* are numbered findings 
   - [When only OPNsense is down, go wired](#when-only-opnsense-is-down-go-wired)
 - [VPN](#vpn)
   - [Outbound — Mullvad (12 tunnels)](#outbound--mullvad-12-tunnels)
+  - [Failover — and what happens when a group runs out](#failover--and-what-happens-when-a-group-runs-out)
+  - [Replacing a Mullvad peer (runbook)](#replacing-a-mullvad-peer-runbook)
   - [Inbound — wg1_server (road warrior)](#inbound--wg1_server-road-warrior)
 - [DNS](#dns)
   - [Unbound is fully recursive](#unbound-is-fully-recursive)
@@ -192,9 +194,9 @@ single always-on tunnel.
 
 | Interface | OPNsense descr | Region | State |
 |-----------|----------------|--------|-------|
-| `wg0` | `wg0_mullvad_nl1` | NL | up — peer moved to an active relay on 2026-09-14 after its old one went inactive ~2026-09-10; see TODO 41 |
-| `wg2` | `wg0_mullvad_nl2` | NL | ⚠️ **down since ~2026-09-10** — relay inactive in Mullvad's list (maintenance or retirement is not stated); see TODO 41 |
-| `wg3` | `wg0_mullvad_nl3` | NL | up |
+| `wg0` | `wg0_mullvad_nl1` | NL | up — peer moved to `nl-ams-wg-301` on 2026-09-14 after its old relay went inactive ~2026-09-10 ([worked example](#replacing-a-mullvad-peer-runbook)) |
+| `wg2` | `wg0_mullvad_nl2` | NL | ⚠️ **down since ~2026-09-10** — relay inactive in Mullvad's list (maintenance or retirement is not stated); left as is by decision |
+| `wg3` | `wg0_mullvad_nl3` | NL | up — but its relay is no longer in Mullvad's relay list (2026-09-14) |
 | `wg4` | `wg0_mullvad_es1` | ES | up |
 | `wg5` | `wg0_mullvad_es2` | ES | up |
 | `wg6` | `wg0_mullvad_es3` | ES | up |
@@ -211,6 +213,86 @@ the default exit; the rest sit at tens of MiB, which is roughly keepalive-only.
 The interface descriptions are all prefixed `wg0_` regardless of which interface
 they are on — a copy-paste artefact from however they were created. Harmless, but
 it makes them impossible to tell apart at a glance in the UI.
+
+### Failover — and what happens when a group runs out
+
+VLAN 40 and VLAN 80 are routed by one rule (*Route ext traffic through Mullvad NL
+Failover*) to the gateway group `Mullvad_failover_nl`: **tier 1 NL1 (`wg0`), tier 2
+NL2 (`wg2`), tier 3 NL3 (`wg3`)**, trigger `downlosslatency`. ES, US and UK have
+groups of their own; their tiers were not read.
+
+hifipi is the one exception: a floating rule, `from 10.30.40.100 to ! USED_LAN_NETS`
+via the WAN gateway, loaded ahead of the group rule because Spotify refuses Mullvad
+exits.
+
+🔴 **If every member of the group is down, VLAN 40 and 80 go out the WAN,
+unencrypted.** `skip_rules_gw_down` is not set (read 2026-09-14), and OPNsense's
+documented default is that *"when a rule has a specific gateway set, and this
+gateway is down, rule is created and traffic is sent to default gateway."* The
+documentation describes a single gateway; that a fully-down group behaves the same
+is inferred, not tested. Nothing alerts on that state: healthchecks sees a working
+internet, and the relay signal watches Mullvad's relay list, not the tunnels. Only
+agent-lxc's VPN-vs-direct comparison (twice a day) reports the egress address.
+
+**Cheapest mitigation, if wanted:** add `WG_MULLVAD_GW_UK1` to `Mullvad_failover_nl`
+as tier 4 — the group has empty tier slots — so an exhausted NL group exits in the
+UK rather than in the clear. Not done as of 2026-09-14.
+
+### Replacing a Mullvad peer (runbook)
+
+**Manual on purpose.** It is a firewall change on the internet single point of
+failure, and an automated swap that picks wrong takes two VLANs offline. What tells
+you to run it is agent-lxc's relay signal (`mullvad_relay_signal.sh`): it alerts
+`#home-alerts` when a relay a peer uses goes inactive, drops out of Mullvad's list,
+or comes back, and posts weekly reminders to `#home-logging` while it stays down.
+
+**Decide before touching anything.** Mullvad marks relays inactive for maintenance
+as well as before retirement, and neither its relay API nor its servers page says
+which. A relay down for a day may return; after 14 days the signal's reminder says
+that permanence is now likely — as an inference, not a Mullvad statement. Replace a
+peer when its group is short of healthy members, not on the first alert.
+
+1. **Pick the relay.** Active relays for the region, with provider and public key:
+   ```
+   curl -s https://api.mullvad.net/app/v1/relays | python3 -c 'import json,sys; [print(r["hostname"], r["provider"], r["public_key"]) for r in json.load(sys.stdin)["wireguard"]["relays"] if r["hostname"].startswith("nl-ams-") and r["active"]]'
+   ```
+   Prefer a different provider from the group's surviving members, so one provider
+   outage cannot take the whole group.
+2. **Replace the peer, not the tunnel.** *VPN → WireGuard → Peers*, edit the existing
+   peer: endpoint `<hostname>.relays.mullvad.net`, port `51820`, the public key from
+   step 1. Leave the instance, interface assignment, gateway, outbound-NAT rule and
+   group membership untouched — a new tunnel means redoing all five. Deleting an
+   instance **leaves its `wgN` interface behind**, up and unconfigured, until
+   `ifconfig wgN destroy`.
+3. **Re-apply routing.** Changing a peer does **not** re-add the gateway's routes. Run,
+   as root, `/usr/local/etc/rc.routing_configure` (the gateway-apply path). Avoid
+   `configctl interface reconfigure optN` for this: it also reloads DHCP and DNS.
+4. **Verify on the firewall** (as root):
+   ```
+   route -n get <monitor IP>              # interface must be the tunnel (wgN), not vlan0.300
+   wg show wgN latest-handshakes          # recent
+   pluginctl -r return_gateways_status    # the gateway: status none, 0% loss
+   pfctl -sr | grep route-to              # the VLAN 40/80 rule routes to the tier you expect
+   ```
+5. **Verify from the estate:** agent-lxc's exit
+   (`curl -s https://am.i.mullvad.net/json` names the new relay), and Spotify from
+   hifipi if its exception rule was touched.
+6. **Update the repo:** `agent_mullvad_relays` in `ansible/inventory/group_vars/agent.yml`,
+   then deploy the agent role (`services.yml --limit agent-lxc --tags agent`, with
+   `--check` first). A relay changed on the firewall but not here is one the signal
+   silently stops watching; swapping in an active relay posts nothing.
+7. **Update the table above.**
+
+🔴 When reading `/conf/config.xml` from a shell, **whitelist the fields you print.** A
+blacklist filter printed two WireGuard preshared keys into a session on 2026-09-13.
+
+**Worked example — NL1, 2026-09-14.** `wg0`'s relay went inactive around 2026-09-10
+and the group failed over to NL3, whose exit Spotify refused. The peer was moved to
+`nl-ams-wg-301` (active, xtom). The tunnel handshook at once, yet dpinger showed NL1
+**down at 100% loss**: its far-gateway (`10.64.0.1`) and monitor routes still pointed
+at the WAN, so the monitor pinged from the tunnel address out the wrong interface.
+Step 3 put both routes back on `wg0`. `wg13` was the leftover of a first attempt at
+building a new tunnel instead (step 2).
 
 ### Inbound — `wg1_server` (road warrior)
 
