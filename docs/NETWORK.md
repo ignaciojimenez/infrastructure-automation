@@ -192,8 +192,8 @@ single always-on tunnel.
 
 | Interface | OPNsense descr | Region | State |
 |-----------|----------------|--------|-------|
-| `wg0` | `wg0_mullvad_nl1` | NL | ⚠️ **down since ~2026-09-10** — relay retired by Mullvad; see TODO 41 |
-| `wg2` | `wg0_mullvad_nl2` | NL | ⚠️ **down since ~2026-09-10** — relay retired by Mullvad; see TODO 41 |
+| `wg0` | `wg0_mullvad_nl1` | NL | up — peer moved to an active relay on 2026-09-14 after its old one went inactive ~2026-09-10; see TODO 41 |
+| `wg2` | `wg0_mullvad_nl2` | NL | ⚠️ **down since ~2026-09-10** — relay inactive in Mullvad's list (maintenance or retirement is not stated); see TODO 41 |
 | `wg3` | `wg0_mullvad_nl3` | NL | up |
 | `wg4` | `wg0_mullvad_es1` | ES | up |
 | `wg5` | `wg0_mullvad_es2` | ES | up |
