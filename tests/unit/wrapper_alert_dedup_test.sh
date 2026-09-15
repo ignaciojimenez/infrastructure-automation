@@ -66,6 +66,13 @@ printf '\n── Wrapper failure-alert dedup\n'
 # ------------------------------------------------------------------
 cat > "$BIN/curl" <<STUB
 #!/bin/sh
+# PER-60: when "$WORK/curl_fail" exists, simulate the webhook being
+# unreachable — no output, non-zero exit — exactly what curl does against a
+# host with no route (vinylstreamer's own down wifi, 2026-09-13). Nothing is
+# recorded to SENT: an attempt that never left the box is not a delivery.
+if [ -f "$WORK/curl_fail" ]; then
+    exit 1
+fi
 payload=""
 url=""
 while [ \$# -gt 0 ]; do
@@ -339,6 +346,80 @@ if "$WRAPPER" --state-file="$STATE" --alert-repeat-base=1h \
 else
     pass "a non-numeric --alert-repeat-base is fatal"
 fi
+
+# ------------------------------------------------------------------
+# 12. 🔴 PER-60 / TODO item 40. On 2026-09-13 the alert describing a 2.5 h
+#    vinylstreamer outage never arrived: the send failed (webhook unreachable
+#    over the down wifi) and repeat suppression then held every later attempt
+#    back as "unchanged". An undelivered alert must not count as sent.
+# ------------------------------------------------------------------
+rm -f "$STATE" "$WORK/curl_fail"
+
+touch "$WORK/curl_fail"
+run "$WORK/fault_a.sh"                 # webhook unreachable: send fails
+if [ "$(alerts)" -eq 0 ]; then
+    pass "a send that never reaches Slack records nothing as delivered"
+else
+    fail "an undelivered send was still counted as an alert (alerts=$(alerts))"
+fi
+
+run "$WORK/fault_a.sh"                 # still unreachable, same fault again
+if [ "$(alerts)" -eq 0 ]; then
+    pass "still unreachable: second attempt also fails to deliver"
+else
+    fail "unreachable webhook unexpectedly counted a delivery (alerts=$(alerts))"
+fi
+
+rm -f "$WORK/curl_fail"                # webhook comes back
+run "$WORK/fault_a.sh"                 # same fault, still failing
+if [ "$(alerts)" -eq 1 ]; then
+    pass "once the webhook recovers, the undelivered alert retries rather than staying suppressed"
+else
+    fail "the alert stayed suppressed after the webhook recovered (alerts=$(alerts))"
+fi
+
+run "$WORK/fault_a.sh"                 # same fault, immediately again
+if [ "$(alerts)" -eq 0 ]; then
+    pass "after a successful delivery, the normal cooldown resumes and suppresses the very next run"
+else
+    fail "delivery success did not restore normal backoff (alerts=$(alerts))"
+fi
+
+rm -f "$WORK/curl_fail"
+
+# ------------------------------------------------------------------
+# 13. 🔴 A CHANGED fault's failed delivery must not inherit the PREVIOUS,
+#    different fault's still-active cooldown. Rolling back to a single
+#    pre-run snapshot would do exactly that: fault A pages and starts a long
+#    cooldown, fault B then arrives and must page immediately (case 3 above)
+#    — if B's send then fails and rolls back to A's cooldown timestamp
+#    (still in the future), B's retry would be wrongly suppressed by a
+#    cooldown that was never B's to begin with.
+# ------------------------------------------------------------------
+rm -f "$STATE" "$WORK/curl_fail"
+run "$WORK/fault_a.sh"                 # pages, starts a long (default) cooldown
+if [ "$(alerts)" -eq 1 ]; then
+    pass "fault A pages and starts its cooldown"
+else
+    fail "fault A did not page (alerts=$(alerts))"
+fi
+
+touch "$WORK/curl_fail"
+run "$WORK/fault_b.sh"                 # different fault, delivery fails
+if [ "$(alerts)" -eq 0 ]; then
+    pass "fault B's send fails to deliver while A's cooldown is still active"
+else
+    fail "fault B unexpectedly delivered (alerts=$(alerts))"
+fi
+
+rm -f "$WORK/curl_fail"
+run "$WORK/fault_b.sh"                 # webhook back, B still failing
+if [ "$(alerts)" -eq 1 ]; then
+    pass "B's retry is not suppressed by A's unrelated, still-future cooldown"
+else
+    fail "B's retry was swallowed by a cooldown that belonged to a different fault (alerts=$(alerts))"
+fi
+rm -f "$WORK/curl_fail"
 
 printf '\n'
 if [ "$failures" -eq 0 ]; then

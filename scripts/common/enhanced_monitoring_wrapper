@@ -524,6 +524,22 @@ NOW_EPOCH=$(date +%s)
 # below if a future edit adds a status that neither branch handles.
 CURRENT_FAILURE_SIGNATURE=""
 
+# Set alongside FAILURE_ALERTS/NEXT_ALERT_EPOCH whenever a branch below
+# advances them in anticipation of a successful send (PER-60: vinylstreamer
+# posted "all layers failed" over the wifi that was down — the send failed,
+# but the advance happened anyway, so repeat suppression held every later
+# attempt back as "unchanged" and the one alert describing a 2.5 h outage
+# never arrived). If delivery then fails, the send block below restores
+# ROLLBACK_FAILURE_ALERTS/ROLLBACK_NEXT_ALERT_EPOCH so nothing here counts as
+# sent. Each branch picks its own rollback target rather than a single
+# pre-run snapshot: a NEW/changed fault must roll back to "no cooldown yet",
+# not to whatever cooldown timestamp the PREVIOUS, different fault left
+# behind — otherwise a failed send for fault B could be suppressed by fault
+# A's still-future cooldown, which never applied to B in the first place.
+SEND_ADVANCED_COOLDOWN=false
+ROLLBACK_FAILURE_ALERTS=""
+ROLLBACK_NEXT_ALERT_EPOCH=""
+
 # ============================================================
 # Failure repeat suppression
 #
@@ -579,6 +595,11 @@ if [ "$CURRENT_STATUS" = "failure" ]; then
     FAILURE_RUNS=1
     FAILURE_ALERTS=1
     NEXT_ALERT_EPOCH=$((NOW_EPOCH + ALERT_REPEAT_BASE))
+    # This is a new episode, so a failed send has no prior cooldown of its
+    # own to fall back to — roll all the way back to "never alerted".
+    SEND_ADVANCED_COOLDOWN=true
+    ROLLBACK_FAILURE_ALERTS=""
+    ROLLBACK_NEXT_ALERT_EPOCH=""
     log_msg "Sending alert (new or changed failure)"
   else
     is_number "$FAILURE_RUNS" || FAILURE_RUNS=0
@@ -591,6 +612,12 @@ if [ "$CURRENT_STATUS" = "failure" ]; then
       log_msg "Sending alert (repeat suppression disabled)"
     elif ! is_number "$NEXT_ALERT_EPOCH" || [ "$NOW_EPOCH" -ge "$NEXT_ALERT_EPOCH" ]; then
       SEND_TO_ALERT=true
+      # Same episode as last run: a failed send rolls back to exactly these
+      # already-normalised values, so the next run re-evaluates the same
+      # (already past-due) cooldown and retries immediately.
+      SEND_ADVANCED_COOLDOWN=true
+      ROLLBACK_FAILURE_ALERTS="$FAILURE_ALERTS"
+      ROLLBACK_NEXT_ALERT_EPOCH="$NEXT_ALERT_EPOCH"
       FAILURE_ALERTS=$((FAILURE_ALERTS + 1))
       # Keeps the shift below inside integer range; the cap makes it moot.
       [ "$FAILURE_ALERTS" -gt 16 ] && FAILURE_ALERTS=16
@@ -649,8 +676,20 @@ fi
 
 # Send notifications if needed
 if [ "$SEND_TO_ALERT" = true ]; then
-  send_slack_notification "FAILED" "$execution_time" "$exit_code" "$execution_result" "$alert_hook" "true" "$REPEAT_NOTE"
-  echo "$(date) - Sent alert notification" >> "${STATE_FILE}.log"
+  if send_slack_notification "FAILED" "$execution_time" "$exit_code" "$execution_result" "$alert_hook" "true" "$REPEAT_NOTE"; then
+    echo "$(date) - Sent alert notification" >> "${STATE_FILE}.log"
+  else
+    # Delivery failed (e.g. the webhook is unreachable, as it was over
+    # vinylstreamer's own down wifi). Nothing here counts as "sent": roll the
+    # cooldown counters back to their pre-attempt target, so the next run
+    # retries instead of being suppressed as an unchanged failure with time
+    # left on the clock.
+    if [ "$SEND_ADVANCED_COOLDOWN" = true ]; then
+      FAILURE_ALERTS="$ROLLBACK_FAILURE_ALERTS"
+      NEXT_ALERT_EPOCH="$ROLLBACK_NEXT_ALERT_EPOCH"
+    fi
+    echo "$(date) - Alert delivery FAILED; cooldown not advanced, will retry next run" >> "${STATE_FILE}.log"
+  fi
 elif [ "$CURRENT_STATUS" = "failure" ]; then
   # Logged locally even though nothing was sent. A suppressed alert that leaves
   # no trace is indistinguishable from a check that stopped running, which is
