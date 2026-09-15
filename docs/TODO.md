@@ -1068,19 +1068,43 @@ Do not touch the daemon.json task while here; it is verified working and
 its `when` guard is deliberate.
 ```
 
-**40. An alert that fails to send is never retried**
+**40. An alert that fails to send is never retried — fixed + tested, not yet deployed**
 On 2026-09-13 vinylstreamer's `wifi_reconnect.sh` tried to post *all layers
 failed* to #home-alerts over the wifi that was down. The send failed (logged on
 the host), and repeat suppression then held every later failure back as
 *unchanged*, so the one alert describing the outage never arrived. Wifi-only hosts
 are the ones most likely to hit this.
 
-Proposed shape, simplest first: **do not record an alert as sent unless delivery
-succeeded**, so the next run retries it — no queue needed. ⚠️ First confirm which
-layer suppressed it; `enhanced_monitoring_wrapper` is the likely one, which is
-the same file as item 5 — do them in sequence, not in parallel.
+Confirmed: `enhanced_monitoring_wrapper` was the layer — `SEND_TO_ALERT` advanced
+the cooldown counters (`FAILURE_ALERTS`, `NEXT_ALERT_EPOCH`) before checking
+whether `send_slack_notification` actually returned success, so an undelivered
+page was recorded exactly like a delivered one. Fixed (PER-60): each branch
+that advances the counters now also records what to roll back to on a failed
+send — a NEW/changed fault rolls back to "no cooldown yet", not to a
+PREVIOUS, different fault's still-future cooldown (that edge case has its own
+pinned test, case 13). 4 new cases in
+`tests/unit/wrapper_alert_dedup_test.sh` (stub `curl` fails on command, undelivered
+alert retries once it recovers, steady-state backoff afterwards is unaffected,
+and the cross-episode rollback edge case) — all green, plus the existing 15
+cases unchanged. Verified the fix actually does something by reverting it and
+watching case 13 fail, then restoring.
 
-*State:* diagnosed. *Effort:* small. *Needs:* laptop.
+⚠️ Not yet redeployed to the fleet (`deploy_monitoring.yml` — one wrapper, every
+host). Same file as item 5 — do them in sequence, not in parallel; item 5 has
+not been touched by this change and there is no overlapping diff.
+
+*State:* written + tested on the laptop, not yet deployed. *Effort:* small (deploy
+only). *Needs:* laptop.
+
+```
+Deploy item 40's fix. Read docs/TODO.md item 40 and the PER-60 commit(s) on
+main. Run `ansible-playbook ansible/playbooks/deploy_monitoring.yml
+--check --diff` first, then for real. Confirm a forced failure with the alert
+webhook pointed at an unreachable address on one live host still retries once
+the webhook is restored, the same way the laptop test proved it does.
+```
+
+<details><summary>Original diagnosis prompt (superseded by the deploy prompt above)</summary>
 
 ```
 Make an undelivered alert retry. Read docs/TODO.md item 40. First confirm where
@@ -1091,6 +1115,8 @@ unreachable address, run a failing script twice — the first send fails, the
 second run must SEND, not suppress. Restore the webhook and confirm a steady
 fault still backs off exactly as before. Coordinate with item 5 (same file).
 ```
+
+</details>
 
 ### 🧊 Blocked on Ignacio, not on work
 
