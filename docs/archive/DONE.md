@@ -17,6 +17,7 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ## Contents
 
+- [2026-09-16 — an alert that fails to send is never retried (PER-60)](#2026-09-16--an-alert-that-fails-to-send-is-never-retried-per-60)
 - [2026-09-14 — two dead Mullvad relays found three days late, and a peer swap that looked broken](#2026-09-14--two-dead-mullvad-relays-found-three-days-late-and-a-peer-swap-that-looked-broken)
 - [2026-09-06 — the nightly backup's heat, and the wear argument that did not survive arithmetic](#2026-09-06--the-nightly-backups-heat-and-the-wear-argument-that-did-not-survive-arithmetic)
 - [2026-09-05 — the speedtest that measured too much, and three false greens](#2026-09-05--the-speedtest-that-measured-too-much-and-three-false-greens)
@@ -54,6 +55,50 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ---
 
+
+---
+
+## 2026-09-16 — an alert that fails to send is never retried (PER-60)
+
+**What happened.** On 2026-09-13 vinylstreamer's `wifi_reconnect.sh` tried to post
+*all layers failed* to `#home-alerts` over the wifi that was down. The send failed,
+was logged only on the host, and repeat suppression then held every later attempt
+back as *unchanged* — so the one alert describing a 2.5 h outage never arrived.
+
+**Confirmed the layer, then fixed it.** `enhanced_monitoring_wrapper` advanced its
+repeat-suppression cooldown (`FAILURE_ALERTS`, `NEXT_ALERT_EPOCH`) before checking
+whether `send_slack_notification` actually returned success — an undelivered page
+was recorded exactly like a delivered one. Each branch that advances the cooldown
+now also records what to roll back to on a failed send.
+
+**Decided: the rollback target is per-branch, not a single pre-run snapshot** —
+because a NEW/changed fault's failed send must roll back to "no cooldown yet", not
+to whatever cooldown timestamp a PREVIOUS, different fault left behind. A shared
+snapshot would let fault B's failed retry inherit fault A's still-future cooldown
+and be wrongly suppressed. Caught this by reasoning through the edge case rather
+than by it failing a test first; it now has its own pinned regression case.
+
+**Verified.** 4 new cases in `tests/unit/wrapper_alert_dedup_test.sh` against a
+stubbed `curl` failure — undelivered alert counts as nothing sent, retries once the
+webhook recovers, steady-state backoff is unaffected afterwards, and the
+cross-episode rollback edge case — all green alongside the existing 15. Confirmed
+the fix does something by reverting it locally and watching the new edge-case test
+fail, then restoring (`5f02564`, merged `7665d78`).
+
+**Deployed and idempotent.** `deploy_monitoring.yml` across all 8 hosts: first run
+`changed=2` everywhere (the wrapper + the cron-restart handler), second run
+`changed=0` everywhere, `unreachable=0` / `failed=0` throughout.
+
+**Not done: a live forced-failure check on a real host.** `read_agent`'s sudo is
+scoped to read-only diagnostics and cannot read into `/home/choco/.scripts/`
+(`0700`) or run arbitrary commands there — attempting to widen that for a one-off
+check would be exactly the kind of quiet scope creep `TESTING_GOALS.md` warns
+against, so it was not attempted. The laptop suite is the established, sufficient
+verification for this file (see the sibling test's own header); this entry states
+plainly that the live-host leg was skipped rather than faked.
+
+**Left alone on purpose: item 5 (PER-15), tokens out of cron command lines** — same
+file, but no overlapping diff, sequenced as asked rather than done in parallel.
 
 ---
 

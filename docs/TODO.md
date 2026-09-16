@@ -62,12 +62,14 @@ renders it:
 > **№4** 2 → **№5** 4 (plex) → **№6** 9 → **№7** 3a/3b/3c → **№8** 39 →
 > **№9** 5 → **№10** 19 → **№11** 12 → **№12** 10 → **№13** 11 → **№14** 6 →
 > **№15** 7 → **№16** 34 *(small; restores `changed=0` as a signal for the docker role)* →
-> **№17** 40 → **№18–21** 8/13/14/16 · **№22** 32 *(git-history rewrite —
-> decision only, default is no)* · **№23** 26 *(one UI toggle, global — his call)*
+> **№17–20** 8/13/14/16 · **№21** 32 *(git-history rewrite —
+> decision only, default is no)* · **№22** 26 *(one UI toggle, global — his call)*
 > *(decision-gated — 16 needs a purchase call, 32 needs his call on a public
 > force-push, the rest need him at the cabinet; not ranked)*
 
 ✅ **41 closed on 2026-09-14** — write-up in [archive/DONE.md](archive/DONE.md#2026-09-14--two-dead-mullvad-relays-found-three-days-late-and-a-peer-swap-that-looked-broken); the peer-replacement runbook is in [NETWORK.md](NETWORK.md#replacing-a-mullvad-peer-runbook).
+
+✅ **40 closed on 2026-09-16** — write-up in [archive/DONE.md](archive/DONE.md#2026-09-16--an-alert-that-fails-to-send-is-never-retried-per-60); fixed, tested (19/19 unit cases), deployed to all 8 hosts, `changed=0` on the second run.
 
 🔀 **18, 1c and 1d were one cron line, and were worked as one branch on
 2026-09-05.** 📌 **1c and 22 are closed and their sections are gone** — the
@@ -191,7 +193,7 @@ Report which layer recovered it; whether any "disconnecting for new activation
 request" still follows a successful activation within 15 s (it must not); the
 recovery message in #home-logging (does it give the true outage length?); and
 whether HA's plug power-cycled. Then move item 37 to docs/archive/DONE.md,
-keeping 39 and 40 open.
+keeping 39 open (40 closed 2026-09-16 — see archive/DONE.md).
 ```
 
 **35. Set cwwk's thermal alert thresholds from a week of real backup nights**
@@ -1067,56 +1069,6 @@ timestamp. These two tasks do not, so they are a fair test.
 Do not touch the daemon.json task while here; it is verified working and
 its `when` guard is deliberate.
 ```
-
-**40. An alert that fails to send is never retried — fixed + tested, not yet deployed**
-On 2026-09-13 vinylstreamer's `wifi_reconnect.sh` tried to post *all layers
-failed* to #home-alerts over the wifi that was down. The send failed (logged on
-the host), and repeat suppression then held every later failure back as
-*unchanged*, so the one alert describing the outage never arrived. Wifi-only hosts
-are the ones most likely to hit this.
-
-Confirmed: `enhanced_monitoring_wrapper` was the layer — `SEND_TO_ALERT` advanced
-the cooldown counters (`FAILURE_ALERTS`, `NEXT_ALERT_EPOCH`) before checking
-whether `send_slack_notification` actually returned success, so an undelivered
-page was recorded exactly like a delivered one. Fixed (PER-60): each branch
-that advances the counters now also records what to roll back to on a failed
-send — a NEW/changed fault rolls back to "no cooldown yet", not to a
-PREVIOUS, different fault's still-future cooldown (that edge case has its own
-pinned test, case 13). 4 new cases in
-`tests/unit/wrapper_alert_dedup_test.sh` (stub `curl` fails on command, undelivered
-alert retries once it recovers, steady-state backoff afterwards is unaffected,
-and the cross-episode rollback edge case) — all green, plus the existing 15
-cases unchanged. Verified the fix actually does something by reverting it and
-watching case 13 fail, then restoring.
-
-⚠️ Not yet redeployed to the fleet (`deploy_monitoring.yml` — one wrapper, every
-host). Same file as item 5 — do them in sequence, not in parallel; item 5 has
-not been touched by this change and there is no overlapping diff.
-
-*State:* written + tested on the laptop, not yet deployed. *Effort:* small (deploy
-only). *Needs:* laptop.
-
-```
-Deploy item 40's fix. Read docs/TODO.md item 40 and the PER-60 commit(s) on
-main. Run `ansible-playbook ansible/playbooks/deploy_monitoring.yml
---check --diff` first, then for real. Confirm a forced failure with the alert
-webhook pointed at an unreachable address on one live host still retries once
-the webhook is restored, the same way the laptop test proved it does.
-```
-
-<details><summary>Original diagnosis prompt (superseded by the deploy prompt above)</summary>
-
-```
-Make an undelivered alert retry. Read docs/TODO.md item 40. First confirm where
-the 2026-09-13 suppression happened (wrapper state vs the script itself). Then
-make the suppression state advance only when the Slack POST actually succeeded
-(curl exit AND HTTP status). Force it on CT 199: point the webhook at an
-unreachable address, run a failing script twice — the first send fails, the
-second run must SEND, not suppress. Restore the webhook and confirm a steady
-fault still backs off exactly as before. Coordinate with item 5 (same file).
-```
-
-</details>
 
 ### 🧊 Blocked on Ignacio, not on work
 
