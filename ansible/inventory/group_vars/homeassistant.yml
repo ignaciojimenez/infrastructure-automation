@@ -175,14 +175,29 @@ presence_ignore_persons:
   # `unknown`. Without this it would page on every run.
   - person.ai_agent
 
-# Hours of silence before a tracker still reading `home` is called frozen.
+# Hours of silence before a tracker still reading `home` is ASKED for a
+# location. Not before it pages: silence at home is normal. The 2026-08-26
+# measurement (healthy gaps of 470 and 721 min) set 18 h; then an iPhone that
+# simply stayed indoors went 18–32 h without a report and paged four times in
+# six days (PER-57). Only an unanswered request pages now.
 #
-# Derived from measurement, not taste (7 days of HA history, 2026-08-26): the
-# widest healthy reporting gaps were 470 min and 721 min. 18 h is ~2.3x the
-# larger. ⚠️ Do not tighten this without re-measuring — a value under ~12 h
-# pages on ordinary overnight quiet, and only `home` can trigger it anyway, so
-# tightening buys very little.
+# Lowering this catches a freeze sooner but asks more often — roughly one push
+# per tracker per this many hours while its owner is home.
 presence_stale_hours: 18
+
+# How long the phone gets to answer before the check pages. The cron runs every
+# 30 min, so 20 means "answered by the next run": one late push is not a page.
+presence_probe_answer_minutes: 20
+
+# At most one location request per tracker per this many hours, including while
+# an unanswered one is paging. HA's push relay enforces a daily per-device
+# quota; a check that spends it would silence that phone's real notifications.
+presence_probe_interval_hours: 6
+
+# Outstanding requests, so the next run can tell whether the phone answered.
+# `.log` (wrapper state), not `logs_dir` (`.logs`, cron output) — see
+# ha_entity_health_state_file.
+presence_probe_state_file: "/home/{{ ansible_user }}/.log/presence_probe.state.json"
 
 # ── per-entity grace windows ──────────────────────────────────────────────────
 # FIRST MATCH WINS, so order is meaningful. These exist because one global
