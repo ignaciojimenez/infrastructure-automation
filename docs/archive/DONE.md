@@ -17,6 +17,7 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ## Contents
 
+- [2026-09-17 — a healthy phone that stays home is not frozen, and paging said it was (PER-57)](#2026-09-17--a-healthy-phone-that-stays-home-is-not-frozen-and-paging-said-it-was-per-57)
 - [2026-09-16 — an alert that fails to send is never retried (PER-60)](#2026-09-16--an-alert-that-fails-to-send-is-never-retried-per-60)
 - [2026-09-14 — two dead Mullvad relays found three days late, and a peer swap that looked broken](#2026-09-14--two-dead-mullvad-relays-found-three-days-late-and-a-peer-swap-that-looked-broken)
 - [2026-09-06 — the nightly backup's heat, and the wear argument that did not survive arithmetic](#2026-09-06--the-nightly-backups-heat-and-the-wear-argument-that-did-not-survive-arithmetic)
@@ -55,6 +56,63 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ---
 
+
+---
+
+## 2026-09-17 — a healthy phone that stays home is not frozen, and paging said it was (PER-57)
+
+**What happened.** `check_presence_health.sh` paged `#home-alerts` FROZEN four
+times in six days (11, 14, 15, 16 Sep) for Candela's iPhone. Three separate paid
+Tier-2 investigations ($0.26–0.39 each) all concluded the Companion App had
+stalled on her phone. All three were wrong: HA had been up with zero restarts
+since 10 Sep, and she was simply home.
+
+**Root cause: the rule, not the phone.** The check paged on "tracker silent
+past `presence_stale_hours` (18 h) AND reads `home`". iOS only reports location
+on a zone change, a significant move, an OS-scheduled background fetch, or when
+asked — a phone that stays indoors can go quiet for a day or more and still be
+healthy. The 18 h threshold came from a 7-day sample where both phones left the
+house daily, so it never saw the case it then broke on. No threshold fixes
+this: a weekend at home is a 48 h gap.
+
+**Fixed by asking instead of assuming.** Past the threshold and still `home`,
+the check now sends the tracker's phone a `request_location_update` push —
+invisible to the owner, per the Companion App's own notification docs. The next
+cron run reads `last_reported`: moved means the phone is stationary and
+healthy; unmoved after `presence_probe_answer_minutes` (20) means FROZEN, and
+pages exactly as before. Requests are capped at one per tracker per
+`presence_probe_interval_hours` (6 h), because HA's push relay enforces a
+per-device daily quota that phone's real notifications also depend on. Being
+unable to ask — no matching `notify.mobile_app_*` service, an HTTP error, an
+unwritable probe-state file — pages rather than passing, so a broken probe path
+can't read as a healthy phone.
+
+**Verified in three layers.** `tests/unit/presence_health_test.sh`, 19 cases
+against a stubbed HA: the pre-fix script fails 13 of them, including a case
+built from the exact PER-57 state (32 h silent, home, phone healthy). Two
+mutants — never paging on an unanswered probe, and matching the notify service
+by entity id alone (no `_2` suffix stripped, no friendly-name fallback) — each
+fail a distinct case, so the suite isn't just checking "does it run". On
+dockassist: the guessed notify service name (`mobile_app_iphone_de_candela`)
+was confirmed live via `/api/services`, and a real push round-tripped in ~1 s
+(`last_reported` moved the second after the request was sent).
+
+**Deployed and idempotent.** `services.yml --limit dockassist --tags
+monitoring`: `--check --diff` showed only `check_presence_health.sh` changing,
+first real run `changed=1`, second `changed=0`. The wrapper's own state file
+(`presence_health.json`) shows the failure streak clearing to empty
+(`failure_since`/`failure_runs`/`failure_alerts` all blank) and `#home-alerts`
+has stayed quiet since.
+
+**Not yet observed: a real frozen-tracker page under the new logic.** Nothing
+has gone stale-and-home since deploy, so the probe-state file
+(`~/.log/presence_probe.state.json`) hasn't been exercised live — only the
+stub suite has. The mechanism (ask → wait → clear or page) is unverified in
+production until that happens naturally.
+
+See [[silence-is-not-frozen-ask-the-device]] for the general lesson: a "no
+news = broken" check on a device that only speaks on change needs a way to ask
+it before paging, not a better-tuned threshold.
 
 ---
 
