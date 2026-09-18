@@ -32,6 +32,7 @@ Complete reference for what is backed up, where backups live, and how to recover
 | cobra | Plex config | 04:00, days 1/8/15/22/29 | `backup_plex_config` | `ansible/roles/services/plex/files/backup_plex_config` | Latest per upload |
 | unifi-lxc | UniFi `.unf` | Daily 03:00 | `backup_unifi` | `scripts/services/network/backup_unifi.sh` | Latest per upload |
 | proxmox | `/etc/pve/` + host configs | 04:00, days 1/8/15/22/29 | `backup_proxmox_config.sh` | `scripts/services/proxmox/` | Latest per upload |
+| proxmox | vzdump (VM 100, LXC 101) → local `/var/lib/vz/dump` | Daily 03:00 | Proxmox job (`pvesh get /cluster/backup`) | `ansible/roles/platform/proxmox` → `proxmox_vzdump_keep_daily` | 3 daily + 2 weekly |
 | proxmox | vzdump (VM 100, LXC 101) → USB | Sun 05:00 | `sync_usb_recovery.sh` | `scripts/services/proxmox/` | 2 generations |
 | opnsense | `/conf/config.xml` | Daily 04:15 | `backup_opnsense.sh` | `scripts/services/opnsense/` | Latest per upload |
 | hifipi · vinylstreamer | — | — | — | Pure IaC, no unique state | — |
@@ -572,7 +573,7 @@ Results are logged in `docs/RESTORE_TEST_LOG.md`.
 | **curlbin single point of failure** | If curlbin is down, uploads fail | `do_backup` saves local fallback to `/tmp/backup_*.age`; 3 retries with 5s delay |
 | **Plex library metadata** not backed up | Watch history and library scan data lost on rebuild | Re-scan from media files; metadata re-fetched from Plex servers |
 | **USB + NVMe co-located** | Catastrophic event (fire, theft) loses both USB and NVMe | curlbin offsite backups remain the true DR path; USB is fast-path for drive failure only |
-| **vzdump schedule not Ansible-managed** | Must reconfigure manually after Proxmox rebuild | Documented in USB recovery checklist (`RECOVERY.txt`) and this guide |
+| **vzdump _schedule_ not Ansible-managed** | Must reconfigure manually after Proxmox rebuild | Documented in USB recovery checklist (`RECOVERY.txt`) and this guide. Its **retention** _is_ managed now (`proxmox_vzdump_keep_daily`), so a rebuilt job inherits the right pruning as soon as the role runs |
 
 ---
 
