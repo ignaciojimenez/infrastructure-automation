@@ -139,6 +139,20 @@
   become: true
   tags: [proxmox, backup, thermal]
 
+# Retention is a per-job property (prune-backups). Unlike bwlimit there is no
+# file-level default a job cannot override, so the job is the only durable place
+# to set it. Compared per job, so a converged host reports changed=0.
+- name: Enforce vzdump retention on every backup job
+  ansible.builtin.command: >-
+    pvesh set /cluster/backup/{{ item.id }}
+    --prune-backups keep-daily={{ proxmox_vzdump_keep_daily }},keep-weekly={{ proxmox_vzdump_keep_weekly }}
+  loop: "{{ proxmox_vzdump_jobs.stdout | from_json }}"
+  loop_control:
+    label: "{{ item.id }}"
+  when: item['prune-backups'] | default({}) != proxmox_vzdump_prune_desired
+  become: true
+  tags: [proxmox, backup]
+
 - name: Read current compression on the backup dataset
   ansible.builtin.command: zfs get -H -o value compression {{ proxmox_backup_dataset }}
   register: proxmox_backup_compression_now

@@ -42,6 +42,34 @@ proxmox_vzdump_bwlimit_kib: 102400   # 100 MiB/s
 proxmox_backup_dataset: rpool/var-lib-vz
 proxmox_backup_dataset_compression: "off"
 
+# vzdump retention -- how many local copies survive in /var/lib/vz/dump.
+# Measured 2026-09-17: keep-daily=15 held 261 GiB of VM 100 alone (~17.4 GiB a
+# night) on a pool that was 73% full at 55% fragmentation. ZFS degrades past
+# ~80%, so disk -- not CPU or RAM -- was the binding constraint on this box.
+#
+# Retention lives on the BACKUP JOB, not in /etc/vzdump.conf and not on the
+# storage: `pvesh get /cluster/backup` returns prune-backups per job, and a
+# job-level value wins over the file -- the same precedence that forces bwlimit
+# to be file-only. So the job is the only place this can be set to stick.
+#
+# This is a RECOVERY decision, not a disk decision. The USB copy keeps only
+# 2 generations, so these dailies are the deeper history; keep-weekly buys
+# reach to a fault noticed a fortnight later for ~1/5 of the space.
+proxmox_vzdump_keep_daily: 3
+proxmox_vzdump_keep_weekly: 2
+
+# The API returns prune-backups values as strings, so the comparison that makes
+# the task idempotent has to be string-valued too.
+#
+# The `| string` is load-bearing and was caught by testing the condition against
+# real `pvesh` output: without it Ansible's native-type Jinja renders "{{ 3 }}"
+# as the INT 3, which never equals the API's STR "3", so the task would fire on
+# every run and report changed for ever -- the exact shape of a check that looks
+# like it works because it is always doing something.
+proxmox_vzdump_prune_desired:
+  keep-daily: "{{ proxmox_vzdump_keep_daily | string }}"
+  keep-weekly: "{{ proxmox_vzdump_keep_weekly | string }}"
+
 # Journald: explicit persistence + size cap (see docs/ARCHITECTURE_DECISIONS.md).
 # 4G matches systemd's implicit ceiling and keeps ~3 months of forensic history
 # at the observed ~1.2G/month; cwwk is the host where journal forensics matter most.
