@@ -43,7 +43,7 @@ ansible-vault edit ansible/inventory/group_vars/all/vault.yml
 - **media** → Plex, Transmission, Samba
 - **homeassistant** → Docker, Home Assistant
 - **firewall** → OPNsense (Unbound DNS, WireGuard VPN, CrowdSec)
-- **network_controller** → UniFi Network application using GleenR script
+- **network_controller** → UniFi Network application using GreenR script
 
 ## Common Commands
 
