@@ -1,7 +1,7 @@
 # Infrastructure TODO — open work
 
-**Improvements and fixes waiting to be worked on.** Start at *What to work on
-next*; the first item you can act on is the right one.
+**The reasoning behind open work.** The queue itself is Linear team `PER`; an
+issue points at its section here, and the order below is not authoritative.
 
 Updated: 2026-09-13
 
@@ -12,13 +12,10 @@ Updated: 2026-09-13
 | **How the system is built** | [`ARCHITECTURE_DECISIONS.md`](ARCHITECTURE_DECISIONS.md) |
 | **What the test environment is for** | [`TESTING_GOALS.md`](TESTING_GOALS.md) — read before any test work |
 | **Full narrative of past sessions** | git history |
-| **Phone-first router, with copy-paste prompts** | the *Infra — What to work on* artifact — link is printed at session start by `.claude/session-start-dashboard.sh` (kept out of this public repo) |
+| **The queue** | Linear team `PER` — this file is the reasoning an issue points at, not a second queue |
 
-> 📌 **The dashboard is a render of this file's *What to work on next* section**, and
-> exists for two things only: starting work from the phone without a session, and
-> handing over ready prompts so a session does not spend tokens rediscovering
-> context. **If you change the items below, update the dashboard** — nothing in the
-> repo surfaces it, so it goes stale silently.
+> 📌 The *Infra — What to work on* dashboard artifact is retired. Do not update it;
+> Linear replaced it.
 
 > **Network layer:** see [NETWORK.md](NETWORK.md) — topology, VLANs, VPN and DNS,
 > plus thirteen findings from deriving it on 2026-08-07/08 that are not yet

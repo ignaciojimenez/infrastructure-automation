@@ -1,8 +1,11 @@
-# Infrastructure Automation — Claude Code Guide
+# Infrastructure Automation — Agent Guide
 
 Personal infrastructure-as-code repository managing a home network of Raspberry Pis, an OPNsense firewall VM, a Proxmox hypervisor, and LXC containers via Ansible.
 
 > For Ansible conventions, role creation, and testing strategy, see [AGENT_INSTRUCTIONS.md](AGENT_INSTRUCTIONS.md).
+
+- **The queue is Linear** (team `PER`, via the global AGENTS.md). [`docs/TODO.md`](docs/TODO.md) holds the reasoning and paste-ready prompts an issue points at — it is not a second queue, and its ordering is not authoritative.
+- **Before any test-environment work**, read [`docs/TESTING_GOALS.md`](docs/TESTING_GOALS.md): the four goals and which are actually built.
 
 ## Active Hosts
 

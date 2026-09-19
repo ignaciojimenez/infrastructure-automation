@@ -817,7 +817,7 @@ visible at the hardware level.
 ## Where the fleet actually lives
 
 **This is the finding most likely to catch out anyone working in this repo.**
-`CLAUDE.md` presents the seven hosts as one flat fleet. They are not — they
+`AGENTS.md` presents the seven hosts as one flat fleet. They are not — they
 straddle two VLANs:
 
 | Host | Address | VLAN | Hardware (OUI) |
