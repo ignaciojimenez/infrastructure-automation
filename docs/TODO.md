@@ -621,7 +621,7 @@ One branch, tick them off. Phone-taggable lines marked 📱.
   requires a `gpg` binary on the target and **fails outright without one**, which
   is what it did on agent-lxc. Any minimal host added to the fleet hits this.
 
-- `CLAUDE.md` still says `deploy_monitoring.yml` deploys "monitoring scripts to
+- `AGENTS.md` still says `deploy_monitoring.yml` deploys "monitoring scripts to
   all hosts" — it syncs only `scripts/common/`. That wording is what hid the
   hifipi drift; fix it.
 - 📱 dockassist: `rm ~/.log/check_container.sh.json*` (orphaned state) and
@@ -667,7 +667,7 @@ One branch, tick them off. Phone-taggable lines marked 📱.
 ```
 Work through the small-fix batch. Read docs/TODO.md item 12 — fourteen
 diagnosed one-liners; do them on one branch and tick each off in the file as
-it lands. Start with the CLAUDE.md deploy_monitoring wording (it hid a
+it lands. Start with the AGENTS.md deploy_monitoring wording (it hid a
 4-month drift). For each fix verify the behaviour, not the absence of the
 error — the heartbeat curl fix must log a forced failure, the
 recovery-routing change must deliver a real recovery to the chosen channel.
