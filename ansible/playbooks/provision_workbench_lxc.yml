@@ -40,7 +40,11 @@
   vars:
     # Container identity — must match the workbench-lxc entry in hosts.yml
     lxc_vmid: 104
-    lxc_hostname: workbench
+    # Matches the inventory key, and must: bootstrap.yml sets the OS hostname
+    # from `inventory_hostname`, so anything else here leaves `pct config`
+    # labelling the container one thing while the box calls itself another.
+    # agent-lxc agrees in both places; this should too.
+    lxc_hostname: workbench-lxc
     lxc_inventory_name: workbench-lxc
     # .200-.204 are the existing Proxmox guests and cobra, .205/.206 the two
     # test containers. .207 is the next free slot in that block.

@@ -111,6 +111,21 @@
   changed_when: true
   tags: [provision, create]
 
+# `pct create` sets the hostname once and nothing revisits it, so a container
+# renamed in the inventory keeps its original `pct` label forever. That split
+# is what let CT 104 sit labelled `workbench` while the box itself answered as
+# `workbench-lxc`: bootstrap.yml sets the OS hostname from `inventory_hostname`
+# and never consults the hypervisor. Cosmetic until someone greps `pct list`
+# for a host they cannot find.
+- name: Ensure the container hostname matches the inventory
+  ansible.builtin.command:
+    cmd: pct set {{ lxc_vmid }} --hostname {{ lxc_hostname }}
+  when:
+    - lxc_config.rc == 0
+    - "('hostname: ' ~ lxc_hostname) not in lxc_config.stdout_lines"
+  changed_when: true
+  tags: [provision, create]
+
 # `--cores` caps how many CPUs the container can see; it does not cap how much
 # CPU it can sustain. `--cpulimit` is the one that bounds total draw, and that
 # is what keeps a long build on this box from skewing the thermal thresholds
