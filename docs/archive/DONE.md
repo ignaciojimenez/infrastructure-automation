@@ -17,6 +17,7 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ## Contents
 
+- [2026-09-19 — three overdue readings land: NIC stalls gone, a ratio floor set, and cwwk's thermal alert learns the difference](#2026-09-19--three-overdue-readings-land-nic-stalls-gone-a-ratio-floor-set-and-cwwks-thermal-alert-learns-the-difference)
 - [2026-09-17 — a healthy phone that stays home is not frozen, and paging said it was (PER-57)](#2026-09-17--a-healthy-phone-that-stays-home-is-not-frozen-and-paging-said-it-was-per-57)
 - [2026-09-16 — an alert that fails to send is never retried (PER-60)](#2026-09-16--an-alert-that-fails-to-send-is-never-retried-per-60)
 - [2026-09-14 — two dead Mullvad relays found three days late, and a peer swap that looked broken](#2026-09-14--two-dead-mullvad-relays-found-three-days-late-and-a-peer-swap-that-looked-broken)
@@ -58,6 +59,54 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 
 ---
+
+## 2026-09-19 — three overdue readings land: NIC stalls gone, a ratio floor set, and cwwk's thermal alert learns the difference
+
+**Items 18, 1d and 35 (PER-5, PER-6, PER-7) — all three were readings waiting
+on time, not on work, and all three landed 2026-09-19/20.**
+
+**18 / PER-5 — dockassist's NIC stalls: zero since the fix.** 14.6 days after
+the 2026-09-05 speedtest resize (4×5 tests/6h → 2×3 tests at 03:07/15:07),
+`journalctl` showed **zero** `NETDEV WATCHDOG` events, against ~9.5 expected
+at the old 0.65/day baseline (≈0.01% chance of that under the null). The
+journal held a single continuous boot since before the deploy, so nothing was
+lost to a reboot. No `ethtool` or driver workaround touched, per the item's
+own warning. Closed unambiguously.
+
+**1d / PER-6 — VPN/direct speed ratio floor set from real data.** 28 paired
+runs over ~14 days gave a tight, well-behaved distribution (download ratio
+min 0.9739, median 0.9947, stdev 0.0064). `speed_comparison_min_ratio: "0.90"`
+deployed to `group_vars/agent.yml`, verified live and `changed=0` on a second
+run. One real outlier surfaced in the *upload* ratio (0.75, tied to a Mullvad
+relay swap) — moot, since `compare_speed_paths.sh` only ever checks
+`ratio_down`. The "two consecutive runs" smoothing the item's prompt
+described was never built; skipped deliberately, nothing in 14 days of data
+suggested it was needed.
+
+**35 / PER-7 — cwwk's thermal alert now knows the difference between a
+backup and a fault.** `check_thermal.sh` previously used one uniform
+WARN/CRIT pair for both the nightly backup window and everything else, so it
+fired at random on a known, accepted event. Now: CRIT (500 throttle
+events / 95°C) applies at all times, unchanged. WARN is suppressed entirely
+02:55–03:20 (measured across 9 real nights: peaks 66–88°C, 0–143 throttle
+events — nowhere near CRIT). Outside the window, WARN was **raised**, not
+tightened as originally floated: real data showed a daily
+`apt-daily-upgrade.service` burst alone produces 45 throttle events and the
+host's own monitoring cron heartbeats spike to 80–81°C, both benign. New
+outside-window WARN: throttle 60 (was 20), temp unchanged at 85. Verified
+with 7 forced-failure cases on the real host (fake counter file, shadowed
+`sensors` binary) before deploying — WARN suppressed/fires correctly on both
+sides of the window, CRIT never suppressed either side. Deployed via
+`deploy_monitoring.yml --limit cwwk --forks 1` (not `site.yml`, per the
+item's own warning about that playbook not touching this role), `changed=0`
+on the second run.
+
+📌 **Testing note worth keeping:** the historical replay data for the
+2026-08-29 CRITICAL night and the 2026-08-07 runaway had already rolled off
+`thermal-history.log`'s 10-day retention by the time this reading happened —
+confirming both incidents still fire relied on the fact that CRIT itself
+was left untouched (already established to fire on both, from the item's own
+prior record), not a fresh replay of raw historical data.
 
 ## 2026-09-17 — a healthy phone that stays home is not frozen, and paging said it was (PER-57)
 

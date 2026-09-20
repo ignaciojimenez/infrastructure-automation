@@ -3,7 +3,7 @@
 **The reasoning behind open work.** The queue itself is Linear team `PER`; an
 issue points at its section here, and the order below is not authoritative.
 
-Updated: 2026-09-19
+Updated: 2026-09-20
 
 | Where a thing lives | |
 |---|---|
@@ -54,8 +54,8 @@ here is something to read past, every time, forever. The write-up goes to
 renders it:
 
 > **№1** 36 + 37 *(deployed 13 Sep — waiting on a real alert / a real lockout)* →
-> **№2** 18 + 1d + 35 *(**deployed; all three waiting on a reading** —
-> see below)* → **№3** 38 *(small follow-ups: MQTT timeout, 403 detection)* →
+> **№2** 42 *(entrance door alert disabled 19 Sep, needs physical inspection)* →
+> **№3** 38 *(small follow-ups: MQTT timeout, 403 detection)* →
 > **№4** 2 → **№5** 4 (plex) → **№6** 9 → **№7** 3a/3b/3c → **№8** 39 →
 > **№9** 5 → **№10** 19 → **№11** 12 → **№12** 10 → **№13** 11 → **№14** 6 →
 > **№15** 7 → **№16** 34 *(small; restores `changed=0` as a signal for the docker role)* →
@@ -68,13 +68,13 @@ renders it:
 
 ✅ **40 closed on 2026-09-16** — write-up in [archive/DONE.md](archive/DONE.md#2026-09-16--an-alert-that-fails-to-send-is-never-retried-per-60); fixed, tested (19/19 unit cases), deployed to all 8 hosts, `changed=0` on the second run.
 
-🔀 **18, 1c and 1d were one cron line, and were worked as one branch on
-2026-09-05.** 📌 **1c and 22 are closed and their sections are gone** — the
-numbers remain valid addresses, and the write-ups are in
-[archive/DONE.md](archive/DONE.md#2026-09-05--the-speedtest-that-measured-too-much-and-three-false-greens). 18 and 1d stay listed because each is
-waiting on a *reading*, not on work — see their entries for the dates. Numbers
-stay as addresses; the write-up is in
-[archive/DONE.md](archive/DONE.md#2026-09-05--the-speedtest-that-measured-too-much-and-three-false-greens).
+🔀 **18, 1c, 1d and 35 were all one cron line's worth of work, worked as one
+branch on 2026-09-05, and are now all closed.** 1c and 22 closed 2026-09-05;
+18 and 1d closed 2026-09-19 (the readings both came back unambiguous — zero
+NIC stalls in 14.6 days, ratio floor set from real data); 35 closed
+2026-09-20 (thermal thresholds shipped, forced-tested on the real host).
+Numbers remain valid addresses. Write-ups: [archive/DONE.md](archive/DONE.md#2026-09-05--the-speedtest-that-measured-too-much-and-three-false-greens) (1c/22) and
+[archive/DONE.md](archive/DONE.md#2026-09-19--three-overdue-readings-land-nic-stalls-gone-a-ratio-floor-set-and-cwwks-thermal-alert-learns-the-difference) (18/1d/35).
 
 **31 was discarded on 2026-09-02, not deferred.** Ignacio tested it: the IoT
 devices cannot associate with PMF enabled, so raising it is not a fix that was
@@ -218,235 +218,6 @@ recovery message in #home-logging (does it give the true outage length?); and
 whether HA's plug power-cycled. Then move item 37 to docs/archive/DONE.md,
 keeping 39 open (40 closed 2026-09-16 — see archive/DONE.md).
 ```
-
-**35. Set cwwk's thermal alert thresholds from a week of real backup nights**
-`check_thermal.sh` alerts on a **known and accepted** event. Its thresholds sit
-*inside* the normal variation of that event, so they fire at random.
-
-📊 **Measured A/B on 2026-09-05** (three runs, VM 100 only, ~2 h apart, KSM off,
-PL1/PL2 20 W/35 W, door untouched):
-
-| Run | Rate | Duration | Peak | Mean | time >80 C | Throttle events |
-|---|---|---|---|---|---|---|
-| A1 uncapped | 287 MiB/s | 230 s | 86 C | 78.6 C | 125 s | 48 |
-| A2 uncapped | ~280 MiB/s | 260 s | 89 C | 79.1 C | 165 s | **79** |
-| **B capped 100 MiB/s** | 99.8 MiB/s | 655 s | 85 C | **64.0 C** | **15 s** | **9** |
-
-🔴 **A1 and A2 were IDENTICAL settings and scored 48 vs 79.** Single-run
-resolution on throttle count is ~±30 events. `THROTTLE_WARN=20` is therefore
-*below the noise floor of the accepted nightly backup* — it cannot not fire.
-`TEMP_WARN=85` has the same defect from the other side: normal backup peaks are
-85–89 C, so it fires whenever a 5-minute sample happens to land on one, and the
-script's own header says instantaneous readings are unreliable.
-
-⚠️ **`THROTTLE_CRIT=500` is fine — do not touch it.** The one genuinely bad night
-(2026-08-29) scored **4,017**. That is 50× the worst normal night, so CRIT has
-real separation and is the only threshold currently earning its place.
-
-📌 **Proposed shape, NOT yet validated — the point of this item is to check it
-against real data before shipping:** make sensitivity time-of-day aware rather
-than uniformly looser. Inside the backup window (02:55–03:20) only CRIT applies,
-because a WARN there drives no action. Outside it, tighten WARN well *below* 20 —
-the box should be at zero, and today's threshold could miss a real daytime event
-like the 2026-08-07 runaway process that held 94–96 C for 9 h 40 m. Net effect
-should be *more* sensitive to genuine faults and silent on the accepted one.
-
-🔴 **A threshold change that only makes alerts stop is indistinguishable from one
-that breaks the check.** Any new set must be replayed against the 2026-08-29
-CRITICAL night (4,017 events, 89 C) and the 2026-08-07 runaway — **both must
-still fire** — and against normal nights, which must be silent.
-
-📂 **The data now survives.** `save_temps.sh` self-rotated at `MAX_LINES=2160`
-(~3 days), which would have discarded days 1–4 of this very question. Raised to
-**7200 (~10 days)** on 2026-09-06 in the same branch. 10 rather than 7 so a
-review that slips a couple of days still has the full week.
-
-*State:* **measuring since 2026-09-06.** `bwlimit` is deployed and codified;
-nothing else to build until there is a week of nights. *Effort:* thresholds are
-four constants in `scripts/services/proxmox/check_thermal.sh`, plus whatever the
-window logic needs. *Needs:* **~7 nights, i.e. review on or after 2026-09-13.**
-
-```
-Set cwwk's thermal alert thresholds from real data. Read docs/TODO.md item 35.
-
-Do NOT re-run the bwlimit experiment and do NOT tune bwlimit further — that is
-settled: 100 MiB/s is deployed, codified in roles/platform/proxmox, and finer
-tuning is below the instrument's noise floor (two identical runs scored 48 vs
-79 throttle events). Judge thermal load by time-above-80C, never by event count.
-
-Pull the week of backup windows (thermal-history.log holds ~10 days, 2-min
-resolution, world-readable):
-  ssh cwwk-agent "grep -v 'throttle_delta=0 ' /var/log/diagnostics/thermal-history.log"
-  ssh cwwk-agent "awk '\$1 ~ /T0[23]:/' /var/log/diagnostics/thermal-history.log"
-
-For each night 03:00-03:20 report: peak pkg, mean pkg, seconds above 80C, and
-total throttle delta. Then separately report every throttle event OUTSIDE that
-window - those are the ones that should still page.
-
-Then propose the threshold set. Before shipping it you MUST show it still fires
-on the 2026-08-29 CRITICAL night (4,017 events, 89C peak) and the 2026-08-07
-runaway process (94-96C sustained, daytime), and stays silent on the normal
-nights you just measured. Thresholds live in
-scripts/services/proxmox/check_thermal.sh (THROTTLE_WARN=20, THROTTLE_CRIT=500,
-TEMP_WARN=85, TEMP_CRIT=95). CRIT=500 has 50x separation from normal - leave it.
-
-🔴 Deploy with deploy_monitoring.yml, NOT site.yml:
-  ansible-playbook ansible/playbooks/deploy_monitoring.yml --limit cwwk --forks 1
-site.yml imports platform/proxmox.yml, which holds ONLY the ZFS ARC tasks — it
-never runs the platform/proxmox ROLE, so a site.yml run reports a healthy
-changed=N from unrelated baseline tasks while touching none of this. Verified
-2026-09-06: `site.yml --tags proxmox,backup,thermal` selected ZERO of the role's
-tasks; deploy_monitoring.yml selected 52.
-```
-
-**1d. Monitor the VPN path's speed, not just the direct one**
-Today only the **non-VPN** path is measured (dockassist, VLAN 100). VLAN 40 egresses
-through Mullvad and is unmeasured, so a degrading tunnel would be invisible.
-
-**Baseline measured 2026-08-19:** VPN **886/906 Mbps** vs direct **943/940** — the
-tunnel delivers **94% of line rate**, so nothing is wrong today. That 94% is the
-number to alert against.
-
-📌 **Alert on the RATIO, not an absolute.** An absolute floor fires every time the
-ISP has a bad evening and says nothing about the VPN; the ratio isolates
-VPN-specific degradation.
-
-⚠️ **Three things that will silently invalidate this if missed:**
-1. **Pin `--server-id` on both paths.** `internet_speed_monitor` does not pass it
-   today. Ookla picks the server nearest the *egress*, so the VPN path would choose
-   relative to the Mullvad exit and the direct path relative to Odido — comparing
-   two different tests and calling the difference "VPN slowness".
-2. **Run the two tests sequentially, never concurrently.** Concurrent tests through
-   one gateway measure each other. This is not theoretical: on 2026-08-19 an agent's
-   parallel downloads produced the 250 Mbps reading that started the whole
-   investigation.
-3. **Prove the VPN-side host can saturate before building on it.** Still **unproven**
-   for agent-lxc — the validation run failed on the wrong binary (see 1c). A host
-   that cannot reach ~900 measures its own NIC, not the tunnel.
-
-**Not opnsense**, for three independent reasons: it performs the WireGuard crypto so
-the test competes with what it measures; it is the internet SPOF; and its own traffic
-does not follow the per-VLAN policy routes clients use, so it would measure a path
-nobody takes.
-
-**Cost to weigh:** ~1.25 GB and a fully saturated line per test. This was
-`--tests=5` every 6h (~25 GB/day, ~26 min/day saturated) and is now
-**`--tests=3` twice daily** — which is the sizing this item already preferred,
-arrived at from the other direction by item 18. A second path brings the total
-to 12 runs/day, still below the 20/day the single path used to do.
-
-🔗 **Read item 18 before sizing this. The current test already has a measured
-cost, not just a theoretical one.** dockassist's NIC has logged **twelve
-`bcmgenet` transmit-queue stalls between 11 Aug and 5 Sep, every one 1–6
-minutes into the speedtest window** — the saturation run intermittently wedges
-the Home Assistant host's link. That was invisible until 2026-08-24 and is
-exactly the "prove the host can saturate" concern in point 3, arriving from the
-other direction: dockassist *can* saturate, but not reliably without cost.
-
-**So doubling the number of saturation runs is not a neutral change.** Decide
-the volume question (18) and the coverage question (1d) together, or 1d
-silently doubles a fault nobody had measured yet.
-
-📌 **That decision was taken on 2026-09-05 and it went in this item's favour.**
-Item 18 cut the direct path to 3 tests twice daily, so the budget now reads:
-6 saturation runs/day on one path, 12 across both — still **40% below the 20/day
-this check was doing before**. Adding the VPN path is no longer a doubling.
-
-*State:* **steps 1 and 2 are DONE** on branch
-`feat/speedtest-sizing-and-ookla-install` — the Ookla install task exists and
-`internet_speed_monitor` now takes `--server-id` (unit-tested: the flag reaches
-the binary, and an unset one passes no argument at all rather than an empty
-`--server-id=` that Ookla rejects). ✅ **STEP 3 PASSED 2026-09-05** — run by hand on both hosts, minutes apart
-(never concurrently), both pinned to server 52365:
-
-| Path | Host | Down / Up (Mbps) | Egress IP | ISP reported |
-|---|---|---|---|---|
-| Direct | dockassist | **940.94 / 940.11** | 87.210.114.214 | Odido Netherlands |
-| VPN | agent-lxc | **930.58 / 935.32** | 193.32.249.134 | **31173 Services AB** (Mullvad) |
-
-**agent-lxc saturates — comfortably.** The target was ~880–900 and it reached
-930/935, so it measures the tunnel and not its own NIC. 📌 **And the tunnel is
-independently confirmed for the first time**: the reported ISP is Mullvad's AS
-and the egress IP differs from dockassist's. Previously "agent-lxc is on the
-VPN path" was inferred from routing, never observed end to end.
-
-📌 **Pinning is validated, not just theorised.** Both paths measured against the
-same Amsterdam server despite egressing through different countries' exits —
-which is exactly what an unpinned test would have got wrong.
-
-⚠️ **Measured ratio is 98.9% down / 99.5% up, against a 94% baseline from
-2026-08-19.** The tunnel is performing *better* than when it was baselined.
-
-✅ **STEP 4 — SHIPPED 2026-09-05, with the comparison owned by one job.** The
-VPN path is measured on agent-lxc at **03:14 / 15:14** and
-`compare_speed_paths.sh` runs at **03:20 / 15:20**, reading dockassist's record
-over the existing read-only fleet SSH.
-
-🔴 **The headline alert is NOT the ratio — it is that the two paths egress from
-different addresses.** If the tunnel drops, agent-lxc keeps measuring and simply
-measures the direct line: throughput goes **up** and the ratio moves toward 1.0,
-so every speed-based check reads a *vanished* tunnel as a healthy one. The unit
-test pins this with a fixture whose ratio is **1.0002**. The exit address is the
-only signal that separates those states, and unlike a ratio it needs no
-baseline.
-
-📂 **The data now survives.** `speed_last.json`, `speed_history.csv` and
-`speed_ratio_history.csv` live in `logs_dir` but are deliberately not `*.log` —
-logrotate is `{{ logs_dir }}/*.log { daily; rotate 7; compress }`, which would
-have left **one readable day** of a fortnight-long question. That is how the
-first version of this plan failed. There is a matching warning at the glob in
-`playbooks/system/baseline.yml`.
-
-🔴 **:14, not :07.** dockassist runs at :07 and the two share one WAN link —
-concurrent saturation tests measure each other, which is what produced the bogus
-250 Mbps reading on 2026-08-19. Runs take ~190 s, so :14 starts four minutes
-clear. ⚠️ It was briefly :37; that was safe but **too loose** — a 30-minute gap
-lets ordinary ISP variation between :07 and :40 leak into the ratio and be
-blamed on the tunnel, reintroducing the very confound the ratio exists to
-remove. **Never move either schedule without moving the other.**
-
-⚠️ **A loose absolute floor (700/700/30) is the only alert, on purpose.** The
-ratio threshold item 1d specifies cannot be set from two samples 17 days apart,
-and a one-sample baseline has burned this repo before. 700 Mbps is ~75% of line
-rate and catches a genuinely broken tunnel from day one — strictly better than
-today, where nothing watches this path at all.
-
-📊 **First real variance data, from the hand-run of the production invocation
-(2026-09-05 12:13, 3 tests):** 935.01 · 938.16 · **908.66** Mbps down — a ~3%
-spread *within a single run*. That is the number a ratio threshold has to
-tolerate, and it is why 94%-vs-99% could not have set one.
-
-*State:* measuring, and the egress check is live. *Effort:* one line.
-*Needs:* **~a fortnight of pairs, then set `speed_comparison_min_ratio`** in
-`group_vars/agent.yml` from the observed distribution in
-`~/.logs/speed_ratio_history.csv` on agent-lxc. Turning it on is that variable;
-no code change.
-
-```
-Set the VPN-vs-direct ratio threshold from real data. Read docs/TODO.md item 1d.
-Steps 1-4 are DONE and deployed — both paths are measured (dockassist :07,
-agent-lxc :14, same pinned server 52365). Do NOT rebuild any of it, and do NOT
-move either schedule without moving the other: they share one WAN link, and :14
-is deliberately CLOSE to :07 — 7 minutes clears dockassist's ~190 s run, while a
-wider gap lets ordinary ISP drift leak into the ratio and be blamed on the
-tunnel. It was briefly :37 for that reason and was tightened.
-
-Only run this once there are ~2 weeks of paired runs. Pull the medians:
-  ssh dockassist-agent 'sudo agent_read log internet_speed_check.log'      | grep "Speed test passed"
-  ssh 10.30.40.203     'grep "Final results (median)" ~/.logs/internet_speed_check_vpn.log'
-
-Pair them by date, compute VPN/direct per day, and report the DISTRIBUTION —
-min, median, spread — before proposing a number. Known so far: 94% (19 Aug),
-99% (5 Sep), and ~3% spread WITHIN a single 3-test run, so any threshold must
-clear that noise floor comfortably.
-
-Then replace the loose absolute floor with a ratio alert: fire when VPN/direct
-drops below the chosen figure for TWO consecutive runs, keeping a loose absolute
-floor underneath it. 🔴 Do not pick the threshold from the two historical points
-alone — that is exactly what this step was deferred to avoid.
-```
-
-
 
 **2. cobra's Samba is hand-built and the role cannot converge as written**
 `--tags samba` has **never run on cobra**. Its live `smb.conf` is stock Debian
@@ -628,104 +399,6 @@ return the total — reporting via print_status alone contributes nothing.
 Acceptance is a forced failure: peg one core on cwwk with
 `timeout 300 sh -c 'while :; do :; done'` and watch the alert reach
 #home-alerts. Then record a fresh idle + pegged-core thermal baseline.
-```
-
-**18. dockassist's NIC stalls under the speedtest, twelve times so far**
-`bcmgenet` logs a transmit-queue hang whenever the link is driven flat out:
-
-```
-bcmgenet fd580000.ethernet eth0: NETDEV WATCHDOG: CPU: 1: transmit queue 0 timed out 2024 ms
-```
-
-⚠️ **Not one event — twelve, and they are not random.** Every single one lands
-1–6 minutes past an hour divisible by six:
-
-```
-Aug 11 00:03 · Aug 12 06:03 · Aug 12 18:04 · Aug 13 12:03 · Aug 14 00:06
-Aug 16 06:01 · Aug 22 12:04 · Aug 22 18:06 · Aug 23 18:03 · Aug 30 06:03
-Sep 04 00:06 · Sep 05 00:03
-```
-
-📌 **Re-measured 2026-09-05: it is not decaying.** The last three are new since
-this item was written. Rate was 9 in 13 days to 23 Aug (0.69/day) and is 2 in
-the 3.2 days of the current boot (0.63/day) — flat, not fading.
-
-⚠️ **The evidence is perishable.** The journal holds two boots (back to
-19 Aug); the Aug 11–16 events are already gone from the host and now survive
-only in this list. Do not expect to re-derive them.
-
-dockassist has exactly one 6-hourly cron: `0 */6 * * *`
-`internet_speed_monitor --min-download=850 --min-upload=850 --tests=5
---delay=75` — five back-to-back saturation tests that hold the NIC at ~850+
-Mbps for several minutes. **The stalls are load-induced by our own monitoring.**
-
-📌 It is intermittent, not deterministic: the 2026-08-24 18:06 run produced no
-stall. So this is "sustained line-rate sometimes wedges the queue", not "the
-speedtest always breaks the NIC".
-
-⚠️ **This was invisible until `read_agent` gained `systemd-journal` on
-2026-08-24**, and it had been happening since at least 11 Aug. The detection
-now exists (`check_nic_stalls.sh`, hourly, alerts on the delta), so the count
-is no longer a thing nobody is watching.
-
-🔗 **Related to items 1c/1d**, which are already about this speedtest's
-dependency and what it measures. Worth deciding together: a bandwidth test that
-wedges the NIC of the Home Assistant host is paying a real cost for its
-measurement, and `--tests=5` may simply be more than is needed.
-
-🔴 **Do not reach for `ethtool -K eth0 tso off` or similar.** The queue resets
-itself and the link recovers, so the observed impact so far is a brief stall,
-not an outage — a driver workaround would be a change with no way to tell
-afterwards whether it helped.
-
-🔎 **Found 2026-09-05: `0 */6` was the worst possible minute.** At :00 this job
-fired alongside **nine other cron entries** (five `*/10`, two hourly, one
-`*/30`, one `*/15`) and then immediately saturated the NIC. Nothing else in
-dockassist's crontab runs at :07. `check_ha_entities` already runs `2-59/15`
-for exactly this reason, and commit `39afd8c` was literally *"move off the :00
-boundary"* — the lesson was learned once and never applied here.
-
-*State:* ✅ **DEPLOYED 2026-09-05, awaiting the stall count.** Live on
-dockassist and verified in its crontab: `7 3,15 * * *`, `--tests=3`,
-`--server-id=52365`. `--tests=5` every 6h (20 saturation runs/day) →
-`--tests=3` twice daily (6/day). 📌 **First scheduled run landed 03:07** — exit 0, 190 s,
-941.02/940.23 Mbps, and **no stall**. Two manual saturation tests either side of
-it also produced none; the count sits at 2, both pre-change.
-
-⚠️ **That is not yet evidence, and it is worth being precise about why.** At the
-0.65/day baseline, ~11 h of clean running is an expected 0.3 events — seeing
-zero has a ~74% chance even if the change did nothing at all. **A week is what
-makes it a result**: ~4.5 expected events, so zero would land near 1%.
-
-📈 One thing did improve immediately and is not statistical: **run duration fell
-371 s → 190 s**, so saturated seconds per day went from ~24.7 min to ~6.3 min —
-a **74% cut in NIC exposure**, which is the quantity the stalls actually track. **The
-reduction is the experiment**: if the stalls stop, load was the cause and the
-schedule is also the fix; if they continue at 6 runs/day, the load hypothesis
-is wrong. Either outcome is a result, which is why no `ethtool -K` workaround
-was applied — that would have left nothing to observe.
-*Effort:* small. *Needs:* the deploy, then ~a week of watching.
-
-```
-Check whether the speedtest resize stopped dockassist's NIC stalls. Read
-docs/TODO.md item 18 — the diagnosis and the fix are DONE, do not re-derive
-either. The change (deployed 2026-09-05) cut 4 runs x 5 tests to 2 runs x 3
-tests and moved them off the :00 boundary to 03:07 / 15:07.
-
-Count NETDEV WATCHDOG events since the deploy:
-  ssh dockassist-agent 'sudo journalctl --no-pager -k | grep -c "NETDEV WATCHDOG"'
-and check them against the 12 pre-change events listed in the item. Note the
-journal only holds two boots — if the host rebooted, `-b -1` too.
-
-Baseline to beat: ~0.65 events/day, i.e. roughly 2 per 3 days. Zero over a
-week is the fix landing; a rate near 0.2/day is proportional to the 70%
-volume cut and means load is confirmed but not eliminated; an unchanged rate
-falsifies the load hypothesis entirely.
-
-🔴 Whatever the answer, do NOT reach for `ethtool -K eth0 tso off` or another
-driver workaround. The queue self-recovers, so there is no established harm to
-fix and no way to tell afterwards whether the workaround helped. If load is
-falsified, the next step is diagnosis, not suppression.
 ```
 
 **39. The HA plug watchdog cannot fire through a flapping ping**
