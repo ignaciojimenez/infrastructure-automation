@@ -1,0 +1,86 @@
+---
+# Provision the workbench LXC (CT 104) on Proxmox — PER-66
+# Usage: ansible-playbook ansible/playbooks/provision_workbench_lxc.yml
+#
+# An interactive Claude Code box, reachable from the phone over Remote
+# Control, that deliberately has NO access to the fleet. The body lives in
+# tasks/provision_lxc.yml and is shared with provision_agent_lxc.yml; this
+# file is the container's identity and nothing else.
+#
+# WHAT THIS BOX MUST NEVER GET — the point of it being separate:
+#   * the read_agent private key, or any fleet SSH key
+#   * the Ansible vault password
+#   * any `pct` / hypervisor right
+#   * the Secure-Enclave signing key — signed merges stay on the laptop
+#
+# None of those are granted here, and none are granted by site.yml either:
+# `primary_function: workbench` keeps it out of group_vars/agent.yml, which is
+# what carries fleet access. system/agent_access.yml does run against it
+# (hosts: all), but that role only templates an authorized_keys file — it
+# distributes no private key, so it grants agent-lxc a way IN rather than
+# giving this box a way OUT. That direction is fine and is what the heartbeat
+# uses.
+#
+# The searchdomain stays `local`, same as every other host here. Dropping it
+# was considered and rejected: it resolves names, it does not authorise
+# anything, so removing it would buy no security while making this the one
+# container on VLAN 40 that cannot resolve its neighbours — a special case
+# that reads as a control without being one. The control is that this box
+# holds no key, no vault password and no `pct` right. If reach itself ever
+# needs constraining, that belongs in an OPNsense rule, where it is
+# enforceable, not in a DNS option.
+
+- name: Provision workbench LXC on Proxmox
+  hosts: proxmox_hosts
+  become: true
+  gather_facts: false
+  vars_files:
+    - "{{ playbook_dir }}/../inventory/group_vars/all/vault.yml"
+
+  vars:
+    # Container identity — must match the workbench-lxc entry in hosts.yml
+    lxc_vmid: 104
+    lxc_hostname: workbench
+    lxc_inventory_name: workbench-lxc
+    # .200-.204 are the existing Proxmox guests and cobra, .205/.206 the two
+    # test containers. .207 is the next free slot in that block.
+    lxc_ip: 10.30.40.207
+    lxc_cidr: 24
+    lxc_gateway: 10.30.40.254
+    lxc_nameserver: 10.30.40.254
+    lxc_searchdomain: local
+    lxc_bridge: vmbr0
+
+    # Resources. Measured on cwwk 2026-09-20: 8 cores at load 0.37, and
+    # 6 GiB of 31 available (OPNsense 12 fixed, ARC 10 capped, unifi 4,
+    # agent-lxc 2). 4 GiB is what fits today; 8 would need reclaiming from
+    # OPNsense or ARC first, so this is sized to what is actually free.
+    #
+    # Disk is no longer the binding constraint — PER-70's retention cut took
+    # rpool from 73% to 34% full (164G of 472G), so 32 GiB for git worktrees
+    # and a node toolchain is cheap.
+    lxc_cores: 4
+    # The one that matters thermally. `--cores` caps concurrency, not
+    # sustained draw; cwwk is a 20 W-capped N355 that runs hot, and PER-7 is
+    # calibrating its thermal alert thresholds from real backup nights. A
+    # long build here with no cap would skew that calibration, so bound it at
+    # 3 of 8 and leave headroom for OPNsense, which is the internet SPOF.
+    lxc_cpulimit: 3
+    lxc_memory: 4096
+    lxc_swap: 1024
+    lxc_rootfs_size: 32
+    lxc_storage: local-zfs
+
+    # Same pinned image as agent-lxc and the test containers, so this is a
+    # twin of a real fleet host rather than an approximation. Bump together.
+    lxc_template_storage: local
+    lxc_template: debian-13-standard_13.6-1_amd64.tar.zst
+
+    lxc_bootstrap_packages:
+      - openssh-server
+      - python3
+      - sudo
+
+  tasks:
+    - name: Provision the container
+      ansible.builtin.import_tasks: tasks/provision_lxc.yml
