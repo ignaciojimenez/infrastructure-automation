@@ -3,7 +3,7 @@
 **The reasoning behind open work.** The queue itself is Linear team `PER`; an
 issue points at its section here, and the order below is not authoritative.
 
-Updated: 2026-09-13
+Updated: 2026-09-19
 
 | Where a thing lives | |
 |---|---|
@@ -108,7 +108,33 @@ input. An item without a prompt is an item that has not been triaged properly.
 
 ### 🔴 P1 — actively hurting
 
-**Nothing here right now.**
+**42. Entrance door sensor flapping false "opened while away" alerts — alert disabled, needs physical inspection**
+`binary_sensor.eve_door_20ebn9901_door_2` ("Entrance Door") intermittently reports a real `on` (open) state — not a connectivity dropout, not low battery (100%), not stale firmware (3.2.1, current) — while the door has not actually been opened. Confirmed live 2026-09-19: 14 alerts in ~6 hours, each `on` state held minutes not seconds (one full cycle observed: on ~4.5 min, then off), and it flipped again live during the investigation itself. Escalating: roughly 1/day in August, 3 in one evening on 09-17, 14 in six hours on 09-19.
+
+Its sibling sensor (`binary_sensor.eve_door_20ebn9901_door`, "Balcony Door") shows a *different* failure mode in the entity-health log — `unavailable` → `recovered` cycles, a connectivity dropout. Entrance never appears there; it stays connected throughout, so this is a bad reading, not a lost link.
+
+**Leading hypothesis, not confirmed:** mechanical — a drifted magnet/sensor alignment, or the door not latching fully and flexing (draft/wind) close enough to the reed switch's trip distance to register minutes-long "open" reads. Needs eyes on site; not diagnosable further from read-only tooling.
+
+✅ **2026-09-19: entrance trigger disabled** in `eve_door_open_while_away` (`ansible/roles/services/homeassistant/templates/automations.yaml.j2`) — the balcony trigger is untouched and still alerts. This is a deliberate, temporary blind spot on the house's most important security sensor, accepted because the alert had become pure noise. 🔴 **Re-enable only after the physical sensor/magnet has been checked** — do not re-enable blind, and do not substitute a debounce for the physical check: the observed `on` cycles already run 3–4+ minutes, longer than a sane debounce window would filter anyway.
+
+*State:* alert disabled, root cause not yet fixed. *Effort:* physical inspection, small; re-enabling is a one-line template revert. *Needs:* someone on site at the entrance door.
+
+```
+Physically inspect the Entrance Door Eve sensor (binary_sensor.eve_door_20ebn9901_door_2)
+and its magnet. Read docs/TODO.md item 42 first — the alert trigger is deliberately
+disabled in ansible/roles/services/homeassistant/templates/automations.yaml.j2
+(eve_door_open_while_away); balcony is untouched. Battery (100%) and firmware (3.2.1,
+current) are already ruled out, and it is not a connectivity/unavailable issue.
+
+Check: does the door latch fully? Is the sensor/magnet gap tight and aligned? Any
+visible movement/flex when the door is closed (draft, wind, a loose hinge)?
+
+If a physical fix is made, verify it holds: watch the entity in HA for a few hours
+(no unexpected `on` transitions), then restore the second trigger (entity_id
+binary_sensor.eve_door_20ebn9901_door_2, to: "on", id: entrance) and the
+trigger.id-based message in the automation, and deploy with
+services.yml --limit dockassist --tags config.
+```
 
 📌 **Numbering is deliberately not compacted.** Several prompts below and in
 git history say "read docs/TODO.md item 2" or "item 3a"; renumbering on every

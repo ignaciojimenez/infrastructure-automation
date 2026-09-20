@@ -161,12 +161,12 @@ speed_comparison_peer_label: "direct"
 speed_comparison_local_label: "vpn"
 speed_comparison_max_age: 60
 
-# 🔴 DELIBERATELY UNSET. With this empty the ratio is recorded every run and
-# never alerted on; the only alert is the egress-identity check, which needs no
-# baseline. Set it once speed_ratio_history.csv holds ~2 weeks of pairs — the
-# noise floor is ~3% WITHIN a single 3-test run, so any value must clear that
-# comfortably. Turning it on is this one line.
-speed_comparison_min_ratio: ""
+# Set 2026-09-19 from ~14 days of paired runs (PER-6): download ratio min
+# 0.9739, median 0.9947, stdev 0.0064 — 0.90 sits ~7.4 points below the worst
+# real reading, clear of the ~3% single-run noise floor. Note: compare_speed_paths.sh
+# only checks ratio_down and fires instantly on one bad run (no multi-run
+# smoothing) — deliberately left that way for now, reassess if it pages on noise.
+speed_comparison_min_ratio: "0.90"
 
 
 # ============================================================

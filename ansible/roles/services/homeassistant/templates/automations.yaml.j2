@@ -257,6 +257,12 @@
 # Sensor mapping:
 #   binary_sensor.eve_door_20ebn9901_door   -> Balcony Door
 #   binary_sensor.eve_door_20ebn9901_door_2 -> Entrance Door
+#
+# Entrance trigger disabled 2026-09-19 (docs/TODO.md item 42): the sensor is
+# reporting real "on" states for minutes at a time, tens of times a day, with
+# the door never actually opened — battery and firmware are healthy, it's not
+# a connectivity dropout. Alerting on it was pure noise. Re-enable only after
+# the physical sensor/magnet has been checked.
 - id: "eve_door_open_while_away"
   alias: "Door Opened While Away"
   trigger:
@@ -264,10 +270,6 @@
       entity_id: binary_sensor.eve_door_20ebn9901_door
       to: "on"
       id: balcony
-    - platform: state
-      entity_id: binary_sensor.eve_door_20ebn9901_door_2
-      to: "on"
-      id: entrance
   condition:
     - condition: state
       entity_id: group.persons
@@ -277,7 +279,7 @@
   action:
     - service: rest_command.slack_alert
       data:
-        message: "{{ '{{' }} \"🚪 Balcony\" if trigger.id == \"balcony\" else \"🚪 Entrance\" {{ '}}' }} door opened while away"
+        message: "🚪 Balcony door opened while away"
   mode: single
 
 # ============================================================
