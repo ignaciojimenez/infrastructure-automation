@@ -246,15 +246,25 @@ set — see `docs/BACKUP_AND_RECOVERY.md`.
   - Same features: Blocklists + static DNS entries available in Unbound
   - Less resource usage: No extra LXC container needed
   
-- **VPN-first DNS** - DNS queries go through VPN tunnel for privacy
-  - Primary: Forward to 10.64.0.1 (Mullvad DNS via WireGuard)
-  - Fallback: 194.242.2.3 (Mullvad public DNS when VPN down)
-  - Both Mullvad endpoints: Privacy preserved even during failover
+- **VPN-first DNS — superseded, was never live as designed.** This entry
+  originally read "Primary: forward to 10.64.0.1 (Mullvad DNS via WireGuard),
+  fallback: 194.242.2.3 (Mullvad public DNS when VPN down)". A 2026-08-07 audit
+  ([NETWORK.md](NETWORK.md#unbound-is-fully-recursive)) found the live box has
+  **no `forward-zone`/`forward-addr` at all** — Unbound resolves recursively
+  from root hints and never forwarded to either address. Corrected here
+  2026-09-20, prompted by Mullvad's Sept 2026 announcement that it is shutting
+  down the public DNS servers behind the `194.242.2.3` fallback (by 2026-11-02,
+  sponsoring Quad9 instead) — moot for this estate since that fallback was
+  never wired in. The in-tunnel resolvers (`10.64.0.1/.3/.7/.11`, used only by
+  `check_dns_health.sh`/`monitor_dns_failover.sh` as VPN-health probes) are a
+  different, unaffected Mullvad service.
   
-- **Script-based failover** - Dynamic config switching vs static dual-forwarder
-  - Avoids Unbound querying both in parallel
-  - Clear visibility: Slack alerts on failover/recovery
-  - Fast detection: 1-minute checks, 3-minute failover threshold
+- **Script-based failover — premise stale, not fixed.** `monitor_dns_failover.sh`
+  still assumes it can flip Unbound's forwarder to Cloudflare if all VPN
+  tunnels drop; there is no forwarder to flip. Its health probe still runs and
+  reports correctly. Tracked as drift in
+  [NETWORK.md](NETWORK.md#3-the-dns-failover-scripts-premise-no-longer-holds),
+  not yet cleaned up.
 
 ## Home Assistant Architecture (Updated November 2025)
 
