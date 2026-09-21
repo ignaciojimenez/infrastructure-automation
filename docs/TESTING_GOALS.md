@@ -34,8 +34,8 @@ documentation error (see TEST_CONTAINER.md).
 
 | Missing | |
 |---|---|
-| **`bootstrap.yml` and a full `site.yml` have never been run against a container** | Only `deploy_monitoring.yml` and `services.yml --tags ssh` have converged. The playbook this goal most exists for is the one least tested. |
-| No one-command loop | create → converge → verify → destroy is a manual sequence today |
+| ~~`bootstrap.yml` and a full `site.yml` have never been run against a container~~ | ✅ **Done 2026-09-21.** Both converge against CT 199, and a second `site.yml` run reports `changed=0` — see goal 3's re-decision for the numbers. Doing it found the reason it had to be done: four SSH tasks reported `changed` forever, because `bootstrap.yml` forced `PermitRootLogin no` while the canonical template sets `prohibit-password` on a test host. The rig could never have reported "converged". |
+| No one-command loop | create → converge → verify → destroy is a manual sequence today. `changed=0` is now usable as its verify signal; before 2026-09-21 it was not. |
 | Not in CI | `.github/workflows/` runs `ansible-lint` only |
 | No `--create` in the sandbox | a fresh container still needs `ssh cwwk` and a Touch ID tap |
 
