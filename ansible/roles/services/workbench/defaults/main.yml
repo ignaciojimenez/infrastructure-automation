@@ -1,0 +1,90 @@
+---
+# Workbench role defaults — PER-66
+
+enable_workbench: true
+
+# 🔴 The agent runs as its own account, NOT as infrastructure_user.
+#
+# Not a hardening flourish — it resolves a real collision. Two independent
+# systems converge this box's $HOME from git: this repo (monitoring into
+# ~/.scripts, ~/.logs) and dotfiles (~/.zshrc, ~/.scripts, the agent context).
+# Their surfaces genuinely overlap, and it is not one filename:
+#
+#   ~/.scripts                    — this repo's wrapper vs dotfiles' user-bin
+#                                   scripts. Live: dotfiles' own validate.sh
+#                                   fails here because the agent-sessions hook
+#                                   target is shadowed by the monitoring dir.
+#   ~/.config/opencode/AGENTS.md  — the agent role templates a FILE where
+#                                   dotfiles wants a SYMLINK. Latent on
+#                                   agent-lxc, fires the day dotfiles lands.
+#   ~/.local/bin                  — Claude Code installs here.
+#
+# Renaming any one of them fixes that one and leaves the next to be discovered
+# on a host, after deploy. Separate accounts remove the shared namespace, so
+# there is no next one: `choco` stays this repo's (Ansible, monitoring, sudo),
+# `builder` is dotfiles' (shell, agent context, Claude Code, worktrees).
+#
+# It is deliberately NOT called write_agent. `read_agent` names what it may do
+# to the fleet; a `write_agent` would name a fleet-write capability, which is
+# the one thing this box is defined by not having. Names become permissions.
+workbench_agent_user: builder
+
+# No sudo, because it has nothing to administer — not because sudo is the
+# control. The controls are the absences: no fleet key, no vault, no pct.
+# Local root would not meaningfully change the blast radius here, since the
+# GitHub token and the VLAN 40 position sit in this account's home either way.
+workbench_agent_sudo: false
+
+# Packages. Deliberately small: this box is a place to run an agent and a git
+# worktree, not a general dev host. build-essential is here because Claude
+# Code's native build needs nothing to compile, but npm modules a session
+# installs during real work routinely do — and discovering that mid-task on a
+# phone is the worst time to find out.
+workbench_packages:
+  - git
+  - tmux
+  - curl
+  - ca-certificates
+  - jq
+  - zsh
+  - ripgrep
+  - fd-find
+  - build-essential
+
+# Claude Code. The native installer, which is what this laptop runs, rather
+# than npm: it self-updates and needs no node runtime of its own.
+#
+# 🔴 It REFUSES to run under sudo from a regular user's shell — verified by
+# reading the script, which exits when `id -u` is 0 with SUDO_USER set. Every
+# task that touches it therefore runs `become: false` as the infrastructure
+# user. Do not "fix" a permissions error here by adding become.
+workbench_claude_install_url: https://claude.ai/install.sh
+workbench_claude_channel: stable
+
+# dotfiles — PER-31's acceptance test. A genuinely clean Linux box where
+# bootstrap.sh and nothing else must produce a working agent context.
+workbench_dotfiles_repo: https://github.com/ignaciojimenez/dotfiles.git
+workbench_dotfiles_dest: "/home/{{ workbench_agent_user }}/dotfiles"
+workbench_dotfiles_version: master
+
+# 🔴 Gates starting the Remote Control service and its heartbeat cron.
+#
+# Defaults FALSE and must stay false until `claude setup-token` has actually
+# been run on the box. Claude Code cannot authenticate unattended, so enabling
+# these before that turns a known-broken service into a cron that pages: the
+# unit crash-loops, the check correctly reports it down, and #home-alerts gets
+# the news every 15 minutes all night. That has happened here before — a
+# known-broken check on cron paged five times overnight.
+#
+# Flip to true in group_vars/workbench.yml once auth is done and
+# `systemctl status claude-remote-control` is green by hand.
+workbench_remote_control_enabled: false
+
+# The tmux session `claude --remote-control` runs in, so a phone SSH session
+# can attach to the same session the phone app is driving.
+workbench_tmux_session: workbench
+
+# Heartbeat cadence. Every 15 minutes: Remote Control is only useful if it is
+# actually up, and a box that went quiet after a reboot is the failure mode
+# this exists to catch.
+workbench_heartbeat_minute: "*/15"

@@ -1,0 +1,232 @@
+---
+# Workbench service role — PER-66
+#
+# An interactive Claude Code box, driven from the phone over Remote Control,
+# with no access to the fleet. See group_vars/workbench.yml for what this host
+# deliberately does not hold, and provision_workbench_lxc.yml for how it is
+# built.
+#
+# Required variables:
+#   infrastructure_user  — the account everything runs as
+#
+# Optional (see defaults/main.yml):
+#   enable_workbench, workbench_remote_control_enabled, workbench_packages
+
+# ============================================================
+# Packages
+# ============================================================
+
+- name: Install workbench packages
+  become: true
+  ansible.builtin.apt:
+    name: "{{ workbench_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  when: os_family == "debian"
+  tags: [workbench, packages]
+
+# ============================================================
+# The agent account
+#
+# Created before anything else writes into a home directory, because the whole
+# point is that dotfiles converges into *this* home and never into the one this
+# repo manages. See defaults/main.yml for why the accounts are split.
+# ============================================================
+
+- name: Create the agent account
+  become: true
+  ansible.builtin.user:
+    name: "{{ workbench_agent_user }}"
+    shell: /bin/bash
+    create_home: true
+    comment: "Workbench agent — builds code, holds no fleet access (PER-66)"
+  tags: [workbench, account]
+
+# Reachable with the same GitHub keys as the infrastructure user. The agent
+# account is one a human attaches to over SSH to drive a tmux session, so it
+# needs the same way in — it just does not carry any key back out.
+- name: Fetch authorized keys from GitHub
+  ansible.builtin.uri:
+    url: "{{ gh_keys }}"
+    return_content: true
+    timeout: 30
+    status_code: 200
+  register: workbench_gh_keys
+  delegate_to: localhost
+  become: false
+  check_mode: false
+  changed_when: false
+  tags: [workbench, account]
+
+- name: Authorize the agent account for SSH
+  become: true
+  ansible.posix.authorized_key:
+    user: "{{ workbench_agent_user }}"
+    key: "{{ workbench_gh_keys.content }}"
+    exclusive: true
+  tags: [workbench, account]
+
+# Asserted rather than assumed. This is the property the container exists for,
+# and a future edit that grants the account sudo should fail the run rather
+# than change the box quietly.
+- name: Assert the agent account has no sudo rights
+  become: true
+  ansible.builtin.file:
+    path: "/etc/sudoers.d/{{ workbench_agent_user }}"
+    state: absent
+  when: not workbench_agent_sudo | bool
+  tags: [workbench, account]
+
+# ============================================================
+# Claude Code
+#
+# 🔴 Installed as the agent account, never as root. The native installer exits
+# when it sees `id -u` = 0 with SUDO_USER set, because it installs under $HOME
+# and would otherwise drop the binary into root's — verified by reading the
+# script, not inferred from a failure. `become_user` satisfies it because the
+# effective uid is the agent's, not 0. Do not "fix" a permission error here by
+# switching to plain `become: true`; that re-breaks it.
+# ============================================================
+
+- name: Check whether Claude Code is already installed
+  become: true
+  become_user: "{{ workbench_agent_user }}"
+  ansible.builtin.stat:
+    path: "/home/{{ workbench_agent_user }}/.local/bin/claude"
+  register: workbench_claude_bin
+  tags: [workbench, claude]
+
+- name: Download the Claude Code installer
+  become: true
+  become_user: "{{ workbench_agent_user }}"
+  ansible.builtin.get_url:
+    url: "{{ workbench_claude_install_url }}"
+    dest: "/home/{{ workbench_agent_user }}/.claude_install.sh"
+    mode: '0700'
+  when: not workbench_claude_bin.stat.exists
+  tags: [workbench, claude]
+
+- name: Install Claude Code
+  become: true
+  become_user: "{{ workbench_agent_user }}"
+  ansible.builtin.command:
+    cmd: "/home/{{ workbench_agent_user }}/.claude_install.sh {{ workbench_claude_channel }}"
+  when: not workbench_claude_bin.stat.exists
+  changed_when: true
+  tags: [workbench, claude]
+
+- name: Remove the installer
+  become: true
+  become_user: "{{ workbench_agent_user }}"
+  ansible.builtin.file:
+    path: "/home/{{ workbench_agent_user }}/.claude_install.sh"
+    state: absent
+  tags: [workbench, claude]
+
+# ============================================================
+# dotfiles — PER-31's acceptance test
+#
+# This is the clean Linux box the whole dotfiles portability question was
+# waiting for: bootstrap.sh and nothing else has to produce a working agent
+# context here. Cloned over HTTPS deliberately — this host has no SSH key to
+# GitHub and is not getting one.
+# ============================================================
+
+- name: Clone dotfiles
+  become: true
+  become_user: "{{ workbench_agent_user }}"
+  ansible.builtin.git:
+    repo: "{{ workbench_dotfiles_repo }}"
+    dest: "{{ workbench_dotfiles_dest }}"
+    version: "{{ workbench_dotfiles_version }}"
+    # The box may have local commits from a session working on dotfiles
+    # itself; clobbering them from a converge run would be a data loss, not a
+    # convergence. An out-of-date clone is the lesser fault and is visible.
+    update: false
+  register: workbench_dotfiles_clone
+  tags: [workbench, dotfiles]
+
+# `--force` is correct here and would not have been in the shared home. In a
+# fresh account the only pre-existing file dotfiles wants is /etc/skel's
+# .profile — verified on this container by diffing skel against the link list —
+# and --force backs the original up rather than discarding it. Run without it,
+# bootstrap.sh exits 1 on that one conflict and links nothing after it.
+- name: Run the dotfiles bootstrap
+  become: true
+  become_user: "{{ workbench_agent_user }}"
+  ansible.builtin.command:
+    cmd: ./bootstrap.sh --force
+    chdir: "{{ workbench_dotfiles_dest }}"
+  register: workbench_bootstrap
+  # bootstrap.sh is idempotent and reports whether it changed anything. Keying
+  # `changed` off that string rather than off the clone means a re-run that
+  # actually relinks something is still visible as a change.
+  changed_when: "'No changes needed' not in workbench_bootstrap.stdout"
+  tags: [workbench, dotfiles]
+
+# ============================================================
+# Remote Control service
+# ============================================================
+
+- name: Deploy the Remote Control systemd unit
+  become: true
+  ansible.builtin.template:
+    src: claude-remote-control.service.j2
+    dest: /etc/systemd/system/claude-remote-control.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify: restart claude-remote-control
+  tags: [workbench, service]
+
+# Deployed always, enabled only behind the gate. The unit being on disk is
+# harmless; starting it before `claude setup-token` has run makes it crash-loop.
+- name: Enable and start the Remote Control service
+  become: true
+  ansible.builtin.systemd_service:
+    name: claude-remote-control
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: workbench_remote_control_enabled | bool
+  tags: [workbench, service]
+
+# ============================================================
+# Heartbeat
+#
+# A silent box is indistinguishable from a working one. Gated on the same
+# variable as the service: a check that correctly reports a service nobody has
+# authenticated yet is not monitoring, it is a pager that fires all night.
+# ============================================================
+
+- name: Deploy the Remote Control health check
+  become: true
+  ansible.builtin.template:
+    src: check_remote_control.sh.j2
+    dest: "{{ scripts_dir }}/check_remote_control.sh"
+    owner: "{{ infrastructure_user }}"
+    group: "{{ infrastructure_user }}"
+    mode: '0755'
+  tags: [workbench, monitoring]
+
+- name: Configure the Remote Control heartbeat cron job
+  become: true
+  ansible.builtin.cron:
+    name: "Claude Remote Control liveness"
+    minute: "{{ workbench_heartbeat_minute }}"
+    job: >
+      {{ scripts_dir }}/enhanced_monitoring_wrapper
+      --monitoring-name=workbench_remote_control
+      --heartbeat-interval=daily
+      --notify-fixed=true
+      {{ logging_token }}
+      {{ alert_token }}
+      {{ scripts_dir }}/check_remote_control.sh
+      >> {{ logs_dir }}/check_remote_control.log 2>&1
+    user: "{{ infrastructure_user }}"
+    state: "{{ 'present' if workbench_remote_control_enabled | bool else 'absent' }}"
+  when:
+    - logging_token is defined and logging_token != ''
+    - alert_token is defined and alert_token != ''
+  tags: [workbench, monitoring, cron]

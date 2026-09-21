@@ -1,0 +1,13 @@
+---
+# Workbench service handlers
+
+- name: Restart claude-remote-control
+  become: true
+  ansible.builtin.systemd_service:
+    name: claude-remote-control
+    state: restarted
+    daemon_reload: true
+  # Only meaningful once the service is allowed to run at all; restarting an
+  # unauthenticated crash-looping unit just adds noise.
+  when: workbench_remote_control_enabled | bool
+  listen: restart claude-remote-control

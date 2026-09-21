@@ -1,0 +1,37 @@
+# Claude Code Remote Control session — PER-66
+# Managed by Ansible (roles/services/workbench). Do not edit on the host.
+#
+# Runs inside tmux rather than as a bare process so a phone SSH session can
+# attach to the very session the phone app is driving — same scrollback, same
+# state — instead of guessing at what the agent is doing from the outside.
+#
+# Type=forking because `tmux new-session -d` daemonizes and returns. That is a
+# real limitation and worth naming: systemd supervises the tmux server, not the
+# claude process inside it, so a session whose pane has exited still reports
+# active. This unit is therefore NOT the liveness signal. check_remote_control.sh
+# is, and it looks for the process itself precisely because this unit cannot.
+
+[Unit]
+Description=Claude Code Remote Control session ({{ workbench_tmux_session }})
+Documentation=https://linear.app/lacopadeeuropa/issue/PER-66
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=forking
+User={{ workbench_agent_user }}
+WorkingDirectory=/home/{{ workbench_agent_user }}
+Environment=HOME=/home/{{ workbench_agent_user }}
+Environment=PATH=/home/{{ workbench_agent_user }}/.local/bin:/usr/local/bin:/usr/bin:/bin
+
+ExecStart=/usr/bin/tmux new-session -d -s {{ workbench_tmux_session }} \
+    '/home/{{ workbench_agent_user }}/.local/bin/claude --remote-control {{ workbench_tmux_session }}'
+ExecStop=/usr/bin/tmux kill-session -t {{ workbench_tmux_session }}
+
+# Restart on failure, but slowly. Remote Control talks to an external service;
+# a tight restart loop against an outage would burn tokens and add nothing.
+Restart=on-failure
+RestartSec=60
+
+[Install]
+WantedBy=multi-user.target
