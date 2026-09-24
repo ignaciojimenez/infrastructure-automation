@@ -260,6 +260,32 @@
   tags: [workbench, github]
 
 # ============================================================
+# Workspaces
+# ============================================================
+
+- name: Ensure the workspaces directory exists
+  become: true
+  become_user: "{{ workbench_agent_user }}"
+  ansible.builtin.file:
+    path: "{{ workbench_workspaces_dir }}"
+    state: directory
+    mode: '0755'
+  tags: [workbench, repos]
+
+# `update: false` on purpose. This box is where work happens, so a checkout
+# may hold a branch mid-change; pulling it from a converge run would discard
+# that. An out-of-date clone is the lesser fault, and a visible one.
+- name: Clone the working repositories
+  become: true
+  become_user: "{{ workbench_agent_user }}"
+  ansible.builtin.git:
+    repo: "https://github.com/{{ gh_profile }}/{{ item }}.git"
+    dest: "{{ workbench_workspaces_dir }}/{{ item }}"
+    update: false
+  loop: "{{ workbench_repos }}"
+  tags: [workbench, repos]
+
+# ============================================================
 # Remote Control service
 # ============================================================
 

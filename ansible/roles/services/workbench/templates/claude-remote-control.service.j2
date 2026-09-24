@@ -20,7 +20,7 @@ Wants=network-online.target
 [Service]
 Type=forking
 User={{ workbench_agent_user }}
-WorkingDirectory=/home/{{ workbench_agent_user }}
+WorkingDirectory={{ workbench_workspaces_dir }}
 Environment=HOME=/home/{{ workbench_agent_user }}
 Environment=PATH=/home/{{ workbench_agent_user }}/.local/bin:/usr/local/bin:/usr/bin:/bin
 

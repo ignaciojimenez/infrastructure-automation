@@ -87,6 +87,21 @@ workbench_dotfiles_version: master
 # `systemctl status claude-remote-control` is green by hand.
 workbench_remote_control_enabled: false
 
+# Where repos live, mirroring the laptop's ~/Documents/Workspaces. The Remote
+# Control session starts here rather than in $HOME, so every checkout is
+# already inside the directory Claude Code was granted — a session that starts
+# in $HOME can still reach them, but has to be told where they are first.
+workbench_workspaces_dir: "/home/{{ workbench_agent_user }}/Workspaces"
+
+# Cloned over HTTPS so the stored git credentials apply; an SSH remote would
+# need a deploy key this box deliberately does not have.
+#
+# infrastructure-automation carries vault.yml, but encrypted and with no
+# password anywhere on this host — the same state it is in on GitHub, which is
+# public. Cloning it here reveals nothing that is not already published.
+workbench_repos:
+  - infrastructure-automation
+
 # The tmux session `claude --remote-control` runs in, so a phone SSH session
 # can attach to the same session the phone app is driving.
 workbench_tmux_session: workbench
