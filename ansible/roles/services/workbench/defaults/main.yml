@@ -87,6 +87,10 @@ workbench_dotfiles_version: master
 # `systemctl status claude-remote-control` is green by hand.
 workbench_remote_control_enabled: false
 
+# Matches the theme dotfiles sets in settings.json, so the two agree rather
+# than the box rendering one thing and the tracked config claiming another.
+workbench_claude_theme: dark-ansi
+
 # Where repos live, mirroring the laptop's ~/Documents/Workspaces. The Remote
 # Control session starts here rather than in $HOME, so every checkout is
 # already inside the directory Claude Code was granted — a session that starts

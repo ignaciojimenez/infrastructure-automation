@@ -260,6 +260,58 @@
   tags: [workbench, github]
 
 # ============================================================
+# Onboarding
+#
+# 🔴 Claude Code runs a first-launch TUI (theme picker, then a welcome flow)
+# until `hasCompletedOnboarding` is set in ~/.claude.json. Under systemd there
+# is no one to answer it: the unit comes up active, the process runs, and it
+# sits on the theme prompt forever without ever registering for Remote
+# Control. The phone shows nothing and every outward sign says healthy.
+#
+# The theme in settings.json does NOT suppress this — dotfiles already sets
+# `theme: dark-ansi` there and the picker still ran. The flag is separate and
+# lives in ~/.claude.json.
+#
+# Written only when the flag is missing or false, not unconditionally: Claude
+# Code rewrites this file at runtime, and a task that restated the whole
+# document every converge would fight it and churn.
+# ============================================================
+
+- name: Read the agent account's Claude Code state
+  become: true
+  ansible.builtin.slurp:
+    src: "/home/{{ workbench_agent_user }}/.claude.json"
+  register: workbench_claude_state
+  failed_when: false
+  tags: [workbench, onboarding]
+
+# Two gates, not one. Past the theme picker the next launch stops on "Is this a
+# project you trust?", which is per-directory state under `projects`. Both have
+# to be pre-answered or the session still sits waiting for a keystroke nobody
+# will send. Found by reading the pane, not by guessing at key names.
+- name: Mark Claude Code onboarding complete for the agent account
+  become: true
+  ansible.builtin.copy:
+    content: >-
+      {{ (workbench_claude_state.content | b64decode | from_json)
+         | combine({'hasCompletedOnboarding': true,
+                    'theme': workbench_claude_theme,
+                    'projects': ((workbench_claude_state.content | b64decode | from_json).projects | default({}))
+                      | combine({workbench_workspaces_dir: {'hasTrustDialogAccepted': true}}, recursive=true)},
+                   recursive=true) | to_nice_json }}
+    dest: "/home/{{ workbench_agent_user }}/.claude.json"
+    owner: "{{ workbench_agent_user }}"
+    group: "{{ workbench_agent_user }}"
+    mode: '0600'
+  when:
+    - workbench_claude_state.content is defined
+    - not ((workbench_claude_state.content | b64decode | from_json).hasCompletedOnboarding | default(false))
+      or not ((workbench_claude_state.content | b64decode | from_json).projects
+              | default({})).get(workbench_workspaces_dir, {}).get('hasTrustDialogAccepted', false)
+  notify: restart claude-remote-control
+  tags: [workbench, onboarding]
+
+# ============================================================
 # Workspaces
 # ============================================================
 
@@ -289,9 +341,20 @@
 # Remote Control service
 # ============================================================
 
-# `claude setup-token` produces this; it is what lets the service authenticate
-# with no interactive login, which is the difference between a box that comes
-# back after a reboot and one that needs a human every time.
+# `claude setup-token` produces this. It authenticates API calls — a
+# `claude -p` prompt works with it and nothing else, which is what the
+# unattended-builder half of this box needs.
+#
+# 🔴 It is NOT sufficient for Remote Control, and that surprised this session.
+# With the token set and working, `claude auth status` still reports
+# `loggedIn: false, authMethod: "none"`, and the session shows "Remote Control
+# disconnected — /login". The account login requests scope
+# `user:sessions:claude_code`, which a setup-token credential does not carry.
+#
+# So Remote Control needs a one-time `claude auth login` as this account: a
+# browser OAuth round trip that cannot be vaulted or automated. It survives
+# restarts and reboots once done — it is once per box, not once per session.
+# Ansible deliberately does not try to fake it.
 - name: Deploy the Remote Control environment file
   become: true
   ansible.builtin.copy:
