@@ -17,6 +17,7 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ## Contents
 
+- [2026-09-23 — the Thread SPOF stays: the outage it would guard against is already fixed twice over (PER-23)](#2026-09-23--the-thread-spof-stays-the-outage-it-would-guard-against-is-already-fixed-twice-over-per-23)
 - [2026-09-19 — three overdue readings land: NIC stalls gone, a ratio floor set, and cwwk's thermal alert learns the difference](#2026-09-19--three-overdue-readings-land-nic-stalls-gone-a-ratio-floor-set-and-cwwks-thermal-alert-learns-the-difference)
 - [2026-09-17 — a healthy phone that stays home is not frozen, and paging said it was (PER-57)](#2026-09-17--a-healthy-phone-that-stays-home-is-not-frozen-and-paging-said-it-was-per-57)
 - [2026-09-16 — an alert that fails to send is never retried (PER-60)](#2026-09-16--an-alert-that-fails-to-send-is-never-retried-per-60)
@@ -57,6 +58,48 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ---
 
+
+---
+
+## 2026-09-23 — the Thread SPOF stays: the outage it would guard against is already fixed twice over (PER-23)
+
+**Decided: no second Thread border router. Closed as accept-and-monitor**,
+**because** the 17–22 Aug outage this item was raised to prevent had two real
+causes, and both are already fixed and verified independently of how many
+border routers exist:
+
+1. **The route, not the router.** The 5-day outage wasn't "only one border
+   router exists" — dockassist's route to the Thread mesh prefix aged out when
+   the HomePod roamed VLANs for AirPlay. Fixed 2026-08-23 with a dedicated
+   IPv6-only `wlan0` leg (`thread_wifi_link`) plus a deploy-time guard that
+   asserts the route actually arrived, not just that the radio associated. See
+   *"the door sensors were fine; their only road had moved,"* above.
+2. **The silence, not the mesh.** Nothing paged for five days because every
+   check watched machinery (host/container/service), not HA entities. Fixed
+   2026-08-25: `check_ha_entities.sh` runs every 10 min, 15-min grace, and was
+   verified with a real forced failure — stopping `matter-server` dropped 10
+   entities, alerted on `#home-alerts` in 45 s naming both door sensors by
+   name. See *"a controller with every device offline used to read as
+   green,"* above. No Thread-related recurrence since.
+
+**What's left is narrower than the original problem:** only "the HomePod is
+fully down/unreachable" (not just roaming) still has no fallback path — and
+that would now page in 15 minutes instead of staying silent for 5 days. For a
+home network, a 15-minutes-to-page / fix-when-convenient posture is an
+acceptable trade against a ~€25 backup OTBR (option a in the original item),
+which would harden a failure mode that's already rare and fast-detected.
+
+**Before closing, verified from Home Assistant's own docs**
+(home-assistant.io/integrations/thread/) that option (a) would have been
+viable if chosen: HA's Companion app supports importing an Apple Thread
+network's credentials ("Send credentials to Home Assistant"), and HA
+explicitly supports multiple border routers sharing one network. Not
+purchased — the decision made buying moot, not the technical gate.
+
+**Refused, do not re-propose** unless a fifth-Aug-style outage or a longer one
+recurs: buying a USB 802.15.4 dongle for a second OTBR on dockassist. Reopen
+condition matches the pattern used for the floor lamp (item 27) and the door
+sensors themselves — a recurrence, not a hunch.
 
 ---
 

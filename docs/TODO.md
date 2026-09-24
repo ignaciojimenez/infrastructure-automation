@@ -59,10 +59,12 @@ renders it:
 > **№4** 2 → **№5** 4 (plex) → **№6** 9 → **№7** 3a/3b/3c → **№8** 39 →
 > **№9** 5 → **№10** 19 → **№11** 12 → **№12** 10 → **№13** 11 → **№14** 6 →
 > **№15** 7 → **№16** 34 *(small; restores `changed=0` as a signal for the docker role)* →
-> **№17–20** 8/13/14/16 · **№21** 32 *(git-history rewrite —
-> decision only, default is no)* · **№22** 26 *(one UI toggle, global — his call)*
-> *(decision-gated — 16 needs a purchase call, 32 needs his call on a public
+> **№17–19** 8/13/14 · **№20** 32 *(git-history rewrite —
+> decision only, default is no)* · **№21** 26 *(one UI toggle, global — his call)*
+> *(decision-gated — 32 needs his call on a public
 > force-push, the rest need him at the cabinet; not ranked)*
+
+✅ **16 closed on 2026-09-23** — write-up in [archive/DONE.md](archive/DONE.md#2026-09-23--the-thread-spof-stays-the-outage-it-would-guard-against-is-already-fixed-twice-over-per-23); accept-and-monitor, no purchase. Both causes of the original 5-day outage (route aging out, silent alerting) were already fixed by items 15 and the 2026-08-23 IPv6 route fix.
 
 ✅ **41 closed on 2026-09-14** — write-up in [archive/DONE.md](archive/DONE.md#2026-09-14--two-dead-mullvad-relays-found-three-days-late-and-a-peer-swap-that-looked-broken); the peer-replacement runbook is in [NETWORK.md](NETWORK.md#replacing-a-mullvad-peer-runbook).
 
@@ -809,46 +811,6 @@ including the failure()+push+main gating and the env-not-${{ }} handling of the
 commit subject. Each repo needs its own SLACK_ALERT_WEBHOOK secret. Force a
 real failure in each and watch #home-alerts before calling any of them done.
 ```
-
-**16. The Thread mesh has exactly one border router, and it is a roaming HomePod**
-Needs a purchase decision. Every Matter-over-Thread device in the house reaches
-HA through **one** device: the HomePod "Bano" (MAC in `docs/local/WIRELESS.md`),
-on Wi-Fi.
-It is the only `_meshcop._udp` responder on the entire network.
-
-On 2026-08-17 it was moved from the IoT SSID to the no-VPN SSID (VLAN 20) to fix
-AirPlay, and every Thread device dropped off HA for five days. dockassist now
-holds a second IPv6-only Wi-Fi leg onto that VLAN, which **restores the path
-but does not remove the dependency** — unplug the HomePod, move it again, or
-change that SSID's key, and everything Thread goes dark exactly as before.
-
-**Option (a): USB 802.15.4 dongle + OpenThread Border Router on dockassist**
-(~€25). The mesh becomes local to the host that needs it: no Wi-Fi hop, no
-VLAN, no HomePod, and it is Ansible-managed like everything else. It also makes
-the mesh survive losing either router.
-
-**Option (b): accept it**, and rely on item 15 to notice within minutes rather
-than days. Cheaper, and honestly reasonable once 15 exists.
-
-⚠️ **Verify before buying:** a second border router has to join the *existing*
-Thread network, or the Eve sensors need re-commissioning. HA is understood to
-be able to import Thread credentials from the Apple ecosystem via the companion
-app — **this is unverified** and it is the whole basis of option (a) being
-cheap. Check it first.
-
-*State:* diagnosed 2026-08-22/23, mitigated not fixed. *Needs:* a decision from
-Ignacio, then a laptop.
-
-```
-Decide the Thread border-router SPOF. Read docs/TODO.md item 16. FIRST verify
-the claim the decision rests on: can Home Assistant import the Apple
-ecosystem's Thread network credentials (companion app → HA Thread panel) so a
-second OTBR joins the SAME mesh without re-commissioning the Eve sensors?
-Answer that from Home Assistant's own documentation, and say plainly if it
-cannot be confirmed. Only then price a USB 802.15.4 dongle that works with
-OTBR on a Pi 4 and report both options back — do not buy anything.
-```
-
 
 **32. Decide whether to rewrite git history for the pre-2026-08-30 disclosures**
 Needs a decision, not work. Item 24 redacted `HEAD`. The wireless
