@@ -24,6 +24,14 @@ WorkingDirectory=/home/{{ workbench_agent_user }}
 Environment=HOME=/home/{{ workbench_agent_user }}
 Environment=PATH=/home/{{ workbench_agent_user }}/.local/bin:/usr/local/bin:/usr/bin:/bin
 
+# CLAUDE_CODE_OAUTH_TOKEN lives in a root-owned 0600 file, not in an
+# `Environment=` line here. Unit-file values are printed by `systemctl show`
+# to any user on the box, so putting it inline would publish the credential to
+# exactly the unprivileged accounts the split was meant to keep it from.
+# systemd reads this as root before dropping to User=, so the agent account
+# never needs read access to it either.
+EnvironmentFile=/etc/claude-remote-control.env
+
 ExecStart=/usr/bin/tmux new-session -d -s {{ workbench_tmux_session }} \
     '/home/{{ workbench_agent_user }}/.local/bin/claude --remote-control {{ workbench_tmux_session }}'
 ExecStop=/usr/bin/tmux kill-session -t {{ workbench_tmux_session }}

@@ -166,8 +166,117 @@
   tags: [workbench, dotfiles]
 
 # ============================================================
+# GitHub access
+#
+# `gh` comes from GitHub's own apt repository, declared with
+# `deb822_repository` rather than `apt_repository`: the latter shells out to a
+# gpg binary that is not installed on a minimal Debian container and fails
+# outright even when the keyring is already dearmored.
+# ============================================================
+
+- name: Install the GitHub CLI keyring
+  become: true
+  ansible.builtin.get_url:
+    url: https://cli.github.com/packages/githubcli-archive-keyring.gpg
+    dest: /usr/share/keyrings/githubcli-archive-keyring.gpg
+    mode: '0644'
+  tags: [workbench, github]
+
+- name: Add the GitHub CLI repository
+  become: true
+  ansible.builtin.deb822_repository:
+    name: github-cli
+    types: [deb]
+    uris: https://cli.github.com/packages
+    suites: stable
+    components: [main]
+    architectures: [amd64]
+    signed_by: /usr/share/keyrings/githubcli-archive-keyring.gpg
+    state: present
+  register: workbench_gh_repo
+  tags: [workbench, github]
+
+- name: Install the GitHub CLI
+  become: true
+  ansible.builtin.apt:
+    name: gh
+    state: present
+    update_cache: "{{ workbench_gh_repo.changed }}"
+  tags: [workbench, github]
+
+# Written as a file rather than passed to `gh auth login --with-token`, so the
+# token never appears in a command line — every process on the box can read
+# /proc/*/cmdline. Same reasoning as keeping tokens out of cron lines.
+# `copy` does not create intermediate directories, and 0700 rather than the
+# 0755 a default mkdir would give: this directory holds a token file.
+- name: Ensure the agent account's gh config directory exists
+  become: true
+  become_user: "{{ workbench_agent_user }}"
+  ansible.builtin.file:
+    path: "/home/{{ workbench_agent_user }}/.config/gh"
+    state: directory
+    mode: '0700'
+  tags: [workbench, github]
+
+# Written by root with explicit ownership, not via `become_user`. Handing a
+# file to another unprivileged account makes Ansible stage it through a temp
+# file it must widen for that user — with `acl` present it does so with an
+# ACL, and without it the only other route is world-readable temp files. For a
+# token, neither is worth it when root can simply write the file and chown it.
+- name: Authenticate the GitHub CLI for the agent account
+  become: true
+  ansible.builtin.copy:
+    owner: "{{ workbench_agent_user }}"
+    group: "{{ workbench_agent_user }}"
+    content: |
+      github.com:
+          oauth_token: {{ workbench_gh_token }}
+          user: {{ gh_profile }}
+          git_protocol: https
+    dest: "/home/{{ workbench_agent_user }}/.config/gh/hosts.yml"
+    mode: '0600'
+  no_log: true
+  tags: [workbench, github]
+
+# So `git push` works without `gh` mediating it.
+- name: Store git credentials for the agent account
+  become: true
+  ansible.builtin.copy:
+    owner: "{{ workbench_agent_user }}"
+    group: "{{ workbench_agent_user }}"
+    content: "https://{{ gh_profile }}:{{ workbench_gh_token }}@github.com\n"
+    dest: "/home/{{ workbench_agent_user }}/.git-credentials"
+    mode: '0600'
+  no_log: true
+  tags: [workbench, github]
+
+- name: Point git at the stored credentials
+  become: true
+  become_user: "{{ workbench_agent_user }}"
+  community.general.git_config:
+    name: credential.helper
+    value: store
+    scope: global
+  tags: [workbench, github]
+
+# ============================================================
 # Remote Control service
 # ============================================================
+
+# `claude setup-token` produces this; it is what lets the service authenticate
+# with no interactive login, which is the difference between a box that comes
+# back after a reboot and one that needs a human every time.
+- name: Deploy the Remote Control environment file
+  become: true
+  ansible.builtin.copy:
+    content: "CLAUDE_CODE_OAUTH_TOKEN={{ workbench_anthropic_token }}\n"
+    dest: /etc/claude-remote-control.env
+    owner: root
+    group: root
+    mode: '0600'
+  no_log: true
+  notify: restart claude-remote-control
+  tags: [workbench, service]
 
 - name: Deploy the Remote Control systemd unit
   become: true

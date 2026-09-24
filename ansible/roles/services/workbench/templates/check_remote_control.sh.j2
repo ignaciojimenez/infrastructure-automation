@@ -36,8 +36,14 @@ command -v tmux >/dev/null 2>&1 || fail "tmux is not installed — the workbench
 # would prompt for a password, fail every time, and report the workbench down
 # whether or not it was — a check that always fails teaches nothing, exactly
 # like one that always passes.
-if ! pgrep -u "$AGENT_USER" -x tmux >/dev/null 2>&1; then
-    fail "no tmux server running as $AGENT_USER — nothing is hosting Remote Control"
+#
+# Matched with -f against the argv, NOT `-x tmux`. The tmux server renames
+# itself to `tmux: server`, so an exact-name match never hits it: the first
+# version of this check reported CRITICAL against a container where Remote
+# Control was demonstrably running. Caught by running the healthy path by hand
+# before this got a cron, which is the only reason it did not page.
+if ! pgrep -u "$AGENT_USER" -f "tmux.*-s $SESSION" >/dev/null 2>&1; then
+    fail "no tmux server hosting session '$SESSION' as $AGENT_USER"
 fi
 
 # The half that matters. Match the process by its own command line rather than
@@ -53,12 +59,18 @@ fi
 # process it is looking for belongs to a different account entirely, so asking
 # about the caller's uid would look in the wrong place and report healthy only
 # when the answer was already wrong.
-if ! pgrep -u "$AGENT_USER" -f 'claude.*--remote-control' >/dev/null 2>&1; then
+# `-x claude` matches the process name exactly, deliberately not
+# `-f 'claude.*--remote-control'`. The tmux server's own argv contains the
+# claude command it was asked to run, so an argv match reports the agent alive
+# whenever tmux is — and would read healthy against a session whose pane had
+# exited. It happens that tmux dies with its last pane here, so the two agree
+# today; relying on that is relying on a coincidence rather than on the check.
+if ! pgrep -u "$AGENT_USER" -x claude >/dev/null 2>&1; then
     fail "tmux session '$SESSION' is alive but no 'claude --remote-control' process is running in it"
 fi
 
 # Report the pid so the log line is worth reading when this is green — a check
 # whose success output is just "OK" teaches nothing when you go back to it.
-PID="$(pgrep -u "$AGENT_USER" -f 'claude.*--remote-control' | head -1)"
+PID="$(pgrep -u "$AGENT_USER" -x claude | head -1)"
 echo "OK: Remote Control up in tmux session '$SESSION' (pid $PID)"
 exit 0

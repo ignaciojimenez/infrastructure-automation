@@ -50,6 +50,13 @@ workbench_packages:
   - ripgrep
   - fd-find
   - build-essential
+  # Ansible stages a file through a temp copy when it becomes an unprivileged
+  # user, and has to widen that temp file for the target account. Without acl
+  # it falls back to `chmod A+user:...:rx:allow`, which is macOS/NFSv4 syntax
+  # that Debian's coreutils rejects outright — every become_user task against
+  # this account then fails on "Failed to set permissions on the temporary
+  # files". With acl it uses setfacl and grants only that one user.
+  - acl
 
 # Claude Code. The native installer, which is what this laptop runs, rather
 # than npm: it self-updates and needs no node runtime of its own.

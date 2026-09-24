@@ -47,3 +47,18 @@
 # no inbound path: Remote Control is outbound-only, which is the whole reason
 # it needs no port forward.
 enable_cloudflare_tunnel: false
+
+# Remote Control is live: `builder` is authenticated via the vaulted OAuth
+# token, so the service can start unattended and the heartbeat has something
+# real to watch. Kept false in the role's defaults so a fresh host never brings
+# up a crash-looping unit with a working pager attached to it.
+workbench_remote_control_enabled: true
+
+# Credentials for the agent account, mapped from the vault the same way
+# group_vars/all/main.yml maps the fleet's. Consumed by roles/services/workbench.
+#
+# Neither is a fleet secret: the GitHub token reaches repos, and the Claude
+# token reaches Anthropic. Losing this box costs the two of them and nothing
+# on the network — which is the whole reason it holds no vault password.
+workbench_gh_token: "{{ vault_builder_gh_token }}"
+workbench_anthropic_token: "{{ vault_anthropic_builder_token }}"
