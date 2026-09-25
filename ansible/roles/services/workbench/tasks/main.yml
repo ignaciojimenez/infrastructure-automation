@@ -67,15 +67,41 @@
     exclusive: true
   tags: [workbench, account]
 
-# Asserted rather than assumed. This is the property the container exists for,
-# and a future edit that grants the account sudo should fail the run rather
-# than change the box quietly.
-- name: Assert the agent account has no sudo rights
+# The agent account gets exactly one privilege: control of its own unit.
+# `validate` runs visudo before the file is installed, so a malformed entry is
+# rejected rather than written — a broken sudoers file locks out every sudo
+# user on the host, including the one Ansible connects as.
+- name: Allow the agent account to control its own service
+  become: true
+  ansible.builtin.copy:
+    content: |
+      # Managed by Ansible (roles/services/workbench). Do not edit.
+      # Scoped to one unit, arguments included — sudo matches the full argv.
+      {{ workbench_agent_user }} ALL=(root) NOPASSWD: \
+        /usr/bin/systemctl restart claude-remote-control, \
+        /usr/bin/systemctl stop claude-remote-control, \
+        /usr/bin/systemctl start claude-remote-control, \
+        /usr/bin/systemctl status claude-remote-control
+    dest: "/etc/sudoers.d/{{ workbench_agent_user }}"
+    owner: root
+    group: root
+    mode: '0440'
+    validate: 'visudo -cf %s'
+  when:
+    - not workbench_agent_sudo | bool
+    - workbench_agent_service_control | bool
+  tags: [workbench, account]
+
+# If both toggles are off the account gets nothing, and any file left behind by
+# a previous run is removed rather than silently kept.
+- name: Remove the agent account's sudoers entry when it should have none
   become: true
   ansible.builtin.file:
     path: "/etc/sudoers.d/{{ workbench_agent_user }}"
     state: absent
-  when: not workbench_agent_sudo | bool
+  when:
+    - not workbench_agent_sudo | bool
+    - not workbench_agent_service_control | bool
   tags: [workbench, account]
 
 # ============================================================

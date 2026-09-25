@@ -29,11 +29,22 @@ enable_workbench: true
 # the one thing this box is defined by not having. Names become permissions.
 workbench_agent_user: builder
 
-# No sudo, because it has nothing to administer — not because sudo is the
-# control. The controls are the absences: no fleet key, no vault, no pct.
+# No general sudo, because it has nothing to administer — not because sudo is
+# the control. The controls are the absences: no fleet key, no vault, no pct.
 # Local root would not meaningfully change the blast radius here, since the
 # GitHub token and the VLAN 40 position sit in this account's home either way.
 workbench_agent_sudo: false
+
+# One narrow exception: the account may restart its OWN unit and read its
+# status. Without it, the one-time `claude auth login` turns into an account
+# hop — log in as builder, discover it cannot restart anything, exit, come
+# back as the infrastructure user — which is exactly the friction that made
+# this box annoying to bring up the first time.
+#
+# Scoped to four exact command lines, arguments included: sudo matches the
+# full argv, so this grants restart/stop/start/status of one named unit and
+# nothing else. It is not a general systemctl grant.
+workbench_agent_service_control: true
 
 # Packages. Deliberately small: this box is a place to run an agent and a git
 # worktree, not a general dev host. build-essential is here because Claude

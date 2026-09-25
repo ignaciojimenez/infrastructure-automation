@@ -19,6 +19,7 @@ Personal infrastructure-as-code repository managing a home network of Raspberry 
 | `cwwk` | `cwwk` | Debian | hypervisor | CWWK host for VMs and LXCs |
 | `unifi-lxc` | `unifi` | LXC | network_controller | UniFi Network Application |
 | `agent-lxc` | `10.30.40.203` | LXC | agent | CT 103 — fleet sweep + investigation; see [AGENT_LXC.md](docs/AGENT_LXC.md) |
+| `workbench-lxc` | `10.30.40.207` | LXC | workbench | CT 104 — interactive Claude Code from the phone, **no fleet access**. Agent runs as `builder`, not `choco`; see [WORKBENCH.md](docs/WORKBENCH.md) |
 
 ## Key Conventions
 
