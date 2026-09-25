@@ -52,6 +52,50 @@
 #
 # This is the half that restores coverage: without it check_auto_upgrades can
 # only report "cannot verify", which is honest but blind.
+# Ghostty's terminfo is not in Debian's ncurses-term (checked on trixie, where
+# ncurses-term is installed and does not carry it), so every interactive login
+# from that terminal greets you with `tput: unknown terminal "xterm-ghostty"`
+# and loses colour. Compiled per host rather than shipped as a binary
+# terminfo: the compiled format is ncurses-version specific, the source is not.
+#
+# Installed system-wide rather than into one user's ~/.terminfo, because the
+# accounts that get SSH'd into vary per host and this is a property of the
+# host, not of an account.
+- name: Stage the Ghostty terminfo source
+  become: true
+  ansible.builtin.copy:
+    # Relative, so Ansible resolves it against this task file's own files/
+    # directory. `{{ playbook_dir }}/files/` — the convention bootstrap.yml
+    # uses — resolves to playbooks/platform/ here, because this file is
+    # imported through platform/debian.yml rather than run directly.
+    src: terminfo/xterm-ghostty.terminfo
+    dest: /usr/local/share/xterm-ghostty.terminfo
+    owner: root
+    group: root
+    mode: '0644'
+  register: debian_ghostty_terminfo
+  tags: [baseline, terminfo]
+
+# `tic -x` reads the extended capabilities Ghostty relies on; without -x they
+# are silently dropped. Guarded on `infocmp` rather than on the copy having
+# changed, so a host that somehow lost the compiled entry gets it back.
+- name: Check whether the Ghostty terminfo is compiled
+  become: true
+  ansible.builtin.command:
+    cmd: infocmp -x xterm-ghostty
+  register: debian_ghostty_compiled
+  changed_when: false
+  failed_when: false
+  tags: [baseline, terminfo]
+
+- name: Compile the Ghostty terminfo
+  become: true
+  ansible.builtin.command:
+    cmd: tic -x -o /usr/share/terminfo /usr/local/share/xterm-ghostty.terminfo
+  when: debian_ghostty_compiled.rc != 0 or debian_ghostty_terminfo.changed
+  changed_when: true
+  tags: [baseline, terminfo]
+
 - name: Ensure the infrastructure user can read system logs
   ansible.builtin.user:
     name: "{{ infrastructure_user }}"
