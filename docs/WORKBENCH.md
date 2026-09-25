@@ -102,6 +102,34 @@ reach it".
 
 ---
 
+## Login noise you can ignore
+
+Two cosmetic things on `ssh builder@workbench`, both stock Debian rather than
+anything this repo does — checked against `cobra`, which behaves identically:
+
+- **The Debian banner prints twice.** `/etc/pam.d/sshd` has two `pam_motd`
+  lines: one for `/run/motd.dynamic` (the kernel line) and one for
+  `/etc/motd` (the warranty text). Unrelated to the agent, which runs under
+  systemd and never starts a login shell.
+- **`tput: unknown terminal "xterm-ghostty"`.** Ghostty's terminfo is not in
+  Debian 13's `ncurses-term`, which is already installed and does not carry
+  it, so `.bashrc`'s colour probe fails. Harmless, and the session itself is
+  unaffected.
+
+  Zero-risk fix, laptop-side, in `~/.ssh/config`:
+
+  ```
+  Host workbench workbench-lxc 10.30.40.207
+      SetEnv TERM=xterm-256color
+  ```
+
+  The alternative is shipping the entry to the fleet
+  (`infocmp -x xterm-ghostty` exports ~4 KB), which would fix every host but is
+  a change to every host — worth doing deliberately, not as a side effect of
+  this container.
+
+---
+
 ## Everyday operations
 
 ```sh
