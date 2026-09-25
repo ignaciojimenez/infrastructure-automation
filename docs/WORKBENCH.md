@@ -47,6 +47,18 @@ shows *"Remote Control disconnected — /login"*. The account login requests
 scope `user:sessions:claude_code`, which a setup-token credential does not
 carry.
 
+🔴 **And it must not be in the service's environment.** Setting
+`CLAUDE_CODE_OAUTH_TOKEN` for the unit puts Claude Code into API mode — the
+banner reads *"Claude API"* — which **overrides** the account's claude.ai
+login. Remote Control then refuses outright: *"Remote Control disconnected —
+Claude.ai login was rejected"*. That is why the phone saw no session at all
+even after a successful `claude auth login`. The unit deliberately passes no
+credential; the login on disk is enough, and survives reboots.
+
+The token stays in `/etc/claude-remote-control.env` for unattended `claude -p`
+work, which genuinely does want API mode. Set it per invocation, never on the
+session.
+
 So Remote Control needs one browser round trip, **once per box** — not per
 session, and it survives restarts and reboots:
 
@@ -82,6 +94,9 @@ Control disconnected"* means the login did not take.
 
 Three separate times this box looked healthy and was not:
 
+0. **A token that looked like help.** `CLAUDE_CODE_OAUTH_TOKEN` in the unit
+   forced API mode and had Remote Control reject the subscription login. The
+   service was `active`, authenticated, and useless.
 1. **The theme picker.** Claude Code runs a first-launch TUI until
    `hasCompletedOnboarding` is set in `~/.claude.json`. Under systemd nobody
    answers it. The unit was `active`, the process was running, the health check
@@ -89,10 +104,16 @@ Three separate times this box looked healthy and was not:
    not suppress it; that flag is separate.
 2. **The trust prompt.** Past the picker, the next launch stops on *"Is this a
    project you trust?"* — per-directory state under `projects`.
-3. **No login.** Both gates passed, prompt reached, and Remote Control still
+3. **The fullscreen-renderer upsell**, a third prompt, counted by
+   `fullscreenUpsellSeenCount`.
+4. **No login.** All gates passed, prompt reached, and Remote Control still
    refused because the account was not signed in.
 
-Both config gates are now pre-answered by the role. The third cannot be.
+The config gates are pre-answered by the role. The login cannot be.
+
+**A healthy pane reads `/rc active` and `Claude Pro`.** `Claude API` means the
+token is leaking into the session's environment; anything else on that line
+means it is not usable from the phone, whatever systemd says.
 
 📌 **The health check proves the process exists, not that the session is
 usable.** `check_remote_control.sh` looks for a `claude` process owned by

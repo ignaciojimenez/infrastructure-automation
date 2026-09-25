@@ -322,6 +322,7 @@
       {{ (workbench_claude_state.content | b64decode | from_json)
          | combine({'hasCompletedOnboarding': true,
                     'theme': workbench_claude_theme,
+                    'fullscreenUpsellSeenCount': 99,
                     'projects': ((workbench_claude_state.content | b64decode | from_json).projects | default({}))
                       | combine({workbench_workspaces_dir: {'hasTrustDialogAccepted': true}}, recursive=true)},
                    recursive=true) | to_nice_json }}
@@ -332,6 +333,7 @@
   when:
     - workbench_claude_state.content is defined
     - not ((workbench_claude_state.content | b64decode | from_json).hasCompletedOnboarding | default(false))
+      or ((workbench_claude_state.content | b64decode | from_json).fullscreenUpsellSeenCount | default(0)) < 99
       or not ((workbench_claude_state.content | b64decode | from_json).projects
               | default({})).get(workbench_workspaces_dir, {}).get('hasTrustDialogAccepted', false)
   notify: restart claude-remote-control

@@ -24,13 +24,22 @@ WorkingDirectory={{ workbench_workspaces_dir }}
 Environment=HOME=/home/{{ workbench_agent_user }}
 Environment=PATH=/home/{{ workbench_agent_user }}/.local/bin:/usr/local/bin:/usr/bin:/bin
 
-# CLAUDE_CODE_OAUTH_TOKEN lives in a root-owned 0600 file, not in an
-# `Environment=` line here. Unit-file values are printed by `systemctl show`
-# to any user on the box, so putting it inline would publish the credential to
-# exactly the unprivileged accounts the split was meant to keep it from.
-# systemd reads this as root before dropping to User=, so the agent account
-# never needs read access to it either.
-EnvironmentFile=/etc/claude-remote-control.env
+# 🔴 CLAUDE_CODE_OAUTH_TOKEN is deliberately NOT passed to this unit.
+#
+# Setting it puts Claude Code into API mode — the banner reads "Claude API" —
+# and that *overrides* the account's claude.ai login. Remote Control needs the
+# subscription session, so with the token present it refuses outright:
+# "Remote Control disconnected — Claude.ai login was rejected". The token was
+# added here believing it would let the service authenticate unattended; it
+# does the opposite, and was the reason the phone saw no session at all.
+#
+# The claude.ai login from `claude auth login` persists on disk under the
+# account's ~/.claude, so this unit needs no credential of its own and comes
+# back after a reboot without one.
+#
+# /etc/claude-remote-control.env still holds the token for unattended
+# `claude -p` work, which genuinely does want API mode. That belongs on the
+# individual invocation, not on this session's environment.
 
 ExecStart=/usr/bin/tmux new-session -d -s {{ workbench_tmux_session }} \
     '/home/{{ workbench_agent_user }}/.local/bin/claude --remote-control {{ workbench_tmux_session }}'
