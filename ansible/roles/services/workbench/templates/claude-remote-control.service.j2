@@ -2,8 +2,10 @@
 # Managed by Ansible (roles/services/workbench). Do not edit on the host.
 #
 # Runs inside tmux rather than as a bare process so a phone SSH session can
-# attach to the very session the phone app is driving — same scrollback, same
-# state — instead of guessing at what the agent is doing from the outside.
+# attach to the very server the phone app is driving — same scrollback, same
+# state — instead of guessing at what it is doing from the outside. The server
+# is interactive (it pre-creates a session to type in, and `w` toggles spawn
+# mode at runtime), so it still wants a terminal.
 #
 # Type=forking because `tmux new-session -d` daemonizes and returns. That is a
 # real limitation and worth naming: systemd supervises the tmux server, not the
@@ -20,7 +22,7 @@ Wants=network-online.target
 [Service]
 Type=forking
 User={{ workbench_agent_user }}
-WorkingDirectory={{ workbench_workspaces_dir }}
+WorkingDirectory={{ workbench_remote_control_dir }}
 Environment=HOME=/home/{{ workbench_agent_user }}
 Environment=PATH=/home/{{ workbench_agent_user }}/.local/bin:/usr/local/bin:/usr/bin:/bin
 
@@ -42,7 +44,10 @@ Environment=PATH=/home/{{ workbench_agent_user }}/.local/bin:/usr/local/bin:/usr
 # individual invocation, not on this session's environment.
 
 ExecStart=/usr/bin/tmux new-session -d -s {{ workbench_tmux_session }} \
-    '/home/{{ workbench_agent_user }}/.local/bin/claude --remote-control {{ workbench_tmux_session }}'
+    '/home/{{ workbench_agent_user }}/.local/bin/claude remote-control \
+       --name {{ workbench_tmux_session }} \
+       --spawn {{ workbench_remote_control_spawn }} \
+       --capacity {{ workbench_remote_control_capacity }}'
 ExecStop=/usr/bin/tmux kill-session -t {{ workbench_tmux_session }}
 
 # Restart on failure, but slowly. Remote Control talks to an external service;

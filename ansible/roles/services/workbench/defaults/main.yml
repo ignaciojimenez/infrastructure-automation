@@ -117,6 +117,34 @@ workbench_workspaces_dir: "/home/{{ workbench_agent_user }}/Workspaces"
 workbench_repos:
   - infrastructure-automation
 
+# 🔴 `claude remote-control` — the SUBCOMMAND, not the `--remote-control` flag.
+#
+# They are not equivalent, and the difference is the whole point of this box.
+# The subcommand "runs as a persistent server that accepts multiple concurrent
+# sessions", pre-creating one so there is somewhere to type immediately. The
+# flag starts a single interactive session with Remote Control enabled — what
+# the subcommand calls `--spawn=session`, "classic single-session mode", which
+# exits when that session ends. With the flag you get one session from the
+# phone and no way to branch another.
+#
+# The subcommand is absent from `claude --help`'s command list, which is why an
+# earlier pass here concluded it did not exist and used the flag. `claude
+# remote-control --help` documents it in full; `rc` is an alias.
+workbench_remote_control_capacity: 32
+
+# Spawn mode: same-dir, worktree, or session.
+#
+# `same-dir` is the default here because the session directory is ~/Workspaces,
+# which holds the repos rather than being one. Worktree mode requires the
+# directory to BE a git repository — so pointing this at a single checkout and
+# setting `worktree` buys per-session isolation at the cost of reaching only
+# that repo. `w` toggles the two at runtime.
+workbench_remote_control_spawn: same-dir
+
+# The directory Remote Control serves. Every repo under it is reachable from
+# any session it spawns.
+workbench_remote_control_dir: "{{ workbench_workspaces_dir }}"
+
 # The tmux session `claude --remote-control` runs in, so a phone SSH session
 # can attach to the same session the phone app is driving.
 workbench_tmux_session: workbench

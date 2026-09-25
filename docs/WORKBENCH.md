@@ -1,8 +1,23 @@
 # The workbench container
 
-**What it is:** an always-on box on `cwwk` (CT 104, `10.30.40.207`) running an
-interactive Claude Code session under `tmux`, reachable from the phone over
-Remote Control. It is where code gets written when the laptop is shut.
+**What it is:** an always-on box on `cwwk` (CT 104, `10.30.40.207`) running
+`claude remote-control` under `tmux` — a persistent server that accepts
+multiple concurrent sessions, reachable from the phone. It is where code gets
+written when the laptop is shut.
+
+⚠️ **`claude remote-control` (subcommand) is not `claude --remote-control`
+(flag).** The subcommand is a server: `--capacity` sessions at once, one
+pre-created so there is somewhere to type immediately. The flag is a single
+session — what the subcommand calls `--spawn=session`, which exits when that
+session ends. The flag was deployed here first, and the phone got exactly one
+session with no way to branch another. The subcommand does not appear in
+`claude --help`'s command list; `claude remote-control --help` documents it,
+and `rc` is an alias.
+
+`--spawn` defaults to `same-dir` because worktree mode *requires the served
+directory to be a git repository*, and `~/Workspaces` holds the repos rather
+than being one. Point it at a single checkout to get per-session worktree
+isolation, at the cost of reaching only that repo; `w` toggles at runtime.
 
 **What it is not:** anything that can touch the fleet. See
 [Deliberate absences](#deliberate-absences).
