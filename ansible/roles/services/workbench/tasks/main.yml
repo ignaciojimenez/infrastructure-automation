@@ -311,10 +311,21 @@
   failed_when: false
   tags: [workbench, onboarding]
 
-# Two gates, not one. Past the theme picker the next launch stops on "Is this a
-# project you trust?", which is per-directory state under `projects`. Both have
-# to be pre-answered or the session still sits waiting for a keystroke nobody
-# will send. Found by reading the pane, not by guessing at key names.
+# Four gates, not one, each found only by reading the pane after clearing the
+# last: the theme picker, "Is this a project you trust?" (per-directory state
+# under `projects`), the fullscreen-renderer upsell, and finally
+# "Enable Remote Control? (y/n)" from the subcommand itself. Every one of them
+# leaves the unit `active` with a process running and nothing reachable.
+#
+# `remoteControlMachineId` is deliberately NOT set here. It identifies a
+# machine to the account; copying the laptop's would make two boxes claim the
+# same identity. Claude Code generates its own on first run.
+#
+# Key names read from a machine that has already answered these, not guessed —
+# and the guard tests every one of them. `hasUsedRemoteControl` alone is not
+# enough: Claude Code sets it itself the moment the server starts, so a guard
+# keyed only on that skips while the consent prompt is still on screen. The
+# flag that actually tracks the dialog is `remoteDialogSeen`.
 - name: Mark Claude Code onboarding complete for the agent account
   become: true
   ansible.builtin.copy:
@@ -323,6 +334,8 @@
          | combine({'hasCompletedOnboarding': true,
                     'theme': workbench_claude_theme,
                     'fullscreenUpsellSeenCount': 99,
+                    'hasUsedRemoteControl': true,
+                    'remoteDialogSeen': true,
                     'projects': ((workbench_claude_state.content | b64decode | from_json).projects | default({}))
                       | combine({workbench_workspaces_dir: {'hasTrustDialogAccepted': true}}, recursive=true)},
                    recursive=true) | to_nice_json }}
@@ -334,6 +347,8 @@
     - workbench_claude_state.content is defined
     - not ((workbench_claude_state.content | b64decode | from_json).hasCompletedOnboarding | default(false))
       or ((workbench_claude_state.content | b64decode | from_json).fullscreenUpsellSeenCount | default(0)) < 99
+      or not ((workbench_claude_state.content | b64decode | from_json).hasUsedRemoteControl | default(false))
+      or not ((workbench_claude_state.content | b64decode | from_json).remoteDialogSeen | default(false))
       or not ((workbench_claude_state.content | b64decode | from_json).projects
               | default({})).get(workbench_workspaces_dir, {}).get('hasTrustDialogAccepted', false)
   notify: restart claude-remote-control

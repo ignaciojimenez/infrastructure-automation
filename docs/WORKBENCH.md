@@ -100,8 +100,17 @@ Then check the session is actually connected — **not just running**:
 tmux capture-pane -p -t workbench | tail -5
 ```
 
-A healthy pane shows the prompt. A pane showing `/rc failed` or *"Remote
-Control disconnected"* means the login did not take.
+A healthy pane shows:
+
+```
+·✔︎· Connected · Workspaces · HEAD
+    Capacity: 1/32 · New sessions will be created in the current directory
+```
+
+`Connected` plus a capacity line is the server running. `/rc failed`, *"Remote
+Control disconnected"*, `Claude API` on the model line, or any `(y/n)` prompt
+means it is not usable from the phone — whatever systemd and the health check
+say.
 
 ---
 
@@ -121,7 +130,11 @@ Three separate times this box looked healthy and was not:
    project you trust?"* — per-directory state under `projects`.
 3. **The fullscreen-renderer upsell**, a third prompt, counted by
    `fullscreenUpsellSeenCount`.
-4. **No login.** All gates passed, prompt reached, and Remote Control still
+4. **"Enable Remote Control? (y/n)"** from the subcommand itself, tracked by
+   `remoteDialogSeen`. Note `hasUsedRemoteControl` is *not* the gate — Claude
+   Code sets that itself the moment the server starts, so a check keyed on it
+   passes while the prompt is still on screen.
+5. **No login.** All gates passed, prompt reached, and Remote Control still
    refused because the account was not signed in.
 
 The config gates are pre-answered by the role. The login cannot be.
