@@ -17,6 +17,7 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ## Contents
 
+- [2026-09-27 — Slack cannot reach the workbench, and the two ways round it are both worse than not doing it (parked)](#2026-09-27--slack-cannot-reach-the-workbench-and-the-two-ways-round-it-are-both-worse-than-not-doing-it-parked)
 - [2026-09-23 — the Thread SPOF stays: the outage it would guard against is already fixed twice over (PER-23)](#2026-09-23--the-thread-spof-stays-the-outage-it-would-guard-against-is-already-fixed-twice-over-per-23)
 - [2026-09-19 — three overdue readings land: NIC stalls gone, a ratio floor set, and cwwk's thermal alert learns the difference](#2026-09-19--three-overdue-readings-land-nic-stalls-gone-a-ratio-floor-set-and-cwwks-thermal-alert-learns-the-difference)
 - [2026-09-17 — a healthy phone that stays home is not frozen, and paging said it was (PER-57)](#2026-09-17--a-healthy-phone-that-stays-home-is-not-frozen-and-paging-said-it-was-per-57)
@@ -58,6 +59,55 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ---
 
+
+---
+
+## 2026-09-27 — Slack cannot reach the workbench, and the two ways round it are both worse than not doing it (parked)
+
+**Parked, not queued.** Diagnosed, nothing broken, no fix worth building today.
+Recorded here so the next person asking "can I just @Claude the workbench from
+Slack?" gets the answer without re-deriving it.
+
+**The question.** The workbench (CT 104, PER-66) is an always-on box that serves
+Claude Code sessions to the phone. `@Claude` already works in Slack — verified,
+the bot is `U0BUU5B0XSL` in `#agents`. So can the Slack one use that box?
+
+**No, and the estate already had the evidence.** Claude in Slack spawns a *cloud
+session*; Claude Code's own comparison table lists it as running on "Anthropic
+cloud", against Remote Control's "your machine". The proof is in the Slack
+history: on 2026-09-06 that bot answered a question about `~/.agent-context` with
+*"This is a Linux cloud container: there's no /Users/choco, and ~ is /root… I'm
+running inside a fresh clone at /home/user/dotfiles"*. It was never on a machine
+here.
+
+**The mechanism that would do it exists, and is out of reach.** Self-hosted
+environments route cloud sessions — *including Claude Tag (Slack) sessions* — to
+infrastructure you control. It is **Team/Enterprise only, public beta**; this is
+a Pro account. The docs send Pro and Max users to Remote Control instead, which
+is exactly what the workbench already runs. And it would not be "the workbench
+session" in any case: a self-hosted environment needs a **runner**, a separate
+long-lived process that polls Anthropic's queue and spawns a *fresh* session per
+task from a clean clone. Same container, different software, its own fleet ops.
+
+**The other route is Channels, and it does not fit either.** A channel pushes
+messages *into* an already-running local session, the mirror image of Remote
+Control pulling. Telegram, Discord and iMessage ship; **Slack does not**, so it
+would mean writing a channel plugin against a research-preview API.
+
+🔴 **And `claude remote-control` rejects `--channels` outright** — forced, not
+assumed: `Error: Unknown argument: --channels`. So channels and the Remote
+Control server cannot be one process. The workbench would have to run a second
+Claude Code process purely for the channel, which is more moving parts than the
+idea is worth while the phone app already reaches that box.
+
+Worth knowing if this is ever revisited: the channel permission relay means
+*anyone who can reply through the channel can approve or deny tool use in the
+session*. On a box holding a GitHub write token, the sender allowlist is the
+whole control.
+
+**Reopen on an event, not a whim:** moving to a Team plan (self-hosted
+environments become available), Slack shipping as a first-class channel plugin,
+or `remote-control` gaining `--channels`. Not on "it would be nice".
 
 ---
 
