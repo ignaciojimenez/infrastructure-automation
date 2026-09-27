@@ -130,7 +130,14 @@ workbench_repos:
 # The subcommand is absent from `claude --help`'s command list, which is why an
 # earlier pass here concluded it did not exist and used the flag. `claude
 # remote-control --help` documents it in full; `rc` is an alias.
-workbench_remote_control_capacity: 32
+# 16, not the documented default of 32. Measured on this container: a session
+# costs roughly 200 MB, so 32 would want about 6.4 GB on a 4 GiB box. The
+# failure mode of the default is the bad kind — nothing refuses the 17th
+# session, the OOM killer takes something, most likely the server itself, and
+# the heartbeat pages with the cause nowhere near the symptom. 16 still exceeds
+# what fits comfortably, but it is a ceiling that reports rather than one that
+# kills; raise it with the container's memory, not on its own.
+workbench_remote_control_capacity: 16
 
 # Spawn mode: same-dir, worktree, or session.
 #
