@@ -1,0 +1,64 @@
+---
+# Workbench LXC (workbench-lxc, CT 104) — interactive agent box. PER-66.
+#
+# A Claude Code session running under tmux as `claude --remote-control`,
+# driven from the phone. Remote Control makes outbound HTTPS calls only and
+# opens no inbound port, so nothing is forwarded here and no service is
+# exposed.
+#
+# 🔴 THE POINT OF THIS HOST IS WHAT IT CANNOT REACH.
+#
+# It is the one box in the estate that runs an agent with write access to
+# repos, so it is assumed to be the most likely to execute something
+# unintended. Everything below follows from that:
+#
+#   * no read_agent private key — `primary_function: workbench` keeps it out
+#     of group_vars/agent.yml, which is the only place fleet access lives
+#   * no Ansible vault password — it is never deployed to any host; it lives
+#     in the laptop's macOS Keychain
+#   * no `pct` or hypervisor right — it is a guest, not an operator
+#   * no Secure-Enclave signing key — signed merges stay on the laptop, so
+#     nothing this box produces can carry a human's attestation
+#
+# None of those are things to switch off here; they are absences. The one
+# thing that would quietly undo them is giving this host `primary_function:
+# agent`, or adding it to a group that loads agent.yml. Do not.
+#
+# system/agent_access.yml DOES run here — it runs on `hosts: all`. That is
+# intended and is not a hole: the role templates an authorized_keys file and
+# distributes no private key, so it grants agent-lxc a way IN rather than
+# giving this box a way OUT. That inbound path is what lets the heartbeat be
+# checked from outside rather than trusting the box to report on itself.
+
+# Services
+# No roles/services/workbench/ role exists yet; services.yml stats for one and
+# skips when it is absent, so this host converges on baseline + monitoring
+# until the Claude Code / tmux / heartbeat role lands.
+
+# Firewall
+# enable_ufw is set on the host entry in hosts.yml, NOT here — this file is
+# loaded by services.yml via include_vars, which happens long after
+# bootstrap.yml has already decided whether to install and enable ufw.
+# Same reasoning as agent.yml.
+
+# Cloudflare tunnel — inert on this host (only the homeassistant role consumes
+# the toggle, and that role never loads here), but set false explicitly so the
+# intent survives anyone later making the toggle general. This box must have
+# no inbound path: Remote Control is outbound-only, which is the whole reason
+# it needs no port forward.
+enable_cloudflare_tunnel: false
+
+# Remote Control is live: `builder` is authenticated via the vaulted OAuth
+# token, so the service can start unattended and the heartbeat has something
+# real to watch. Kept false in the role's defaults so a fresh host never brings
+# up a crash-looping unit with a working pager attached to it.
+workbench_remote_control_enabled: true
+
+# Credentials for the agent account, mapped from the vault the same way
+# group_vars/all/main.yml maps the fleet's. Consumed by roles/services/workbench.
+#
+# Neither is a fleet secret: the GitHub token reaches repos, and the Claude
+# token reaches Anthropic. Losing this box costs the two of them and nothing
+# on the network — which is the whole reason it holds no vault password.
+workbench_gh_token: "{{ vault_builder_gh_token }}"
+workbench_anthropic_token: "{{ vault_anthropic_builder_token }}"

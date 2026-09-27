@@ -52,6 +52,21 @@ agent_fleet_hosts:
     kind: proxmox
   - name: opnsense
     kind: opnsense
+  # The workbench (CT 104). Reachable because system/agent_access.yml runs on
+  # `hosts: all`, so read_agent's authorized_keys is there and this container's
+  # key opens it — verified 2026-09-25: `read_agent@workbench-lxc`. That is
+  # inbound only; the workbench holds no key of its own and cannot reach
+  # anything here.
+  #
+  # Named `workbench-lxc`, not `workbench`: the ssh_config template resolves
+  # `HostName {{ h.name }}` through `search local`, and only the full hostname
+  # answers mDNS (`workbench` alone is NXDOMAIN from this container).
+  #
+  # Swept from outside on purpose. The box already runs its own Remote Control
+  # liveness check, but a host cannot credibly report that it has stopped — the
+  # same reason opnsense stayed in this list rather than trusting its own crons.
+  - name: workbench-lxc
+    kind: linux
 
 # Disk usage percentage at or above which a host is flagged.
 agent_disk_threshold: 85

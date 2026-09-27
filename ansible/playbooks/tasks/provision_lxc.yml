@@ -1,0 +1,429 @@
+---
+# Provision one LXC container on Proxmox — shared body.
+#
+# Imported by provision_agent_lxc.yml and provision_workbench_lxc.yml, which
+# supply the `lxc_*` vars and nothing else. This is the ONE place in this repo
+# that creates infrastructure rather than configuring it.
+#
+# It does the minimum needed to hand a fresh container to the standard
+# pipeline, and stops as soon as SSH-with-a-password works:
+#
+#   provision_*_lxc.yml  ->  bootstrap.yml  ->  site.yml
+#
+# Idempotent: every mutating step is guarded on live `pct`/`pveam` state, so
+# re-running is a no-op. Safe to run repeatedly.
+#
+# `pct` is used rather than the Proxmox API (community.general.proxmox): the
+# module needs API tokens with CT-create privileges plus proxmoxer on the
+# control node, to drive the same commands we can already run over the SSH
+# path this repo uses everywhere else. See docs/ARCHITECTURE_DECISIONS.md.
+#
+# Imported with `import_tasks`, not `include_tasks`, and deliberately: an
+# import is static, so the tags each task carries below are visible to
+# `--tags` and to `--list-tasks`. A dynamic include would hide all of them
+# behind the include's own tag — the failure that made `--tags agent_access`
+# report a false green across the fleet on 2026-09-05.
+#
+# Required vars (no defaults on purpose — a container's identity should never
+# be inherited by accident):
+#
+#   lxc_vmid             CT number
+#   lxc_hostname         container hostname
+#   lxc_inventory_name   its key in hosts.yml, for the handover message
+#   lxc_ip / lxc_cidr / lxc_gateway / lxc_nameserver / lxc_searchdomain
+#   lxc_bridge lxc_cores lxc_cpulimit lxc_memory lxc_swap
+#   lxc_rootfs_size lxc_storage
+#   lxc_template_storage lxc_template
+#   lxc_bootstrap_packages
+
+# ============================================================
+# Template
+# ============================================================
+
+- name: Check for the pinned LXC template
+  ansible.builtin.command:
+    cmd: pveam list {{ lxc_template_storage }}
+  register: lxc_template_list
+  check_mode: false  # read-only probe; must run under --check
+  changed_when: false
+  tags: [provision, template]
+
+# `command` tasks always report "skipping" under --check regardless of
+# their `when`, so a dry run cannot show which of them would fire. This
+# states the computed plan explicitly, which is the point of --check here.
+- name: Report what provisioning would change
+  ansible.builtin.debug:
+    msg: >-
+      Template {{ lxc_template }}:
+      {{ 'present' if lxc_template in lxc_template_list.stdout else 'WOULD DOWNLOAD' }}
+  tags: [provision, template]
+
+- name: Download the pinned LXC template
+  ansible.builtin.command:
+    cmd: pveam download {{ lxc_template_storage }} {{ lxc_template }}
+  when: lxc_template not in lxc_template_list.stdout
+  changed_when: true
+  tags: [provision, template]
+
+# ============================================================
+# Container creation
+# ============================================================
+
+- name: Check whether the container already exists
+  ansible.builtin.command:
+    cmd: pct config {{ lxc_vmid }}
+  register: lxc_config
+  check_mode: false  # read-only probe; must run under --check
+  failed_when: false
+  changed_when: false
+  tags: [provision, create]
+
+- name: Create the container
+  ansible.builtin.command:
+    cmd: >
+      pct create {{ lxc_vmid }}
+      {{ lxc_template_storage }}:vztmpl/{{ lxc_template }}
+      --hostname {{ lxc_hostname }}
+      --cores {{ lxc_cores }}
+      --cpulimit {{ lxc_cpulimit }}
+      --memory {{ lxc_memory }}
+      --swap {{ lxc_swap }}
+      --rootfs {{ lxc_storage }}:{{ lxc_rootfs_size }}
+      --net0 name=eth0,bridge={{ lxc_bridge }},firewall=1,ip={{ lxc_ip }}/{{ lxc_cidr }},gw={{ lxc_gateway }},type=veth
+      --nameserver {{ lxc_nameserver }}
+      --searchdomain {{ lxc_searchdomain }}
+      --ostype debian
+      --unprivileged 1
+      --features nesting=1
+      --onboot 1
+      --password {{ vault_bootstrap_password | quote }}
+  when: lxc_config.rc != 0
+  changed_when: true
+  no_log: true  # the root password is on this command line
+  tags: [provision, create]
+
+- name: Ensure the container starts on boot
+  ansible.builtin.command:
+    cmd: pct set {{ lxc_vmid }} --onboot 1
+  when:
+    - lxc_config.rc == 0
+    - "'onboot: 1' not in lxc_config.stdout"
+  changed_when: true
+  tags: [provision, create]
+
+# `pct create` sets the hostname once and nothing revisits it, so a container
+# renamed in the inventory keeps its original `pct` label forever. That split
+# is what let CT 104 sit labelled `workbench` while the box itself answered as
+# `workbench-lxc`: bootstrap.yml sets the OS hostname from `inventory_hostname`
+# and never consults the hypervisor. Cosmetic until someone greps `pct list`
+# for a host they cannot find.
+- name: Ensure the container hostname matches the inventory
+  ansible.builtin.command:
+    cmd: pct set {{ lxc_vmid }} --hostname {{ lxc_hostname }}
+  when:
+    - lxc_config.rc == 0
+    - "('hostname: ' ~ lxc_hostname) not in lxc_config.stdout_lines"
+  changed_when: true
+  tags: [provision, create]
+
+# `--cores` caps how many CPUs the container can see; it does not cap how much
+# CPU it can sustain. `--cpulimit` is the one that bounds total draw, and that
+# is what keeps a long build on this box from skewing the thermal thresholds
+# PER-7 is calibrating on a 20 W-capped CPU.
+#
+# 0 is Proxmox's "unlimited" and is the default, so a host that wants no limit
+# is skipped rather than having the key cleared — that keeps this a no-op on
+# agent-lxc instead of churning its config every run. `pct config` only prints
+# `cpulimit:` when it is set, so absence and 0 read the same, which is correct.
+#
+# Matched against `stdout_lines`, not `stdout`. The sibling guards above test
+# `'onboot: 1' not in ...stdout` and get away with it because onboot is 0 or 1;
+# a substring test on cpulimit reads `cpulimit: 30` as already satisfying a
+# wanted 3 and skips — a false "already converged", verified before writing
+# this. An exact line match cannot make that mistake.
+- name: Ensure the CPU limit is applied to an existing container
+  ansible.builtin.command:
+    cmd: pct set {{ lxc_vmid }} --cpulimit {{ lxc_cpulimit }}
+  when:
+    - lxc_config.rc == 0
+    - lxc_cpulimit | int != 0
+    - "('cpulimit: ' ~ lxc_cpulimit) not in lxc_config.stdout_lines"
+  changed_when: true
+  tags: [provision, create]
+
+# Debian 13 ships systemd 257, which needs nesting to set up its
+# credentials tmpfs. Without it the container boots with ~19 failed units —
+# journald, tmpfiles-setup and every mount unit, all exiting 243/CREDENTIALS.
+# Proxmox says so outright on start ("Systemd 257 detected. You may need to
+# enable nesting"), but nothing was reading that. A dead journald is the
+# expensive part: it took a 12-day silent cron outage with it.
+# Takes effect on the next container start, not immediately.
+- name: Ensure nesting is enabled on an existing container
+  ansible.builtin.command:
+    cmd: pct set {{ lxc_vmid }} --features nesting=1
+  when:
+    - lxc_config.rc == 0
+    - "'nesting=1' not in lxc_config.stdout"
+  changed_when: true
+  tags: [provision, create]
+
+- name: Report container state plan
+  ansible.builtin.debug:
+    msg: >-
+      CT {{ lxc_vmid }}:
+      {{ 'exists' if lxc_config.rc == 0 else 'WOULD CREATE' }}
+      {{ '(onboot already set)' if lxc_config.rc == 0 and 'onboot: 1' in lxc_config.stdout
+         else '(WOULD SET onboot=1)' if lxc_config.rc == 0 else '' }}
+  tags: [provision, create]
+
+- name: Check container run state
+  ansible.builtin.command:
+    cmd: pct status {{ lxc_vmid }}
+  register: lxc_status
+  check_mode: false  # read-only probe; must run under --check
+  # Non-zero simply means the container does not exist yet (it will have
+  # been created above in a real run). Empty stdout then reads as
+  # "not running", which is the correct conclusion either way.
+  failed_when: false
+  changed_when: false
+  tags: [provision, start]
+
+- name: Start the container
+  ansible.builtin.command:
+    cmd: pct start {{ lxc_vmid }}
+  when: "'status: running' not in lxc_status.stdout"
+  changed_when: true
+  tags: [provision, start]
+
+- name: Wait for the container to finish booting
+  ansible.builtin.command:
+    cmd: pct exec {{ lxc_vmid }} -- systemctl is-system-running --wait
+  register: lxc_boot
+  # `degraded` is a normal steady state on a fresh container (no swap unit,
+  # etc.) and must not fail the play — we only care that boot finished.
+  failed_when: lxc_boot.rc != 0 and 'degraded' not in lxc_boot.stdout
+  changed_when: false
+  retries: 12
+  delay: 5
+  until: lxc_boot is not failed
+  # Skipped under --check: there is nothing to wait for when the container
+  # has not been created, and a skipped task registers no rc to test.
+  when: not ansible_check_mode
+  tags: [provision, start]
+
+# "Finished booting" and "booted healthy" are different questions, and the
+# task above only answers the first — it accepts `degraded` on purpose, so
+# a container whose journald never started still passes provisioning. That
+# is exactly how CT 103 shipped with 19 failed units and stayed that way
+# for weeks. Ask the second question explicitly, and fail the build rather
+# than hand back a container that cannot log why it is broken.
+- name: Collect failed units after boot
+  ansible.builtin.command:
+    cmd: pct exec {{ lxc_vmid }} -- systemctl --failed --no-legend --plain
+  register: lxc_failed_units
+  changed_when: false
+  failed_when: false
+  when: not ansible_check_mode
+  tags: [provision, start]
+
+- name: Fail when the container booted with failed units
+  ansible.builtin.fail:
+    msg: |
+      CT {{ lxc_vmid }} finished booting but has failed systemd units:
+
+      {{ lxc_failed_units.stdout }}
+
+      Do not treat this as cosmetic. If journald is among them the container
+      cannot log its own failures, and anything that breaks later breaks
+      silently. `243/CREDENTIALS` on journald/tmpfiles/mount units means
+      nesting is off — check `pct config {{ lxc_vmid }}` for
+      `features: nesting=1` and restart the container.
+  when:
+    - not ansible_check_mode
+    - lxc_failed_units.stdout | default('') | trim | length > 0
+  tags: [provision, start]
+
+# ============================================================
+# Inside the container: the minimum for Ansible to take over
+# ============================================================
+
+- name: Check which bootstrap packages are missing
+  ansible.builtin.command:
+    cmd: pct exec {{ lxc_vmid }} -- dpkg-query -W -f=${Status} {{ item }}
+  register: lxc_pkg_check
+  check_mode: false  # read-only probe; must run under --check
+  failed_when: false
+  changed_when: false
+  loop: "{{ lxc_bootstrap_packages }}"
+  tags: [provision, packages]
+
+- name: Install bootstrap packages in the container
+  ansible.builtin.command:
+    cmd: >
+      pct exec {{ lxc_vmid }} -- env DEBIAN_FRONTEND=noninteractive
+      sh -c "apt-get update && apt-get install -y {{ lxc_bootstrap_packages | join(' ') }}"
+  when: lxc_pkg_check.results | rejectattr('stdout', 'search', 'install ok installed') | list | length > 0
+  changed_when: true
+  tags: [provision, packages]
+
+- name: Check whether the infrastructure user exists in the container
+  ansible.builtin.command:
+    cmd: pct exec {{ lxc_vmid }} -- id -u {{ infrastructure_user }}
+  register: lxc_user_check
+  check_mode: false  # read-only probe; must run under --check
+  failed_when: false
+  changed_when: false
+  tags: [provision, user]
+
+# bootstrap.yml can adopt a host that answers as either root or the
+# infrastructure user. We create the user directly so root SSH login never
+# has to be enabled, not even transiently.
+- name: Create the infrastructure user in the container
+  ansible.builtin.command:
+    cmd: >
+      pct exec {{ lxc_vmid }} -- useradd
+      --create-home --shell /bin/bash --groups sudo
+      --comment "Infrastructure Management User"
+      {{ infrastructure_user }}
+  when: lxc_user_check.rc != 0
+  changed_when: true
+  tags: [provision, user]
+
+- name: Set the infrastructure user's bootstrap password
+  ansible.builtin.command:
+    cmd: >
+      pct exec {{ lxc_vmid }} -- sh -c
+      "echo '{{ infrastructure_user }}:{{ vault_bootstrap_password }}' | chpasswd"
+  when: lxc_user_check.rc != 0
+  changed_when: true
+  no_log: true  # the bootstrap password is on this command line
+  tags: [provision, user]
+
+# Seed the user's authorized_keys here rather than relying on bootstrap.
+#
+# bootstrap.yml only creates .ssh and installs GitHub keys inside its
+# "connected as root" block. Adopted as the infrastructure user instead,
+# it skips that block but still runs "Lock password authentication" and
+# sets PasswordAuthentication no — so a container that never received a
+# key locks itself out, and SSH connection multiplexing hides it until
+# ControlPersist expires. Making the container key-reachable before
+# bootstrap runs removes the ordering hazard entirely.
+# The other four places that fetch over the network guard the URL first
+# (bootstrap.yml, tasks/ssh_hardening.yml, the docker role, the pihole
+# role). This one did not, which made the rule look like a coincidence
+# rather than a rule — and this is the fetch whose payload becomes an
+# authorized_keys file, so it is the last one that should be the exception.
+- name: Validate gh_keys uses HTTPS
+  ansible.builtin.assert:
+    that:
+      - "gh_keys is match('^https://')"
+    fail_msg: "gh_keys must use https:// — got: {{ gh_keys }}"
+  when: gh_keys is defined
+  tags: [provision, ssh]
+
+- name: Fetch authorized keys from GitHub
+  ansible.builtin.uri:
+    url: "{{ gh_keys }}"
+    return_content: true
+    timeout: 30
+    status_code: 200
+  register: lxc_gh_keys
+  delegate_to: localhost
+  become: false
+  check_mode: false
+  changed_when: false
+  tags: [provision, ssh]
+
+- name: Read the container's current authorized_keys
+  ansible.builtin.command:
+    cmd: pct exec {{ lxc_vmid }} -- cat /home/{{ infrastructure_user }}/.ssh/authorized_keys
+  register: lxc_authkeys
+  check_mode: false  # read-only probe; must run under --check
+  failed_when: false
+  changed_when: false
+  tags: [provision, ssh]
+
+- name: Install authorized keys in the container
+  when: lxc_authkeys.stdout | trim != lxc_gh_keys.content | trim
+  tags: [provision, ssh]
+  block:
+    - name: Stage authorized keys on the hypervisor
+      ansible.builtin.copy:
+        content: "{{ lxc_gh_keys.content }}"
+        dest: /tmp/lxc_{{ lxc_vmid }}_authorized_keys
+        owner: root
+        group: root
+        mode: '0600'
+
+    - name: Ensure the container's .ssh directory exists
+      ansible.builtin.command:
+        cmd: >-
+          pct exec {{ lxc_vmid }} -- install -d -m 0700
+          -o {{ infrastructure_user }} -g {{ infrastructure_user }}
+          /home/{{ infrastructure_user }}/.ssh
+
+      changed_when: true
+
+    - name: Push authorized keys into the container
+      ansible.builtin.command:
+        cmd: >-
+          pct push {{ lxc_vmid }} /tmp/lxc_{{ lxc_vmid }}_authorized_keys
+          /home/{{ infrastructure_user }}/.ssh/authorized_keys
+          --user 1000 --group 1000 --perms 0600
+      changed_when: true
+
+  always:
+    - name: Remove the staged key file
+      ansible.builtin.file:
+        path: /tmp/lxc_{{ lxc_vmid }}_authorized_keys
+        state: absent
+
+# ansible.cfg sets `become_flags = -H -n`, so sudo can never prompt for a
+# password — a fresh sudo-group user is therefore unusable by Ansible.
+# bootstrap.yml converges to exactly this file (and this line), so
+# pre-seeding it is not extra privilege, just removing a chicken-and-egg.
+# Probes the mode, not just existence, so a half-written file from an
+# interrupted run is corrected rather than accepted. sudo ignores
+# world-writable drop-ins, and 0440 is what the rest of the fleet uses.
+- name: Check the infrastructure user's sudoers entry
+  ansible.builtin.command:
+    cmd: pct exec {{ lxc_vmid }} -- stat -c %a /etc/sudoers.d/{{ infrastructure_user }}
+  register: lxc_sudoers_check
+  check_mode: false  # read-only probe; must run under --check
+  failed_when: false
+  changed_when: false
+  tags: [provision, user]
+
+- name: Grant the infrastructure user passwordless sudo
+  ansible.builtin.command:
+    cmd: >-
+      pct exec {{ lxc_vmid }} -- sh -c
+      "printf '%s\n' '{{ infrastructure_user }} ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/{{ infrastructure_user }}
+      && chmod 0440 /etc/sudoers.d/{{ infrastructure_user }}
+      && visudo -c -f /etc/sudoers.d/{{ infrastructure_user }}"
+  when: lxc_sudoers_check.rc != 0 or lxc_sudoers_check.stdout | trim != '440'
+  changed_when: true
+  tags: [provision, user]
+
+# ============================================================
+# Handover
+# ============================================================
+
+- name: Wait for SSH to answer on the container
+  ansible.builtin.wait_for:
+    host: "{{ lxc_ip }}"
+    port: 22
+    timeout: 60
+  delegate_to: localhost
+  become: false
+  tags: [provision, verify]
+
+- name: Report provisioning result
+  ansible.builtin.debug:
+    msg: |
+      ✅ CT {{ lxc_vmid }} ({{ lxc_hostname }}) provisioned at {{ lxc_ip }}
+
+      Next:
+        ansible-playbook ansible/playbooks/bootstrap.yml --limit {{ lxc_inventory_name }}
+        ansible-playbook ansible/playbooks/site.yml --limit {{ lxc_inventory_name }}
+  tags: [provision]

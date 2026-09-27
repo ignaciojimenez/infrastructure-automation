@@ -34,8 +34,8 @@ documentation error (see TEST_CONTAINER.md).
 
 | Missing | |
 |---|---|
-| **`bootstrap.yml` and a full `site.yml` have never been run against a container** | Only `deploy_monitoring.yml` and `services.yml --tags ssh` have converged. The playbook this goal most exists for is the one least tested. |
-| No one-command loop | create → converge → verify → destroy is a manual sequence today |
+| ~~`bootstrap.yml` and a full `site.yml` have never been run against a container~~ | ✅ **Done 2026-09-21.** Both converge against CT 199, and a second `site.yml` run reports `changed=0` — see goal 3's re-decision for the numbers. Doing it found the reason it had to be done: four SSH tasks reported `changed` forever, because `bootstrap.yml` forced `PermitRootLogin no` while the canonical template sets `prohibit-password` on a test host. The rig could never have reported "converged". |
+| No one-command loop | create → converge → verify → destroy is a manual sequence today. `changed=0` is now usable as its verify signal; before 2026-09-21 it was not. |
 | Not in CI | `.github/workflows/` runs `ansible-lint` only |
 | No `--create` in the sandbox | a fresh container still needs `ssh cwwk` and a Touch ID tap |
 
@@ -83,6 +83,55 @@ the blast radius is the point.
 committing a vault password to make a playbook run on the container, re-opens
 this decision without anyone deciding it. If the tap becomes the bottleneck, say
 so and re-decide in this file.
+
+### ✅ RE-DECIDED 2026-09-21 — the tap was the bottleneck
+
+**Superseded by evidence, in the manner the paragraph above asks for.** The tap
+became the bottleneck the moment the goal became a closed loop: agent-lxc
+diagnoses, a builder box writes the fix, and the fix is validated without a
+human in the middle. A per-run Touch ID tap breaks that loop by design.
+
+**The refusal held on one specific ground** — *"a Linux-reachable vault path
+moves the fleet's secrets from 'behind a Touch ID prompt on one laptop' to
+'readable by a long-running network service that executes model output'."*
+That ground is now removed rather than overruled, because **the rig never
+needed the fleet's secrets at all.**
+
+Measured 2026-09-21 against CT 199, with a plaintext vault containing nothing
+real:
+
+| Run | Result |
+|---|---|
+| `bootstrap.yml` — the playbook this goal most exists for, never before run against a container | ok=23, changed=11, **failed=0** |
+| `site.yml` — full convergence | ok=104, changed=29, **failed=0** |
+
+Exactly **one** vaulted variable was load-bearing, and it is not a credential:
+`vault_infrastructure_user`, the account name. Everything else — Slack tokens,
+healthcheck URLs, API keys — took fake values without complaint. What landed on
+the container was verified rather than assumed: its cron carries
+`TEST/TEST/testcontainernotarealwebhook` and no real healthcheck UUID, so the
+rig cannot page a real channel.
+
+**Granted, therefore:** scoped `pct create`/`destroy`/`exec` on the **198/199
+range only** — the half this file already called *"narrow, arguably
+reasonable"* — plus a **test-only vault holding nothing real**. The expensive
+half stays refused: no real vault on any always-on Linux box, and fleet writes
+and signed merges stay laptop-gated.
+
+**What this still does not buy — and the reason to keep reading before trusting
+a green run.** A fake vault proves *deployment* correctness: the playbook
+converges, templates render, files, modes and crons land. It cannot prove
+*integration* correctness: that what was deployed actually reaches Slack,
+healthchecks.io, Home Assistant or the OPNsense API. A check wired to a dead
+webhook can still report success, which is the failure mode goal 4 exists to
+catch. **Treat a green rig run as "this deploys", never as "this works".**
+
+🛑 The same rule still applies to what remains: if the real vault is ever wanted
+on the builder, re-decide it here, with the reason.
+
+📎 Enabled by resolving `vault.yml` from `inventory_dir` rather than
+`playbook_dir`, so an inventory can carry its own vault.
+
 
 ## Goal 4 — Regression-test the monitoring scripts (the unplanned one)
 

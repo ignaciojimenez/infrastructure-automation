@@ -675,8 +675,18 @@ elif [ "$CURRENT_STATUS" = "success" ]; then
 fi
 
 # Send notifications if needed
+#
+# DELIVERY_OUTCOME records what actually happened on the wire, because the
+# summary at the end of this run used to be computed from the SEND_TO_* intent
+# flags instead. That reported "Notification sent: Yes" whenever the wrapper
+# *decided* to send, including runs where both the payload and the fallback
+# failed and the state log recorded "Alert delivery FAILED" one line earlier.
+# The human reading the cron log got the opposite of the truth.
+DELIVERY_OUTCOME="none"
+
 if [ "$SEND_TO_ALERT" = true ]; then
   if send_slack_notification "FAILED" "$execution_time" "$exit_code" "$execution_result" "$alert_hook" "true" "$REPEAT_NOTE"; then
+    DELIVERY_OUTCOME="sent"
     echo "$(date) - Sent alert notification" >> "${STATE_FILE}.log"
   else
     # Delivery failed (e.g. the webhook is unreachable, as it was over
@@ -688,6 +698,7 @@ if [ "$SEND_TO_ALERT" = true ]; then
       FAILURE_ALERTS="$ROLLBACK_FAILURE_ALERTS"
       NEXT_ALERT_EPOCH="$ROLLBACK_NEXT_ALERT_EPOCH"
     fi
+    DELIVERY_OUTCOME="failed"
     echo "$(date) - Alert delivery FAILED; cooldown not advanced, will retry next run" >> "${STATE_FILE}.log"
   fi
 elif [ "$CURRENT_STATUS" = "failure" ]; then
@@ -698,9 +709,18 @@ elif [ "$CURRENT_STATUS" = "failure" ]; then
 fi
 
 if [ "$SEND_TO_MONITOR" = true ]; then
-  send_slack_notification "SUCCESS" "$execution_time" "$exit_code" "$execution_result" "$monitor_hook" "false"
-  echo "$(date) - Sent monitor notification" >> "${STATE_FILE}.log"
-  LAST_SUCCESS_NOTIFICATION=$(date +"%Y-%m-%d %H:%M:%S")
+  # The return value used to be discarded here, so a heartbeat that never left
+  # the host still stamped LAST_SUCCESS_NOTIFICATION and logged "Sent". State
+  # then claimed a heartbeat had gone out that nobody could have received —
+  # and the next run's "is a heartbeat due" arithmetic trusted that stamp.
+  if send_slack_notification "SUCCESS" "$execution_time" "$exit_code" "$execution_result" "$monitor_hook" "false"; then
+    [ "$DELIVERY_OUTCOME" = "failed" ] || DELIVERY_OUTCOME="sent"
+    echo "$(date) - Sent monitor notification" >> "${STATE_FILE}.log"
+    LAST_SUCCESS_NOTIFICATION=$(date +"%Y-%m-%d %H:%M:%S")
+  else
+    DELIVERY_OUTCOME="failed"
+    echo "$(date) - Monitor notification delivery FAILED; heartbeat timestamp not advanced" >> "${STATE_FILE}.log"
+  fi
 fi
 
 # Update state file
@@ -756,7 +776,12 @@ log_msg "  Started: ${date_started}"
 log_msg "  Duration: ${execution_time} seconds"
 log_msg "  Status: ${CURRENT_STATUS}"
 log_msg "  Exit code: ${exit_code}"
-log_msg "  Notification sent: $([ "$SEND_TO_MONITOR" = true ] || [ "$SEND_TO_ALERT" = true ] && echo "Yes" || echo "No")"
+case "$DELIVERY_OUTCOME" in
+  sent)   notification_summary="Yes" ;;
+  failed) notification_summary="NO - delivery failed" ;;
+  *)      notification_summary="No" ;;
+esac
+log_msg "  Notification sent: ${notification_summary}"
 if [ "$CURRENT_STATUS" = "failure" ] && [ "$SEND_TO_ALERT" != true ]; then
   log_msg "  Alert suppressed: unchanged failure, run ${FAILURE_RUNS}, signature ${CURRENT_FAILURE_SIGNATURE}"
 fi

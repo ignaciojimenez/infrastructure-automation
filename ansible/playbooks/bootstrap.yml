@@ -15,7 +15,7 @@
   hosts: all
   gather_facts: false
   vars_files:
-    - "{{ playbook_dir }}/../inventory/group_vars/all/vault.yml"
+    - "{{ inventory_dir }}/group_vars/all/vault.yml"
   vars:
     ansible_password: "{{ vault_bootstrap_password | default(omit) }}"
   tasks:
@@ -63,7 +63,7 @@
   become: true
   gather_facts: true
   vars_files:
-    - "{{ playbook_dir }}/../inventory/group_vars/all/vault.yml"
+    - "{{ inventory_dir }}/group_vars/all/vault.yml"
   vars:
     # Use bootstrap password from vault as fallback
     ansible_user: "{{ detected_user | default(ansible_user) }}"
@@ -222,6 +222,17 @@
     # disagree, each run flips the value back and forth: the host is
     # perpetually "changed" and its effective setting depends on which play
     # ran last. UsePAM was exactly that case (here `no`, template `yes`).
+    #
+    # PermitRootLogin was the same case and outlived that fix: this line said
+    # `no` unconditionally while the template says `prohibit-password` on a
+    # test container, so the rig flipped on every run. It is mirrored from the
+    # template rather than restated, because a second literal is what let the
+    # two drift apart in the first place. Verified by --diff against CT 199:
+    # this was the only key of the five that disagreed.
+    #
+    # The cost was not just noise. `changed=0` on a second run is the signal
+    # this repo uses for "converged", and a host that can never report it
+    # cannot be verified by the one-command test loop PER-67 is for.
     - name: Configure SSH daemon for key-only auth
       ansible.builtin.lineinfile:
         path: /etc/ssh/sshd_config
@@ -230,7 +241,8 @@
         state: present
         validate: 'sshd -t -f %s'
       loop:
-        - { regexp: '^#?PermitRootLogin', line: 'PermitRootLogin no' }
+        - regexp: '^#?PermitRootLogin'
+          line: "PermitRootLogin {{ 'prohibit-password' if is_test_environment | default(false) else 'no' }}"
         - { regexp: '^#?PasswordAuthentication', line: 'PasswordAuthentication no' }
         - { regexp: '^#?PubkeyAuthentication', line: 'PubkeyAuthentication yes' }
         - { regexp: '^#?ChallengeResponseAuthentication', line: 'ChallengeResponseAuthentication no' }

@@ -1,0 +1,162 @@
+---
+# Workbench role defaults — PER-66
+
+enable_workbench: true
+
+# 🔴 The agent runs as its own account, NOT as infrastructure_user.
+#
+# Not a hardening flourish — it resolves a real collision. Two independent
+# systems converge this box's $HOME from git: this repo (monitoring into
+# ~/.scripts, ~/.logs) and dotfiles (~/.zshrc, ~/.scripts, the agent context).
+# Their surfaces genuinely overlap, and it is not one filename:
+#
+#   ~/.scripts                    — this repo's wrapper vs dotfiles' user-bin
+#                                   scripts. Live: dotfiles' own validate.sh
+#                                   fails here because the agent-sessions hook
+#                                   target is shadowed by the monitoring dir.
+#   ~/.config/opencode/AGENTS.md  — the agent role templates a FILE where
+#                                   dotfiles wants a SYMLINK. Latent on
+#                                   agent-lxc, fires the day dotfiles lands.
+#   ~/.local/bin                  — Claude Code installs here.
+#
+# Renaming any one of them fixes that one and leaves the next to be discovered
+# on a host, after deploy. Separate accounts remove the shared namespace, so
+# there is no next one: `choco` stays this repo's (Ansible, monitoring, sudo),
+# `builder` is dotfiles' (shell, agent context, Claude Code, worktrees).
+#
+# It is deliberately NOT called write_agent. `read_agent` names what it may do
+# to the fleet; a `write_agent` would name a fleet-write capability, which is
+# the one thing this box is defined by not having. Names become permissions.
+workbench_agent_user: builder
+
+# No general sudo, because it has nothing to administer — not because sudo is
+# the control. The controls are the absences: no fleet key, no vault, no pct.
+# Local root would not meaningfully change the blast radius here, since the
+# GitHub token and the VLAN 40 position sit in this account's home either way.
+workbench_agent_sudo: false
+
+# One narrow exception: the account may restart its OWN unit and read its
+# status. Without it, the one-time `claude auth login` turns into an account
+# hop — log in as builder, discover it cannot restart anything, exit, come
+# back as the infrastructure user — which is exactly the friction that made
+# this box annoying to bring up the first time.
+#
+# Scoped to four exact command lines, arguments included: sudo matches the
+# full argv, so this grants restart/stop/start/status of one named unit and
+# nothing else. It is not a general systemctl grant.
+workbench_agent_service_control: true
+
+# Packages. Deliberately small: this box is a place to run an agent and a git
+# worktree, not a general dev host. build-essential is here because Claude
+# Code's native build needs nothing to compile, but npm modules a session
+# installs during real work routinely do — and discovering that mid-task on a
+# phone is the worst time to find out.
+workbench_packages:
+  - git
+  - tmux
+  - curl
+  - ca-certificates
+  - jq
+  - zsh
+  - ripgrep
+  - fd-find
+  - build-essential
+  # Ansible stages a file through a temp copy when it becomes an unprivileged
+  # user, and has to widen that temp file for the target account. Without acl
+  # it falls back to `chmod A+user:...:rx:allow`, which is macOS/NFSv4 syntax
+  # that Debian's coreutils rejects outright — every become_user task against
+  # this account then fails on "Failed to set permissions on the temporary
+  # files". With acl it uses setfacl and grants only that one user.
+  - acl
+
+# Claude Code. The native installer, which is what this laptop runs, rather
+# than npm: it self-updates and needs no node runtime of its own.
+#
+# 🔴 It REFUSES to run under sudo from a regular user's shell — verified by
+# reading the script, which exits when `id -u` is 0 with SUDO_USER set. Every
+# task that touches it therefore runs `become: false` as the infrastructure
+# user. Do not "fix" a permissions error here by adding become.
+workbench_claude_install_url: https://claude.ai/install.sh
+workbench_claude_channel: stable
+
+# dotfiles — PER-31's acceptance test. A genuinely clean Linux box where
+# bootstrap.sh and nothing else must produce a working agent context.
+workbench_dotfiles_repo: https://github.com/ignaciojimenez/dotfiles.git
+workbench_dotfiles_dest: "/home/{{ workbench_agent_user }}/dotfiles"
+workbench_dotfiles_version: master
+
+# 🔴 Gates starting the Remote Control service and its heartbeat cron.
+#
+# Defaults FALSE and must stay false until `claude setup-token` has actually
+# been run on the box. Claude Code cannot authenticate unattended, so enabling
+# these before that turns a known-broken service into a cron that pages: the
+# unit crash-loops, the check correctly reports it down, and #home-alerts gets
+# the news every 15 minutes all night. That has happened here before — a
+# known-broken check on cron paged five times overnight.
+#
+# Flip to true in group_vars/workbench.yml once auth is done and
+# `systemctl status claude-remote-control` is green by hand.
+workbench_remote_control_enabled: false
+
+# Matches the theme dotfiles sets in settings.json, so the two agree rather
+# than the box rendering one thing and the tracked config claiming another.
+workbench_claude_theme: dark-ansi
+
+# Where repos live, mirroring the laptop's ~/Documents/Workspaces. The Remote
+# Control session starts here rather than in $HOME, so every checkout is
+# already inside the directory Claude Code was granted — a session that starts
+# in $HOME can still reach them, but has to be told where they are first.
+workbench_workspaces_dir: "/home/{{ workbench_agent_user }}/Workspaces"
+
+# Cloned over HTTPS so the stored git credentials apply; an SSH remote would
+# need a deploy key this box deliberately does not have.
+#
+# infrastructure-automation carries vault.yml, but encrypted and with no
+# password anywhere on this host — the same state it is in on GitHub, which is
+# public. Cloning it here reveals nothing that is not already published.
+workbench_repos:
+  - infrastructure-automation
+
+# 🔴 `claude remote-control` — the SUBCOMMAND, not the `--remote-control` flag.
+#
+# They are not equivalent, and the difference is the whole point of this box.
+# The subcommand "runs as a persistent server that accepts multiple concurrent
+# sessions", pre-creating one so there is somewhere to type immediately. The
+# flag starts a single interactive session with Remote Control enabled — what
+# the subcommand calls `--spawn=session`, "classic single-session mode", which
+# exits when that session ends. With the flag you get one session from the
+# phone and no way to branch another.
+#
+# The subcommand is absent from `claude --help`'s command list, which is why an
+# earlier pass here concluded it did not exist and used the flag. `claude
+# remote-control --help` documents it in full; `rc` is an alias.
+# 16, not the documented default of 32. Measured on this container: a session
+# costs roughly 200 MB, so 32 would want about 6.4 GB on a 4 GiB box. The
+# failure mode of the default is the bad kind — nothing refuses the 17th
+# session, the OOM killer takes something, most likely the server itself, and
+# the heartbeat pages with the cause nowhere near the symptom. 16 still exceeds
+# what fits comfortably, but it is a ceiling that reports rather than one that
+# kills; raise it with the container's memory, not on its own.
+workbench_remote_control_capacity: 16
+
+# Spawn mode: same-dir, worktree, or session.
+#
+# `same-dir` is the default here because the session directory is ~/Workspaces,
+# which holds the repos rather than being one. Worktree mode requires the
+# directory to BE a git repository — so pointing this at a single checkout and
+# setting `worktree` buys per-session isolation at the cost of reaching only
+# that repo. `w` toggles the two at runtime.
+workbench_remote_control_spawn: same-dir
+
+# The directory Remote Control serves. Every repo under it is reachable from
+# any session it spawns.
+workbench_remote_control_dir: "{{ workbench_workspaces_dir }}"
+
+# The tmux session `claude --remote-control` runs in, so a phone SSH session
+# can attach to the same session the phone app is driving.
+workbench_tmux_session: workbench
+
+# Heartbeat cadence. Every 15 minutes: Remote Control is only useful if it is
+# actually up, and a box that went quiet after a reboot is the failure mode
+# this exists to catch.
+workbench_heartbeat_minute: "*/15"

@@ -1,0 +1,5 @@
+---
+# No role dependencies. This host's isolation from the fleet is an absence —
+# it holds no key — not something another role grants or revokes here.
+
+dependencies: []
