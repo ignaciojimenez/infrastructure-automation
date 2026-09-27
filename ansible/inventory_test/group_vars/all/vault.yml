@@ -1,0 +1,66 @@
+---
+# FAKE vault for the test rig. Contains NOTHING real.
+#
+# Deliberately unencrypted: the point is that converging a throwaway container
+# needs no access to the fleet's secrets. Proven 2026-09-21 — bootstrap.yml and
+# a full site.yml both reach failed=0 against CT 199 with only fakes here.
+#
+# 🔴 Shape-matched, not merely dead. A fake still has to survive every validator
+# on the path it travels. enhanced_monitoring_wrapper checks its webhook against
+# T[A-Z0-9]*/B[A-Z0-9]*/[a-zA-Z0-9]* and exits with a usage error before running
+# the checked script, so the previous TEST/TEST/... tokens meant nothing
+# downstream of that gate was ever exercised on the rig (docs/TODO.md item 43).
+# Keep the character classes of the real values: slashes, dots, +, = and all.
+#
+# vault_infrastructure_user is pinned REAL and pinned deliberately. The fleet
+# vault does not define it at all, so group_vars/all/main.yml falls back to
+# `lookup('env', 'USER')` — which is `choco` on the laptop and `builder` on the
+# workbench. Leaving it to the fallback means the rig works from one machine and
+# fails at SSH from the other, with an error that names the wrong account rather
+# than the wrong assumption. It is a username, not a credential.
+
+vault_infrastructure_user: "choco"
+vault_agent_control_ip: "10.30.40.0/24"
+vault_agent_ssh_pubkey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAzwUkF8g+nliH4mXRm3Qlslb7TioAHQlvl1w9i5XkN3 fake@testrig"
+vault_alert_token: "TTEST00000/BTEST00000/testrigfakenotarealwebhook00"
+vault_anthropic_api_key: "zQ/QQeZ00xfKXxQWGHXWivcpNgeRvV0PFWtq0GD4aJSdrrpA0jJmO4zOrWBHzHGycIjW0U1iWBcqkB+m"
+vault_anthropic_builder_token: "FAKE_VAULT_ANTHROPIC_BUILDER_TOKEN"
+vault_bootstrap_password: "testonlypassword"
+vault_builder_gh_token: "FAKE_VAULT_BUILDER_GH_TOKEN"
+vault_cloudflare_tunnel_token: "eyJhIjoiMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAiLCJ0IjoiMDAwMDAwMDAtMDAwMC0wMDAw"
+vault_curlbin_password: "testrigfakepassword00"
+vault_curlbin_user: "testrig"
+vault_gh_profile: "ignaciojimenez"
+vault_git_mail: "test@example.invalid"
+vault_git_name: "Test Rig"
+vault_ha_agent_token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiIwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMCIsImlhdCI6MCwiZXhwIjowfQ.0000000000000000000000000000000000000000000"
+vault_ha_monitor_token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiIwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMCIsImlhdCI6MCwiZXhwIjowfQ.0000000000000000000000000000000000000000000"
+vault_ha_secondary_device_tracker: "device_tracker.testrig_phone"
+vault_ha_secondary_person: "person.testrig"
+vault_ha_secondary_person_display: "Test Rig"
+vault_healthcheck_agent_sweep: "https://hc-ping.com/00000000-0000-4000-8000-000000000000"
+vault_healthcheck_backup_ha: "https://hc-ping.com/00000000-0000-4000-8000-000000000000"
+vault_healthcheck_backup_opnsense: "https://hc-ping.com/00000000-0000-4000-8000-000000000000"
+vault_healthcheck_backup_plex: "https://hc-ping.com/00000000-0000-4000-8000-000000000000"
+vault_healthcheck_backup_proxmox: "https://hc-ping.com/00000000-0000-4000-8000-000000000000"
+vault_healthcheck_backup_unifi: "https://hc-ping.com/00000000-0000-4000-8000-000000000000"
+vault_healthcheck_ha: "https://hc-ping.com/00000000-0000-4000-8000-000000000000"
+vault_healthcheck_opnsense_dns: "https://hc-ping.com/00000000-0000-4000-8000-000000000000"
+vault_healthcheck_opnsense_monitoring: "https://hc-ping.com/00000000-0000-4000-8000-000000000000"
+vault_healthcheck_opnsense_wan: "https://hc-ping.com/00000000-0000-4000-8000-000000000000"
+vault_healthcheck_proxmox_health: "https://hc-ping.com/00000000-0000-4000-8000-000000000000"
+vault_healthchecks_readonly_api_key: "https://hc-ping.com/00000000-0000-4000-8000-000000000000"
+vault_icecast_admin_password: "testrigfakepassword00"
+vault_icecast_source_password: "testrigfakepassword00"
+vault_logging_token: "TTEST00000/BTEST00000/testrigfakenotarealwebhook00"
+vault_mqtt_password: "testrigfakepassword00"
+vault_mqtt_username: "FAKE_VAULT_MQTT_USERNAME"
+vault_ns_api_key: "zQ/QQeZ00xfKXxQWGHXWivcpNgeRvV0PFWtq0GD4aJSdrrpA0jJmO4zOrWBHzHGycIjW0U1iWBcqkB+m"
+vault_opnsense_api_key: "zQ/QQeZ00xfKXxQWGHXWivcpNgeRvV0PFWtq0GD4aJSdrrpA0jJmO4zOrWBHzHGycIjW0U1iWBcqkB+m"
+vault_opnsense_api_secret: "zQ/QQeZ00xfKXxQWGHXWivcpNgeRvV0PFWtq0GD4aJSdrrpA0jJmO4zOrWBHzHGycIjW0U1iWBcqkB+m"
+vault_proxmox_agent_token: "read_agent@pve!readonly=00000000-0000-4000-8000-000000000000"
+vault_slack_read_token: "TTEST00000/BTEST00000/testrigfakenotarealwebhook00"
+vault_thread_wifi_link_psk: "testrigfakepassword00"
+vault_thread_wifi_link_ssid: "testrig_ssid"
+vault_unifi_readonly_password: "testrigfakepassword00"
+vault_unifi_readonly_user: "read_agent"

@@ -17,6 +17,7 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ## Contents
 
+- [2026-09-28 — the test rig ran nothing: dead webhook tokens were the wrong shape, and the rig now owns its vault (item 43)](#2026-09-28--the-test-rig-ran-nothing-dead-webhook-tokens-were-the-wrong-shape-and-the-rig-now-owns-its-vault-item-43)
 - [2026-09-27 — Slack cannot reach the workbench, and the two ways round it are both worse than not doing it (parked)](#2026-09-27--slack-cannot-reach-the-workbench-and-the-two-ways-round-it-are-both-worse-than-not-doing-it-parked)
 - [2026-09-23 — the Thread SPOF stays: the outage it would guard against is already fixed twice over (PER-23)](#2026-09-23--the-thread-spof-stays-the-outage-it-would-guard-against-is-already-fixed-twice-over-per-23)
 - [2026-09-19 — three overdue readings land: NIC stalls gone, a ratio floor set, and cwwk's thermal alert learns the difference](#2026-09-19--three-overdue-readings-land-nic-stalls-gone-a-ratio-floor-set-and-cwwks-thermal-alert-learns-the-difference)
@@ -59,6 +60,57 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ---
 
+
+---
+
+## 2026-09-28 — the test rig ran nothing: dead webhook tokens were the wrong shape, and the rig now owns its vault (item 43)
+
+**Two faults, one fix, and the second was the reason the first went unnoticed.**
+
+**The rig executed no checked scripts, ever.** `enhanced_monitoring_wrapper`
+validates its webhook argument against `T[A-Z0-9]*/B[A-Z0-9]*/[a-zA-Z0-9]*`
+and exits with a *usage error* before invoking the script it wraps. The test
+inventory set `logging_token` and `alert_token` to
+`TEST/TEST/testcontainernotarealwebhook` — dead, as intended, but the wrong
+**shape**. Every cron the roles installed on CT 199 failed identically at that
+gate: no check ran, no state file was written, no alert path was touched.
+
+🔴 **The unit suite was green throughout**, because
+`tests/unit/wrapper_alert_dedup_test.sh` already used shape-valid fakes. Two
+halves of the test estate disagreed about what a fake token looks like, and the
+half that was wrong was the one running against a real host. Found by the
+workbench container itself (PER-66's acceptance test), which is the first thing
+that box produced.
+
+**Forced in both directions on CT 199**, not inferred: before, a deployed cron
+line run by hand returned exit 1 and `Monitor webhook format invalid`; after,
+the same line returns exit 0 and `~/.logs/system_health_check.log` shows the
+health check actually completing. That path had never executed on the rig.
+
+**The rig now owns its own vault.** `ansible/inventory/test_hosts.yml` moved to
+`ansible/inventory_test/hosts.yml`, a separate inventory *directory* — Ansible
+resolves `group_vars/` per directory, so this is the only way it can carry
+`group_vars/all/vault.yml` holding nothing real. `main.yml` is a symlink to the
+fleet's, so the non-secret defaults cannot drift. Host-level token overrides are
+gone: the "cannot page a real channel" guarantee now lives in one place instead
+of being restated per host.
+
+This is what lets a throwaway container be converged by something that is not
+the laptop — the workbench included — without any fleet secret existing on it.
+Measured: `bootstrap.yml` and a full `site.yml` reach `failed=0`, and a second
+run is `changed=0`.
+
+**One entry in that fake vault is real and has to be:**
+`vault_infrastructure_user: choco`. The fleet vault never defined it, so
+`main.yml` fell back to `lookup('env', 'USER')` — `choco` on the laptop,
+`builder` on the workbench. Left to the fallback the rig works from one machine
+and fails at SSH from the other, blaming the wrong account. It is a username,
+not a credential.
+
+**The rule this leaves behind:** a fake credential still has to survive every
+validator on the path it travels. Dead is not enough — keep the character
+classes of the real thing, slashes, dots, `+`, `=` and all. A fake that fails
+validation does not test a failure path; it removes the path from the test.
 
 ---
 

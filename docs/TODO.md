@@ -289,7 +289,7 @@ first.** The rig merged on 2026-08-18 (`5d2563c`, 10/10 green) serves **goal 4**
 monitoring-script regression. **Goal 1 — running real playbooks against a host
 that is created and destroyed — is ~70% built and is the actual gap.**
 
-📌 The plumbing already exists and is better than it looks: `test_hosts.yml` is a
+📌 The plumbing already exists and is better than it looks: `inventory_test/hosts.yml` is a
 real inventory connecting as the infra user over sudo, `provision_test_container.sh`
 creates *and* destroys, and CT 198 covers Debian 12 for the Pis. **Do not rebuild
 any of that.**
@@ -307,7 +307,7 @@ docs/TESTING_GOALS.md goal 1 first — the inventory and provisioning already
 exist, do not rebuild them.
 
 Start CT 199 (ssh cwwk "sudo /usr/sbin/pct start 199"). Then, against
-ansible/inventory/test_hosts.yml ONLY — never the fleet inventory:
+ansible/inventory_test/hosts.yml ONLY — never the fleet inventory:
 (1) bootstrap.yml against a TEST_CT_BARE=1 container with -e ansible_user=root,
 which is the only state where its user-creation branch runs at all;
 (2) a full site.yml against a normal (non-bare) CT 199.
@@ -331,7 +331,7 @@ first; the standing rules there (two inventories, infra-user-over-sudo, the
 provisioning script taking no dependency on Ansible) are settled, not up for
 redesign.
 
-Reuse tests/provision_test_container.sh and ansible/inventory/test_hosts.yml —
+Reuse tests/provision_test_container.sh and ansible/inventory_test/hosts.yml —
 this is a driver, not a rewrite. Do 3a first: it tells you what actually breaks.
 Must destroy the container even when the converge step fails, and must refuse to
 run against anything not named like a test container.
@@ -366,40 +366,6 @@ wrapper_state_collision never drops privilege — it has no run_uut call, so
 the mechanical conversion skipped it, yet the wrapper DOES run as the
 infrastructure user under cron on every fleet host. Fixing it means the test
 exercises the privilege level production actually uses.
-```
-
-**43. The rig's dead Slack tokens fail the wrapper's shape gate, so no checked script runs on it**
-`test_hosts.yml` sets `logging_token` and `alert_token` to
-`TEST/TEST/testcontainernotarealwebhook` on both test hosts — dead, as intended,
-but also the wrong *shape*. `enhanced_monitoring_wrapper` validates its first
-argument against `T[A-Z0-9]*/B[A-Z0-9]*/[a-zA-Z0-9]*` and exits with a usage
-error before it ever invokes the checked script. Forced on 2026-09-26: exit 1,
-`Monitor webhook format invalid`, and a script that would have touched a file
-never ran. **Nothing downstream of that gate is exercised on the rig at all** —
-no check, no state file, no alert path. Every cron job the roles install there
-fails identically and silently into its log.
-
-🔴 **The fix is shape-matched fakes, not merely dead ones.** The unit tests
-already do this (`wrapper_alert_dedup_test.sh` uses `TTEST0000/BTEST0000/…`),
-which is why the regression suite is green while the rig is blind.
-
-*State:* diagnosed, not fixed. *Effort:* small — two lines per host, then prove
-it. *Needs:* CT 199 started. Do before 3a, or 3a's `changed=0` proves
-convergence of cron jobs that cannot run.
-
-```
-Give the test rig Slack tokens that are dead AND shape-valid. Read docs/TODO.md
-item 43 first. In ansible/inventory/test_hosts.yml, replace
-TEST/TEST/testcontainernotarealwebhook (logging_token and alert_token, both
-hosts) with fakes matching the wrapper's T[A-Z0-9]*/B[A-Z0-9]*/[a-zA-Z0-9]*,
-following tests/unit/wrapper_alert_dedup_test.sh. Keep them visibly fake and
-distinct per role (log vs alert).
-
-Prove it, do not infer it: before the change, run one installed cron line by
-hand on CT 199 and capture the usage error; after it, the same line must reach
-the checked script (its own output or state file appears in logs_dir). Also
-record what the wrapper does when hooks.slack.com rejects the fake — that path
-is now exercised on the rig for the first time.
 ```
 
 **9. Runaway-process detection — the fan removed the only thing that caught the last one**
