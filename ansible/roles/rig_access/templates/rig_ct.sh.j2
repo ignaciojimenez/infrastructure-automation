@@ -1,0 +1,109 @@
+#!/bin/sh
+# Test-container control, the only privileged thing {{ rig_access_user }} may do.
+# Managed by Ansible (roles/rig_access). Do not edit on the host.
+#
+# Runs as root via an enumerated sudoers entry — ten exact command lines, no
+# wildcards — so sudo refuses anything outside the grant before this file is
+# reached. The checks below are therefore belt and braces, not the control.
+#
+# 🔴 `pct create` takes NO arguments from the caller. Every flag is a literal
+# written here at deploy time, keyed by VMID. There is no pass-through, so
+# there is nothing to inject into: the bind-mount escape (`--mp0 /:/host`)
+# cannot be expressed through this interface at all.
+#
+# Mirrors tests/provision_test_container.sh. Bump them together.
+
+set -eu
+
+TAG="rig_ct"
+VERB="${1:-}"
+VMID="${2:-}"
+
+die() {
+    logger -t "$TAG" -p auth.warning "refused: $1 (verb=[${VERB}] vmid=[${VMID}])"
+    echo "rig_ct: $1" >&2
+    exit 2
+}
+
+# Exactly two arguments. Never more — a third would mean something upstream
+# started passing input through, which is the failure this design exists to
+# make impossible.
+[ "$#" -eq 2 ] || die "expects exactly 2 arguments, got $#"
+
+case "$VMID" in
+{% for vmid in rig_access_vmids %}
+    {{ vmid }}) ;;
+{% endfor %}
+    *) die "VMID not in the allowlist" ;;
+esac
+
+case "$VERB" in
+{% for verb in rig_access_verbs %}
+    {{ verb }}) ;;
+{% endfor %}
+    *) die "verb not in the allowlist" ;;
+esac
+
+logger -t "$TAG" -p auth.notice "$VERB $VMID requested"
+
+exists() { pct config "$1" >/dev/null 2>&1; }
+
+case "$VERB" in
+    status)
+        pct status "$VMID"
+        ;;
+    start)
+        exists "$VMID" || die "CT $VMID does not exist"
+        pct status "$VMID" | grep -q running || pct start "$VMID"
+        pct status "$VMID"
+        ;;
+    stop)
+        exists "$VMID" || die "CT $VMID does not exist"
+        pct status "$VMID" | grep -q running && pct stop "$VMID" || true
+        pct status "$VMID"
+        ;;
+    destroy)
+        # Irreversible, and the reason the allowlist is enforced three times.
+        # Guarded on existence so a repeat call is a no-op rather than an
+        # error: the loop that calls this must be safe to re-run.
+        if exists "$VMID"; then
+            pct status "$VMID" | grep -q running && pct stop "$VMID" || true
+            pct destroy "$VMID" --purge
+            logger -t "$TAG" -p auth.notice "destroyed CT $VMID"
+            echo "destroyed $VMID"
+        else
+            echo "absent $VMID"
+        fi
+        ;;
+    create)
+        if exists "$VMID"; then
+            echo "exists $VMID"
+            exit 0
+        fi
+        # Every value below is literal. Nothing here came from the caller.
+        case "$VMID" in
+{% for vmid in rig_access_vmids %}
+{% set h = rig_access_hosts[vmid] %}
+            {{ vmid }})
+                pct create {{ vmid }} \
+                    {{ rig_access_template_storage }}:vztmpl/{{ h.template }} \
+                    --hostname {{ h.hostname }} \
+                    --cores {{ rig_access_cores }} \
+                    --memory {{ rig_access_memory }} \
+                    --swap {{ rig_access_swap }} \
+                    --rootfs {{ rig_access_storage }}:{{ rig_access_rootfs_gb }} \
+                    --net0 name=eth0,bridge={{ rig_access_bridge }},firewall=1,ip={{ h.ip }}/24,gw={{ rig_access_gateway }},type=veth \
+                    --nameserver {{ rig_access_nameserver }} \
+                    --searchdomain {{ rig_access_searchdomain }} \
+                    --ostype debian \
+                    --unprivileged 1 \
+                    --features nesting=1 \
+                    --onboot 0
+                ;;
+{% endfor %}
+        esac
+        pct start "$VMID"
+        logger -t "$TAG" -p auth.notice "created and started CT $VMID"
+        echo "created $VMID"
+        ;;
+esac

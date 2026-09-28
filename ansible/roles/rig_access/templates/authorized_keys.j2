@@ -1,0 +1,10 @@
+# Managed by Ansible (roles/rig_access) — do not edit manually.
+#
+# `command=` discards whatever the client asked to run and hands it to the
+# forced command as data in $SSH_ORIGINAL_COMMAND. `restrict` removes port
+# forwarding, agent forwarding, PTY allocation and X11. Together they mean this
+# key gets no shell on this host — not a limited shell, none.
+#
+# `from=` pins the source. It is a reduction in reach, not a control on its own:
+# the controls are the forced command and the enumerated sudoers.
+from="{{ rig_access_from }}",restrict,command="/usr/local/bin/rig_ct_ssh" {{ rig_access_pubkey }}

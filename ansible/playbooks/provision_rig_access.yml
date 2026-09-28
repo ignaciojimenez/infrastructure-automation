@@ -1,0 +1,65 @@
+---
+# Grant the workbench control of the two test containers — PER-67.
+# Usage: ansible-playbook ansible/playbooks/provision_rig_access.yml
+#
+# Two plays, because the key is generated where it will be used and only its
+# public half travels:
+#
+#   1. on the workbench — generate a keypair as the agent account, read the
+#      public half
+#   2. on the hypervisor — create the rig account, install the forced command,
+#      the enumerated sudoers and that public key
+#
+# The private key is created on the workbench and never leaves it. Nothing here
+# puts a key on the control machine, and nothing writes one into the vault.
+#
+# What this grant is, precisely: the workbench may run five verbs against two
+# VMIDs on cwwk, through an SSH key that has no shell and a sudoers file that
+# enumerates ten complete command lines. It does NOT gain `pct`, a shell, or
+# any fleet credential. See roles/rig_access/defaults/main.yml.
+
+- name: Generate the workbench's rig key
+  hosts: workbench-lxc
+  gather_facts: false
+  # The agent account's name lives in the workbench role's defaults, which do
+  # not load for a playbook that does not run that role. Read them rather than
+  # restating `builder` here: a second literal is how the two drift apart, and
+  # this one decides which home the private key is written into.
+  vars_files:
+    - "{{ playbook_dir }}/../roles/services/workbench/defaults/main.yml"
+  tasks:
+    - name: Create the keypair as the agent account
+      become: true
+      become_user: "{{ workbench_agent_user }}"
+      ansible.builtin.command:
+        cmd: >-
+          ssh-keygen -t ed25519 -N ''
+          -C 'rig_runner@workbench (PER-67)'
+          -f /home/{{ workbench_agent_user }}/.ssh/rig_runner_ed25519
+        creates: "/home/{{ workbench_agent_user }}/.ssh/rig_runner_ed25519"
+      tags: [rig_access]
+
+    - name: Read the public half
+      become: true
+      ansible.builtin.slurp:
+        src: "/home/{{ workbench_agent_user }}/.ssh/rig_runner_ed25519.pub"
+      register: rig_pubkey
+      tags: [rig_access]
+
+    - name: Publish it for the hypervisor play
+      ansible.builtin.set_fact:
+        rig_access_pubkey_fact: "{{ rig_pubkey.content | b64decode | trim }}"
+      tags: [rig_access]
+
+- name: Grant test-container control on the hypervisor
+  hosts: proxmox_hosts
+  gather_facts: false
+  vars:
+    rig_access_pubkey: "{{ hostvars['workbench-lxc'].rig_access_pubkey_fact }}"
+  tasks:
+    - name: Apply rig_access
+      ansible.builtin.include_role:
+        name: rig_access
+        apply:
+          tags: [rig_access]
+      tags: [rig_access, always]

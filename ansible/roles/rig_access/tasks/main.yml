@@ -1,0 +1,127 @@
+---
+# rig_access — the hypervisor half of the test loop. PER-67.
+#
+# Applied to proxmox_hosts only. See defaults/main.yml for the design rule:
+# the caller supplies no parameters, so there is nothing to inject into.
+#
+# Required:
+#   rig_access_pubkey — the workbench's public key (its private half is
+#                       generated on that box and never leaves it)
+
+- name: Assert a public key was supplied
+  ansible.builtin.assert:
+    that:
+      - rig_access_pubkey | length > 0
+      - rig_access_pubkey is match('^ssh-')
+    fail_msg: >-
+      rig_access_pubkey is empty or malformed. Deploying the sudoers and the
+      forced command without a key would leave a privileged account that
+      nothing can reach — harmless, but it would look installed and not be.
+      Run provision_rig_access.yml, which reads the key off the workbench.
+  tags: [rig_access]
+
+# 🔴 The shell is /bin/sh, NOT nologin, and that is not a weakening.
+#
+# sshd runs a forced command THROUGH the account's login shell
+# (`$SHELL -c "<command>"`). With nologin as the shell, nologin intercepts
+# everything and prints "This account is currently not available" — including
+# the verbs that are supposed to work. The first version of this role set
+# nologin as a second belt and broke the mechanism it was belting; the fix was
+# found by running an allowed verb from the workbench and watching it refused.
+#
+# Nothing is lost. The key is the only way into this account (no password is
+# ever set, so `user` leaves it locked), and that key carries `command=`, so
+# every session runs the forced command whatever the client asks for. The shell
+# is what executes that command, not a way to avoid it.
+- name: Create the rig runner account
+  become: true
+  ansible.builtin.user:
+    name: "{{ rig_access_user }}"
+    shell: /bin/sh
+    create_home: true
+    home: "/home/{{ rig_access_user }}"
+    comment: "Test-container control for the workbench (PER-67) — forced command only"
+  tags: [rig_access]
+
+- name: Deploy the privileged control script
+  become: true
+  ansible.builtin.template:
+    src: rig_ct.sh.j2
+    dest: /usr/local/bin/rig_ct
+    owner: root
+    group: root
+    mode: '0755'
+  tags: [rig_access]
+
+- name: Deploy the SSH forced command
+  become: true
+  ansible.builtin.template:
+    src: rig_ct_ssh.sh.j2
+    dest: /usr/local/bin/rig_ct_ssh
+    owner: root
+    group: root
+    mode: '0755'
+  tags: [rig_access]
+
+# `validate` runs visudo before the file is installed. A malformed sudoers file
+# locks out every sudo user on the host, including the account Ansible connects
+# as, so this is not optional.
+- name: Grant the enumerated container commands
+  become: true
+  ansible.builtin.template:
+    src: sudoers_rig.j2
+    dest: "/etc/sudoers.d/{{ rig_access_user }}"
+    owner: root
+    group: root
+    mode: '0440'
+    validate: 'visudo -cf %s'
+  tags: [rig_access]
+
+- name: Ensure the rig runner's .ssh directory exists
+  become: true
+  ansible.builtin.file:
+    path: "/home/{{ rig_access_user }}/.ssh"
+    state: directory
+    owner: "{{ rig_access_user }}"
+    group: "{{ rig_access_user }}"
+    mode: '0700'
+  tags: [rig_access]
+
+- name: Authorize the workbench key, forced command only
+  become: true
+  ansible.builtin.template:
+    src: authorized_keys.j2
+    dest: "/home/{{ rig_access_user }}/.ssh/authorized_keys"
+    owner: "{{ rig_access_user }}"
+    group: "{{ rig_access_user }}"
+    mode: '0600'
+  tags: [rig_access]
+
+# Proves the grant is exactly what was intended, on the host, every run — not
+# what the templates were believed to render. `sudo -l -U` lists what an
+# account may run without invoking anything.
+- name: Read back what the account may actually run
+  become: true
+  ansible.builtin.command:
+    cmd: "sudo -l -U {{ rig_access_user }}"
+  register: rig_access_effective
+  changed_when: false
+  tags: [rig_access, verify]
+
+- name: Fail if the grant is wider than the allowlist
+  ansible.builtin.assert:
+    that:
+      - rig_access_effective.stdout | regex_findall('/usr/local/bin/rig_ct') | length
+        == (rig_access_verbs | length * rig_access_vmids | length)
+      - "'(ALL' not in rig_access_effective.stdout"
+      - "'/usr/sbin/pct' not in rig_access_effective.stdout"
+    fail_msg: >-
+      {{ rig_access_user }} can run more than the
+      {{ rig_access_verbs | length * rig_access_vmids | length }} enumerated
+      rig_ct commands. Effective grant:
+      {{ rig_access_effective.stdout }}
+    success_msg: >-
+      {{ rig_access_user }} may run exactly
+      {{ rig_access_verbs | length * rig_access_vmids | length }} rig_ct
+      commands and nothing else.
+  tags: [rig_access, verify]

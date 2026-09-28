@@ -1,0 +1,17 @@
+# {{ rig_access_user }} — test-container control only. PER-67.
+# Managed by Ansible (roles/rig_access) — do not edit manually.
+#
+# Every line is a COMPLETE command with literal arguments. No wildcards, on
+# purpose: sudo matches the full argv, so anything outside these {{ rig_access_verbs | length * rig_access_vmids | length }} lines is
+# refused here, before /usr/local/bin/rig_ct is reached and regardless of
+# whether that script has a bug. Compare the read_agent entries, which use
+# `agent_read *` and do rely on the script validating — the verb x VMID space
+# here is small enough that it does not have to.
+#
+# rig_ct is root-owned 0755, so this account cannot rewrite the one thing it is
+# permitted to invoke.
+{% for vmid in rig_access_vmids %}
+{% for verb in rig_access_verbs %}
+{{ rig_access_user }} ALL=(root) NOPASSWD: /usr/local/bin/rig_ct {{ verb }} {{ vmid }}
+{% endfor %}
+{% endfor %}

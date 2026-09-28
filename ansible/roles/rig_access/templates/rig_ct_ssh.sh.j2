@@ -1,0 +1,66 @@
+#!/bin/sh
+# SSH forced command for {{ rig_access_user }} — PER-67.
+# Managed by Ansible (roles/rig_access). Do not edit on the host.
+#
+# 🔴 THE POINT OF THIS FILE: the caller supplies no parameters.
+#
+# authorized_keys pins this as `command="..."`, so whatever the client asked to
+# run is discarded and arrives here as $SSH_ORIGINAL_COMMAND — data, never a
+# command. That string is compared against literal alternatives below, and each
+# match then runs a command whose arguments are written out in full at deploy
+# time. No variable is ever expanded into an argument.
+#
+# That is the difference between "we validate the caller's input" and "the
+# caller has no input". `pct create 199 --mp0 /:/host` — a bind mount of the
+# hypervisor's root into a container, which is root on cwwk by another name —
+# is not blocked here, it is unreachable: there is no argument to carry it.
+#
+# Anything that does not match is a REJECTION, and a rejection is the alert.
+# Successful runs are routine and only log; something asking for a verb or a
+# VMID it was never granted is the event worth waking someone for.
+
+set -u
+
+LOGGER_TAG="rig_ct_ssh"
+REQUEST="${SSH_ORIGINAL_COMMAND:-}"
+
+reject() {
+    logger -t "$LOGGER_TAG" -p auth.warning "REJECTED from ${SSH_CLIENT%% *}: $1: [$REQUEST]"
+{% if rig_access_alert_hook | default('') %}
+    # A refusal means something exceeded its grant. That is worth a page; the
+    # successes are not.
+    # The delivery outcome is recorded, not discarded. `>/dev/null 2>&1 || true`
+    # would make a dead webhook indistinguishable from a delivered alert — and
+    # this is the alert that says something exceeded its grant, so a silent
+    # failure here is the worst one in the file. Slack answers `ok` on success.
+    _resp=$(curl -s -m 10 -X POST -H 'Content-type: application/json' \
+        --data "{\"text\":\":no_entry: rig_ct REJECTED on $(hostname): $1 — request was [$REQUEST]\"}" \
+        "https://hooks.slack.com/services/{{ rig_access_alert_hook }}" 2>&1) || _resp="curl failed"
+    if [ "$_resp" = "ok" ]; then
+        logger -t "$LOGGER_TAG" -p auth.warning "rejection alert delivered"
+    else
+        logger -t "$LOGGER_TAG" -p auth.err "rejection alert NOT delivered: $_resp"
+    fi
+{% endif %}
+    echo "refused: $1" >&2
+    exit 1
+}
+
+[ -n "$REQUEST" ] || reject "no request (interactive shell is not available on this key)"
+
+# The allowlist. Every arm is a literal string on both sides — generated from
+# rig_access_verbs x rig_access_vmids at deploy time, so widening it is an
+# Ansible change and a re-deploy, never an argument and never a flag.
+case "$REQUEST" in
+{% for vmid in rig_access_vmids %}
+{% for verb in rig_access_verbs %}
+    "{{ verb }} {{ vmid }}")
+        logger -t "$LOGGER_TAG" -p auth.notice "allow from ${SSH_CLIENT%% *}: {{ verb }} {{ vmid }}"
+        exec sudo -n /usr/local/bin/rig_ct {{ verb }} {{ vmid }}
+        ;;
+{% endfor %}
+{% endfor %}
+    *)
+        reject "not in the allowlist"
+        ;;
+esac

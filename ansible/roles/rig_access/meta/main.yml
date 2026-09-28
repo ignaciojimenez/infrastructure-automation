@@ -1,0 +1,4 @@
+---
+# No dependencies. This role grants one capability on the hypervisor and is
+# applied only to proxmox_hosts.
+dependencies: []
