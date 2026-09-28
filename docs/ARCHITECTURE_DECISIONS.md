@@ -328,6 +328,7 @@ set — see `docs/BACKUP_AND_RECOVERY.md`.
 - **The TV routes the amp but never powers it** (PER-88, 2026-09-28)
   - TV is often watched without the Pioneer, so `media_player.cobi_tv_3` is out of `binary_sensor.amp_source_active` (power) and stays in `sensor.amp_active_source` (input)
   - Amp on for TV = switch the Shelly plug by hand; the RCA switcher still lands on the TV input
+  - The switcher rests on TV: `amp_input_park_tv` sends `input_tv` on plug-off, so a hand-switched amp gets TV sound even if HA misses the plug-on (the switcher is powered independently of the amp)
   - Do not re-add the TV to the power sensor — that is the behaviour this reverted
 
 - **Docker cleanup via weekly prune** - Prevents disk space issues from old images

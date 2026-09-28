@@ -48,6 +48,7 @@ flowchart TD
         subgraph Automations[Automations]
             A_Power[amp_power_on / amp_power_off<br/>on: instant · off: 5-min grace]
             A_Input[amp_input_select<br/>source change: 3s debounce<br/>plug-on: instant re-align]
+            A_Park[amp_input_park_tv<br/>plug-off: park switcher on TV]
             A_Reconcile[amp_reconcile_on_start<br/>HA restart → plug = source state]
             A_Watchdog[amp_plug_cycling_watchdog<br/>plug on >3×/h → Slack alert]
         end
@@ -73,12 +74,14 @@ flowchart TD
     TS_Active --> A_Reconcile
     TS_Source -->|Drives routing| A_Input
     Shelly -.->|plug turns on| A_Input
+    Shelly -.->|plug turns off| A_Park
 
     %% Physical actions (Control Layer)
     A_Power -.->|Local RPC| Shelly
     Shelly -.->|history_stats: on-count 1h| A_Watchdog
     A_Watchdog -.->|>3 on/hour| Slack[Slack #home-alerts]
     A_Input -.->|Local API| Broadlink[Broadlink RM4 Mini]
+    A_Park -.->|Local API| Broadlink
     Broadlink -.->|IR: rca_switcher/input_tv → 1<br/>rca_switcher/input_pi → 2| Switch
 ```
 
@@ -88,7 +91,9 @@ flowchart TD
   playing) switches the plug on. Debounce against phantom vinyl starts lives in
   `detect_audio` on vinylstreamer, not in HA.
 - **The TV never powers the amp** (PER-88): TV is often watched without it. Switch
-  the plug on by hand for TV sound; input selection still follows the TV. Nothing
+  the plug on by hand for TV sound; input selection still follows the TV, and the
+  switcher rests on the TV input (below), so TV sound works even if HA misses the
+  plug-on. Nothing
   turns a hand-switched amp off when the TV goes off — it goes off by hand, or via
   the 5-min grace after the next hifipi playback ends, or on an HA restart
   (reconcile sets the plug to hifipi source state).
@@ -99,6 +104,9 @@ flowchart TD
   IR code at the switcher (3s debounce); when the plug turns on, the input is
   re-aligned instantly. Learned codes are checked into the role and seeded to
   `.storage` only-if-missing (see ARCHITECTURE_DECISIONS).
+- **Resting input is TV**: when the plug turns off, the RM4 parks the switcher on
+  input 1 (TV). The switcher is powered independently of the amp, so the position
+  holds until the next plug-on re-aligns it.
 - **Resilience**: an HA restart reconciles the plug against source state; a
   watchdog pages `#home-alerts` if the plug starts cycling (>3 on-events/hour).
 
