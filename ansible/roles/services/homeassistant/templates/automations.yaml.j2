@@ -538,7 +538,8 @@
 
 # ── Amp power control ──────────────────────────────────────────────────────────
 # Drive the Pioneer's Shelly plug from source activity. binary_sensor.amp_source_active
-# is the OR of all inputs (hifipi AirPlay/Spotify/MPD playing, or the TV powered on).
+# is the OR of the hifipi inputs (AirPlay/Spotify/MPD/vinyl playing). The TV does
+# not drive power (PER-88) — the amp is switched on by hand for TV.
 # Input selection (TV vs Pi) is handled by "Amp - select input" below, keyed off
 # sensor.amp_active_source.
 - id: "amp_power_on"
@@ -557,7 +558,7 @@
         entity_id: switch.living_room_shellyplugsg3_pioneer
   mode: single
 
-# 5-minute grace so brief gaps (track changes, short TV pauses) don't cut the amp.
+# 5-minute grace so brief gaps (track changes, short pauses) don't cut the amp.
 - id: "amp_power_off"
   alias: "Amp - power off when idle"
   trigger:

@@ -41,7 +41,7 @@ flowchart TD
         end
 
         subgraph Templates[Template Logic]
-            TS_Active[binary_sensor.amp_source_active<br/>OR of all sources]
+            TS_Active[binary_sensor.amp_source_active<br/>OR of hifipi sources — not the TV]
             TS_Source[sensor.amp_active_source<br/>pi / tv / none — Pi wins over TV]
         end
 
@@ -54,7 +54,6 @@ flowchart TD
     end
 
     %% Source → template mapping
-    E_TV -.-> TS_Active
     E_AP -.-> TS_Active
     E_SP -.-> TS_Active
     E_VINYL -.-> TS_Active
@@ -85,9 +84,14 @@ flowchart TD
 
 ## Behavior
 
-- **Power on** is instant: any source going active (AirPlay/Spotify/vinyl playing,
-  or the TV powering on) switches the plug on. Debounce against phantom vinyl
-  starts lives in `detect_audio` on vinylstreamer, not in HA.
+- **Power on** is instant: any hifipi source going active (AirPlay/Spotify/vinyl
+  playing) switches the plug on. Debounce against phantom vinyl starts lives in
+  `detect_audio` on vinylstreamer, not in HA.
+- **The TV never powers the amp** (PER-88): TV is often watched without it. Switch
+  the plug on by hand for TV sound; input selection still follows the TV. Nothing
+  turns a hand-switched amp off when the TV goes off — it goes off by hand, or via
+  the 5-min grace after the next hifipi playback ends, or on an HA restart
+  (reconcile sets the plug to hifipi source state).
 - **Power off** waits a 5-minute idle grace so track gaps and short pauses don't
   cut the amp.
 - **Input selection**: `sensor.amp_active_source` picks `pi`/`tv` (active Pi
