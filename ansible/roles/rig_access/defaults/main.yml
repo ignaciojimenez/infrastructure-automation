@@ -1,0 +1,80 @@
+---
+# rig_access — lets the workbench create and destroy the two test containers on
+# the hypervisor, and nothing else. PER-67.
+#
+# 🔴 THE DESIGN RULE: no caller-supplied value ever reaches a command line.
+#
+# Not "the caller's arguments are validated" — the caller has no arguments. The
+# SSH forced command matches the whole request against literal strings and then
+# runs a fixed command with literal arguments written out at deploy time. There
+# is no variable to inject into, which is why `pct create ... --mp0 /:/host`
+# (a bind mount of the hypervisor root into a container, i.e. root on cwwk) is
+# not merely blocked but unreachable.
+
+enable_rig_access: false
+
+# The account on the hypervisor. Deliberately NOT read_agent: that key is held
+# by agent-lxc, so extending its sudoers would hand container create/destroy to
+# a box that is read-only by construction.
+rig_access_user: rig_runner
+
+# 🔴 The only VMIDs this grant will ever touch. Every sudoers line, every
+# forced-command case arm and every guard in the script is generated from this
+# list, so adding an ID is an Ansible change and a re-deploy — never a flag,
+# never an argument.
+rig_access_vmids:
+  - 198
+  - 199
+
+# The verbs. `destroy` is included deliberately: these two containers exist to
+# be destroyed, and a loop that cannot clean up silently stops working when the
+# pool fills. It is the one irreversible verb and it is why the VMID allowlist
+# is enforced in three places rather than one.
+rig_access_verbs:
+  - create
+  - destroy
+  - start
+  - stop
+  - status
+
+# Where the request may come from. Combined with `restrict` this is a source
+# pin, not a control on its own — the controls are the forced command and the
+# enumerated sudoers.
+rig_access_from: "10.30.40.207"
+
+# Slack webhook path for REJECTIONS only. Successful runs will be routine once
+# the loop exists, so paging on them is noise; an attempt at a verb or a VMID
+# that was never granted means something exceeded its grant, which is the event
+# worth waking someone for. Defaults to the fleet's alert channel.
+rig_access_alert_hook: "{{ alert_token | default('') }}"
+
+# The public key the workbench presents. Its private half is generated on that
+# box and never leaves it.
+rig_access_pubkey: ""
+
+# Container shape for `create`. Rendered into the script at deploy time, so
+# these are fixed strings on the host rather than anything a caller can reach.
+# Mirrors tests/provision_test_container.sh — bump them together.
+rig_access_storage: local-zfs
+rig_access_template_storage: local
+rig_access_template: debian-13-standard_13.6-1_amd64.tar.zst
+rig_access_bridge: vmbr0
+rig_access_gateway: 10.30.40.254
+rig_access_nameserver: 10.30.40.254
+rig_access_searchdomain: local
+rig_access_rootfs_gb: 4
+rig_access_memory: 1024
+rig_access_swap: 512
+rig_access_cores: 1
+
+# Per-VMID identity. Keyed by VMID so the script never computes a hostname or
+# an address from input.
+rig_access_hosts:
+  198:
+    hostname: test-deb12
+    ip: 10.30.40.206
+    template: debian-12-standard_12.12-1_amd64.tar.zst
+  199:
+    hostname: testlxc
+    ip: 10.30.40.205
+    template: debian-13-standard_13.6-1_amd64.tar.zst
