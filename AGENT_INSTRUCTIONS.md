@@ -213,9 +213,9 @@ ansible-playbook ansible/playbooks/services.yml --limit hostname --check --diff
 
 **Tier 3 — Test host (optional integration test):**
 ```bash
-cp ansible/inventory/test_hosts.yml.example ansible/inventory/test_hosts.yml
-# Edit test_hosts.yml: set ansible_host to your test machine's IP
-ansible-playbook -i ansible/inventory/test_hosts.yml ansible/playbooks/site.yml
+cp ansible/inventory_test/hosts.yml.example ansible/inventory_test/hosts.yml
+# Edit inventory_test/hosts.yml: set ansible_host to your test machine's IP
+ansible-playbook -i ansible/inventory_test/hosts.yml ansible/playbooks/site.yml
 ```
 The `is_test_environment: true` flag in the test inventory gates hardware-specific tasks.
 

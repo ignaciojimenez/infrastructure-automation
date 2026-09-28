@@ -103,11 +103,11 @@ package set. A true rebuild needs `pct` on the Proxmox host, so it stays a
 
 ## Running playbooks against them
 
-`ansible/inventory/test_hosts.yml` describes both containers, connecting as the
+`ansible/inventory_test/hosts.yml` describes both containers, connecting as the
 infrastructure user over sudo exactly as the fleet is reached:
 
 ```sh
-ansible-playbook -i ansible/inventory/test_hosts.yml \
+ansible-playbook -i ansible/inventory_test/hosts.yml \
     ansible/playbooks/deploy_monitoring.yml
 ```
 

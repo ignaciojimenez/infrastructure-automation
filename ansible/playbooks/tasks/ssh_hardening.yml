@@ -32,7 +32,7 @@
 # So on a test host the connecting key is appended to the authoritative set
 # rather than the task being skipped. Hardening still runs, still deploys the
 # same config, and is still exercised — it just does not saw off the branch.
-# `is_test_environment` is set only in test_hosts.yml and never in the fleet
+# `is_test_environment` is set only in inventory_test/hosts.yml and never in the fleet
 # inventory, so this branch cannot be reached by a real host.
 # Double-quoted, not a folded `>-` block: YAML only expands \n as a newline
 # inside double quotes, and a folded scalar hands Jinja a literal backslash-n

@@ -24,12 +24,12 @@ set to start on boot. Nothing should ever depend on it existing.
 ⚠️ **It IS in an Ansible inventory — just not the fleet's.** This paragraph used
 to say the opposite, which was wrong and actively harmful: an agent that read it
 first concluded playbook testing was out of scope and stopped. The rig is
-described in [`ansible/inventory/test_hosts.yml`](../ansible/inventory/test_hosts.yml),
+described in [`ansible/inventory_test/hosts.yml`](../ansible/inventory_test/hosts.yml),
 a **separate** inventory that never mentions a fleet host, and running playbooks
 against it is a first-class use of this container — see
 [§6b](#6b-running-playbooks-against-it) and [TESTING_GOALS.md](TESTING_GOALS.md).
 What must never happen is CT 199 appearing in `ansible/inventory/hosts.yml`, or a
-fleet host appearing in `test_hosts.yml` — `is_test_environment` unlocks
+fleet host appearing in `inventory_test/hosts.yml` — `is_test_environment` unlocks
 behaviour that must not reach production.
 
 ## Design choices
@@ -195,12 +195,12 @@ to add cases.
 
 ## 6b. Running playbooks against it
 
-`ansible/inventory/test_hosts.yml` describes both containers. It is a separate
+`ansible/inventory_test/hosts.yml` describes both containers. It is a separate
 inventory file, never included from `hosts.yml`, so nothing here can reach a
 fleet host by accident.
 
 ```sh
-ansible-playbook -i ansible/inventory/test_hosts.yml \
+ansible-playbook -i ansible/inventory_test/hosts.yml \
     ansible/playbooks/deploy_monitoring.yml
 ```
 
@@ -230,7 +230,7 @@ disposable container the key Ansible connected with *is* the only way in, so the
 same task would lock the rig out of itself with `pct` as the sole way back.
 
 Rather than skipping hardening on test hosts, which would leave it untested,
-three things are gated on `is_test_environment` — set only in `test_hosts.yml`,
+three things are gated on `is_test_environment` — set only in `inventory_test/hosts.yml`,
 never in the fleet inventory:
 
 | Task | Fleet host | Test container |
@@ -260,7 +260,7 @@ pct stop 199 && pct destroy 199
 ```
 
 Nothing else needs cleaning up — the container held no state, and it appears
-only in `test_hosts.yml`, never in the fleet inventory.
+only in `inventory_test/hosts.yml`, never in the fleet inventory.
 
 ## Rebuilding later
 

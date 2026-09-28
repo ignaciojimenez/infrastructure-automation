@@ -9,7 +9,7 @@ Ansible automation for Raspberry Pis, LXC, Proxmox, and OPNsense.
 ansible-playbook ansible/playbooks/site.yml --limit hostname
 
 # Test first with a test host (recommended)
-ansible-playbook -i ansible/inventory/test_hosts.yml ansible/playbooks/site.yml
+ansible-playbook -i ansible/inventory_test/hosts.yml ansible/playbooks/site.yml
 ```
 
 **Auto-bootstraps** from fresh install (detects user, creates infrastructure user, hardens security).

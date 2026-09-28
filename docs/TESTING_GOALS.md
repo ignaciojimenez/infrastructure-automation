@@ -28,7 +28,7 @@ documentation error (see TEST_CONTAINER.md).
 | Built | |
 |---|---|
 | Create **and destroy** | `tests/provision_test_container.sh` (`--destroy`), idempotent; refuses to destroy anything not named like a test container |
-| A real test inventory | `ansible/inventory/test_hosts.yml` — connects **as the infrastructure user over sudo**, not root, so every `become` path is genuinely exercised; `is_test_environment: true`; dead Slack tokens so a rig can never page a real channel; overrides at host level with the precedence reasoning recorded |
+| A real test inventory, with its own vault | `ansible/inventory_test/hosts.yml` — connects **as the infrastructure user over sudo**, not root, so every `become` path is genuinely exercised; `is_test_environment: true`; dead Slack tokens so a rig can never page a real channel; overrides at host level with the precedence reasoning recorded |
 | Two OS targets | CT 199 (Debian 13 — twin of the LXCs) and CT 198 (Debian 12 — proxy for the four Pis). Chosen on **OS release, not CPU**: that is where a POSIX shell script actually trips |
 | The bootstrap path | `TEST_CT_BARE=1` leaves the container with root and nothing else, the only state in which bootstrap's user-creation branch runs |
 
@@ -131,6 +131,13 @@ on the builder, re-decide it here, with the reason.
 
 📎 Enabled by resolving `vault.yml` from `inventory_dir` rather than
 `playbook_dir`, so an inventory can carry its own vault.
+
+✅ **Landed 2026-09-28.** The rig lives at `ansible/inventory_test/` with
+`group_vars/all/vault.yml` holding nothing real, and converges CT 199 to
+`changed=0` with no fleet secret anywhere on the control machine. Doing it
+found that the rig had never executed a checked script at all — the dead
+webhook tokens were the wrong *shape* and the wrapper rejected them before
+running anything (item 43, now in archive/DONE.md).
 
 
 ## Goal 4 — Regression-test the monitoring scripts (the unplanned one)
