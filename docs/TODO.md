@@ -297,44 +297,86 @@ any of that.**
 *State:* assessed, planned below. *Effort:* 3a small, 3b medium, 3c small.
 *Needs:* a laptop, and CT 199 started (`ssh cwwk 'sudo /usr/sbin/pct start 199'`).
 
-**3a. Run `bootstrap.yml` and a full `site.yml` against a container — never done**
-The playbook goal 1 most exists for is the one least tested. Highest value here,
-and it is pure verification: no new code until it fails.
+**3a. Run `bootstrap.yml` and a full `site.yml` against a container — half done**
+✅ **The non-bare path is done (2026-09-21/28).** `bootstrap.yml` and a full
+`site.yml` both converge CT 199 against `ansible/inventory_test/` with
+`failed=0`, and a second `site.yml` run reports `changed=0`. Doing it found two
+things that had made the rig useless: `bootstrap.yml` flipped `PermitRootLogin`
+on every run so the rig could never report `changed=0` at all, and the rig's
+dead webhook tokens were the wrong *shape*, so the wrapper rejected them at its
+format gate and **no checked script had ever run on the rig** (archive/DONE.md).
+
+🔴 **Still untested: the bare/root path**, which is the only state where
+`bootstrap.yml`'s user-creation branch executes — the half this item most
+exists for. Everything below still applies to it.
 
 ```
 Run the playbooks that have never been tested against a container. Read
 docs/TESTING_GOALS.md goal 1 first — the inventory and provisioning already
 exist, do not rebuild them.
 
-Start CT 199 (ssh cwwk "sudo /usr/sbin/pct start 199"). Then, against
-ansible/inventory_test/hosts.yml ONLY — never the fleet inventory:
-(1) bootstrap.yml against a TEST_CT_BARE=1 container with -e ansible_user=root,
-which is the only state where its user-creation branch runs at all;
-(2) a full site.yml against a normal (non-bare) CT 199.
+The non-bare path is already proven; do NOT redo it. What remains is
+bootstrap.yml against a TEST_CT_BARE=1 container with -e ansible_user=root,
+which is the only state where its user-creation branch runs at all.
 
-Expect failures — that is the point, this has never been done. For each one,
-record whether it is a real playbook bug or a rig artefact, and fix only the
-real ones. Finish with changed=0 on a second run of each, which is the actual
-proof. Destroy and recreate the container between the two, and stop it when
-done.
+Against ansible/inventory_test/hosts.yml ONLY — never the fleet inventory. That
+inventory now carries its own group_vars/all/vault.yml holding nothing real, so
+this needs no fleet secret; do not point it at the fleet vault.
+
+Expect failures — that branch has never executed. For each one, record whether
+it is a real playbook bug or a rig artefact, and fix only the real ones. Finish
+with changed=0 on a second run, which is the actual proof.
 ```
 
-**3b. One command: create → converge → verify → destroy**
-Today it is a manual sequence, which is why it does not get run.
+**3b. One command: create → converge → verify → destroy — and it must run on the workbench**
+Today it is a manual sequence, which is why it does not get run. 📌 **The point
+is not the command, it is where it runs.** A cloud session can already clone,
+edit and open a PR; what it can never do is reach this LAN to prove a change
+converges on a real host. That is the only thing the workbench container has
+that a cloud session structurally cannot, so a loop that only runs on the laptop
+leaves the box a worse cloud session.
+
+Two of the four pieces are built and merged — **do not rebuild either**:
+
+| Built | |
+|---|---|
+| The rig owns its vault | `ansible/inventory_test/` carries `group_vars/all/vault.yml` holding nothing real. CT 199 converges with no fleet secret present, so a non-laptop control machine is viable. `main.yml` is a symlink to the fleet's, so defaults cannot drift |
+| The workbench may create/destroy containers | `roles/rig_access` + `provision_rig_access.yml`. `rig_runner@cwwk` accepts five verbs against 198/199 through an SSH forced command, with sudo enumerating ten complete command lines. **No shell on cwwk, no `pct`, no fleet credential.** Forced in both directions; `docs/WORKBENCH.md` and the role defaults carry the reasoning |
+
+*State:* two of four built. *Effort:* medium. *Needs:* a laptop to deploy the
+Ansible changes; the loop then runs from the workbench.
 
 ```
-Give the test environment a single entry point that creates a container,
-converges it with a chosen playbook, verifies, and destroys it — so that
-testing a change is one command and therefore actually happens. Read
-docs/TESTING_GOALS.md and docs/ARCHITECTURE_DECISIONS.md "Test Environments"
-first; the standing rules there (two inventories, infra-user-over-sudo, the
-provisioning script taking no dependency on Ansible) are settled, not up for
-redesign.
+Finish the test loop so it runs from the workbench, not the laptop. Read
+docs/TESTING_GOALS.md goals 1 and 3, then roles/rig_access/defaults/main.yml,
+then docs/WORKBENCH.md. Two pieces are already built and merged — the rig's own
+vault at ansible/inventory_test/, and the rig_ct grant letting the workbench
+create and destroy CT 198/199 on cwwk. Do not rebuild either, and do not widen
+the grant.
 
-Reuse tests/provision_test_container.sh and ansible/inventory_test/hosts.yml —
-this is a driver, not a rewrite. Do 3a first: it tells you what actually breaks.
-Must destroy the container even when the converge step fails, and must refuse to
-run against anything not named like a test container.
+What is missing:
+(1) Ansible on the workbench. roles/services/workbench installs no ansible
+    today, so the box cannot converge anything.
+(2) A single entry point: create -> converge -> verify -> destroy, driven over
+    the rig_ct grant (ssh rig_runner@cwwk "create 199"), converging via
+    ansible/inventory_test/hosts.yml ONLY.
+
+Two things will bite, both already diagnosed:
+  * inventory_test/hosts.yml points ansible_ssh_private_key_file at
+    ~/.ssh/read_agent_ed25519, a LAPTOP path that does not exist on the
+    workbench. Make it resolve per control machine.
+  * a freshly created container has no keys. rig_ct already knows the
+    workbench's public key at deploy time and has root on the container it just
+    made, so it can install that key during create — baked in, never passed in.
+    Keep the rule that the caller supplies no parameters.
+
+Must destroy the container even when the converge step fails, and must refuse
+to run against anything not named like a test container.
+
+Acceptance, forced from the workbench with the laptop uninvolved: destroy CT
+199, then one command brings it back, converges it, proves changed=0 on a
+second converge, and tears it down. Then do it again with a deliberately broken
+playbook and watch the container still get destroyed.
 ```
 
 **3c. `sandbox.sh --create`, so a fresh box does not need a laptop tap**
