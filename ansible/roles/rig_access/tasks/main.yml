@@ -129,6 +129,9 @@
     cmd: "sudo -l -U {{ rig_access_user }}"
   register: rig_access_effective
   changed_when: false
+  # Read-only, so it runs under --check too. Skipped there, it left the assert
+  # below reading an empty grant and failing every dry run of this role.
+  check_mode: false
   tags: [rig_access, verify]
 
 - name: Fail if the grant is wider than the allowlist
