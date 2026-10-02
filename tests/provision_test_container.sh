@@ -250,6 +250,8 @@ fi
 # Root keeps the key too, as the second way in. ssh_hardening would normally
 # close this off; on a host flagged is_test_environment it leaves it open,
 # because `pct` on the hypervisor is otherwise the only recovery path.
+# ⚠️ Only until bootstrap.yml runs: it rewrites root's keys from GitHub with
+# `exclusive: true` and has no test-host exemption (TODO 3b, 2026-10-03).
 say "Authorising the agent key for root"
 pct exec "$VMID" -- mkdir -p /root/.ssh
 pct exec "$VMID" -- sh -c "printf '%s\n' '$AGENT_PUBKEY' > /root/.ssh/authorized_keys"

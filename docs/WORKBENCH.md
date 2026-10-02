@@ -201,6 +201,41 @@ has no SSH key to GitHub by design.
 
 ---
 
+## The test loop
+
+**Why it is here.** A cloud session can clone, edit and open a PR. What it can
+never do is reach this LAN and prove a change converges on a real host. That is
+the one thing this box has that a cloud session does not — a loop that only
+ran on the laptop would leave it a worse cloud session.
+
+```sh
+cd ~/Workspaces/infrastructure-automation
+tests/rig_loop.sh                       # site.yml against a fresh CT 199
+tests/rig_loop.sh --deb12               # CT 198, the Pis' Debian 12
+tests/rig_loop.sh ansible/playbooks/services.yml
+tests/rig_loop.sh --keep                # leave it up to poke at
+```
+
+Destroy → create → converge → converge again requiring `changed=0` → destroy,
+on success, failure or Ctrl-C. Run it as `builder` — the rig key lives in that
+home. A PASS means **"this deploys"**, never "this works": the rig's vault is
+fake, so nothing reaches Slack, healthchecks.io or Home Assistant
+([TESTING_GOALS.md](TESTING_GOALS.md) goal 3).
+
+What makes it possible, and what each piece does *not* grant:
+
+| Piece | Grants | Does not grant |
+|---|---|---|
+| `~/.ssh/rig_runner_ed25519` | `create`/`destroy`/`start`/`stop`/`status` of CT 198/199 on cwwk; root on those two containers once created | a shell on cwwk, `pct`, any other VMID, any fleet host |
+| Ansible in `/opt/ansible`, pinned to the laptop's version | running playbooks | anything to connect *with* beyond the rig key — there is no fleet key here |
+| `tests/lib/no_vault_pass.sh` | loading the rig's plaintext vault | the fleet vault: it decrypts nothing, so a play that reaches for it fails closed |
+
+`rig_ct create` installs this box's public key into the new container — baked
+into `rig_ct` at deploy time, never passed in. Changing the key or the
+provisioning script needs `provision_rig_access.yml` from the laptop.
+
+---
+
 ## Deliberate absences
 
 None of these are toggles to flip. They are the reason the box exists as a
@@ -211,7 +246,11 @@ separate thing:
   to `cwwk` is refused on an **open** port — the path exists, the credential
   does not.
 - **No Ansible vault password.** It never leaves the laptop's Keychain.
-- **No `pct` or hypervisor right.** It is a guest, not an operator.
+- **No `pct`, and exactly one hypervisor right.** `rig_runner@cwwk` accepts
+  five verbs against CT 198/199 through a forced command and nothing else — no
+  shell, no `pct`, no argument the caller can pass ([PER-67](https://linear.app/lacopadeeuropa/issue/PER-67),
+  `roles/rig_access`). It is a guest that may recycle two disposable
+  containers, not an operator. See [The test loop](#the-test-loop).
 - **No Secure-Enclave signing key.** Signed merges stay on the laptop, so
   nothing this box produces carries a human attestation.
 

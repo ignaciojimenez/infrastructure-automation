@@ -56,7 +56,7 @@ renders it:
 > **№1** 36 + 37 *(deployed 13 Sep — waiting on a real alert / a real lockout)* →
 > **№2** 42 *(entrance door alert disabled 19 Sep, needs physical inspection)* →
 > **№3** 38 *(small follow-ups: MQTT timeout, 403 detection)* →
-> **№4** 2 → **№5** 4 (plex) → **№6** 9 → **№7** 3a/3b/3c → **№8** 39 →
+> **№4** 2 → **№5** 4 (plex) → **№6** 9 → **№7** 3a/3c *(3b done 3 Oct)* → **№8** 39 →
 > **№9** 5 → **№10** 19 → **№11** 12 → **№12** 10 → **№13** 11 → **№14** 6 →
 > **№15** 7 → **№16** 34 *(small; restores `changed=0` as a signal for the docker role)* →
 > **№17–19** 8/13/14 · **№20** 32 *(git-history rewrite —
@@ -294,7 +294,7 @@ real inventory connecting as the infra user over sudo, `provision_test_container
 creates *and* destroys, and CT 198 covers Debian 12 for the Pis. **Do not rebuild
 any of that.**
 
-*State:* assessed, planned below. *Effort:* 3a small, 3b medium, 3c small.
+*State:* 3b done (2026-10-03); 3a half done; 3c open. *Effort:* 3a small, 3c small.
 *Needs:* a laptop, and CT 199 started (`ssh cwwk 'sudo /usr/sbin/pct start 199'`).
 
 **3a. Run `bootstrap.yml` and a full `site.yml` against a container — half done**
@@ -328,56 +328,50 @@ it is a real playbook bug or a rig artefact, and fix only the real ones. Finish
 with changed=0 on a second run, which is the actual proof.
 ```
 
-**3b. One command: create → converge → verify → destroy — and it must run on the workbench**
-Today it is a manual sequence, which is why it does not get run. 📌 **The point
-is not the command, it is where it runs.** A cloud session can already clone,
-edit and open a PR; what it can never do is reach this LAN to prove a change
-converges on a real host. That is the only thing the workbench container has
-that a cloud session structurally cannot, so a loop that only runs on the laptop
-leaves the box a worse cloud session.
+**3b. One command: create → converge → verify → destroy — on the workbench ✅ DONE 2026-10-03**
+📌 **The point was never the command, it was where it runs.** A cloud session
+can already clone, edit and open a PR; what it can never do is reach this LAN to
+prove a change converges on a real host. That is the only thing the workbench
+has that a cloud session structurally cannot.
 
-Two of the four pieces are built and merged — **do not rebuild either**:
+`tests/rig_loop.sh`, run as `builder` on the workbench — usage and what each
+piece grants in [`WORKBENCH.md`](WORKBENCH.md#the-test-loop). Built on the two
+pieces that already existed (the rig's own vault, the `rig_ct` grant), neither
+rebuilt, the grant not widened: still exactly 10 command lines.
 
-| Built | |
+What it took: Ansible on the box (a venv pinned to the laptop's 14.4.0 / core
+2.21 — Debian 13 ships 2.19); the rig key resolved per control machine, with
+`test_environment_ssh_key` read from that key's `.pub` instead of a literal;
+`rig_ct create` running `provision_test_container.sh` with literal values,
+which installs the workbench key — one definition of a test container instead
+of two; and a vault "password" that decrypts nothing, because `ansible.cfg`'s
+Keychain script exits 1 on Linux and Ansible aborts on that before loading
+anything.
+
+**Acceptance, forced from the workbench** (kicked off over SSH, every step
+executing on CT 104 with its own key and toolchain):
+
+| Run | Result |
 |---|---|
-| The rig owns its vault | `ansible/inventory_test/` carries `group_vars/all/vault.yml` holding nothing real. CT 199 converges with no fleet secret present, so a non-laptop control machine is viable. `main.yml` is a symlink to the fleet's, so defaults cannot drift |
-| The workbench may create/destroy containers | `roles/rig_access` + `provision_rig_access.yml`. `rig_runner@cwwk` accepts five verbs against 198/199 through an SSH forced command, with sudo enumerating ten complete command lines. **No shell on cwwk, no `pct`, no fleet credential.** Forced in both directions; `docs/WORKBENCH.md` and the role defaults carry the reasoning |
+| CT 199 destroyed, then `tests/rig_loop.sh` | create + provision → `site.yml` ok=109 changed=42 failed=0 → second run, fresh SSH sockets, ok=106 **changed=0** → destroyed. PASS |
+| a playbook that runs `bootstrap.yml` then `/bin/false` | changed=10, failed=1 → exit 1, **container destroyed**, lock released |
 
-*State:* two of four built. *Effort:* medium. *Needs:* a laptop to deploy the
-Ansible changes; the loop then runs from the workbench.
+Plus the control flow forced under dash with stubs: destroy also runs on a
+non-idempotent second run, a wrong host at the address, no recap line and
+SIGINT; a failed destroy fails the run.
 
-```
-Finish the test loop so it runs from the workbench, not the laptop. Read
-docs/TESTING_GOALS.md goals 1 and 3, then roles/rig_access/defaults/main.yml,
-then docs/WORKBENCH.md. Two pieces are already built and merged — the rig's own
-vault at ansible/inventory_test/, and the rig_ct grant letting the workbench
-create and destroy CT 198/199 on cwwk. Do not rebuild either, and do not widen
-the grant.
-
-What is missing:
-(1) Ansible on the workbench. roles/services/workbench installs no ansible
-    today, so the box cannot converge anything.
-(2) A single entry point: create -> converge -> verify -> destroy, driven over
-    the rig_ct grant (ssh rig_runner@cwwk "create 199"), converging via
-    ansible/inventory_test/hosts.yml ONLY.
-
-Two things will bite, both already diagnosed:
-  * inventory_test/hosts.yml points ansible_ssh_private_key_file at
-    ~/.ssh/read_agent_ed25519, a LAPTOP path that does not exist on the
-    workbench. Make it resolve per control machine.
-  * a freshly created container has no keys. rig_ct already knows the
-    workbench's public key at deploy time and has root on the container it just
-    made, so it can install that key during create — baked in, never passed in.
-    Keep the rule that the caller supplies no parameters.
-
-Must destroy the container even when the converge step fails, and must refuse
-to run against anything not named like a test container.
-
-Acceptance, forced from the workbench with the laptop uninvolved: destroy CT
-199, then one command brings it back, converges it, proves changed=0 on a
-second converge, and tears it down. Then do it again with a deliberately broken
-playbook and watch the container still get destroyed.
-```
+🔴 **Found doing it — `bootstrap.yml` removes root's way into a test
+container.** Its "Set authorized keys from GitHub" writes `exclusive: true` to
+`ansible_user_id`, which is **root** under the play's `become`, with no
+`is_test_environment` exemption (ssh_hardening has one; bootstrap does not).
+Verified 2026-10-03: after `bootstrap.yml`, the rig key still works as `choco`
+and is refused as root, and is gone from root's `authorized_keys`.
+TEST_CONTAINER.md claimed root "stays as a second way in"; corrected in place.
+It does not affect the loop, which connects as the infra user. **Not fixed:**
+`bootstrap.yml` runs on the fleet, so the change — mirror ssh_hardening's
+append for test hosts, or target `ansible_user` — needs a decision, and on the
+fleet it is also worth asking whether root's keys being GitHub-only is the
+intent.
 
 **3c. `sandbox.sh --create`, so a fresh box does not need a laptop tap**
 Small, and it is the last thing standing between goal 2 and "done".
