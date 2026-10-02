@@ -27,6 +27,35 @@
   tags: [workbench, packages]
 
 # ============================================================
+# Ansible — for the test loop (tests/rig_loop.sh, TODO 3b)
+#
+# It reaches only what inventory_test/ names, with the key rig_access gave this
+# box. There is no fleet key and no vault password here, so a playbook pointed
+# at the fleet inventory has nothing to connect with and nothing to decrypt.
+# ============================================================
+
+- name: Install Ansible into its venv
+  become: true
+  ansible.builtin.pip:
+    name: "ansible=={{ workbench_ansible_version }}"
+    virtualenv: "{{ workbench_ansible_venv }}"
+    virtualenv_command: python3 -m venv
+  tags: [workbench, ansible]
+
+- name: Put the Ansible entry points on PATH
+  become: true
+  ansible.builtin.file:
+    src: "{{ workbench_ansible_venv }}/bin/{{ item }}"
+    dest: "/usr/local/bin/{{ item }}"
+    state: link
+  loop:
+    - ansible
+    - ansible-playbook
+    - ansible-inventory
+    - ansible-galaxy
+  tags: [workbench, ansible]
+
+# ============================================================
 # The agent account
 #
 # Created before anything else writes into a home directory, because the whole

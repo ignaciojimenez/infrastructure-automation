@@ -6,12 +6,10 @@
 # wildcards — so sudo refuses anything outside the grant before this file is
 # reached. The checks below are therefore belt and braces, not the control.
 #
-# 🔴 `pct create` takes NO arguments from the caller. Every flag is a literal
-# written here at deploy time, keyed by VMID. There is no pass-through, so
-# there is nothing to inject into: the bind-mount escape (`--mp0 /:/host`)
-# cannot be expressed through this interface at all.
-#
-# Mirrors tests/provision_test_container.sh. Bump them together.
+# 🔴 `create` takes NO arguments from the caller. Every value it hands the
+# provisioner is a literal written here at deploy time, keyed by VMID. There is
+# no pass-through, so there is nothing to inject into: the bind-mount escape
+# (`--mp0 /:/host`) cannot be expressed through this interface at all.
 
 set -eu
 
@@ -80,30 +78,48 @@ case "$VERB" in
             echo "exists $VMID"
             exit 0
         fi
-        # Every value below is literal. Nothing here came from the caller.
+        # Built by the same script a human runs on the laptop's behalf, so
+        # there is one definition of what a test container is, not two kept in
+        # step by hand. It creates, starts, checks systemd, installs the test
+        # prerequisites, creates {{ infrastructure_user }} with sudo, and
+        # authorises the workbench key for that user and root.
+        #
+        # That last step is why the key is installed HERE: a container fresh
+        # from `pct create` has no keys at all, and this is the only moment
+        # anything holds root on it. The key is the one this file was rendered
+        # with — baked in at deploy time, never passed in.
+        #
+        # `env -i` and every TEST_CT_* written out: the script falls back to
+        # its own defaults for anything unset, and nothing about this run may
+        # depend on what happened to be in the environment. Every value below
+        # is literal. Nothing here came from the caller.
         case "$VMID" in
 {% for vmid in rig_access_vmids %}
 {% set h = rig_access_hosts[vmid] %}
             {{ vmid }})
-                pct create {{ vmid }} \
-                    {{ rig_access_template_storage }}:vztmpl/{{ h.template }} \
-                    --hostname {{ h.hostname }} \
-                    --cores {{ rig_access_cores }} \
-                    --memory {{ rig_access_memory }} \
-                    --swap {{ rig_access_swap }} \
-                    --rootfs {{ rig_access_storage }}:{{ rig_access_rootfs_gb }} \
-                    --net0 name=eth0,bridge={{ rig_access_bridge }},firewall=1,ip={{ h.ip }}/24,gw={{ rig_access_gateway }},type=veth \
-                    --nameserver {{ rig_access_nameserver }} \
-                    --searchdomain {{ rig_access_searchdomain }} \
-                    --ostype debian \
-                    --unprivileged 1 \
-                    --features nesting=1 \
-                    --onboot 0
+                env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin \
+                    TEST_CT_VMID={{ vmid }} \
+                    TEST_CT_HOSTNAME={{ h.hostname }} \
+                    TEST_CT_IP={{ h.ip }} \
+                    TEST_CT_CIDR=24 \
+                    TEST_CT_GATEWAY={{ rig_access_gateway }} \
+                    TEST_CT_NAMESERVER={{ rig_access_nameserver }} \
+                    TEST_CT_BRIDGE={{ rig_access_bridge }} \
+                    TEST_CT_STORAGE={{ rig_access_storage }} \
+                    TEST_CT_ROOTFS_GB={{ rig_access_rootfs_gb }} \
+                    TEST_CT_MEMORY={{ rig_access_memory }} \
+                    TEST_CT_SWAP={{ rig_access_swap }} \
+                    TEST_CT_CORES={{ rig_access_cores }} \
+                    TEST_CT_TEMPLATE_STORAGE={{ rig_access_template_storage }} \
+                    TEST_CT_TEMPLATE={{ h.template }} \
+                    TEST_CT_USER={{ infrastructure_user }} \
+                    TEST_CT_BARE=0 \
+                    TEST_CT_PUBKEY={{ rig_access_pubkey | quote }} \
+                    sh {{ rig_access_provisioner }}
                 ;;
 {% endfor %}
         esac
-        pct start "$VMID"
-        logger -t "$TAG" -p auth.notice "created and started CT $VMID"
+        logger -t "$TAG" -p auth.notice "created and provisioned CT $VMID"
         echo "created $VMID"
         ;;
 esac

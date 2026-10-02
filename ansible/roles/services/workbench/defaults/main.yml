@@ -68,6 +68,23 @@ workbench_packages:
   # this account then fails on "Failed to set permissions on the temporary
   # files". With acl it uses setfacl and grants only that one user.
   - acl
+  # The Ansible venv below. Already present on CT 104 (verified 2026-10-03),
+  # listed so a fresh host does not depend on that.
+  - python3-venv
+
+# Ansible — so the box can prove a change converges on a real host, which is
+# the one thing it has that a cloud session structurally cannot (TODO 3b).
+#
+# A pinned venv, NOT Debian's `ansible` package. Debian 13 ships ansible-core
+# 2.19; the laptop that deploys to the fleet runs `ansible` 14.4.0 (core 2.21),
+# and a test loop on a different toolchain proves a different thing — 2.19 is
+# the release that rewrote templating. The `ansible` pip package carries the
+# same collection set the laptop's Homebrew build does. Bump this with the
+# laptop (`ansible --version`), never independently.
+#
+# Root-owned under /opt: the agent account runs it but cannot rewrite it.
+workbench_ansible_version: "14.4.0"
+workbench_ansible_venv: /opt/ansible
 
 # Claude Code. The native installer, which is what this laptop runs, rather
 # than npm: it self-updates and needs no node runtime of its own.
