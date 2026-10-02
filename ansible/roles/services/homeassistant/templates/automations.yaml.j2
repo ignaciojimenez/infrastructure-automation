@@ -538,7 +538,8 @@
 
 # ── Amp power control ──────────────────────────────────────────────────────────
 # Drive the Pioneer's Shelly plug from source activity. binary_sensor.amp_source_active
-# is the OR of all inputs (hifipi AirPlay/Spotify/MPD playing, or the TV powered on).
+# is the OR of the hifipi inputs (AirPlay/Spotify/MPD/vinyl playing). The TV does
+# not drive power (PER-88) — the amp is switched on by hand for TV.
 # Input selection (TV vs Pi) is handled by "Amp - select input" below, keyed off
 # sensor.amp_active_source.
 - id: "amp_power_on"
@@ -557,7 +558,7 @@
         entity_id: switch.living_room_shellyplugsg3_pioneer
   mode: single
 
-# 5-minute grace so brief gaps (track changes, short TV pauses) don't cut the amp.
+# 5-minute grace so brief gaps (track changes, short pauses) don't cut the amp.
 - id: "amp_power_off"
   alias: "Amp - power off when idle"
   trigger:
@@ -635,6 +636,26 @@
         device: rca_switcher
         command: "{{ '{{' }} 'input_' ~ states('sensor.amp_active_source') {{ '}}' }}"
   mode: restart
+
+# Park the switcher on the TV input whenever the amp goes off, so TV is the resting
+# position. The TV no longer powers the amp (PER-88) — it is switched on by hand —
+# and this keeps TV sound working even if HA, the RM4 or the TV entity is down when
+# the amp is next switched on. The switcher is powered independently of the amp, so the position
+# holds; the next hifipi playback re-aligns it on plug-on as usual.
+- id: "amp_input_park_tv"
+  alias: "Amp - park switcher on TV when the amp turns off"
+  trigger:
+    - platform: state
+      entity_id: switch.living_room_shellyplugsg3_pioneer
+      to: "off"
+  action:
+    - service: remote.send_command
+      target:
+        entity_id: remote.rm4_mini_ir_blaster
+      data:
+        device: rca_switcher
+        command: input_tv
+  mode: single
 
 # Watchdog: the amp-on trigger is deliberately instant (phantom-start debounce
 # lives in detect_audio on vinylstreamer), so if the detector ever regresses the

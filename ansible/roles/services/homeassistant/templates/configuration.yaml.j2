@@ -142,20 +142,24 @@ template:
         device_class: presence
         state: '{{ "{{ is_state(\"" }}{{ ha_secondary_device_tracker | default("device_tracker.phone_secondary") }}{{ "\", \"home\") }}" }}'
 
-      # Amp power control — is any source feeding the Pioneer? OR of every input:
-      # hifipi AirPlay/Spotify/MPD actively playing, vinyl detected on the
-      # turntable (MQTT push from vinylstreamer — instant, unlike the ~10s MPD
-      # poll that also covers the same playback), or the TV powered on. Drives
-      # the Shelly plug (switch.living_room_shellyplugsg3_pioneer) via automations.
+      # Amp power control — is a hifipi source feeding the Pioneer? OR of:
+      # AirPlay/Spotify/MPD actively playing, or vinyl detected on the turntable
+      # (MQTT push from vinylstreamer — instant, unlike the ~10s MPD poll that
+      # also covers the same playback). Drives the Shelly plug
+      # (switch.living_room_shellyplugsg3_pioneer) via automations. The TV is
+      # deliberately absent (PER-88): TV is often watched without the amp, so
+      # the amp is powered by hand for TV and only input selection follows it.
       - name: "Amp Source Active"
         unique_id: amp_source_active
         device_class: running
         state: >
-          {{ '{{ is_state("binary_sensor.shairport_sync_hifipi_playing", "on") or is_state("binary_sensor.raspotify_hifipi_playing", "on") or is_state("binary_sensor.vinyl_vinylstreamer_playing", "on") or is_state("media_player.music_player_daemon", "playing") or is_state("media_player.cobi_tv_3", "on") }}' }}
+          {{ '{{ is_state("binary_sensor.shairport_sync_hifipi_playing", "on") or is_state("binary_sensor.raspotify_hifipi_playing", "on") or is_state("binary_sensor.vinyl_vinylstreamer_playing", "on") or is_state("media_player.music_player_daemon", "playing") }}' }}
   - sensor:
       # Amp input selection — which source the RM4 IR blaster should select on the
       # 4-way RCA switch (consumed by the "Amp - select input" automation).
       # Active Pi playback wins over a merely powered-on TV. Values: pi / tv / none.
+      # Unlike amp_source_active, the TV counts here: when the amp is switched on
+      # by hand for TV, the switcher still lands on the TV input.
       - name: "Amp Active Source"
         unique_id: amp_active_source
         state: >
