@@ -53,6 +53,29 @@
     mode: '0755'
   tags: [rig_access]
 
+# The provisioner `create` runs. Root-owned in a root-owned directory: this is
+# executed as root on the hypervisor, so the account that triggers it must not
+# be able to replace it.
+- name: Ensure the provisioner directory exists
+  become: true
+  ansible.builtin.file:
+    path: "{{ rig_access_provisioner | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  tags: [rig_access]
+
+- name: Deploy the test-container provisioner
+  become: true
+  ansible.builtin.copy:
+    src: "{{ role_path }}/../../../tests/provision_test_container.sh"
+    dest: "{{ rig_access_provisioner }}"
+    owner: root
+    group: root
+    mode: '0755'
+  tags: [rig_access]
+
 - name: Deploy the SSH forced command
   become: true
   ansible.builtin.template:
@@ -106,6 +129,9 @@
     cmd: "sudo -l -U {{ rig_access_user }}"
   register: rig_access_effective
   changed_when: false
+  # Read-only, so it runs under --check too. Skipped there, it left the assert
+  # below reading an empty grant and failing every dry run of this role.
+  check_mode: false
   tags: [rig_access, verify]
 
 - name: Fail if the grant is wider than the allowlist

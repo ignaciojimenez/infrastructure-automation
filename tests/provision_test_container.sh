@@ -14,6 +14,11 @@
 #
 # Idempotent: an existing CT 199 is reconfigured, not recreated.
 #
+# ⚠️ It has a second caller. roles/rig_access deploys this file to cwwk and
+# `rig_ct create` runs it with every TEST_CT_* set to a literal — that is how
+# the workbench gets a container (tests/rig_loop.sh). A change here reaches the
+# workbench only after `provision_rig_access.yml` redeploys it.
+#
 # TARGETS
 #
 #   CT 199 (default) — Debian 13. Exact match for agent-lxc and unifi-lxc,
@@ -245,6 +250,8 @@ fi
 # Root keeps the key too, as the second way in. ssh_hardening would normally
 # close this off; on a host flagged is_test_environment it leaves it open,
 # because `pct` on the hypervisor is otherwise the only recovery path.
+# ⚠️ Only until bootstrap.yml runs: it rewrites root's keys from GitHub with
+# `exclusive: true` and has no test-host exemption (TODO 3b, 2026-10-03).
 say "Authorising the agent key for root"
 pct exec "$VMID" -- mkdir -p /root/.ssh
 pct exec "$VMID" -- sh -c "printf '%s\n' '$AGENT_PUBKEY' > /root/.ssh/authorized_keys"

@@ -3,6 +3,11 @@
 Behavioural tests for the monitoring scripts, run against a **disposable Debian
 LXC** — never against a fleet host.
 
+> **Proving a playbook converges** is a different job, done by
+> `tests/rig_loop.sh` on the workbench: fresh container → converge → `changed=0`
+> on a second run → destroy. See
+> [docs/WORKBENCH.md](../docs/WORKBENCH.md#the-test-loop).
+
 ```sh
 ssh cwwk 'sudo pct start 199'                       # the rig is onboot 0
 tests/run_tests.sh --target 10.30.40.205            # all cases

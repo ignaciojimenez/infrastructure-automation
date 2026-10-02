@@ -50,18 +50,28 @@ rig_access_alert_hook: "{{ alert_token | default('') }}"
 
 # The public key the workbench presents. Its private half is generated on that
 # box and never leaves it.
+#
+# It is ALSO the key `create` authorises on the new container, for the
+# infrastructure user and root — the only way the workbench can converge what
+# it just made. One key, one holder, two scopes: forced-command-only here, root
+# on a disposable LAN-only container there. A second keypair would add a file
+# to manage and no separation, since both halves would sit in the same home.
 rig_access_pubkey: ""
 
-# Container shape for `create`. Rendered into the script at deploy time, so
-# these are fixed strings on the host rather than anything a caller can reach.
-# Mirrors tests/provision_test_container.sh — bump them together.
+# `create` runs tests/provision_test_container.sh — the same script a human
+# runs — deployed here root-owned so this account cannot rewrite what it
+# invokes. One definition of a test container, not a second copy of its
+# `pct create` line kept in step by hand.
+rig_access_provisioner: /usr/local/lib/rig_access/provision_test_container.sh
+
+# Container shape for `create`. Rendered into rig_ct as literal TEST_CT_*
+# values at deploy time, so these are fixed strings on the host rather than
+# anything a caller can reach.
 rig_access_storage: local-zfs
 rig_access_template_storage: local
-rig_access_template: debian-13-standard_13.6-1_amd64.tar.zst
 rig_access_bridge: vmbr0
 rig_access_gateway: 10.30.40.254
 rig_access_nameserver: 10.30.40.254
-rig_access_searchdomain: local
 rig_access_rootfs_gb: 4
 rig_access_memory: 1024
 rig_access_swap: 512
