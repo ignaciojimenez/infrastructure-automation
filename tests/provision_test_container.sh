@@ -84,10 +84,12 @@ BARE="${TEST_CT_BARE:-0}"
 TEMPLATE_STORAGE="${TEST_CT_TEMPLATE_STORAGE:-local}"
 TEMPLATE="${TEST_CT_TEMPLATE:-debian-13-standard_13.6-1_amd64.tar.zst}"
 
-# The read_agent public key. Authorised for root here — the tests must fill
-# disks and stop services, which read_agent's scoped read-only sudo exists to
-# prevent. Acceptable only because this container is LAN-only, empty, and
-# destroyed after use. Never reuse this pattern on a host that persists.
+# The control machine's public key (read_agent's from the laptop; the
+# workbench's when rig_ct runs this). Authorised for the infrastructure user,
+# who has passwordless sudo — the tests fill disks and stop services, which is
+# acceptable only because this container is LAN-only, empty, and destroyed
+# after use. Never reuse this pattern on a host that persists. Authorised for
+# root ONLY with TEST_CT_BARE=1, where root is the whole point.
 AGENT_PUBKEY="${TEST_CT_PUBKEY:-ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAzwUkF8g+nliH4mXRm3Qlslb7TioAHQlvl1w9i5XkN3 claude_agent@infrastructure}"
 
 # system_health_check.sh probes all of these; without them a healthy baseline
@@ -214,10 +216,9 @@ pct exec "$VMID" -- setcap cap_net_raw+ep /bin/ping
 # Same lesson as the fail2ban jail above: what bootstrap does to a real host has
 # to be mirrored here, or the rig only reports faults of its own making.
 #
-# Deliberately NOT mirrored: ssh_hardening.yml. It sets PermitRootLogin to
-# prohibit-password with no key for the fleet's real users, and gives root
-# /sbin/nologin. The read_agent key authorised for root below is the only way
-# into this container, so hardening it would lock the rig out of itself.
+# Deliberately NOT mirrored: ssh_hardening.yml. Hardening is what the
+# playbooks under test do; doing it here would mean testing a host that is
+# already in the end state.
 if [ "$BARE" = "1" ]; then
     say "TEST_CT_BARE=1 — skipping the infrastructure user"
     printf '    The container is left as a fresh host with root only, which is what\n'
@@ -247,28 +248,29 @@ else
     pct exec "$VMID" -- chmod 600 "/home/$INFRA_USER/.ssh/authorized_keys"
 fi
 
-# Root keeps the key too, as the second way in. ssh_hardening would normally
-# close this off; on a host flagged is_test_environment it leaves it open,
-# because `pct` on the hypervisor is otherwise the only recovery path.
-# ⚠️ Only until bootstrap.yml runs: its "Lock root account" gives root
-# /sbin/nologin on every host, test containers included, so the key still
-# authenticates and the session is refused (TODO 3b, 2026-10-03).
-say "Authorising the agent key for root"
-pct exec "$VMID" -- mkdir -p /root/.ssh
-pct exec "$VMID" -- sh -c "printf '%s\n' '$AGENT_PUBKEY' > /root/.ssh/authorized_keys"
-pct exec "$VMID" -- chmod 700 /root/.ssh
-pct exec "$VMID" -- chmod 600 /root/.ssh/authorized_keys
-pct exec "$VMID" -- sh -c 'echo "PermitRootLogin prohibit-password" > /etc/ssh/sshd_config.d/10-testlxc.conf'
-pct exec "$VMID" -- systemctl restart ssh
+# Root gets the key ONLY on a bare container, because there root is the state
+# under test: bootstrap.yml meets a fresh host as root and replaces it with the
+# infrastructure user. Otherwise root has no key and sshd keeps its default
+# (prohibit-password), so root SSH is simply not a way in — the same as the
+# fleet once hardening has run, and the rig is reached as the infra user and
+# recreated rather than rescued. Root SSH was the "second way in" until
+# 2026-10-03; it bought nothing, because bootstrap gives root nologin anyway.
+if [ "$BARE" = "1" ]; then
+    say "Authorising the agent key for root (bare container)"
+    pct exec "$VMID" -- mkdir -p /root/.ssh
+    pct exec "$VMID" -- sh -c "printf '%s\n' '$AGENT_PUBKEY' > /root/.ssh/authorized_keys"
+    pct exec "$VMID" -- chmod 700 /root/.ssh
+    pct exec "$VMID" -- chmod 600 /root/.ssh/authorized_keys
+fi
 
 cat <<EOF
 
 ────────────────────────────────────────────────────────
 CT $VMID ($HOSTNAME_) ready at $IP
 
-Verify from the laptop:
+Verify (as the infrastructure user; root only on a bare container):
   ssh -i ~/.ssh/read_agent_ed25519 -o IdentitiesOnly=yes \\
-      -o IdentityAgent=none root@$IP 'hostname; systemctl --failed'
+      -o IdentityAgent=none $INFRA_USER@$IP 'hostname; systemctl --failed'
 
 Run the suite from the repo root:
   tests/run_tests.sh --target $IP
