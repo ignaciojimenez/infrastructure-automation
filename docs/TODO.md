@@ -371,9 +371,10 @@ Proven: fleet `--check` from the branch and from `main` identical, and the rig
 converged `site.yml` to `changed=0` with root's keys untouched.
 
 Still open, same root cause:
-- the guard meant to stop bootstrap deleting `pi` while connected as `pi`
-  (`ansible_user_id != "pi"`) can never fire — on a fresh Pi bootstrapped as
-  `pi` it would force-delete the connecting account. One line: `ansible_user`.
+- ✅ the guard meant to stop bootstrap deleting `pi` while connected as `pi`
+  could never fire. Fixed 2026-10-03 (`ansible_user`), forced on CT 199: `main`
+  connected as `pi` deleted `pi` mid-run and went unreachable; the fix skips it
+  as `pi` and still removes `pi` when connected as `choco`.
 - `Ensure user has sudo privileges` writes `/etc/sudoers.d/root_nopasswd`
   (present on cwwk). Harmless — root needs no sudoers — but it is not what the
   task meant.
