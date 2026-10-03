@@ -202,7 +202,12 @@
       ansible.builtin.user:
         name: root
         password_lock: true
-        shell: /sbin/nologin
+        # Mirrors ssh_hardening.yml's "Disable root user login": on FreeBSD
+        # (opnsense) root's shell is /usr/local/sbin/opnsense-shell, the console
+        # recovery menu, and nologin there would remove it. This copy had
+        # drifted to an unconditional nologin; opnsense still had its menu on
+        # 2026-10-03 only because bootstrap had not run there since.
+        shell: "{{ '/sbin/nologin' if os_family == 'debian' else omit }}"
       tags: [bootstrap, security]
 
     # These must agree with templates/debian/sshd_config.j2, which
