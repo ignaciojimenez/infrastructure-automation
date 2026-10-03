@@ -156,33 +156,17 @@
         nopassword: true
       tags: [bootstrap, sudo]
 
-    - name: Validate gh_keys uses HTTPS
-      ansible.builtin.assert:
-        that:
-          - "gh_keys is match('^https://')"
-        fail_msg: "gh_keys must use https:// — got: {{ gh_keys }}"
-      when: gh_keys is defined
-      tags: [bootstrap, ssh]
-
-    - name: Fetch authorized keys from GitHub
-      ansible.builtin.uri:
-        url: "{{ gh_keys }}"
-        return_content: true
-        timeout: 30
-        status_code: 200
-      register: github_keys_fetched
-      when: gh_keys is defined
-      changed_when: false
-      tags: [bootstrap, ssh]
-
-    - name: Set authorized keys from GitHub
-      ansible.posix.authorized_key:
-        user: "{{ ansible_user_id }}"
-        state: present
-        key: "{{ github_keys_fetched.content | default('') }}"
-        exclusive: true  # Only GitHub keys, removes all others
-      when: github_keys_fetched is succeeded
-      tags: [bootstrap, ssh]
+    # The INFRASTRUCTURE USER's keys — named, not `ansible_user_id`. Under this
+    # play's `become` that fact is root, so this used to write GitHub's keys
+    # into root's authorized_keys on every host it ran on: dead credentials on
+    # the fleet (PermitRootLogin no), and on a test container it replaced the
+    # rig's key for root, the one copy that had no test-host exception.
+    # Forced 2026-10-03 on CT 199. Shared with ssh_hardening.yml.
+    - name: Set the infrastructure user's authorized keys from GitHub
+      ansible.builtin.import_tasks: tasks/github_authorized_keys.yml
+      vars:
+        github_keys_user: "{{ infrastructure_user }}"
+      tags: [bootstrap]
 
     - name: Lock password authentication for user
       ansible.builtin.user:

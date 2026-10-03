@@ -1,0 +1,90 @@
+---
+# Make GitHub's key list the whole truth for one account's authorized_keys.
+#
+# Required:
+#   github_keys_user — the account to write. Pass the account you MEAN, never
+#                      `ansible_user_id`: under `become` that fact is root, and
+#                      that is how bootstrap.yml spent its life writing GitHub
+#                      keys into root's authorized_keys instead of the
+#                      infrastructure user's (TODO 3b, 2026-10-03).
+#
+# Included by bootstrap.yml and tasks/ssh_hardening.yml. It used to be two
+# copies, and they drifted: only ssh_hardening's learned the test-container
+# exception below, so bootstrap kept sawing off the rig's way in. One file is
+# the fix for that class of bug, not just for that instance.
+
+- name: Validate gh_keys uses HTTPS
+  ansible.builtin.assert:
+    that:
+      - "gh_keys is match('^https://')"
+    fail_msg: "gh_keys must use https:// — got: {{ gh_keys }}"
+  when: gh_keys is defined
+  tags: [ssh, keys]
+
+- name: Fetch authorized keys from GitHub
+  ansible.builtin.uri:
+    url: "{{ gh_keys }}"
+    return_content: true
+    timeout: 30
+    status_code: 200
+  register: github_keys_fetched
+  when: gh_keys is defined
+  changed_when: false
+  # Read-only fetch — must run in check mode too, otherwise the next task sees
+  # an empty content and renders a diff that looks like "wipe all keys".
+  check_mode: false
+  tags: [ssh, keys]
+
+# `exclusive: true` is the point of this file — the GitHub key set is the whole
+# truth for this user, so a key revoked upstream disappears from every host. It
+# is also why a test container has to be handled explicitly: the key Ansible
+# connected with is the only way into a disposable host, and wiping it locks the
+# rig out of itself with `pct` on the hypervisor as the sole way back.
+#
+# So on a test host the connecting key is appended to the authoritative set
+# rather than the write being skipped: it still runs and is still exercised, it
+# just does not saw off the branch. `is_test_environment` is set only in
+# inventory_test/hosts.yml and never in the fleet inventory, so this branch
+# cannot be reached by a real host.
+#
+# Double-quoted, not a folded `>-` block: YAML only expands \n as a newline
+# inside double quotes, and a folded scalar hands Jinja a literal backslash-n
+# that authorized_key then rejects as an invalid key.
+- name: Build the authoritative key set
+  ansible.builtin.set_fact:
+    authorized_key_set: "{{ key_lines | select | join('\n') }}"
+  vars:
+    key_lines:
+      - "{{ github_keys_fetched.content | default('') | trim }}"
+      - "{{ test_environment_ssh_key | default('')
+            if is_test_environment | default(false) else '' }}"
+  when: github_keys_fetched is succeeded
+  tags: [ssh, keys]
+
+# Ordered before the write on purpose: once `exclusive: true` has run there is
+# no way back in to fix it.
+- name: Assert a test host keeps a way in
+  ansible.builtin.assert:
+    that:
+      # Length first: an empty string is a substring of everything, so the
+      # membership check alone would wave through a blank key.
+      - test_environment_ssh_key | default('') | length > 0
+      - test_environment_ssh_key in authorized_key_set
+    fail_msg: >-
+      is_test_environment is set on {{ inventory_hostname }} but the connecting
+      key is not in the key set. Writing it would lock Ansible out of this host
+      permanently — recoverable only with pct/qm on the hypervisor. Set
+      test_environment_ssh_key in the test inventory.
+  when:
+    - is_test_environment | default(false)
+    - github_keys_fetched is succeeded
+  tags: [ssh, keys]
+
+- name: Set authorized keys from GitHub for {{ github_keys_user }}
+  ansible.posix.authorized_key:
+    user: "{{ github_keys_user }}"
+    state: present
+    key: "{{ authorized_key_set }}"
+    exclusive: true
+  when: github_keys_fetched is succeeded
+  tags: [ssh, keys]
