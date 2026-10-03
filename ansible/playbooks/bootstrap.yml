@@ -191,7 +191,11 @@
       when:
         - pi_user_check is succeeded
         - pi_user_check.ansible_facts.getent_passwd.pi is defined
-        - ansible_user_id != "pi"  # Don't delete if we're connected as pi
+        # The CONNECTING user, not `ansible_user_id`: under this play's `become`
+        # that fact is root, so this guard used to be always true and would
+        # force-delete `pi` while connected as `pi`. `ansible_user` is the
+        # detected connection user (play vars above).
+        - ansible_user != "pi"
       tags: [bootstrap, security]
 
     - name: Lock root account
