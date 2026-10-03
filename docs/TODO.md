@@ -360,18 +360,37 @@ Plus the control flow forced under dash with stubs: destroy also runs on a
 non-idempotent second run, a wrong host at the address, no recap line and
 SIGINT; a failed destroy fails the run.
 
-🔴 **Found doing it — `bootstrap.yml` removes root's way into a test
-container.** Its "Set authorized keys from GitHub" writes `exclusive: true` to
-`ansible_user_id`, which is **root** under the play's `become`, with no
-`is_test_environment` exemption (ssh_hardening has one; bootstrap does not).
-Verified 2026-10-03: after `bootstrap.yml`, the rig key still works as `choco`
-and is refused as root, and is gone from root's `authorized_keys`.
-TEST_CONTAINER.md claimed root "stays as a second way in"; corrected in place.
-It does not affect the loop, which connects as the infra user. **Not fixed:**
-`bootstrap.yml` runs on the fleet, so the change — mirror ssh_hardening's
-append for test hosts, or target `ansible_user` — needs a decision, and on the
-fleet it is also worth asking whether root's keys being GitHub-only is the
-intent.
+🔴 **Found doing it — `bootstrap.yml` used `ansible_user_id` as if it were the
+connecting user.** Under the play's `become` it is root. ✅ **Fixed for the
+keys (2026-10-03):** bootstrap wrote GitHub's keys into **root's**
+`authorized_keys` on every host — dead credentials on the fleet, and on a test
+container it replaced the rig key. It now writes the infrastructure user's,
+through `tasks/github_authorized_keys.yml`, shared with ssh_hardening so the two
+copies cannot drift again (only one of them had the test-host exception).
+Proven: fleet `--check` from the branch and from `main` identical, and the rig
+converged `site.yml` to `changed=0` with root's keys untouched.
+
+Still open, same root cause:
+- the guard meant to stop bootstrap deleting `pi` while connected as `pi`
+  (`ansible_user_id != "pi"`) can never fire — on a fresh Pi bootstrapped as
+  `pi` it would force-delete the connecting account. One line: `ansible_user`.
+- `Ensure user has sudo privileges` writes `/etc/sudoers.d/root_nopasswd`
+  (present on cwwk). Harmless — root needs no sudoers — but it is not what the
+  task meant.
+- GitHub keys bootstrap already left in root's `authorized_keys` on fleet hosts
+  stay until removed deliberately. Unverified which hosts carry them:
+  `read_agent` cannot read `/root`.
+
+Also found: on a test container root has `/sbin/nologin` after bootstrap
+("Lock root account" has no test-host exemption), so root SSH is already dead on
+any converged container and `tests/run_tests.sh` — which connects as root —
+works only against one that was never bootstrapped. That is the case for
+moving the suite to the infrastructure user with sudo (decision pending).
+
+Pre-existing drift seen in the fleet `--check`, not caused by this: opnsense's
+`choco` keys carry two comments the exclusive write would strip (same five
+keys); cobra, hifipi, dockassist and cwwk run an older `update_keys`
+(`#!/bin/bash`, same curl) that `services.yml` has not re-applied over.
 
 **3c. `sandbox.sh --create`, so a fresh box does not need a laptop tap**
 Small, and it is the last thing standing between goal 2 and "done".

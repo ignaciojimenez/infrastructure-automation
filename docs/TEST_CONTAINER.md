@@ -236,7 +236,7 @@ never in the fleet inventory:
 | Task | Fleet host | Test container |
 |---|---|---|
 | authorized_keys, `exclusive: true` | GitHub key set only | GitHub key set **+ `test_environment_ssh_key`** |
-| Disable root login | root shell → nologin | skipped — but see the note below the table: `bootstrap.yml` still replaces root's keys |
+| Disable root login | root shell → nologin | skipped here — but moot: `bootstrap.yml` sets it anyway, see the note below the table |
 | Lock the user password | locked | skipped |
 | `sshd_config` | `PermitRootLogin no` | `PermitRootLogin prohibit-password` |
 
@@ -244,12 +244,15 @@ An `assert` runs **before** the authorized_keys write and fails the play if the
 connecting key is missing or empty — after `exclusive: true` has run there is no
 way back in to fix it.
 
-⚠️ **Corrected 2026-10-03: root does NOT stay reachable after `bootstrap.yml`**
-(so not after `site.yml` either). bootstrap writes root's `authorized_keys`
-with `exclusive: true` from GitHub and has no test-host exemption; forced on CT
-199 from the workbench — rig key accepted as `choco`, refused as root. The
-infrastructure user is the only way in; `pct` on cwwk is the fallback. See
-TODO 3b. The verification below was of `services.yml --tags ssh` alone.
+⚠️ **Corrected 2026-10-03: root is NOT a way in on any container that has run
+`bootstrap.yml`** (so not after `site.yml` either). bootstrap's "Lock root
+account" sets root's shell to `/sbin/nologin` with no test-host exemption, so
+the key is accepted and the session ends with *"This account is currently not
+available"* — forced on CT 199 from the workbench. Until `fix(bootstrap)` on
+2026-10-03 it also replaced root's key with GitHub's; it no longer touches
+root's keys at all. **The infrastructure user is the only way in**; with the
+rig destroyed and recreated per run, that is enough. The verification below
+was of `services.yml --tags ssh` on a never-bootstrapped container.
 
 Verified in both directions on CT 198: with the flag set, a fresh SSH as both
 `choco` and `root` still works after hardening; with `is_test_environment: false`
