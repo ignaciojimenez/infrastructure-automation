@@ -280,6 +280,6 @@ Run the suite from the repo root:
   ${SUITE_ENV}tests/run_tests.sh --target $IP
 
 Destroy when done:
-  ssh cwwk 'TEST_CT_VMID=$VMID sh -s -- --destroy' < tests/provision_test_container.sh
+  ssh cwwk 'sudo -n env TEST_CT_VMID=$VMID sh -s -- --destroy' < tests/provision_test_container.sh
 ────────────────────────────────────────────────────────
 EOF

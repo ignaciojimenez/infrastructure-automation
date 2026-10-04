@@ -18,6 +18,15 @@
     - "{{ inventory_dir }}/group_vars/all/vault.yml"
   vars:
     ansible_password: "{{ vault_bootstrap_password | default(omit) }}"
+  # A refused login is UNREACHABLE, not failed: `ignore_errors` does not cover
+  # it, so the host used to leave the play at the first probe and the pi/root
+  # fallbacks never ran — this play could not bootstrap a fresh host at all.
+  # For the same reason the conditions read the probe's output, not `is failed`:
+  # an unreachable result has no `failed` key, so `is succeeded` reads it as
+  # true. Only a real login prints `connected`; unreachable, failed and skipped
+  # results all lack it.
+  # First executed on a bare container 2026-10-04 (TODO 3a).
+  ignore_unreachable: true
   tasks:
     - name: Try connecting with infrastructure user
       ansible.builtin.raw: "echo connected"
@@ -35,7 +44,7 @@
       register: pi_connection
       ignore_errors: true
       changed_when: false
-      when: infrastructure_connection is failed
+      when: "'connected' not in infrastructure_connection.stdout | default('')"
 
     - name: Try connecting as root if both failed
       ansible.builtin.raw: "echo connected"
@@ -46,12 +55,12 @@
       ignore_errors: true
       changed_when: false
       when:
-        - infrastructure_connection is failed
-        - pi_connection is failed
+        - "'connected' not in infrastructure_connection.stdout | default('')"
+        - "'connected' not in pi_connection.stdout | default('')"
 
     - name: Set detected user
       ansible.builtin.set_fact:
-        detected_user: "{{ infrastructure_user if infrastructure_connection is succeeded else ('pi' if pi_connection is succeeded else ('root' if root_connection is succeeded else infrastructure_user)) }}"
+        detected_user: "{{ infrastructure_user if 'connected' in infrastructure_connection.stdout | default('') else ('pi' if 'connected' in pi_connection.stdout | default('') else ('root' if 'connected' in root_connection.stdout | default('') else infrastructure_user)) }}"
         cacheable: true
 
     - name: Display detected user
@@ -119,14 +128,6 @@
             group: "{{ infrastructure_user }}"
             mode: '0700'
 
-        - name: Set up SSH keys from GitHub
-          ansible.posix.authorized_key:
-            user: "{{ infrastructure_user }}"
-            key: "https://github.com/{{ vault_gh_profile }}.keys"
-            exclusive: false
-            state: present
-          when: vault_gh_profile is defined
-
         - name: Configure passwordless sudo
           ansible.builtin.lineinfile:
             path: "/etc/sudoers.d/{{ infrastructure_user }}"
@@ -147,13 +148,16 @@
         - name: Display user creation
           ansible.builtin.debug:
             msg: "✅ Created {{ infrastructure_user }} user on {{ inventory_hostname }}"
-    - name: Ensure user has sudo privileges
-      community.general.sudoers:
-        name: "{{ ansible_user_id }}_nopasswd"
-        state: present
-        user: "{{ ansible_user_id }}"
-        commands: ALL
-        nopassword: true
+
+    # This used to grant `{{ ansible_user_id }}` passwordless sudo — root, under
+    # this play's `become` — so every host got a root_nopasswd that grants
+    # nothing. The connecting user's grant is system/preflight.yml's
+    # ("Allow user to run as root"), which keys on `ansible_user`. Remove the
+    # residue; delete this task once no host carries it (TODO 3a, 2026-10-04).
+    - name: Remove the root sudoers file an older bootstrap wrote by mistake
+      ansible.builtin.file:
+        path: /etc/sudoers.d/root_nopasswd
+        state: absent
       tags: [bootstrap, sudo]
 
     # The INFRASTRUCTURE USER's keys — named, not `ansible_user_id`. Under this
@@ -167,12 +171,6 @@
       vars:
         github_keys_user: "{{ infrastructure_user }}"
       tags: [bootstrap]
-
-    - name: Lock password authentication for user
-      ansible.builtin.user:
-        name: "{{ ansible_user_id }}"
-        password_lock: true
-      tags: [bootstrap, security]
 
     - name: Check if pi user exists
       ansible.builtin.getent:
@@ -348,6 +346,6 @@
           Password authentication has been disabled.
 
           Next steps:
-          1. Verify SSH access: ssh {{ ansible_user_id }}@{{ ansible_host | default(inventory_hostname) }}
+          1. Verify SSH access: ssh {{ infrastructure_user }}@{{ ansible_host | default(inventory_hostname) }}
           2. Run site playbook: ansible-playbook playbooks/site.yml --limit {{ inventory_hostname }}
       tags: [bootstrap]
