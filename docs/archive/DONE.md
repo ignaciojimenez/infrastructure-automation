@@ -1819,6 +1819,10 @@ permission fault at all.
 **Refused, do not reopen:** G1's prescription that "the runner connects as the
 infrastructure user and cases escalate with `sudo`". It is backwards, it was
 measured to be backwards, and the runner stays connecting as root.
+↳ **Superseded 2026-10-03** by the owner: the measurement was of a run with *no*
+privilege; arranging through sudo was never measured, and root SSH had stopped
+reaching any bootstrapped container. See ARCHITECTURE_DECISIONS.md "Test
+Environments".
 
 **The split is demonstrated, not asserted.** `chmod 0600
 /etc/apt/apt.conf.d/20auto-upgrades` is a fault only an unprivileged reader

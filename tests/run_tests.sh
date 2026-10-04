@@ -10,8 +10,10 @@
 #
 # See docs/TEST_CONTAINER.md for how to create the target.
 #
-# PRIVILEGE SPLIT: this connects as ROOT and every case EXERCISES as the
-# unprivileged infrastructure user.
+# PRIVILEGE SPLIT: every case ARRANGES as root and EXERCISES as the
+# unprivileged infrastructure user. It connects as that user and reaches root
+# through sudo — root SSH is not a way into the rig (2026-10-03; see
+# docs/TEST_CONTAINER.md). SSH_USER=root still works, for a bare container.
 #
 # Both halves are load-bearing and neither is negotiable:
 #
@@ -37,8 +39,31 @@ REPO_ROOT=$(cd -- "$(dirname -- "$0")/.." && pwd)
 TARGET=""
 CASE_FILTER=""
 VERBOSE=0
+# The control machine's rig key: the workbench holds rig_runner_ed25519, the
+# laptop read_agent_ed25519, and neither exists on the other — same resolution
+# as ansible/inventory_test/hosts.yml.
+if [ -z "${SSH_KEY:-}" ]; then
+    for _k in "$HOME/.ssh/rig_runner_ed25519" "$HOME/.ssh/read_agent_ed25519"; do
+        [ -r "$_k" ] && { SSH_KEY="$_k"; break; }
+    done
+fi
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/read_agent_ed25519}"
-SSH_USER="${SSH_USER:-root}"
+SSH_USER="${SSH_USER:-choco}"
+
+# How a remote command gets root. Empty when connected as root (a bare
+# container); otherwise sudo, with the environment made to match what a root
+# SSH session gave the cases before 2026-10-03:
+#   * SUDO_* stripped — enhanced_monitoring_wrapper takes its state directory
+#     from ${SUDO_USER:-$USER}, so a leftover SUDO_USER=choco would quietly move
+#     a root-run case's state into /home/choco/.log
+#   * HOME, USER, LOGNAME as root's
+# sudo's env_reset drops the caller's variables, so the case's own
+# (UUT_ROOT, VERBOSE, INFRA_USER) are passed after this, as env arguments.
+if [ "$SSH_USER" = root ]; then
+    AS_ROOT=""
+else
+    AS_ROOT="sudo -n env -u SUDO_USER -u SUDO_UID -u SUDO_GID -u SUDO_COMMAND -u SUDO_HOME HOME=/root USER=root LOGNAME=root"
+fi
 
 # Staging root, per connecting user.
 #
@@ -105,6 +130,11 @@ esac
 
 printf 'Target: %s (%s)\n' "$remote_hostname" "$TARGET"
 
+if [ -n "$AS_ROOT" ] && ! $SSH "$AS_ROOT true" 2>/dev/null; then
+    printf 'error: %s@%s has no passwordless sudo — cases cannot arrange as root\n' "$SSH_USER" "$TARGET" >&2
+    exit 1
+fi
+
 # The account every case exercises the scripts as — see run_uut_as. Resolved on
 # the target (uid 1000) rather than assumed, and overridable for a rig whose
 # infrastructure user is named something else.
@@ -121,8 +151,9 @@ printf 'Cases arrange as root and exercise as: %s\n' "$INFRA_USER"
 # Debian container has tar, and may not have rsync.
 # ------------------------------------------------------------------
 printf 'Staging scripts to %s:%s ... ' "$remote_hostname" "$UUT_ROOT"
-$SSH "rm -rf $UUT_ROOT && mkdir -p $UUT_ROOT" || exit 1
-tar -C "$REPO_ROOT" -cf - scripts tests | $SSH "tar -C $UUT_ROOT -xf -" || exit 1
+# As root: cases run as root and leave root-owned files in the staged tree.
+$SSH "$AS_ROOT rm -rf $UUT_ROOT && $AS_ROOT mkdir -p $UUT_ROOT" || exit 1
+tar -C "$REPO_ROOT" -cf - scripts tests | $SSH "$AS_ROOT tar -C $UUT_ROOT -xf -" || exit 1
 printf 'done\n'
 
 # ------------------------------------------------------------------
@@ -144,7 +175,7 @@ printf 'done\n'
 # Best effort on purpose. A target without the package is a legitimate rig, and
 # health_baseline arranges its own log entry regardless.
 printf 'Refreshing unattended-upgrades timestamp ... '
-if $SSH 'command -v unattended-upgrade >/dev/null 2>&1 && unattended-upgrade --dry-run >/dev/null 2>&1'; then
+if $SSH "command -v unattended-upgrade >/dev/null 2>&1 && $AS_ROOT unattended-upgrade --dry-run >/dev/null 2>&1"; then
     printf 'done\n'
 else
     printf 'skipped (not available or failed) — elapsed-time checks may fire\n'
@@ -169,7 +200,7 @@ for case_file in "$REPO_ROOT"/tests/cases/*.sh; do
     fi
 
     total=$((total + 1))
-    if $SSH "UUT_ROOT=$UUT_ROOT VERBOSE=$VERBOSE INFRA_USER=$INFRA_USER sh $UUT_ROOT/tests/cases/$case_name.sh"; then
+    if $SSH "$AS_ROOT UUT_ROOT=$UUT_ROOT VERBOSE=$VERBOSE INFRA_USER=$INFRA_USER sh $UUT_ROOT/tests/cases/$case_name.sh"; then
         :
     else
         failed=$((failed + 1))

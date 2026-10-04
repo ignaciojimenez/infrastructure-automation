@@ -46,13 +46,12 @@
     # console admin menu on VGA/serial. Replacing it with nologin would remove
     # the console recovery path, so only lock the password there.
     shell: "{{ '/sbin/nologin' if os_family == 'debian' else omit }}"
-  # Skipped on a test container so root SSH survives as a second way in. It
-  # means root-disabling itself is the one part of hardening the rig does not
-  # exercise — an accepted trade, because the alternative is a single point of
-  # access on a host only `pct` can rescue.
-  when:
-    - ansible_user != "root"
-    - not (is_test_environment | default(false))
+  # No longer skipped on test containers (2026-10-03). The skip kept root SSH
+  # as the rig's "second way in", but bootstrap.yml already gave root nologin
+  # there, so it protected nothing — and it left root-disabling as the one part
+  # of hardening the rig never exercised. The rig is reached as the
+  # infrastructure user and recreated per run.
+  when: ansible_user != "root"
   tags: [ssh, security]
 
 - name: Lock the user account password

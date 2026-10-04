@@ -41,12 +41,13 @@ behaviour that must not reach production.
 | `--features nesting=1` | Without it systemd cannot mount its credentials tmpfs and `journald` dies — the exact CT 103 bug. Since these tests exercise `systemctl`, an unhealthy systemd would invalidate every result. |
 | `--onboot 0` | A forgotten test container must not survive a reboot. |
 | 4 GB rootfs | Small enough that "fill the disk" is a ~2 GB write, not a 15 GB one. |
-| `root` SSH with the `read_agent` key | The tests must *break* things — stop services, fill disks. `read_agent`'s scoped read-only sudo exists precisely to prevent that, so it is the wrong identity here. |
+| The infrastructure user with passwordless sudo, reached with the control machine's rig key | The tests must *break* things — stop services, fill disks — so they need root, reached through sudo exactly as Ansible reaches the fleet. `read_agent`'s scoped read-only sudo exists precisely to prevent that, so it is the wrong identity here. **No root SSH** (since 2026-10-03), except on a `TEST_CT_BARE=1` container, where root is the state under test. |
 
-> ⚠️ **Security note.** This container permits root SSH with a passphrase-free
-> key. That is acceptable only because it is LAN-only, short-lived, holds
-> nothing, and is destroyed after use. Do not copy this pattern to any host
-> that persists, and delete the container when finished.
+> ⚠️ **Security note.** A passphrase-free key reaches an account with
+> passwordless sudo here. That is acceptable only because the container is
+> LAN-only, short-lived, holds nothing, and is destroyed after use. Do not copy
+> this pattern to any host that persists, and delete the container when
+> finished.
 
 ## Prerequisites
 
@@ -140,7 +141,9 @@ pct exec 199 -- chmod 440 /etc/sudoers.d/choco
 # root instead makes `become` a no-op, so every privilege-escalation path in
 # every playbook goes untested.
 pct exec 199 -- install -d -m 700 -o choco -g choco /home/choco/.ssh
-pct exec 199 -- sh -c 'cp /root/.ssh/authorized_keys /home/choco/.ssh/authorized_keys'
+pct exec 199 -- sh -c 'cat > /home/choco/.ssh/authorized_keys' <<'EOF'
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAzwUkF8g+nliH4mXRm3Qlslb7TioAHQlvl1w9i5XkN3 claude_agent@infrastructure
+EOF
 pct exec 199 -- chown choco:choco /home/choco/.ssh/authorized_keys
 pct exec 199 -- chmod 600 /home/choco/.ssh/authorized_keys
 ```
@@ -160,24 +163,20 @@ fleet fault the rig should reproduce, not paper over. See `docs/TODO.md`.
 What is deliberately *not* mirrored is `ssh_hardening.yml`. See "Running
 playbooks against it" below.
 
-## 4. Authorise the agent key
+## 4. Root gets a key only on a bare container
 
-```sh
-pct exec 199 -- mkdir -p /root/.ssh
-pct exec 199 -- sh -c 'cat > /root/.ssh/authorized_keys' <<'EOF'
-ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAzwUkF8g+nliH4mXRm3Qlslb7TioAHQlvl1w9i5XkN3 claude_agent@infrastructure
-EOF
-pct exec 199 -- chmod 700 /root/.ssh
-pct exec 199 -- chmod 600 /root/.ssh/authorized_keys
-pct exec 199 -- sh -c 'echo "PermitRootLogin prohibit-password" > /etc/ssh/sshd_config.d/10-testlxc.conf'
-pct exec 199 -- systemctl restart ssh
-```
+Root is **not** a way into the rig (2026-10-03). The step above already
+authorised the key for the infrastructure user, which is how both Ansible and
+the test suite connect. Only a `TEST_CT_BARE=1` container — where there is no
+infrastructure user yet, and meeting a fresh host as root is what bootstrap
+tests — gets the key for root; `provision_test_container.sh` does that for you.
+sshd keeps Debian's default (`prohibit-password`) until hardening sets `no`.
 
 ## 5. Verify from the laptop
 
 ```sh
 ssh -i ~/.ssh/read_agent_ed25519 -o IdentitiesOnly=yes -o IdentityAgent=none \
-    -o StrictHostKeyChecking=accept-new root@10.30.40.205 'hostname; systemctl --failed'
+    -o StrictHostKeyChecking=accept-new choco@10.30.40.205 'hostname; systemctl --failed'
 ```
 
 The container is ready when that prints `testlxc` and `0 loaded units listed.`
@@ -230,38 +229,35 @@ disposable container the key Ansible connected with *is* the only way in, so the
 same task would lock the rig out of itself with `pct` as the sole way back.
 
 Rather than skipping hardening on test hosts, which would leave it untested,
-three things are gated on `is_test_environment` — set only in `inventory_test/hosts.yml`,
-never in the fleet inventory:
+the key write is adjusted, and `is_test_environment` — set only in
+`inventory_test/hosts.yml`, never in the fleet inventory — gates as little as
+possible:
 
 | Task | Fleet host | Test container |
 |---|---|---|
 | authorized_keys, `exclusive: true` | GitHub key set only | GitHub key set **+ `test_environment_ssh_key`** |
-| Disable root login | root shell → nologin | skipped here — but moot: `bootstrap.yml` sets it anyway, see the note below the table |
+| Disable root login | root shell → nologin | **same** (exemption removed 2026-10-03) |
 | Lock the user password | locked | skipped |
-| `sshd_config` | `PermitRootLogin no` | `PermitRootLogin prohibit-password` |
+| `sshd_config` | `PermitRootLogin no` | **same** (exemption removed 2026-10-03) |
 
 An `assert` runs **before** the authorized_keys write and fails the play if the
 connecting key is missing or empty — after `exclusive: true` has run there is no
-way back in to fix it.
+way back in to fix it. The key write is shared by `bootstrap.yml` and
+`ssh_hardening.yml` (`tasks/github_authorized_keys.yml`), so the exception cannot
+exist in one and be missing from the other again.
 
-⚠️ **Corrected 2026-10-03: root is NOT a way in on any container that has run
-`bootstrap.yml`** (so not after `site.yml` either). bootstrap's "Lock root
-account" sets root's shell to `/sbin/nologin` with no test-host exemption, so
-the key is accepted and the session ends with *"This account is currently not
-available"* — forced on CT 199 from the workbench. Until `fix(bootstrap)` on
-2026-10-03 it also replaced root's key with GitHub's; it no longer touches
-root's keys at all. **The infrastructure user is the only way in**; with the
-rig destroyed and recreated per run, that is enough. The verification below
-was of `services.yml --tags ssh` on a never-bootstrapped container.
+📌 **Root SSH was the rig's "second way in" until 2026-10-03, and it bought
+nothing.** `bootstrap.yml` gives root `/sbin/nologin` on every host, so on any
+converged container a root key authenticated and the session was refused —
+and the test suite, which connected as root, could only run against a
+container that had never been bootstrapped. Now the suite connects as the
+infrastructure user and reaches root through sudo; verified on CT 199 that it
+gives 11/11 both ways on the same container, keeps its A/B teeth, and runs
+11/11 against a converged container for the first time.
 
-Verified in both directions on CT 198: with the flag set, a fresh SSH as both
-`choco` and `root` still works after hardening; with `is_test_environment: false`
-the same run plans to *remove* the rescue key and renders `PermitRootLogin no`.
-So the fleet's behaviour is unchanged.
-
-⚠️ Still true: `bootstrap.yml` and a full `site.yml` have not been run against a
-container. Hardening is the piece that made them dangerous, and it is now
-handled, but the rest of those playbooks remains unexercised here.
+✅ `bootstrap.yml` and a full `site.yml` converge against a container (2026-09-21),
+and `tests/rig_loop.sh` proves it per change from the workbench. The bare/root
+bootstrap path is still untested — TODO 3a.
 
 ## 7. Destroy when done
 

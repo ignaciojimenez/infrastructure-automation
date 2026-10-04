@@ -202,7 +202,12 @@
       ansible.builtin.user:
         name: root
         password_lock: true
-        shell: /sbin/nologin
+        # Mirrors ssh_hardening.yml's "Disable root user login": on FreeBSD
+        # (opnsense) root's shell is /usr/local/sbin/opnsense-shell, the console
+        # recovery menu, and nologin there would remove it. This copy had
+        # drifted to an unconditional nologin; opnsense still had its menu on
+        # 2026-10-03 only because bootstrap had not run there since.
+        shell: "{{ '/sbin/nologin' if os_family == 'debian' else omit }}"
       tags: [bootstrap, security]
 
     # These must agree with templates/debian/sshd_config.j2, which
@@ -211,12 +216,11 @@
     # perpetually "changed" and its effective setting depends on which play
     # ran last. UsePAM was exactly that case (here `no`, template `yes`).
     #
-    # PermitRootLogin was the same case and outlived that fix: this line said
-    # `no` unconditionally while the template says `prohibit-password` on a
-    # test container, so the rig flipped on every run. It is mirrored from the
-    # template rather than restated, because a second literal is what let the
-    # two drift apart in the first place. Verified by --diff against CT 199:
-    # this was the only key of the five that disagreed.
+    # PermitRootLogin was the same case: for a while the template said
+    # `prohibit-password` on a test container while this said `no`, so the rig
+    # flipped on every run. Since 2026-10-03 both say `no` everywhere — the
+    # test-container exception is gone from the template, so it is gone here
+    # too. Change one, change the other.
     #
     # The cost was not just noise. `changed=0` on a second run is the signal
     # this repo uses for "converged", and a host that can never report it
@@ -229,8 +233,7 @@
         state: present
         validate: 'sshd -t -f %s'
       loop:
-        - regexp: '^#?PermitRootLogin'
-          line: "PermitRootLogin {{ 'prohibit-password' if is_test_environment | default(false) else 'no' }}"
+        - { regexp: '^#?PermitRootLogin', line: 'PermitRootLogin no' }
         - { regexp: '^#?PasswordAuthentication', line: 'PasswordAuthentication no' }
         - { regexp: '^#?PubkeyAuthentication', line: 'PubkeyAuthentication yes' }
         - { regexp: '^#?ChallengeResponseAuthentication', line: 'ChallengeResponseAuthentication no' }

@@ -6,7 +6,7 @@
 # touching one.
 #
 #   tests/sandbox.sh                    # shell in, as the infrastructure user
-#   tests/sandbox.sh --root             # ... as root, for the bootstrap path
+#   tests/sandbox.sh --root             # ... as root — a TEST_CT_BARE=1 container only
 #   tests/sandbox.sh --deb12            # CT 198 instead of CT 199
 #   tests/sandbox.sh --push             # copy the working tree's scripts over
 #   tests/sandbox.sh --run system_health_check.sh

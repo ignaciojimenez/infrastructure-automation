@@ -36,8 +36,10 @@ for. The runner refuses to run against a host that is not named `testlxc`.
 
 ## Who the suite runs as
 
-**It connects as root and exercises the scripts as the infrastructure user.**
-The split is the point, and both halves are load-bearing:
+**It arranges as root and exercises the scripts as the infrastructure user.**
+It connects as that user and reaches root through sudo — root SSH is not a way
+into the rig (2026-10-03). The split is the point, and both halves are
+load-bearing:
 
 | Step | User | Why |
 |---|---|---|
@@ -68,7 +70,7 @@ same case on the exercise user alone:
 
 ```sh
 # a config file the cron user cannot read — invisible to root
-ssh root@10.30.40.205 chmod 0600 /etc/apt/apt.conf.d/20auto-upgrades
+ssh choco@10.30.40.205 sudo chmod 0600 /etc/apt/apt.conf.d/20auto-upgrades
 
 tests/run_tests.sh --target 10.30.40.205 --case health_baseline
 #   → FAIL: "❌ Unattended upgrades not enabled in config"
@@ -76,7 +78,7 @@ tests/run_tests.sh --target 10.30.40.205 --case health_baseline
 INFRA_USER=root tests/run_tests.sh --target 10.30.40.205 --case health_baseline
 #   → PASS — root reads it fine, and sees nothing wrong
 
-ssh root@10.30.40.205 chmod 0644 /etc/apt/apt.conf.d/20auto-upgrades
+ssh choco@10.30.40.205 sudo chmod 0644 /etc/apt/apt.conf.d/20auto-upgrades
 ```
 
 Measured 2026-08-18, exactly as shown. If both legs agree, the exercise step is
