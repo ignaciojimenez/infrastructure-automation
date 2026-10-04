@@ -380,13 +380,23 @@ Still open, same root cause:
   task meant.
 - GitHub keys bootstrap already left in root's `authorized_keys` on fleet hosts
   stay until removed deliberately. Unverified which hosts carry them:
-  `read_agent` cannot read `/root`.
+  `read_agent` cannot read `/root`. Next: read-only inventory as `choco` + become,
+  then a declarative removal — minding cwwk (root's keys are Proxmox's, a symlink
+  into `/etc/pve/priv`) and opnsense (may be owned by `config.xml`).
 
-Also found: on a test container root has `/sbin/nologin` after bootstrap
-("Lock root account" has no test-host exemption), so root SSH is already dead on
-any converged container and `tests/run_tests.sh` — which connects as root —
-works only against one that was never bootstrapped. That is the case for
-moving the suite to the infrastructure user with sudo (decision pending).
+✅ **Root SSH is gone from test containers (2026-10-04).** Root had
+`/sbin/nologin` after bootstrap anyway, so `tests/run_tests.sh` (then root-only)
+worked only on a never-bootstrapped container. Now the suite connects as `choco`
+and arranges with `sudo -n` (`SUDO_*` stripped — the monitoring wrapper would
+otherwise keep root-run state in `/home/choco/.log`); sshd and bootstrap say
+`PermitRootLogin no` on test containers too; the provisioner gives root a key
+only with `TEST_CT_BARE=1`. Also fixed: bootstrap's "Lock root account" no
+longer replaces opnsense's console shell with nologin (unrun there since). Proven:
+suite 11/11 as root and as choco on one container, the A/B fault still splits
+them; a converged container runs the suite 11/11 (impossible before); fresh
+`rig_ct create 199` → root has no `authorized_keys`, root SSH refused; bare
+CT 198 → root key works; `rig_loop.sh` on `main` from the workbench → changed=41
+then **changed=0**, destroyed; rig_access redeployed from `main`, changed=0.
 
 Pre-existing drift seen in the fleet `--check`, not caused by this: opnsense's
 `choco` keys carry two comments the exclusive write would strip (same five
