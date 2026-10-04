@@ -39,10 +39,11 @@ git_name: "{{ vault_git_name }}"
 git_mail: "{{ vault_git_mail }}"
 
 # ============================================================
-# GitHub (for SSH key provisioning)
+# SSH keys for the infrastructure user (a raw gist, one public key per line)
+# Not github.com/<user>.keys: GitHub deletes account keys unused against GitHub.
 # ============================================================
 gh_profile: "{{ vault_gh_profile }}"
-gh_keys: "https://github.com/{{ gh_profile }}.keys"
+gh_keys: "https://gist.githubusercontent.com/{{ gh_profile }}/<gist-id>/raw/<file>"
 
 # ============================================================
 # Backup encryption (age public key — from vault)

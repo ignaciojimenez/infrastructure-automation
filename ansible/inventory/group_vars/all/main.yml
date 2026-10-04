@@ -36,9 +36,12 @@ timezone: "Europe/Madrid"
 git_name: "{{ vault_git_name }}"
 git_mail: "{{ vault_git_mail }}"
 
-# GitHub profile for SSH keys (from vault)
+# SSH keys for the infrastructure user: one gist, read live by sshd at login
+# (update_keys) and written to authorized_keys by Ansible as the offline
+# fallback. Not github.com/<user>.keys: GitHub deletes account keys that never
+# authenticate to GitHub itself — every device but the laptop (2026-10-04).
 gh_profile: "{{ vault_gh_profile }}"
-gh_keys: "https://github.com/{{ gh_profile }}.keys"
+gh_keys: "https://gist.githubusercontent.com/{{ gh_profile }}/133b6e03fa1b4f5bf5fb12301cd30441/raw/gistfile1.txt"
 
 # Backup encryption - age public key (asymmetric, safe to commit — private key stays in password manager)
 backup_age_pubkey: "age1yeuwd2t78jyxldxeja529djj8zt5et7h9j0fnwzn7r0cqfnww58qjqrttc"
