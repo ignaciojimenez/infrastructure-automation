@@ -156,24 +156,31 @@ copied, or migrated — not by Time Machine, not by Migration Assistant, not by 
 That is `touchid-agent` working correctly, and it would be a genuine problem if SSH
 depended on that key alone. **It does not.**
 
-### Why it works: sshd asks GitHub, every time
+### Why it works: sshd asks the key gist, every time
 
-`ansible/playbooks/tasks/ssh_hardening.yml` deploys a two-line script to every Debian
+`ansible/playbooks/tasks/ssh_hardening.yml` deploys a short script to every Debian
 host and wires it into `sshd`:
 
 ```sh
 #!/bin/sh
-curl -sf "https://github.com/<profile>.keys"      # /usr/local/bin/update_keys, root, 0755
+[ "$1" = "choco" ] || exit 0                       # /usr/local/bin/update_keys, root, 0755
+exec curl -sf --max-time 5 "<gh_keys>"             # a raw gist, one public key per line
 ```
 
 ```
-AuthorizedKeysCommand       /usr/local/bin/update_keys
+AuthorizedKeysCommand       /usr/local/bin/update_keys %u
 AuthorizedKeysCommandUser   nobody
 ```
 
 This is a **live lookup at authentication time**, not a snapshot written at bootstrap.
-Add a public key to your GitHub profile and every host accepts it on the next
-connection — no Ansible run, no physical access, no SD-card surgery.
+Add a public key to the gist and every host accepts it on the next connection — no
+Ansible run, no physical access, no SD-card surgery. `~/.ssh/authorized_keys`, written
+from the same gist by Ansible, is the fallback when the gist is unreachable.
+
+> 📌 **A gist, not `github.com/<profile>.keys` (changed 2026-10-04).** GitHub deletes
+> account keys that never authenticate to GitHub itself, so every device key but the
+> laptop's aged out, and the exclusive write would have revoked them fleet-wide. The
+> gist is edited by the same GitHub account, so the trust root is unchanged.
 
 > 📌 The template is `templates/debian/sshd_config.j2` at the **repository root**, not
 > under `ansible/`. Searching only `ansible/` misses this mechanism entirely and leads
@@ -182,15 +189,15 @@ connection — no Ansible run, no physical access, no SD-card surgery.
 ### The procedure
 
 1. **Get into GitHub** — password and 2FA are in Apple Passwords.
-2. **New key, enrolled at GitHub:**
+2. **New key, added to the key gist** (`gh_keys` in `group_vars/all/main.yml`):
    ```bash
    ssh-keygen -t ed25519 -C "choco@<new-machine>"
-   # paste ~/.ssh/id_ed25519.pub into github.com/settings/keys
+   # append ~/.ssh/id_ed25519.pub to the gist, one key per line
    ```
 3. **Clone and go:**
    ```bash
    git clone git@github.com:ignaciojimenez/infrastructure-automation.git
-   ssh cobra    # works immediately — sshd fetched the new key from GitHub
+   ssh cobra    # works immediately — sshd fetched the new key from the gist
    ```
 4. **Restore the vault password and age key** from Apple Passwords; re-create the
    Keychain accessor so Ansible runs non-interactively:
@@ -292,8 +299,8 @@ apply removes it. The discriminator is the UI field, or `grep authorizedkeys` in
 `config.xml`.)
 
 📌 **So the account that matters most is GitHub, not the laptop.**
-`authorized_key` is deployed with `exclusive: true` from `{{ gh_keys }}` *and*
-`AuthorizedKeysCommand` reads GitHub live — both paths terminate at the same account.
+`authorized_key` is deployed with `exclusive: true` from `{{ gh_keys }}` (a gist) *and*
+`AuthorizedKeysCommand` reads the same gist live — both paths terminate at the same account.
 
 ✅ **Confirmed well covered (2026-09-01).** That account carries several independent
 authentication and recovery factors, **at least one of which is a physical token that

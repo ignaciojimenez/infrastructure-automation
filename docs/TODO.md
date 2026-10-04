@@ -399,13 +399,18 @@ Still open, same root cause:
   after the content is already replaced), so the task uses `copy`; forced with
   an injected line.
 
-🔴 **GitHub deletes the keys that grant fleet access (found 2026-10-04).** The
+✅ **GitHub deletes the keys that grant fleet access (found and fixed 2026-10-04).** The
 3 de-listed keys were removed by GitHub itself for inactivity (security log).
 Only the laptop key ever talks to GitHub, so every other device's key will age
 out the same way — and the exclusive write then revokes it on every host. GitHub
 is the source of truth for `choco`'s keys (static write + `AuthorizedKeysCommand`),
-so this needs a decision before the next untagged `services.yml` or `bootstrap.yml`
-run, either of which removes those 3 keys from `choco` fleet-wide.
+so this needed fixing before the next untagged `services.yml` or `bootstrap.yml` run.
+Fixed: the source is now a gist, read live and as the fallback (ARCHITECTURE_DECISIONS).
+`update_keys` also takes `%u` now — it used to hand the keys to every account with a
+shell, bypassing `read_agent`'s and `rig_runner`'s forced commands. Proven on CT 199:
+live path alone logs in; gist unreachable → lookup gives up at 5.02 s, static key
+still works; a bad source is refused with the file untouched. Fleet: 9 hosts, second
+run changed=0, same 5 keys everywhere now carrying device names.
 
 ✅ **Root SSH is gone from test containers (2026-10-04).** Root had
 `/sbin/nologin` after bootstrap anyway, so `tests/run_tests.sh` (then root-only)
