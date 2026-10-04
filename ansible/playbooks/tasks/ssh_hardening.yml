@@ -14,9 +14,15 @@
     dest: "/usr/local/bin/update_keys"
     owner: root
     mode: "755"
+    # sshd passes the login name (%u). Keys are printed for the infrastructure
+    # user only — without this, every account with a shell (read_agent,
+    # rig_runner, builder) accepted these keys, bypassing forced commands.
+    # --max-time: sshd waits on this before auth; a hung fetch must fail fast
+    # to the authorized_keys fallback, not stall the login.
     content: |
       #!/bin/sh
-      curl -sf "{{ gh_keys }}"
+      [ "$1" = "{{ infrastructure_user }}" ] || exit 0
+      exec curl -sf --max-time 5 "{{ gh_keys }}"
   when: gh_keys is defined
   tags: [ssh, keys]
 

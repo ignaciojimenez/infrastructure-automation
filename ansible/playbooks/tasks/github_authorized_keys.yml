@@ -35,6 +35,25 @@
   check_mode: false
   tags: [ssh, keys]
 
+# The guard for the exclusive write below. authorized_keys is the fallback when
+# the live lookup cannot reach the gist, so a blank or broken download must never
+# replace it: that is the one way to lock the infrastructure user out of every
+# host at once. Every non-comment line must look like a public key, and there
+# must be at least one.
+- name: Refuse an empty or malformed key list
+  ansible.builtin.assert:
+    that:
+      - fetched_key_lines | length > 0
+      - fetched_key_lines | reject('match', '^(ssh-|ecdsa-|sk-)[A-Za-z0-9@.-]+ AAAA[A-Za-z0-9+/=]+( .*)?$') | list | length == 0
+    fail_msg: >-
+      {{ gh_keys }} returned no keys or lines that are not public keys. Refusing
+      to replace authorized_keys with it — that file is the fallback when the
+      live lookup fails. Fix the key list, then re-run.
+  vars:
+    fetched_key_lines: "{{ github_keys_fetched.content | default('') | split('\n') | map('trim') | select | reject('match', '^#') | list }}"
+  when: github_keys_fetched is succeeded
+  tags: [ssh, keys]
+
 # `exclusive: true` is the point of this file — the GitHub key set is the whole
 # truth for this user, so a key revoked upstream disappears from every host. It
 # is also why a test container has to be handled explicitly: the key Ansible

@@ -33,7 +33,7 @@ AuthorizedKeysFile  .ssh/authorized_keys
 
 {% if update_key_script is defined %}
 # Dynamic authorized keys
-AuthorizedKeysCommand	{{ update_key_script }}
+AuthorizedKeysCommand	{{ update_key_script }} %u
 AuthorizedKeysCommandUser	nobody
 {% endif %}
 
