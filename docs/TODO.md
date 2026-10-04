@@ -53,7 +53,7 @@ here is something to read past, every time, forever. The write-up goes to
 (numbers never move), but the order to work them is this, and the dashboard
 renders it:
 
-> **№1** 36 + 37 *(36: PER-58 fix built 4 Oct, needs deploy · 37: waiting on a real lockout)* →
+> **№1** 36 + 37 *(36: PER-58 fix deployed 4 Oct, waiting on a real HA alert · 37: waiting on a real lockout)* →
 > **№2** 42 *(entrance door alert disabled 19 Sep, needs physical inspection)* →
 > **№3** 38 *(small follow-ups: MQTT timeout, 403 detection)* →
 > **№4** 2 → **№5** 4 (plex) → **№6** 9 → **№7** 3a/3c *(3b done 3 Oct)* → **№8** 39 →
@@ -172,36 +172,36 @@ Bathroom Radiator` (15:02, in the 15:07 poll) named no host and keyed
 `incidents/`. This is the known gap above, through a sender with no host and no
 script to name.
 
-🔧 **Fixed on branch `fix/per-58-ha-alert-incident-key`, not deployed.** The HA
+✅ **Fixed and deployed 2026-10-04** (`5cfdfda`, merge `7d83e2f`). The HA
 automations that overlap `check_ha_entities` (heating offline, smoke offline,
 gas `unavailable`) append `(Host: dockassist, Subject: ha-entities)`, and an
 explicit `Subject:` in an alert title wins in `subjects()`. Host alone would
 not have fixed it (`offline` keys `reachability`). See ARCHITECTURE_DECISIONS.
 `incident_dedup_test.sh` Part 3 replays the verbatim 09-21 messages: new 1 run
-$0.6926; main's script 2 runs $1.1712, with the same two keys as the live store.
+$0.6926; the old script 2 runs $1.1712, with the same two keys as the live store.
 
-⚠️ **Deploy order matters:** agent-lxc first, then dockassist. An HA tag reaching
-the old parser keys `dockassist.reachability`, which is wrong in a new way.
-Still unverified: mawk's `match()`; timed-out runs log $0, so the cap
-undercounts; HA's renderer is untested (plain jinja2 renders the three messages
-as intended).
+Verified on the hosts, not just the laptop: agent-lxc deployed first, then
+dockassist (an HA tag reaching the old parser keys `dockassist.reachability`).
+On agent-lxc the deployed script passes `dash -n`, and its `subjects()` keys
+the tagged title and the wrapper alert both `ha-entities`. On dockassist
+the deployed file carries 3 tags, all 36 automations loaded `on`, and HA's own
+renderer (`/api/template`) produces the tagged text, with gas `fault` left
+untagged. Still unverified: a real HA-entity fault end to end; mawk's `match()`;
+timed-out runs log $0, so the cap undercounts.
 
-*State:* **built, waiting on deploy + one real HA-entity fault.** *Needs:* the
-laptop, for the two deploys.
+*State:* **deployed; waiting on the next real HA-entity fault.** *Needs:*
+nothing to build.
 
 ```
-Deploy and verify PER-58 (docs/TODO.md item 36). Branch fix/per-58-ha-alert-incident-key
-is merged; do not redesign it.
+Confirm PER-58 on a real alert (docs/TODO.md item 36). It is DEPLOYED; do not
+redesign or redeploy it.
 
-  ansible-playbook ansible/playbooks/services.yml --limit agent-lxc --tags agent
-  ansible-playbook ansible/playbooks/services.yml --limit dockassist --tags config
+  ssh 10.30.40.203 'grep -E "ha-entities|alert-" ~/.logs/investigate.log | tail; ls ~/.agent/incidents'
 
-Order matters: agent-lxc first. Then confirm the HA side really renders the tag
-(not just plain jinja2): grep "Subject: ha-entities" in the deployed
-automations.yaml on dockassist. On the next HA entity fault: ONE incident file,
-dockassist.ha-entities, no alert-*heating*/alert-*smoke*/alert-*gas* sibling,
-and one paid run in ~/.logs/investigate.log. Then close PER-58 and move item 36
-to docs/archive/DONE.md.
+For the first HA heating/smoke/gas "unavailable" alert since 2026-10-04 21:00:
+it is logged as dockassist.ha-entities (covered, or ONE paid run), with no new
+alert-*heating*/alert-*smoke*/alert-*gas* incident file. Then close PER-58 and
+move item 36 to docs/archive/DONE.md.
 ```
 
 **37. vinylstreamer's wifi recovery undid its own fix — DEPLOYED, waiting on a lockout**
