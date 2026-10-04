@@ -389,6 +389,20 @@ Still open, same root cause:
   yet). Also: GitHub now lists **2** keys (the laptop's Touch ID key and one
   other) where it listed 5 on 2026-10-03; the 3 de-listed keys still open
   `choco` everywhere until the next exclusive write.
+  ✅ **Removed 2026-10-04** (`ssh_hardening`, tag `root_keys`) from the 7
+  non-Proxmox Linux hosts, second run changed=0, `choco`'s keys untouched.
+  cwwk dry-run only, pending: trim `/etc/pve/priv/authorized_keys` to
+  `root@cwwk` and restore the link — `pvecm updatecerts` (every pveproxy start)
+  merges a plain root file back into the shared one, so deletion alone would
+  not survive a reboot.
+
+🔴 **GitHub deletes the keys that grant fleet access (found 2026-10-04).** The
+3 de-listed keys were removed by GitHub itself for inactivity (security log).
+Only the laptop key ever talks to GitHub, so every other device's key will age
+out the same way — and the exclusive write then revokes it on every host. GitHub
+is the source of truth for `choco`'s keys (static write + `AuthorizedKeysCommand`),
+so this needs a decision before the next untagged `services.yml` or `bootstrap.yml`
+run, either of which removes those 3 keys from `choco` fleet-wide.
 
 ✅ **Root SSH is gone from test containers (2026-10-04).** Root had
 `/sbin/nologin` after bootstrap anyway, so `tests/run_tests.sh` (then root-only)
