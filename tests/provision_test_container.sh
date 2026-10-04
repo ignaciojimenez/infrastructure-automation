@@ -263,19 +263,23 @@ if [ "$BARE" = "1" ]; then
     pct exec "$VMID" -- chmod 600 /root/.ssh/authorized_keys
 fi
 
+# A bare container has no infrastructure user, so root is the only way in.
+if [ "$BARE" = "1" ]; then CONNECT_USER=root; SUITE_ENV="SSH_USER=root "
+else CONNECT_USER="$INFRA_USER"; SUITE_ENV=""; fi
+
 cat <<EOF
 
 ────────────────────────────────────────────────────────
 CT $VMID ($HOSTNAME_) ready at $IP
 
-Verify (as the infrastructure user; root only on a bare container):
+Verify:
   ssh -i ~/.ssh/read_agent_ed25519 -o IdentitiesOnly=yes \\
-      -o IdentityAgent=none $INFRA_USER@$IP 'hostname; systemctl --failed'
+      -o IdentityAgent=none $CONNECT_USER@$IP 'hostname; systemctl --failed'
 
 Run the suite from the repo root:
-  tests/run_tests.sh --target $IP
+  ${SUITE_ENV}tests/run_tests.sh --target $IP
 
 Destroy when done:
-  ssh cwwk 'sh -s -- --destroy' < tests/provision_test_container.sh
+  ssh cwwk 'TEST_CT_VMID=$VMID sh -s -- --destroy' < tests/provision_test_container.sh
 ────────────────────────────────────────────────────────
 EOF
