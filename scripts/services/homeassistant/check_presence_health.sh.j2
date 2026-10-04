@@ -48,6 +48,17 @@
 #
 # {{ presence_stale_hours }}h before asking; {{ presence_probe_answer_minutes }} min for the answer, so one push
 # delivered late is not a page.
+#
+# ⚠️ A Home Assistant restart is not an answer (2026-10-04). On start HA
+# restores every entity and stamps `last_reported` with the moment it did so.
+# Candela's app had been silent 19 h and this check had paged; an Ansible
+# deploy restarted HA at 21:13, every one of her sensors read "reported 34 s
+# after boot", and the 21:30 run cleared the page with "✅ all reporting" and
+# dropped the outstanding request. Cloudflare showed no request from her app
+# at all. So while a request is outstanding, a stamp inside the restart's
+# restore window is read as HA's, and the tracker is judged by the stamp it had
+# when asked. The cost runs the safe way: a phone that genuinely answers inside
+# those few minutes keeps paging until its next report.
 set -eu
 
 SECRETS_FILE="{{ homeassistant_config_dir }}/secrets.yaml"
@@ -79,8 +90,15 @@ IGNOREEOF
 )
 export PRESENCE_IGNORE
 
+# When HA last started, from Docker rather than HA: a restored entity cannot
+# tell you it was restored. Empty if Docker cannot say — the check then runs as
+# it did before, and says so.
+HA_STARTED=$(docker inspect "{{ homeassistant_container_name }}" 2>/dev/null \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["State"]["StartedAt"])' \
+      2>/dev/null) || HA_STARTED=""
+
 python3 - "$HA_TOKEN" "$HA_URL" "$STALE_HOURS" "$STATE_FILE" \
-          "$PROBE_ANSWER_MINUTES" "$PROBE_INTERVAL_HOURS" <<'PYEOF'
+          "$PROBE_ANSWER_MINUTES" "$PROBE_INTERVAL_HOURS" "$HA_STARTED" <<'PYEOF'
 import datetime
 import json
 import os
@@ -94,6 +112,24 @@ token, ha_url, stale_hours, state_file = (sys.argv[1], sys.argv[2],
                                           float(sys.argv[3]), sys.argv[4])
 answer_minutes, probe_interval_hours = float(sys.argv[5]), float(sys.argv[6])
 now = datetime.datetime.now(datetime.timezone.utc)
+
+# How long after HA starts its restored stamps keep landing. Observed: 34 s on
+# dockassist; five minutes leaves room for a slow boot.
+RESTORE_WINDOW = datetime.timedelta(minutes=5)
+
+
+def parse_stamp(stamp):
+    """ISO-8601 from HA or Docker, or None. Docker writes `Z` and nanoseconds."""
+    if not stamp:
+        return None
+    stamp = re.sub(r"(\.\d{6})\d+", r"\1", stamp.replace("Z", "+00:00"))
+    try:
+        return datetime.datetime.fromisoformat(stamp)
+    except ValueError:
+        return None
+
+
+ha_started = parse_stamp(sys.argv[7] if len(sys.argv) > 7 else "")
 
 
 ignored = {p.strip() for p in os.environ.get("PRESENCE_IGNORE", "").splitlines() if p.strip()}
@@ -176,24 +212,24 @@ def save_probes(probes):
     os.replace(tmp, state_file)
 
 
-def age_minutes(state):
-    """Minutes since HA last heard from this entity.
+def age_minutes(stamp):
+    """Minutes since `stamp`, or None if it is missing or unreadable."""
+    t = parse_stamp(stamp)
+    return None if t is None else (now - t).total_seconds() / 60.0
 
-    `last_reported` is the right field: `last_changed` only moves when the
-    value differs, so a phone sitting at `home` all day would look stale
-    within the hour and page constantly.
-    """
-    stamp = state.get("last_reported") or state.get("last_updated")
-    if not stamp:
-        return None
-    try:
-        return (now - datetime.datetime.fromisoformat(stamp)).total_seconds() / 60.0
-    except ValueError:
-        return None
+
+def restored_at_start(stamp):
+    """True if HA wrote this stamp itself while restoring state on start."""
+    t = parse_stamp(stamp)
+    return (ha_started is not None and t is not None
+            and datetime.timedelta(0) <= t - ha_started <= RESTORE_WINDOW)
 
 
 issues = []
 notes = []
+if ha_started is None:
+    notes.append("cannot read Home Assistant's start time from Docker — a "
+                 "restart during a freeze would read as the phone answering")
 
 # ---------------------------------------------------------------------------
 # Discover what to watch, rather than being told.
@@ -264,7 +300,19 @@ for person in sorted(persons, key=lambda s: s["entity_id"]):
                           % tlabel)
             continue
 
-        age = age_minutes(st)
+        # `last_reported`, not `last_changed`: the latter only moves when the
+        # value differs, so a phone sitting at `home` all day would look stale
+        # within the hour and page constantly.
+        reported = st.get("last_reported") or st.get("last_updated")
+        probe = probes.get(tid)
+        if probe and restored_at_start(reported):
+            # HA restarted while the phone owed an answer. The new stamp is
+            # HA's own restore; the phone's last word is the one we asked on.
+            reported = probe.get("reported")
+            notes.append("%s: stamp is Home Assistant's restart at %s, not a "
+                         "report — still waiting on the phone"
+                         % (tlabel, ha_started.isoformat(timespec="seconds")))
+        age = age_minutes(reported)
         if age is None:
             notes.append("%s: no timestamp on the state, cannot judge freshness" % tlabel)
             continue
@@ -279,8 +327,6 @@ for person in sorted(persons, key=lambda s: s["entity_id"]):
 
         # Stale AND home. Silence alone cannot tell stationary from frozen, so
         # the phone is asked; see the header.
-        reported = st.get("last_reported") or st.get("last_updated")
-        probe = probes.get(tid)
         if probe and probe.get("reported") != reported:
             probe = None   # it answered since, and has gone quiet again
 

@@ -44,6 +44,7 @@ if python3 "$RENDERER" "$TEMPLATE" "$WORK/check.sh" \
         presence_probe_interval_hours=6 \
         presence_probe_state_file=/home/tester/.log/presence_probe.state.json \
         presence_ignore_persons=person.ai_agent \
+        homeassistant_container_name=home-assistant \
         2>"$WORK/render.err"; then
     pass "template renders with no unhandled Jinja"
 else
@@ -185,10 +186,35 @@ PY
 
 phone() { printf '%s\n' "$1" > "$FIX/phone"; }
 
+# HA_STARTED is what Docker reports for the container; empty = Docker could
+# not say. Default: started long ago, so no stamp is a restore.
+HA_STARTED_DEFAULT=2026-01-01T00:00:00.000000000Z
 run() {
     OUT=$(PRESENCE_IGNORE="" python3 "$WORK/check.py" token "$HA_URL" 18 \
-          "${STATE_OVERRIDE:-$STATE}" 20 6 2>&1)
+          "${STATE_OVERRIDE:-$STATE}" 20 6 "${HA_STARTED-$HA_STARTED_DEFAULT}" 2>&1)
     RC=$?
+}
+
+# docker_stamp <minutes_ago> — Docker's StartedAt shape: `Z`, nanoseconds.
+docker_stamp() {
+    python3 -c 'import datetime, sys
+t = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=float(sys.argv[1]))
+print(t.strftime("%Y-%m-%dT%H:%M:%S.%f") + "123Z")' "$1"
+}
+
+# restamp <minutes_ago> — HA re-stamps the tracker (a restore, or a report).
+restamp() {
+    python3 - "$FIX" "$1" <<'PY'
+import datetime, json, os, sys
+fix, minutes = sys.argv[1], float(sys.argv[2])
+stamp = (datetime.datetime.now(datetime.timezone.utc)
+         - datetime.timedelta(minutes=minutes)).isoformat()
+states = json.load(open(os.path.join(fix, "states.json")))
+for s in states:
+    if s["entity_id"].startswith("device_tracker."):
+        s["last_reported"] = s["last_updated"] = s["last_changed"] = stamp
+json.dump(states, open(os.path.join(fix, "states.json"), "w"))
+PY
 }
 
 pushes() { grep -c "request_location_update" "$FIX/calls" 2>/dev/null || true; }
@@ -338,6 +364,54 @@ if [ "$RC" -eq 0 ] && [ "$(pushes)" -eq 0 ] && ! grep -q "$TRACKER" "$STATE"; th
 else
     fail "7b. fresh tracker mishandled (rc=$RC, pushes=$(pushes)): $OUT"
 fi
+
+# ------------------------------------------------------------------
+# 8. A Home Assistant restart is not an answer (2026-10-04). The app was
+#    silent 19 h, the check had paged, a deploy restarted HA, every entity was
+#    re-stamped 34 s after boot, and the next run sent "✅ all reporting".
+# ------------------------------------------------------------------
+rm -f "$STATE"; world home 19; phone silent; asked 60
+restamp 15.5; HA_STARTED=$(docker_stamp 16)
+run
+if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -q "FROZEN.*did not answer"; then
+    pass "8a. restart during a freeze: still pages FROZEN"
+else
+    fail "8a. HA's restore stamp read as an answer (rc=$RC): $OUT"
+fi
+if grep -q "$TRACKER" "$STATE" 2>/dev/null && [ "$(pushes)" -eq 0 ]; then
+    pass "8b. outstanding request kept, no extra push"
+else
+    fail "8b. request dropped or re-pushed (pushes=$(pushes)): $(cat "$STATE" 2>/dev/null)"
+fi
+
+# Its twin: the phone really reports after the restart window. Must clear —
+# a fix that ignored every stamp after a restart would pass 8a alone.
+restamp 2; HA_STARTED=$(docker_stamp 30)
+run
+if [ "$RC" -eq 0 ] && ! grep -q "$TRACKER" "$STATE"; then
+    pass "8c. a real report after the restart clears it"
+else
+    fail "8c. real report after restart still paged (rc=$RC): $OUT"
+fi
+
+# A restart with nothing outstanding must not page a healthy phone either.
+rm -f "$STATE"; world home 0; restamp 1; HA_STARTED=$(docker_stamp 1.5)
+run
+if [ "$RC" -eq 0 ] && [ "$(pushes)" -eq 0 ]; then
+    pass "8d. restart with no request outstanding: quiet"
+else
+    fail "8d. plain restart paged or pushed (rc=$RC, pushes=$(pushes)): $OUT"
+fi
+
+# Docker could not say when HA started: run as before, but say so.
+HA_STARTED=""
+run
+if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q "cannot read Home Assistant's start time"; then
+    pass "8e. unknown start time is reported, not hidden"
+else
+    fail "8e. missing start time was silent (rc=$RC): $OUT"
+fi
+unset HA_STARTED
 
 printf '\n'
 if [ "$failures" -eq 0 ]; then
