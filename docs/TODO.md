@@ -391,10 +391,13 @@ Still open, same root cause:
   `choco` everywhere until the next exclusive write.
   ✅ **Removed 2026-10-04** (`ssh_hardening`, tag `root_keys`) from the 7
   non-Proxmox Linux hosts, second run changed=0, `choco`'s keys untouched.
-  cwwk dry-run only, pending: trim `/etc/pve/priv/authorized_keys` to
-  `root@cwwk` and restore the link — `pvecm updatecerts` (every pveproxy start)
-  merges a plain root file back into the shared one, so deletion alone would
-  not survive a reboot.
+  cwwk (same day): `/etc/pve/priv/authorized_keys` trimmed to `root@cwwk` and
+  the link restored — `pvecm updatecerts` (every pveproxy start) merges a plain
+  root file back into the shared one, so deletion alone would not survive a
+  reboot. Proven by running `pvecm updatecerts` by hand: state unchanged, then
+  changed=0. `authorized_key` cannot write there (pmxcfs refuses its chown,
+  after the content is already replaced), so the task uses `copy`; forced with
+  an injected line.
 
 🔴 **GitHub deletes the keys that grant fleet access (found 2026-10-04).** The
 3 de-listed keys were removed by GitHub itself for inactivity (security log).

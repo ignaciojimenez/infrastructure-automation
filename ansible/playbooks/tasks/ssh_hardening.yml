@@ -90,14 +90,17 @@
   when: platform_type | default('') == "proxmox"
   tags: [ssh, security, root_keys]
 
+# `copy` with the ownership pmxcfs itself enforces, not `authorized_key`: that
+# module chowns to root:root after writing, pmxcfs refuses it (EPERM), and the
+# task failed with the content already replaced — forced on cwwk 2026-10-04.
 - name: Limit Proxmox's root keys to the node's own key
   become: true
-  ansible.posix.authorized_key:
-    user: root
-    path: /etc/pve/priv/authorized_keys
-    manage_dir: false
-    key: "{{ proxmox_root_pubkey.content | b64decode | trim }}"
-    exclusive: true
+  ansible.builtin.copy:
+    dest: /etc/pve/priv/authorized_keys
+    content: "{{ proxmox_root_pubkey.content | b64decode | trim }}\n"
+    owner: root
+    group: www-data
+    mode: '0600'
   when: platform_type | default('') == "proxmox"
   tags: [ssh, security, root_keys]
 
