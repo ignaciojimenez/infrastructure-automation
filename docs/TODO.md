@@ -380,13 +380,46 @@ Still open, same root cause:
   task meant.
 - GitHub keys bootstrap already left in root's `authorized_keys` on fleet hosts
   stay until removed deliberately. Unverified which hosts carry them:
-  `read_agent` cannot read `/root`.
+  **Inventoried 2026-10-04** (`choco` + become): the same 5 keys in root's
+  file on all 8 Linux hosts, written 2026-09-25 14:38 (agent-lxc Jul 22,
+  workbench Sep 20); opnsense has none. sshd says `permitrootlogin no`, so they
+  are dead credentials, not live access. On cwwk the exclusive write **replaced
+  Proxmox's symlink** to `/etc/pve/priv/authorized_keys` with a plain file,
+  dropping `root@cwwk`'s own key from root's set (single node, so nothing uses it
+  yet). Also: GitHub now lists **2** keys (the laptop's Touch ID key and one
+  other) where it listed 5 on 2026-10-03; the 3 de-listed keys still open
+  `choco` everywhere until the next exclusive write.
+  ✅ **Removed 2026-10-04** (`ssh_hardening`, tag `root_keys`) from the 7
+  non-Proxmox Linux hosts, second run changed=0, `choco`'s keys untouched.
+  cwwk (same day): `/etc/pve/priv/authorized_keys` trimmed to `root@cwwk` and
+  the link restored — `pvecm updatecerts` (every pveproxy start) merges a plain
+  root file back into the shared one, so deletion alone would not survive a
+  reboot. Proven by running `pvecm updatecerts` by hand: state unchanged, then
+  changed=0. `authorized_key` cannot write there (pmxcfs refuses its chown,
+  after the content is already replaced), so the task uses `copy`; forced with
+  an injected line.
 
-Also found: on a test container root has `/sbin/nologin` after bootstrap
-("Lock root account" has no test-host exemption), so root SSH is already dead on
-any converged container and `tests/run_tests.sh` — which connects as root —
-works only against one that was never bootstrapped. That is the case for
-moving the suite to the infrastructure user with sudo (decision pending).
+🔴 **GitHub deletes the keys that grant fleet access (found 2026-10-04).** The
+3 de-listed keys were removed by GitHub itself for inactivity (security log).
+Only the laptop key ever talks to GitHub, so every other device's key will age
+out the same way — and the exclusive write then revokes it on every host. GitHub
+is the source of truth for `choco`'s keys (static write + `AuthorizedKeysCommand`),
+so this needs a decision before the next untagged `services.yml` or `bootstrap.yml`
+run, either of which removes those 3 keys from `choco` fleet-wide.
+
+✅ **Root SSH is gone from test containers (2026-10-04).** Root had
+`/sbin/nologin` after bootstrap anyway, so `tests/run_tests.sh` (then root-only)
+worked only on a never-bootstrapped container. Now the suite connects as `choco`
+and arranges with `sudo -n` (`SUDO_*` stripped — the monitoring wrapper would
+otherwise keep root-run state in `/home/choco/.log`); sshd and bootstrap say
+`PermitRootLogin no` on test containers too; the provisioner gives root a key
+only with `TEST_CT_BARE=1`. Also fixed: bootstrap's "Lock root account" no
+longer replaces opnsense's console shell with nologin (unrun there since). Proven:
+suite 11/11 as root and as choco on one container, the A/B fault still splits
+them; a converged container runs the suite 11/11 (impossible before); fresh
+`rig_ct create 199` → root has no `authorized_keys`, root SSH refused; bare
+CT 198 → root key works; `rig_loop.sh` on `main` from the workbench → changed=41
+then **changed=0**, destroyed; rig_access redeployed from `main`, changed=0.
 
 Pre-existing drift seen in the fleet `--check`, not caused by this: opnsense's
 `choco` keys carry two comments the exclusive write would strip (same five

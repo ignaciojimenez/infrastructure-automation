@@ -54,6 +54,66 @@
   when: ansible_user != "root"
   tags: [ssh, security]
 
+# Root takes no SSH keys. PermitRootLogin is no and root's shell is nologin, so
+# a key here grants nothing today — it waits for one of those to slip. These
+# are the GitHub keys bootstrap.yml wrote to root by mistake until 2026-10-03
+# (TODO 3b). Own tag so it can run without the GitHub key write above.
+#
+# Skipped when connected as root: that is a bare test container, and its key is
+# the way in.
+- name: Remove root's authorized_keys
+  become: true
+  ansible.builtin.file:
+    path: /root/.ssh/authorized_keys
+    state: absent
+  when:
+    - os_family == "debian"
+    - platform_type | default('') != "proxmox"
+    - ansible_user != "root"
+  tags: [ssh, security, root_keys]
+
+# Proxmox is the exception, because it owns root's keys. /root/.ssh/authorized_keys
+# is a symlink into the cluster filesystem, and `pvecm updatecerts` — run on
+# every pveproxy start — restores that link and MERGES any plain file it finds
+# there into the shared one (PVE/Cluster/Setup.pm, setup_ssh_keys and
+# ssh_merge_keys). Deleting root's file would only last until the next boot,
+# when the GitHub keys already in the shared file came back with it.
+#
+# So: the shared file holds the node's own root key and nothing else, and the
+# link is put back. Bootstrap's exclusive write had replaced it with a plain
+# file on 2026-09-25.
+- name: Read the hypervisor's own root key
+  become: true
+  ansible.builtin.slurp:
+    src: /root/.ssh/id_rsa.pub
+  register: proxmox_root_pubkey
+  when: platform_type | default('') == "proxmox"
+  tags: [ssh, security, root_keys]
+
+# `copy` with the ownership pmxcfs itself enforces, not `authorized_key`: that
+# module chowns to root:root after writing, pmxcfs refuses it (EPERM), and the
+# task failed with the content already replaced — forced on cwwk 2026-10-04.
+- name: Limit Proxmox's root keys to the node's own key
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/pve/priv/authorized_keys
+    content: "{{ proxmox_root_pubkey.content | b64decode | trim }}\n"
+    owner: root
+    group: www-data
+    mode: '0600'
+  when: platform_type | default('') == "proxmox"
+  tags: [ssh, security, root_keys]
+
+- name: Restore Proxmox's root keys symlink
+  become: true
+  ansible.builtin.file:
+    src: /etc/pve/priv/authorized_keys
+    dest: /root/.ssh/authorized_keys
+    state: link
+    force: true
+  when: platform_type | default('') == "proxmox"
+  tags: [ssh, security, root_keys]
+
 - name: Lock the user account password
   become: true
   ansible.builtin.user:
