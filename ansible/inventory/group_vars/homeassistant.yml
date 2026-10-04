@@ -213,13 +213,23 @@ ha_entity_health_grace_overrides:
   # standby drops its network interface, so `unavailable` IS its resting state,
   # every night. Nothing observable separates that from a dead TV, so a window
   # here would only be a delayed false alarm; it is allowlisted honestly below
-  # instead. This list is deliberately EMPTY: no device currently needs one.
+  # instead.
   #
   # 📌 Confirmed 2026-08-28 that `light.book_floor_lamp` does NOT belong here.
   # Its wall switch is meant to stay on; with power restored it reports `on`
   # like its three siblings, so `unavailable` means broken and the normal
   # 15-minute window is exactly right. The fix was the switch, not a threshold.
-  []
+
+  # Both Eve Door sensors (Balcony + Entrance). They drop off Thread and come
+  # back on their own: 21 drops 2026-09-04 → 10-04, both sensors, longest ~6 h
+  # (09-30, 10-03 ×2). One border router serves them — the HomePod mini in the
+  # bathroom — so this is mesh range, not a device fault. Their door state
+  # drives nothing that matters; the only failure worth a page is a dead
+  # battery, which reads `unavailable` and never comes back. 24 h is ~4× the
+  # longest self-healed drop and still pages a dead battery within a day.
+  # Reopen if a drop outlives this window and then recovers.
+  - pattern: "*eve_door_20ebn9901*"
+    grace_seconds: 86400
 
 # ============================================================
 # Entity health — the check the five-day outage did not have
