@@ -560,6 +560,119 @@ b=$(runs)
 "$SH" "$WORK/investigate.sh" > "$WORK/out" 2>&1
 expect 1 "$b" "below the cap, that pending anomaly is investigated"
 
+# ==================================================================
+printf "\n── Part 3: replay of 2026-09-21 (was 2 runs, \$1.1712) — PER-58\n"
+# ==================================================================
+# One radiator went unavailable and two senders said so an hour of polls
+# apart: HA's own automation at 15:02 (in the 15:07 poll) and the wrapper
+# around check_ha_entities at 15:10:07, just after that poll had read the
+# channel (so in the 16:07 one). HA's text named no host and keyed "alert-…";
+# the wrapper keyed dockassist.ha-entities. The fix is at the sender: the
+# automations that overlap that check now carry a tag naming its incident.
+# The tag is read from the template itself, so a fixture cannot keep passing
+# after the real message has changed.
+rm -f "$INCIDENTS"/* "$AGENT_DIR/spend/$(date -u +%Y-%m-%d)"
+AUTOMATIONS="$REPO_ROOT/ansible/roles/services/homeassistant/templates/automations.yaml.j2"
+TAG=$(sed -n 's/^{% set ha_entities_incident = "\(.*\)" %}$/\1/p' "$AUTOMATIONS" \
+    | sed 's/" ~ inventory_hostname ~ "/dockassist/')
+case "$TAG" in
+    *"Host: dockassist"*"Subject: "*) pass "automations.yaml.j2 defines the incident tag: $TAG" ;;
+    *) fail "no usable ha_entities_incident tag in automations.yaml.j2: '$TAG'" ;;
+esac
+
+# Verbatim from #home-alerts, ts 1789995739 and 1789996207, plus the tag.
+printf ':warning: Heating offline: Bathroom Radiator %s\n' "$TAG" > "$WORK/fx/ha_radiator"
+cat > "$WORK/fx/ha_entities" <<'EOF'
+:x: ALERT: Script Failed on dockassist
+*Output:*
+```=== Home Assistant entity health ===
+299 entities; 67 unavailable/unknown (63 allowlisted, 0 inside grace)
+❌ climate.tado_smart_radiator_thermostat_va0612513536 = unavailable for 20 min (past its 15 min grace)
+❌ select.tado_smart_radiator_thermostat_va0612513536_temperature_display_units = unavailable for 20 min (past its 15 min grace)
+❌ sensor.tado_smart_radiator_thermostat_va0612513536_current_humidity = unavailable for 20 min (past its 15 min grace)
+❌ sensor.tado_smart_radiator_thermostat_va0612513536_current_temperature = unavailable for 20 min (past its 15 min grace)```
+Host: dockassist
+Script: /home/choco/.scripts/check_ha_entities.sh
+Started: 2026-09-21 15:10:04
+Duration: 1 seconds
+Status: FAILED
+Exit Code: 4
+Enhanced Monitoring Wrapper • 2026-09-21 15:10:05
+EOF
+
+b=$(runs); echo 0.6926 > "$COST_FILE"
+poll "$WORK/fx/ha_radiator"
+expect 1 "$b" "15:07 HA's 'Heating offline' is investigated (was \$0.6926)"
+if [ -f "$INCIDENTS/dockassist.ha-entities" ]; then
+    pass "it opens the check's own incident, dockassist.ha-entities"
+else
+    fail "HA's alert did not key to dockassist.ha-entities: $(incident_list)"
+fi
+if [ -f "$INCIDENTS/dockassist.reachability" ]; then
+    fail "a device going offline was keyed as dockassist itself being unreachable"
+else
+    pass "a device going offline is not keyed as the host being unreachable"
+fi
+
+b=$(runs); echo 0.4786 > "$COST_FILE"
+poll "$WORK/fx/ha_entities"
+expect 0 "$b" "16:07 check_ha_entities on the same radiator is not re-billed (was \$0.4786)"
+
+ledger=$(cat "$AGENT_DIR/spend/$(date -u +%Y-%m-%d)" 2>/dev/null)
+if [ "$ledger" = "0.6926" ]; then
+    pass "replay spend: 1 run, \$0.6926 (was 2 runs, \$1.1712) — ledger agrees"
+else
+    fail "ledger reads '$ledger', expected 0.6926"
+fi
+
+# The other order: the check pages first, HA's alert follows.
+rm -f "$INCIDENTS"/*
+echo 0.25 > "$COST_FILE"
+b=$(runs)
+poll "$WORK/fx/ha_entities"
+poll "$WORK/fx/ha_radiator"
+expect 1 "$b" "check first, HA's alert second: still one run"
+
+# The other two automations carrying the tag, while that incident is open.
+printf ':warning: Smoke detector OFFLINE (not reporting) — Hallway %s\n' "$TAG" > "$WORK/fx/ha_smoke"
+b=$(runs)
+poll "$WORK/fx/ha_smoke"
+expect 0 "$b" "a smoke detector gone unavailable joins the open ha-entities incident"
+printf ':warning: Gas detector FAULT/OFFLINE — Kitchen (state: unavailable) %s\n' "$TAG" > "$WORK/fx/ha_gas_gone"
+b=$(runs)
+poll "$WORK/fx/ha_gas_gone"
+expect 0 "$b" "a gas detector gone unavailable joins it too"
+
+# ...and what the tag must NOT swallow.
+printf ':warning: Gas detector FAULT/OFFLINE — Kitchen (state: fault)\n' > "$WORK/fx/ha_gas_fault"
+b=$(runs)
+poll "$WORK/fx/ha_gas_fault"
+expect 1 "$b" "a gas detector reporting FAULT (untagged: the check cannot see it) is still investigated"
+cat > "$WORK/fx/ha_web" <<'EOF'
+:x: ALERT: Script Failed on dockassist
+*Output:*
+```❌ Home Assistant web UI not responding```
+Host: dockassist
+Script: /home/choco/.scripts/check_ha_web.sh
+EOF
+b=$(runs)
+poll "$WORK/fx/ha_web"
+expect 1 "$b" "a different check failing on dockassist while ha-entities is open is investigated"
+cat > "$WORK/fx/openssl" <<'EOF'
+:x: ALERT: Script Failed on cobra
+*Output:*
+```❌ certificate expired
+        Subject: cn = cobra.local```
+Host: cobra
+Script: /home/choco/.scripts/check_cert.sh
+EOF
+poll "$WORK/fx/openssl"
+if [ -f "$INCIDENTS/cobra.cert" ] && [ ! -f "$INCIDENTS/cobra.cn" ]; then
+    pass "a 'Subject:' inside a check's output is not taken as the incident subject"
+else
+    fail "a check's output chose the subject: $(incident_list)"
+fi
+
 printf '\n'
 if [ "$failures" -eq 0 ]; then
     printf 'PASS\n'

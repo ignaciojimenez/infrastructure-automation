@@ -197,6 +197,13 @@ compose_prompt() {
 # parser cannot link (no shared unit name) costs a second run. The daily spend
 # cap below bounds that; a hidden fault would be unbounded.
 #
+# Seen 2026-09-21 (PER-58): HA's "Heating offline: Bathroom Radiator" named no
+# host, so it keyed "alert-…", and check_ha_entities' alert for the same radiator
+# keyed "dockassist.ha-entities" in the next poll, $1.17 for one fault. Naming
+# the host alone would not have helped: "offline" reads as reachability, which
+# means the host itself is down. The automations that overlap that check now
+# state "Host: dockassist, Subject: ha-entities" (subject rule 0 below).
+#
 # State: one file per key holding "<opened_epoch> <last_seen_epoch> <plan>".
 # ============================================================
 
@@ -265,6 +272,11 @@ open_incidents_on() {
 #
 #   subjects(host, script, title, body) -> ["raspotify", ...]
 #
+#   0. An alert whose TITLE states "Subject: <name>" is taken at its word. This
+#      is for senders with no check script to be named after — Home Assistant
+#      automations — so they can join the incident the matching check opens
+#      instead of being guessed at (see automations.yaml.j2). Title only: the
+#      body is a check output, and openssl, for one, prints "Subject:".
 #   1. A specific check script names its subject: check_raspotify.sh →
 #      raspotify. Generic multi-check scripts are NOT a subject.
 #   2. Otherwise, the ❌ lines of the output: "Service X: not running", a
@@ -332,6 +344,9 @@ def body_subjects(body, host):
     return out
 
 def subjects(host, script, title, body):
+    m = re.search(r"\bSubject: *([a-z0-9][a-z0-9-]*)", title)
+    if m:
+        return [m.group(1)]
     base = ""
     if script:
         base = re.sub(r"\.[A-Za-z0-9]+$", "", script.split()[0].rsplit("/", 1)[-1]).lower()
