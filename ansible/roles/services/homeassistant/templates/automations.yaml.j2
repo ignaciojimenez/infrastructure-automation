@@ -200,6 +200,15 @@
         message: "{{ '{{' }} \"✅ Shelly bulb back online: \" ~ (trigger.to_state.attributes.friendly_name | default(trigger.entity_id)) {{ '}}' }}"
   mode: parallel
 
+# Alerts below that report an entity going `unavailable` describe the same fault
+# check_ha_entities.sh pages for, through a second channel. agent-lxc's Tier 2
+# keys every alert by (host, subject) to pay for one investigation per fault;
+# HA's wording names neither, so on 2026-09-21 one radiator bought two (PER-58).
+# This tag puts them in the check's own incident. "ha-entities" is the subject
+# investigate.sh derives from that script's name; tests/unit/incident_dedup_test.sh
+# reads this line, so the two cannot drift apart unnoticed.
+{% set ha_entities_incident = "(Host: " ~ inventory_hostname ~ ", Subject: ha-entities)" %}
+
 # HomeKit heating availability monitoring
 - id: "homekit_tado_climate_offline_alert"
   alias: "HomeKit Tado Climate Offline Alert"
@@ -228,7 +237,7 @@
   action:
     - service: rest_command.slack_alert
       data:
-        message: "{{ '{{' }} \"⚠️ Heating offline: \" ~ (trigger.to_state.attributes.friendly_name | default(trigger.entity_id)) {{ '}}' }}"
+        message: "{{ '{{' }} \"⚠️ Heating offline: \" ~ (trigger.to_state.attributes.friendly_name | default(trigger.entity_id)) ~ \" {{ ha_entities_incident }}\" {{ '}}' }}"
   mode: parallel
 
 - id: "homekit_tado_climate_online_recovery"
@@ -433,7 +442,7 @@
   action:
     - service: rest_command.slack_alert
       data:
-        message: "{{ '{{' }} \"⚠️ Gas detector FAULT/OFFLINE — \" ~ (area_name(trigger.entity_id) | default(trigger.to_state.attributes.friendly_name | replace(\" Operation\", \"\"), true)) ~ \" (state: \" ~ trigger.to_state.state ~ \")\" {{ '}}' }}"
+        message: "{{ '{{' }} \"⚠️ Gas detector FAULT/OFFLINE — \" ~ (area_name(trigger.entity_id) | default(trigger.to_state.attributes.friendly_name | replace(\" Operation\", \"\"), true)) ~ \" (state: \" ~ trigger.to_state.state ~ \")\" ~ (\" {{ ha_entities_incident }}\" if trigger.to_state.state == \"unavailable\" else \"\") {{ '}}' }}"
   mode: parallel
 
 - id: "shelly_gas_fault_recovery"
@@ -520,7 +529,7 @@
   action:
     - service: rest_command.slack_alert
       data:
-        message: "{{ '{{' }} \"⚠️ Smoke detector OFFLINE (not reporting) — \" ~ (area_name(trigger.entity_id) | default(trigger.to_state.attributes.friendly_name | replace(\" Smoke\", \"\"), true)) {{ '}}' }}"
+        message: "{{ '{{' }} \"⚠️ Smoke detector OFFLINE (not reporting) — \" ~ (area_name(trigger.entity_id) | default(trigger.to_state.attributes.friendly_name | replace(\" Smoke\", \"\"), true)) ~ \" {{ ha_entities_incident }}\" {{ '}}' }}"
   mode: parallel
 
 - id: "shelly_smoke_online_recovery"

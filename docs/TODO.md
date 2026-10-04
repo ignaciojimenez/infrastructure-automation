@@ -53,7 +53,7 @@ here is something to read past, every time, forever. The write-up goes to
 (numbers never move), but the order to work them is this, and the dashboard
 renders it:
 
-> **№1** 36 + 37 *(deployed 13 Sep — waiting on a real alert / a real lockout)* →
+> **№1** 36 + 37 *(36: PER-58 fix built 4 Oct, needs deploy · 37: waiting on a real lockout)* →
 > **№2** 42 *(entrance door alert disabled 19 Sep, needs physical inspection)* →
 > **№3** 38 *(small follow-ups: MQTT timeout, 403 detection)* →
 > **№4** 2 → **№5** 4 (plex) → **№6** 9 → **№7** 3a/3c *(3b done 3 Oct)* → **№8** 39 →
@@ -163,24 +163,45 @@ unrelated-fault cases. On the box: the script parses under dash, all three Tier 
 crons are present, the retired Slack markers are gone, and the first run created
 `incidents/`.
 
-⚠️ **Not verified:** behaviour on a real alert — item 38 was fixed the same
-evening, so no live alert was left to test it. Also unverified: mawk's `match()`;
-timed-out runs log $0, so the cap undercounts; a fault whose checks name it
-differently still costs a second run.
+❌ **The first real multi-message fault double-billed (2026-09-21, PER-58).**
+One Tado radiator, **2 runs, $1.17**. HA's own `:warning: Heating offline:
+Bathroom Radiator` (15:02, in the 15:07 poll) named no host and keyed
+`alert-warning-heating-offline-bathroom-radiator`. The wrapper's
+`check_ha_entities` alert (15:10:07, after that poll had read the channel) keyed
+`dockassist.ha-entities` at 16:07. Both files were found in agent-lxc's
+`incidents/`. This is the known gap above, through a sender with no host and no
+script to name.
 
-*State:* deployed; **waiting on the next real alert**. *Needs:* nothing to build.
+🔧 **Fixed on branch `fix/per-58-ha-alert-incident-key`, not deployed.** The HA
+automations that overlap `check_ha_entities` (heating offline, smoke offline,
+gas `unavailable`) append `(Host: dockassist, Subject: ha-entities)`, and an
+explicit `Subject:` in an alert title wins in `subjects()`. Host alone would
+not have fixed it (`offline` keys `reachability`). See ARCHITECTURE_DECISIONS.
+`incident_dedup_test.sh` Part 3 replays the verbatim 09-21 messages: new 1 run
+$0.6926; main's script 2 runs $1.1712, with the same two keys as the live store.
+
+⚠️ **Deploy order matters:** agent-lxc first, then dockassist. An HA tag reaching
+the old parser keys `dockassist.reachability`, which is wrong in a new way.
+Still unverified: mawk's `match()`; timed-out runs log $0, so the cap
+undercounts; HA's renderer is untested (plain jinja2 renders the three messages
+as intended).
+
+*State:* **built, waiting on deploy + one real HA-entity fault.** *Needs:* the
+laptop, for the two deploys.
 
 ```
-Verify the Tier 2 host+subject dedup against a real alert. Read docs/TODO.md
-item 36 — it is DEPLOYED; do not redesign or redeploy it.
+Deploy and verify PER-58 (docs/TODO.md item 36). Branch fix/per-58-ha-alert-incident-key
+is merged; do not redesign it.
 
-  ssh 10.30.40.203 'tail -n 40 ~/.logs/investigate.log; ls -la ~/.agent/incidents ~/.agent'
+  ansible-playbook ansible/playbooks/services.yml --limit agent-lxc --tags agent
+  ansible-playbook ansible/playbooks/services.yml --limit dockassist --tags config
 
-For the first alert since 2026-09-13 21:00: exactly ONE paid run per
-host.subject, later reminders logged as covered (no new run), and today's spend
-ledger written. If two checks described one fault under different subjects and
-it cost two runs, report both subject strings — that is the one known gap.
-Then move item 36 to docs/archive/DONE.md.
+Order matters: agent-lxc first. Then confirm the HA side really renders the tag
+(not just plain jinja2): grep "Subject: ha-entities" in the deployed
+automations.yaml on dockassist. On the next HA entity fault: ONE incident file,
+dockassist.ha-entities, no alert-*heating*/alert-*smoke*/alert-*gas* sibling,
+and one paid run in ~/.logs/investigate.log. Then close PER-58 and move item 36
+to docs/archive/DONE.md.
 ```
 
 **37. vinylstreamer's wifi recovery undid its own fix — DEPLOYED, waiting on a lockout**
