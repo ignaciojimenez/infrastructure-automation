@@ -56,7 +56,7 @@ renders it:
 > **№1** 37 *(waiting on a real lockout)* →
 > **№2** 42 *(entrance door alert disabled 19 Sep, needs physical inspection)* →
 > **№3** 38 *(small follow-ups: MQTT timeout, 403 detection)* →
-> **№4** 2 → **№5** 4 (plex) → **№6** 9 → **№7** 3a/3c *(3b done 3 Oct)* → **№8** 39 →
+> **№4** 2 → **№5** 4 (plex) → **№6** 9 → **№7** 3c *(3a done 4 Oct, 3b 3 Oct)* → **№8** 39 →
 > **№9** 5 → **№10** 19 → **№11** 12 → **№12** 10 → **№13** 11 → **№14** 6 →
 > **№15** 7 → **№16** 34 *(small; restores `changed=0` as a signal for the docker role)* →
 > **№17–19** 8/13/14 · **№20** 32 *(git-history rewrite —
@@ -256,56 +256,19 @@ real inventory connecting as the infra user over sudo, `provision_test_container
 creates *and* destroys, and CT 198 covers Debian 12 for the Pis. **Do not rebuild
 any of that.**
 
-*State:* 3b done (2026-10-03); 3a half done; 3c open. *Effort:* 3a small, 3c small.
-*Needs:* a laptop, and CT 199 started (`ssh cwwk 'sudo /usr/sbin/pct start 199'`).
+*State:* 3a done (2026-10-04); 3b done (2026-10-03); 3c open. *Effort:* 3c small.
+*Needs:* the workbench (3c extends `rig_ct`, which already creates CT 198/199 with no tap).
 
-**3a. Run `bootstrap.yml` and a full `site.yml` against a container — half done**
-✅ **The non-bare path is done (2026-09-21/28).** `bootstrap.yml` and a full
-`site.yml` both converge CT 199 against `ansible/inventory_test/` with
-`failed=0`, and a second `site.yml` run reports `changed=0`. Doing it found two
-things that had made the rig useless: `bootstrap.yml` flipped `PermitRootLogin`
-on every run so the rig could never report `changed=0` at all, and the rig's
-dead webhook tokens were the wrong *shape*, so the wrapper rejected them at its
-format gate and **no checked script had ever run on the rig** (archive/DONE.md).
+**3a. Run `bootstrap.yml` and a full `site.yml` against a container ✅ DONE 2026-10-04**
+Both paths now converge. The non-bare path was proven 2026-09-21/28; the
+bare/root path (user creation) ran for the first time on 2026-10-04 and could
+not bootstrap a fresh host at all. Fixed, then proven from bare: bootstrap →
+`changed=0` as `choco` → `site.yml` → `changed=0`. Write-up:
+[archive/DONE.md](archive/DONE.md#2026-10-04--bootstrap-could-not-bootstrap-a-fresh-host-its-first-run-on-a-bare-container-todo-3a-per-67).
 
-🔴 **Still untested: the bare/root path**, which is the only state where
-`bootstrap.yml`'s user-creation branch executes — the half this item most
-exists for. Everything below still applies to it.
-
-```
-TODO 3a (PER-67): prove bootstrap.yml's bare/root path on a test container.
-Read docs/TODO.md item 3 (3a and 3b) and docs/TESTING_GOALS.md goal 1 first.
-The inventory, provisioning and test loop exist — do not rebuild them.
-
-The non-bare path is already proven (tests/rig_loop.sh converges site.yml to
-changed=0 from the workbench); do NOT redo it. What remains is bootstrap.yml
-against a TEST_CT_BARE=1 container with -e ansible_user=root — the only state
-where its user-creation branch runs at all.
-
-How, from the laptop (rig_ct on cwwk never makes a bare container — it takes
-no caller parameters, by design; do not add one):
-- create: ssh cwwk 'sudo -n env TEST_CT_BARE=1 sh -s' < tests/provision_test_container.sh
-  (CT 199, 10.30.40.205; root gets the laptop's read_agent key, which is also
-  what inventory_test resolves rig_ssh_key to on the laptop)
-- destroy when done, even on failure:
-  ssh cwwk 'sudo -n env TEST_CT_VMID=199 sh -s -- --destroy' < tests/provision_test_container.sh
-- inventory ansible/inventory_test/hosts.yml ONLY, never the fleet one; its own
-  vault holds nothing real. ansible-playbook is a zsh wrapper that pre-auths
-  Touch ID; use --forks 1.
-
-Expect it to cut its own connection: since 2026-10-03 bootstrap sets
-PermitRootLogin no and gives root /sbin/nologin, and it writes the gist keys
-plus the rig key to the infrastructure user, not root. That is the designed end
-state — a host reachable as choco with sudo, not as root — so the run must
-leave choco reachable before root goes away. If it doesn't, that ordering is
-the real bug.
-
-Expect other failures too — that branch has never executed. For each, record
-whether it is a real playbook bug or a rig artefact, and fix only the real
-ones. Finish with changed=0 on a second bootstrap run connecting as choco,
-then site.yml converging. Run CI's checks locally before pushing, merge with
-git ms, record the result in TODO 3a. Simple, standard fixes only.
-```
+🔴 **Not yet on the fleet:** the next `site.yml` run removes
+`/etc/sudoers.d/root_nopasswd` (a no-op grant) from every host carrying it.
+Delete that cleanup task once a fleet run shows no host carries it.
 
 **3b. One command: create → converge → verify → destroy — on the workbench ✅ DONE 2026-10-03**
 📌 **The point was never the command, it was where it runs.** A cloud session
@@ -354,9 +317,9 @@ Still open, same root cause:
   could never fire. Fixed 2026-10-03 (`ansible_user`), forced on CT 199: `main`
   connected as `pi` deleted `pi` mid-run and went unreachable; the fix skips it
   as `pi` and still removes `pi` when connected as `choco`.
-- `Ensure user has sudo privileges` writes `/etc/sudoers.d/root_nopasswd`
-  (present on cwwk). Harmless — root needs no sudoers — but it is not what the
-  task meant.
+- ✅ `Ensure user has sudo privileges` wrote `/etc/sudoers.d/root_nopasswd`.
+  Fixed 2026-10-04 in 3a: deleted (redundant with preflight's grant); residue
+  removed on the next run.
 - GitHub keys bootstrap already left in root's `authorized_keys` on fleet hosts
   stay until removed deliberately. Unverified which hosts carry them:
   **Inventoried 2026-10-04** (`choco` + become): the same 5 keys in root's
