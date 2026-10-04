@@ -311,21 +311,38 @@ format gate and **no checked script had ever run on the rig** (archive/DONE.md).
 exists for. Everything below still applies to it.
 
 ```
-Run the playbooks that have never been tested against a container. Read
-docs/TESTING_GOALS.md goal 1 first — the inventory and provisioning already
-exist, do not rebuild them.
+TODO 3a (PER-67): prove bootstrap.yml's bare/root path on a test container.
+Read docs/TODO.md item 3 (3a and 3b) and docs/TESTING_GOALS.md goal 1 first.
+The inventory, provisioning and test loop exist — do not rebuild them.
 
-The non-bare path is already proven; do NOT redo it. What remains is
-bootstrap.yml against a TEST_CT_BARE=1 container with -e ansible_user=root,
-which is the only state where its user-creation branch runs at all.
+The non-bare path is already proven (tests/rig_loop.sh converges site.yml to
+changed=0 from the workbench); do NOT redo it. What remains is bootstrap.yml
+against a TEST_CT_BARE=1 container with -e ansible_user=root — the only state
+where its user-creation branch runs at all.
 
-Against ansible/inventory_test/hosts.yml ONLY — never the fleet inventory. That
-inventory now carries its own group_vars/all/vault.yml holding nothing real, so
-this needs no fleet secret; do not point it at the fleet vault.
+How, from the laptop (rig_ct on cwwk never makes a bare container — it takes
+no caller parameters, by design; do not add one):
+- create: ssh cwwk 'sudo -n env TEST_CT_BARE=1 sh -s' < tests/provision_test_container.sh
+  (CT 199, 10.30.40.205; root gets the laptop's read_agent key, which is also
+  what inventory_test resolves rig_ssh_key to on the laptop)
+- destroy when done, even on failure:
+  ssh cwwk 'sudo -n env TEST_CT_VMID=199 sh -s -- --destroy' < tests/provision_test_container.sh
+- inventory ansible/inventory_test/hosts.yml ONLY, never the fleet one; its own
+  vault holds nothing real. ansible-playbook is a zsh wrapper that pre-auths
+  Touch ID; use --forks 1.
 
-Expect failures — that branch has never executed. For each one, record whether
-it is a real playbook bug or a rig artefact, and fix only the real ones. Finish
-with changed=0 on a second run, which is the actual proof.
+Expect it to cut its own connection: since 2026-10-03 bootstrap sets
+PermitRootLogin no and gives root /sbin/nologin, and it writes the gist keys
+plus the rig key to the infrastructure user, not root. That is the designed end
+state — a host reachable as choco with sudo, not as root — so the run must
+leave choco reachable before root goes away. If it doesn't, that ordering is
+the real bug.
+
+Expect other failures too — that branch has never executed. For each, record
+whether it is a real playbook bug or a rig artefact, and fix only the real
+ones. Finish with changed=0 on a second bootstrap run connecting as choco,
+then site.yml converging. Run CI's checks locally before pushing, merge with
+git ms, record the result in TODO 3a. Simple, standard fixes only.
 ```
 
 **3b. One command: create → converge → verify → destroy — on the workbench ✅ DONE 2026-10-03**
@@ -426,10 +443,10 @@ them; a converged container runs the suite 11/11 (impossible before); fresh
 CT 198 → root key works; `rig_loop.sh` on `main` from the workbench → changed=41
 then **changed=0**, destroyed; rig_access redeployed from `main`, changed=0.
 
-Pre-existing drift seen in the fleet `--check`, not caused by this: opnsense's
-`choco` keys carry two comments the exclusive write would strip (same five
-keys); cobra, hifipi, dockassist and cwwk run an older `update_keys`
-(`#!/bin/bash`, same curl) that `services.yml` has not re-applied over.
+Pre-existing drift seen in the fleet `--check` — ✅ both gone with the gist
+deploy (2026-10-04, `--tags keys,configuration`, second run changed=0): opnsense's
+two stray key comments, and the older `#!/bin/bash` `update_keys` on cobra,
+hifipi, dockassist and cwwk.
 
 **3c. `sandbox.sh --create`, so a fresh box does not need a laptop tap**
 Small, and it is the last thing standing between goal 2 and "done".
