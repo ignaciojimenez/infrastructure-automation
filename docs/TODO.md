@@ -380,9 +380,15 @@ Still open, same root cause:
   task meant.
 - GitHub keys bootstrap already left in root's `authorized_keys` on fleet hosts
   stay until removed deliberately. Unverified which hosts carry them:
-  `read_agent` cannot read `/root`. Next: read-only inventory as `choco` + become,
-  then a declarative removal — minding cwwk (root's keys are Proxmox's, a symlink
-  into `/etc/pve/priv`) and opnsense (may be owned by `config.xml`).
+  **Inventoried 2026-10-04** (`choco` + become): the same 5 keys in root's
+  file on all 8 Linux hosts, written 2026-09-25 14:38 (agent-lxc Jul 22,
+  workbench Sep 20); opnsense has none. sshd says `permitrootlogin no`, so they
+  are dead credentials, not live access. On cwwk the exclusive write **replaced
+  Proxmox's symlink** to `/etc/pve/priv/authorized_keys` with a plain file,
+  dropping `root@cwwk`'s own key from root's set (single node, so nothing uses it
+  yet). Also: GitHub now lists **2** keys (the laptop's Touch ID key and one
+  other) where it listed 5 on 2026-10-03; the 3 de-listed keys still open
+  `choco` everywhere until the next exclusive write.
 
 ✅ **Root SSH is gone from test containers (2026-10-04).** Root had
 `/sbin/nologin` after bootstrap anyway, so `tests/run_tests.sh` (then root-only)
