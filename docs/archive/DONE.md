@@ -17,6 +17,8 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ## Contents
 
+- [2026-10-04 — one fault, one paid investigation: Tier 2 dedup confirmed on a real alert (item 36, PER-58)](#2026-10-04--one-fault-one-paid-investigation-tier-2-dedup-confirmed-on-a-real-alert-item-36-per-58)
+- [2026-10-04 — a Home Assistant restart is not the phone answering, and the Eve doors get a day's grace](#2026-10-04--a-home-assistant-restart-is-not-the-phone-answering-and-the-eve-doors-get-a-days-grace)
 - [2026-09-28 — the test rig ran nothing: dead webhook tokens were the wrong shape, and the rig now owns its vault (item 43)](#2026-09-28--the-test-rig-ran-nothing-dead-webhook-tokens-were-the-wrong-shape-and-the-rig-now-owns-its-vault-item-43)
 - [2026-09-27 — Slack cannot reach the workbench, and the two ways round it are both worse than not doing it (parked)](#2026-09-27--slack-cannot-reach-the-workbench-and-the-two-ways-round-it-are-both-worse-than-not-doing-it-parked)
 - [2026-09-23 — the Thread SPOF stays: the outage it would guard against is already fixed twice over (PER-23)](#2026-09-23--the-thread-spof-stays-the-outage-it-would-guard-against-is-already-fixed-twice-over-per-23)
@@ -60,6 +62,61 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ---
 
+
+---
+
+## 2026-10-04 — one fault, one paid investigation: Tier 2 dedup confirmed on a real alert (item 36, PER-58)
+
+**Closed on a real fault, not a replay.** On the night of 2026-09-12/13
+agent-lxc paid for 6 investigations ($1.57) of one fault: the Slack watch keyed
+on message text, anomaly mode keyed on the whole finding set, and the two modes
+shared no state. Since `44cf961`, incidents are keyed by **host + subject**,
+shared by both modes, with a 26 h quiet window and a $2/day cap. Rationale in
+[`ARCHITECTURE_DECISIONS.md`](../ARCHITECTURE_DECISIONS.md).
+
+**The reading:** the Eve Door Thread drops on dockassist (03 and 04 Oct) went
+through three episodes in about 30 h and posted 9 `check_ha_entities` messages.
+They produced **one** incident (`dockassist.ha-entities`) and **one** paid run
+($0.35). The later polls log *"already investigated … not re-billing"*.
+
+**The first real test failed, and was fixed before this one.** On 2026-09-21 a
+Tado radiator billed twice ($1.17). HA's own `Heating offline` alert named no
+host and keyed `alert-…`, while the wrapper's alert keyed
+`dockassist.ha-entities`. Fixed in `5cfdfda`: the three HA automations that
+overlap the check append `(Host: dockassist, Subject: ha-entities)`, and an
+explicit title `Subject:` wins. Naming the host alone would not have fixed it,
+because `offline` keys as `reachability`.
+
+**Still unexercised live:** an HA heating, smoke or gas `unavailable` alert
+joining that incident. It is covered by `incident_dedup_test.sh` Part 3 (the
+verbatim 09-21 messages: 1 run instead of 2). **Reopen on the event:** an
+`alert-*heating*`, `alert-*smoke*` or `alert-*gas*` incident billed alongside
+`dockassist.ha-entities`.
+
+---
+
+## 2026-10-04 — a Home Assistant restart is not the phone answering, and the Eve doors get a day's grace
+
+**Presence (`533daf4`).** Candela's Companion App went silent about 01:00, and
+`check_presence_health` paged correctly at 20:30 (stale, home, no answer to
+`request_location_update`). At 21:13 an Ansible deploy restarted HA, which
+restored every entity with `last_reported` set to boot + 34 s. The 21:30 run
+then sent "✅ all reporting" and dropped its outstanding request. Cloudflare
+showed no request from her app at all. **We now distrust a stamp within 5 min of
+the container's `StartedAt` while a request is outstanding, because otherwise
+any deploy during a freeze buys another 18 h of silence.** Left open on
+purpose: a restart *before* the probe starts still resets the 18 h clock. That
+delays detection but never gives a false all-clear. Tests 8a–8e; on the old
+script, 8a fails with tonight's exact message.
+
+**Eve doors (`ha_entity_health_grace_overrides`).** Both sensors, not one,
+dropped off Thread 21 times between 09-04 and 10-04. Every drop healed on its
+own, the longest after about 6 h. One border router serves them. Their door
+state drives nothing that matters, and a dead battery reads `unavailable` for
+good. **We gave them a 24 h grace rather than an allowlist, because that still
+pages a dead battery while ignoring transient drops.** No mesh hardware, which is
+consistent with the PER-23 decision below. Reopen if a drop outlives 24 h and
+then recovers.
 
 ---
 
