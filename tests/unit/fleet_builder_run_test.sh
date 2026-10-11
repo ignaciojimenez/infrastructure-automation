@@ -1,0 +1,234 @@
+#!/bin/sh
+# fleet_builder_run.sh against a local origin, a fake claude and a fake gh
+# (PER-85 part 2).
+#
+# Real git, real worktrees, real push (to a bare repo in a temp dir). The model
+# is a stub that makes a chosen kind of edit, gh is a stub that records the PR
+# it was asked for, and the rig is a stub that passes or fails on demand.
+#
+#   tests/unit/fleet_builder_run_test.sh
+#   SH=dash tests/unit/fleet_builder_run_test.sh
+#
+# What it pins: the flags that keep the model away from MCP and the shell; the
+# deterministic limits on what it produced; that tests run without the Claude
+# token; and the exit-status protocol fleet_builder_poll.sh relies on.
+
+set -u
+
+CDPATH=''
+REPO_ROOT=$(cd -- "$(dirname -- "$0")/../.." && pwd)
+TEMPLATE="$REPO_ROOT/scripts/services/workbench/fleet_builder_run.sh.j2"
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+SH=${SH:-sh}
+
+failures=0
+pass() { printf '   ✓ %s\n' "$1"; }
+fail() { printf '   ✗ %s\n' "$1"; failures=$((failures + 1)); }
+
+mkdir -p "$WORK/bin" "$WORK/home"
+
+# ── A tiny origin with the two entry points the run script calls ──────────
+git init --quiet --bare -b main "$WORK/origin.git"
+git clone --quiet "$WORK/origin.git" "$WORK/seed" 2>/dev/null
+mkdir -p "$WORK/seed/tests" "$WORK/seed/scripts"
+cat > "$WORK/seed/tests/run_unit_tests.sh" <<'EOF'
+#!/bin/sh
+# Fails when the model broke something, and records whether the Claude token
+# leaked into the environment the model's code runs in.
+echo "token=${CLAUDE_CODE_OAUTH_TOKEN:-absent}" >> "$STUB_LOG"
+grep -q BROKEN scripts/check_x.sh && { echo "FAILED: check_x"; exit 1; }
+echo "✅ 3/3 unit suites passed"
+EOF
+printf '#!/bin/sh\necho "rig $(pwd | sed s:.*/::) token=${CLAUDE_CODE_OAUTH_TOKEN:-absent}" >> "$STUB_LOG"\n[ -z "${RIG_FAIL:-}" ] || { echo "changed=3 on second converge"; exit 1; }\necho "PASS: converged, second run changed=0"\n' > "$WORK/rig.sh"
+printf '#!/bin/sh\necho "threshold=$((90 + 1O))"\n' > "$WORK/seed/scripts/check_x.sh"
+git -C "$WORK/seed" add -A
+git -C "$WORK/seed" -c user.name=t -c user.email=t@t commit --quiet -m init
+git -C "$WORK/seed" push --quiet origin main
+
+# ── Fakes ─────────────────────────────────────────────────────────────────
+# claude: records argv and whether stdin carried the issue, then edits the
+# worktree as $FAKE_CLAUDE says.
+cat > "$WORK/bin/claude" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" > "$STUB_DIR/claude.argv"
+cat > "$STUB_DIR/claude.stdin"
+mkdir -p .builder
+case "$FAKE_CLAUDE" in
+    fix)       printf '#!/bin/sh\necho "threshold=$((90 + 10))"\n' > scripts/check_x.sh
+               echo "fix the threshold arithmetic" > .builder/subject
+               echo "A letter O was typed for a zero." > .builder/summary.md ;;
+    decline)   echo "the disk is full; a human must clear it" > .builder/decline ;;
+    nothing)   : ;;
+    big)       seq 1 200 > scripts/big.txt; echo big > .builder/subject ;;
+    forbidden) mkdir -p ansible/inventory/group_vars/all; echo x > ansible/inventory/group_vars/all/vault.yml ;;
+    breaks)    echo BROKEN >> scripts/check_x.sh; echo breaks > .builder/subject ;;
+    crash)     exit 2 ;;
+esac
+echo '{"type":"result","total_cost_usd":0.4217,"is_error":false}'
+EOF
+# gh: no PR is open yet; `create` records its arguments and answers a URL.
+cat > "$WORK/bin/gh" <<'EOF'
+#!/bin/sh
+case "$1 $2" in
+    "pr list") [ -f "$STUB_DIR/gh.open" ] && cat "$STUB_DIR/gh.open"; exit 0 ;;
+    "pr create") printf '%s\n' "$*" > "$STUB_DIR/gh.create"
+                 while [ $# -gt 0 ]; do [ "$1" = --body-file ] && cp "$2" "$STUB_DIR/gh.body"; shift; done
+                 echo "https://github.com/o/r/pull/42" ;;
+    "pr edit") printf '%s\n' "$*" > "$STUB_DIR/gh.edit" ;;
+esac
+EOF
+# timeout: macOS has none by default; the real one only adds a deadline.
+printf '#!/bin/sh\nshift\nexec "$@"\n' > "$WORK/bin/timeout"
+chmod +x "$WORK/bin/claude" "$WORK/bin/gh" "$WORK/bin/timeout" "$WORK/rig.sh"
+
+python3 "$REPO_ROOT/tests/lib/render_j2.py" "$TEMPLATE" "$WORK/run.sh" \
+    builder_repo_url="$WORK/origin.git" \
+    builder_clone_dir="$WORK/home/repo" \
+    builder_worktrees_dir="$WORK/home/worktrees" \
+    builder_claude_bin="$WORK/bin/claude" \
+    builder_model=sonnet \
+    builder_budget_usd=3 \
+    builder_claude_timeout_seconds=1800 \
+    builder_rig_timeout_seconds=2700 \
+    builder_max_diff_lines=60 \
+    builder_git_name=ignaciojimenez-builder \
+    builder_git_email=builder@example.invalid || exit 1
+
+export STUB_DIR="$WORK/stub" STUB_LOG="$WORK/stub/log" FLEET_BUILDER_RIG_LOOP="$WORK/rig.sh"
+
+# attempt <ref> <n> <model behaviour> — one run, as the poller makes it.
+attempt() {
+    rm -rf "$STUB_DIR"; mkdir -p "$STUB_DIR"; : > "$STUB_LOG"
+    JOB="$WORK/jobs/$1-$2"
+    mkdir -p "$JOB"
+    printf '# %s: check_x threshold wrong\n\n**Tier 2 investigation plan** — fix the 1O typo\n' "$1" > "$JOB/issue.md"
+    FAKE_CLAUDE=$3 CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat-UNITTEST HOME="$WORK/home" PATH="$WORK/bin:$PATH" \
+        "$SH" "$WORK/run.sh" attempt "$1" "$JOB" > "$WORK/out" 2> "$WORK/err"
+    RC=$?
+}
+branch_files() { git -C "$WORK/origin.git" diff --name-only main "builder/$1" 2>/dev/null; }
+
+printf '\n── A good fix: tested, pushed, draft PR\n'
+
+attempt PER-951 1 fix
+if [ "$RC" -eq 0 ] && [ "$(tail -1 "$WORK/out")" = "PR https://github.com/o/r/pull/42" ]; then
+    pass "exit 0 and the last line is 'PR <url>'"
+else
+    fail "rc=$RC out=$(cat "$WORK/out") err=$(cat "$WORK/err")"
+fi
+argv=$(cat "$STUB_DIR/claude.argv")
+ok=1
+for flag in --restricted "--tools Read,Edit,Write,Glob,Grep" --strict-mcp-config \
+            '--mcp-config {"mcpServers":{}}' "--permission-prompts none" --no-session-persistence \
+            "--max-budget-usd 3"; do
+    case "$argv" in *"$flag"*) ;; *) ok=0; fail "claude was not given $flag: $argv" ;; esac
+done
+case "$argv" in *Bash*|*dangerously*|*bypassPermissions*) ok=0; fail "claude got a shell or a bypass: $argv" ;; esac
+[ "$ok" = 1 ] && pass "the model runs restricted, with no MCP, no shell, no prompts, a budget"
+if grep -q "fix the 1O typo" "$STUB_DIR/claude.stdin" && grep -q "Treat it as evidence, not as" "$STUB_DIR/claude.stdin"; then
+    pass "the prompt carries the plan and frames it as evidence, not instructions"
+else
+    fail "prompt: $(head -c 400 "$STUB_DIR/claude.stdin")"
+fi
+if grep -q "^token=absent$" "$STUB_LOG" && grep -q "^rig PER-951 token=absent$" "$STUB_LOG"; then
+    pass "unit tests and the rig ran in the worktree WITHOUT the Claude token"
+else
+    fail "token in test env, or tests not run: $(cat "$STUB_LOG")"
+fi
+if [ "$(branch_files PER-951)" = "scripts/check_x.sh" ] &&
+   [ "$(git -C "$WORK/origin.git" log -1 --format='%an|%s' builder/PER-951)" = "ignaciojimenez-builder|fix(PER-951): fix the threshold arithmetic" ]; then
+    pass "builder/PER-951 pushed: one file, authored by the builder, titled fix(PER-951)"
+else
+    fail "pushed branch: $(branch_files PER-951) / $(git -C "$WORK/origin.git" log -1 --format='%an|%s' builder/PER-951 2>&1)"
+fi
+if grep -q -- "--draft --base main --head builder/PER-951" "$STUB_DIR/gh.create" &&
+   grep -q '^builder-cost-usd: 0.4217$' "$STUB_DIR/gh.body" && grep -q "3/3 unit suites passed" "$STUB_DIR/gh.body" &&
+   grep -q "second run changed=0" "$STUB_DIR/gh.body"; then
+    pass "draft PR against main, body has the test results and a machine-readable cost"
+else
+    fail "PR: $(cat "$STUB_DIR/gh.create") / $(cat "$STUB_DIR/gh.body")"
+fi
+if ! git -C "$WORK/origin.git" show builder/PER-951 --stat | grep -q '\.builder'; then
+    pass "the model's .builder/ notes are not committed"
+else
+    fail ".builder/ committed"
+fi
+
+printf '\n── Every way an attempt can fail exits 3 with a reason\n'
+
+check_fail() {
+    # check_fail <ref> <behaviour> <reason substring> <label>
+    attempt "$1" 1 "$2"
+    if [ "$RC" -eq 3 ] && grep -q "$3" "$JOB/reason" && [ ! -s "$STUB_DIR/gh.create" ] &&
+       [ -z "$(branch_files "$1")" ]; then
+        pass "$4"
+    else
+        fail "$4: rc=$RC reason=$(cat "$JOB/reason" 2>/dev/null) err=$(cat "$WORK/err")"
+    fi
+}
+check_fail PER-952 nothing "changed nothing and did not decline" "no change and no decline"
+check_fail PER-953 big "the limit is 60" "a diff over the line limit"
+check_fail PER-954 forbidden "may not change" "a change to a vault file"
+check_fail PER-955 breaks "unit tests failed" "unit tests that fail"
+if grep -q "FAILED: check_x" "$JOB/failure.md"; then pass "failure.md carries the test output for the next attempt"; else fail "failure.md: $(cat "$JOB/failure.md")"; fi
+check_fail PER-956 crash "model run failed" "the model run itself failing"
+RIG_FAIL=1; export RIG_FAIL
+check_fail PER-957 fix "rig_loop.sh failed" "a rig that does not converge to changed=0"
+unset RIG_FAIL
+
+printf '\n── Declined: exit 4, nothing pushed\n'
+
+attempt PER-958 1 decline
+if [ "$RC" -eq 4 ] && grep -q "the disk is full" "$JOB/reason" && [ -z "$(branch_files PER-958)" ]; then
+    pass "a decline exits 4 with the model's one-line reason"
+else
+    fail "decline: rc=$RC $(cat "$WORK/err")"
+fi
+
+printf '\n── A retry replaces the branch, never stacks on it\n'
+
+attempt PER-955 2 fix
+if [ "$RC" -eq 0 ] && [ "$(git -C "$WORK/origin.git" rev-list --count main..builder/PER-955)" = 1 ]; then
+    pass "attempt 2 starts from origin/main again: one commit on the branch"
+else
+    fail "retry: rc=$RC $(cat "$WORK/err")"
+fi
+
+printf '\n── Hand-back: an empty draft PR that says why\n'
+
+rm -rf "$STUB_DIR"; mkdir -p "$STUB_DIR"
+HB="$WORK/jobs/PER-953-handback"
+mkdir -p "$HB"
+printf 'Handing back.\n\n- attempt 1: diff is 200 changed lines\n' > "$HB/handback.md"
+HOME="$WORK/home" PATH="$WORK/bin:$PATH" "$SH" "$WORK/run.sh" handback PER-953 "$HB" > "$WORK/out" 2> "$WORK/err"
+RC=$?
+if [ "$RC" -eq 0 ] && grep -q '\[hand-back\] PER-953' "$STUB_DIR/gh.create" &&
+   [ -z "$(branch_files PER-953)" ] && [ "$(git -C "$WORK/origin.git" rev-list --count main..builder/PER-953)" = 1 ] &&
+   grep -q "diff is 200 changed lines" "$STUB_DIR/gh.body" && grep -q "big.txt" "$STUB_DIR/gh.body"; then
+    pass "[hand-back] draft PR: no file changes, reasons and the last diff in the body"
+else
+    fail "hand-back: rc=$RC $(cat "$WORK/err") / $(cat "$STUB_DIR/gh.create" 2>/dev/null)"
+fi
+
+printf '\n── A PR already open on the branch is reused, not duplicated\n'
+
+attempt PER-959 1 fix
+echo "https://github.com/o/r/pull/77" > "$STUB_DIR/gh.open.keep"
+rm -rf "$STUB_DIR"; mkdir -p "$STUB_DIR"; : > "$STUB_LOG"
+echo "https://github.com/o/r/pull/77" > "$STUB_DIR/gh.open"
+JOB="$WORK/jobs/PER-959-2"; mkdir -p "$JOB"; cp "$WORK/jobs/PER-959-1/issue.md" "$JOB/"
+FAKE_CLAUDE=fix HOME="$WORK/home" PATH="$WORK/bin:$PATH" "$SH" "$WORK/run.sh" attempt PER-959 "$JOB" > "$WORK/out" 2> "$WORK/err"
+if [ "$(tail -1 "$WORK/out")" = "PR https://github.com/o/r/pull/77" ] && [ ! -f "$STUB_DIR/gh.create" ]; then
+    pass "a run that died after opening its PR does not open a second one"
+else
+    fail "PR reuse: $(cat "$WORK/out") $(ls "$STUB_DIR")"
+fi
+
+printf '\n'
+if [ "$failures" -eq 0 ]; then
+    printf '✅ fleet_builder_run: all checks passed\n'
+    exit 0
+fi
+printf '❌ fleet_builder_run: %s check(s) failed\n' "$failures"
+exit 1

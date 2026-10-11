@@ -1,0 +1,254 @@
+#!/bin/sh
+# fleet_builder_poll.sh — agent/fleet issues -> builder attempts -> draft PRs
+# (managed by Ansible; PER-85 part 2)
+#
+# Deterministic, no model involved. Each run:
+#
+#   1. lists Todo + agent/fleet issues on team PER (read-only Linear key);
+#   2. picks the oldest issue that has a Tier 2 plan comment and no final
+#      outcome yet;
+#   3. records the attempt BEFORE any work starts, then hands it to
+#      fleet_builder_run.sh as the unattended account;
+#   4. records what came back.
+#
+# At most one action per run. An action is either an attempt (spends) or a
+# hand-back (does not). The limits are enforced here, where the model cannot
+# reach them:
+#
+#   MAX_ATTEMPTS per issue — then it is handed back, never tried again
+#   DAILY_CAP attempts per UTC day — past it, issues wait for tomorrow
+#
+# Every issue this touches ends in exactly one draft PR from the builder's
+# GitHub account: `fix(PER-x): …` when the fix passed the unit tests and the
+# rig, `[hand-back] PER-x: …` when it did not, the model declined it, or the
+# run died twice. The agent-lxc filer reads those PRs (public, no token) and
+# comments them on the issue — so nothing on this box holds a Linear write.
+#
+# 🔴 Killed mid-attempt: the "started" line is already on disk, so the next run
+# counts it. It is retried while attempts remain and handed back, with the
+# reason "never finished", once they do. It is never silently lost.
+#
+# 🔴 Runs as ROOT. Root is the only account that can read the Linear key and
+# this state, so the model — which runs as RUN_USER — can neither read the
+# queue beyond what it is handed nor reset its own attempt count. Everything
+# read back from RUN_USER (reasons, URLs) is DATA: it reaches printf/jq, never
+# eval. The Claude token reaches RUN_USER through the environment, never argv.
+#
+# POSIX /bin/sh, jq, curl.
+
+set -u
+
+AUTH_FILE="{{ builder_linear_auth_file }}"
+TOKEN_ENV_FILE="{{ builder_claude_env_file }}"
+ENDPOINT="{{ builder_linear_endpoint }}"
+TEAM_ID="{{ builder_linear_team_id }}"
+FLEET_LABEL_ID="{{ builder_linear_fleet_label_id }}"
+TODO_STATE_ID="{{ builder_linear_todo_state_id }}"
+STATE_DIR="{{ builder_state_dir }}"
+JOBS_DIR="{{ builder_jobs_dir }}"
+RUN_USER="{{ builder_run_user }}"
+RUN_HOME="{{ builder_run_home }}"
+RUN_SCRIPT="{{ builder_run_script }}"
+# How root becomes RUN_USER. Empty in the unit tests, which cannot setuid.
+RUN_AS="{{ builder_run_as }}"
+MAX_ATTEMPTS={{ builder_max_attempts }}
+DAILY_CAP={{ builder_daily_cap }}
+
+PLAN_PREFIX='**Tier 2 investigation plan**'
+
+# The clock is injectable so the daily cap can be proven without waiting.
+NOW=${FLEET_BUILDER_NOW:-$(date +%s)}
+TODAY=$(date -u -d "@$NOW" +%F 2>/dev/null || date -u -r "$NOW" +%F)
+
+die() {
+    echo "ERROR: $*" >&2
+    exit 1
+}
+
+[ -r "$AUTH_FILE" ] || die "no Linear credential at $AUTH_FILE"
+[ -r "$TOKEN_ENV_FILE" ] || die "no Claude token file at $TOKEN_ENV_FILE"
+[ -x "$RUN_SCRIPT" ] || die "no run script at $RUN_SCRIPT"
+mkdir -p "$STATE_DIR/issues" "$STATE_DIR/daily" || die "cannot create $STATE_DIR"
+
+WORK=$(mktemp -d) || die "mktemp failed"
+trap 'rm -rf "$WORK"' EXIT INT TERM
+
+# ── Linear (read only) ────────────────────────────────────────────────────
+
+jq -n --arg t "$TEAM_ID" --arg l "$FLEET_LABEL_ID" --arg s "$TODO_STATE_ID" '{
+  query: "query($team: ID!, $label: ID!, $todo: ID!) { issues(first: 50, orderBy: createdAt, filter: { team: { id: { eq: $team } }, labels: { some: { id: { eq: $label } } }, state: { id: { eq: $todo } } }) { pageInfo { hasNextPage } nodes { id identifier title description url createdAt comments(first: 100) { nodes { body createdAt } } } } }",
+  variables: {team: $t, label: $l, todo: $s}
+}' > "$WORK/req" || die "could not build request"
+
+# The key reaches curl as a header FILE, never an argument: argv is
+# world-readable through /proc, and RUN_USER is on this box.
+curl -sS --max-time 30 -H @"$AUTH_FILE" -H 'Content-Type: application/json' \
+    --data-binary @"$WORK/req" "$ENDPOINT" > "$WORK/resp" 2> "$WORK/curl_err" ||
+    die "Linear unreachable: $(head -c 300 "$WORK/curl_err")"
+jq -e '(.errors | not) and (.data.issues.nodes != null)' "$WORK/resp" > /dev/null 2>&1 ||
+    die "Linear refused the request: $(head -c 400 "$WORK/resp")"
+
+# Oldest first, so a backlog drains in order and nothing is starved.
+jq -c '.data.issues.nodes | sort_by(.createdAt) | .[]' "$WORK/resp" > "$WORK/issues"
+
+# ── Per-issue state ───────────────────────────────────────────────────────
+#
+# $STATE_DIR/issues/<ref>, append-only, one event per line:
+#   attempt <n> <epoch> started
+#   attempt <n> <epoch> failed <reason>
+#   declined <epoch> <reason>
+#   final <epoch> <pr|handback> <url>
+
+state_of() { printf '%s/issues/%s' "$STATE_DIR" "$1"; }
+attempts_of() {
+    _f=$(state_of "$1")
+    if [ -f "$_f" ]; then grep -c '^attempt [0-9]* [0-9]* started' "$_f"; else echo 0; fi
+}
+is_final() { grep -q '^final ' "$(state_of "$1")" 2>/dev/null; }
+is_declined() { grep -q '^declined ' "$(state_of "$1")" 2>/dev/null; }
+spent_today() {
+    if [ -f "$STATE_DIR/daily/$TODAY" ]; then wc -l < "$STATE_DIR/daily/$TODAY" | tr -d ' '; else echo 0; fi
+}
+
+# Lines of the hand-back reason: every attempt's outcome, with the ones that
+# never reported spelled out — that is the "killed mid-handoff" case.
+handback_reasons() {
+    awk '
+        $1 == "attempt" && $4 == "started" { if ($2 + 0 > n) n = $2 + 0 }
+        $1 == "attempt" && $4 == "failed"  { r = $0; sub(/^attempt [0-9]+ [0-9]+ failed /, "", r); failed[$2 + 0] = r }
+        END {
+            for (i = 1; i <= n; i++)
+                if (i in failed) printf "- attempt %d: %s\n", i, failed[i]
+                else printf "- attempt %d: never finished (the run was killed or timed out)\n", i
+        }' "$1"
+}
+
+# run_as <mode> <ref> <job dir> — the unattended account does the git, model
+# and PR work. Its stdout's last "PR <url>" line is the only thing trusted
+# back, and only as a string.
+run_as() {
+    (
+        set -a
+        # shellcheck disable=SC1090
+        . "$TOKEN_ENV_FILE"
+        set +a
+        HOME=$RUN_HOME USER=$RUN_USER LOGNAME=$RUN_USER
+        export HOME USER LOGNAME
+        cd "$RUN_HOME" || exit 1
+        # shellcheck disable=SC2086
+        exec $RUN_AS "$RUN_SCRIPT" "$1" "$2" "$3"
+    ) > "$3/run.out" 2> "$3/run.err"
+}
+
+new_job() {
+    # new_job <ref> <label> — a directory RUN_USER can write and root reads.
+    _j="$JOBS_DIR/$1-$2"
+    rm -rf "$_j"
+    mkdir -p "$_j" || die "cannot create $_j"
+    [ -z "$RUN_AS" ] || chown "$RUN_USER" "$_j" || die "cannot hand $_j to $RUN_USER"
+    printf '%s' "$_j"
+}
+
+pr_url_of() {
+    sed -n 's|^PR \(https://github\.com/[^ ]*/pull/[0-9]*\)$|\1|p' "$1/run.out" | tail -1
+}
+
+handback() {
+    # handback <ref> <issue url>
+    _ref=$1
+    _job=$(new_job "$_ref" handback)
+    {
+        printf 'The builder is handing **%s** back to a human: no fix was produced that passed the unit tests and the rig.\n\n' "$_ref"
+        printf 'Issue: %s\n\n' "$2"
+        handback_reasons "$(state_of "$_ref")"
+    } > "$_job/handback.md"
+    run_as handback "$_ref" "$_job"
+    _rc=$?
+    _url=$(pr_url_of "$_job")
+    if [ "$_rc" -ne 0 ] || [ -z "$_url" ]; then
+        die "$_ref: hand-back PR failed (rc $_rc): $(tail -c 400 "$_job/run.err")"
+    fi
+    echo "final $NOW handback $_url" >> "$(state_of "$_ref")"
+    echo "$_ref: handed back — $_url"
+}
+
+# ── Pick one action ───────────────────────────────────────────────────────
+
+waiting_plan=0 at_cap=0 done_already=0
+while read -r issue; do
+    ref=$(printf '%s' "$issue" | jq -r '.identifier')
+    url=$(printf '%s' "$issue" | jq -r '.url')
+    case "$ref" in *[!A-Za-z0-9-]*|'') echo "WARN: skipping malformed identifier" >&2; continue ;; esac
+
+    if is_final "$ref"; then
+        done_already=$((done_already + 1))
+        continue
+    fi
+
+    n=$(attempts_of "$ref")
+    if is_declined "$ref" || [ "$n" -ge "$MAX_ATTEMPTS" ]; then
+        handback "$ref" "$url"
+        exit 0
+    fi
+
+    # Newest plan wins: a re-investigation supersedes the first one.
+    plan=$(printf '%s' "$issue" | jq -r --arg p "$PLAN_PREFIX" '
+        [.comments.nodes[] | select(.body | startswith($p))] | sort_by(.createdAt) | last | .body // empty')
+    if [ -z "$plan" ]; then
+        waiting_plan=$((waiting_plan + 1))
+        continue
+    fi
+
+    if [ "$(spent_today)" -ge "$DAILY_CAP" ]; then
+        at_cap=$((at_cap + 1))
+        continue
+    fi
+
+    attempt=$((n + 1))
+    job=$(new_job "$ref" "$attempt")
+    {
+        printf '# %s: %s\n\n' "$ref" "$(printf '%s' "$issue" | jq -r '.title')"
+        printf '%s\n\n' "$(printf '%s' "$issue" | jq -r '.description // ""')"
+        printf '%s\n' "$plan"
+        prev="$JOBS_DIR/$ref-$n/failure.md"
+        if [ "$n" -gt 0 ] && [ -r "$prev" ]; then
+            printf '\n## Your previous attempt failed\n\n'
+            head -c 20000 "$prev"
+        fi
+    } > "$job/issue.md"
+
+    # Recorded BEFORE the work. If this process dies from here on, the next
+    # run sees an attempt that never reported and counts it.
+    echo "attempt $attempt $NOW started" >> "$(state_of "$ref")" || die "cannot record attempt"
+    echo "$ref $attempt" >> "$STATE_DIR/daily/$TODAY" || die "cannot record daily spend"
+    echo "$ref: attempt $attempt of $MAX_ATTEMPTS"
+
+    run_as attempt "$ref" "$job"
+    rc=$?
+    reason=$(head -1 "$job/reason" 2>/dev/null | tr -d '\r' | cut -c1-200)
+    case "$rc" in
+        0)
+            pr=$(pr_url_of "$job")
+            [ -n "$pr" ] || die "$ref: run reported success but no PR URL"
+            echo "final $NOW pr $pr" >> "$(state_of "$ref")"
+            echo "$ref: draft PR $pr"
+            ;;
+        4)
+            echo "attempt $attempt $NOW failed declined: ${reason:-no reason given}" >> "$(state_of "$ref")"
+            echo "declined $NOW ${reason:-no reason given}" >> "$(state_of "$ref")"
+            echo "$ref: declined — ${reason:-no reason given}"
+            handback "$ref" "$url"
+            ;;
+        *)
+            echo "attempt $attempt $NOW failed ${reason:-run exited $rc}" >> "$(state_of "$ref")"
+            echo "$ref: attempt $attempt failed — ${reason:-run exited $rc}"
+            if [ "$attempt" -ge "$MAX_ATTEMPTS" ]; then
+                handback "$ref" "$url"
+            fi
+            ;;
+    esac
+    exit 0
+done < "$WORK/issues"
+
+echo "builder poll: nothing to do ($(wc -l < "$WORK/issues" | tr -d ' ') open; $done_already finished, $waiting_plan waiting for a plan, $at_cap held by the daily cap of $DAILY_CAP)"
+exit 0
