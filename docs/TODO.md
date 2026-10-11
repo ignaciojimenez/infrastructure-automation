@@ -334,9 +334,12 @@ not bootstrap a fresh host at all. Fixed, then proven from bare: bootstrap →
 `changed=0` as `choco` → `site.yml` → `changed=0`. Write-up:
 [archive/DONE.md](archive/DONE.md#2026-10-04--bootstrap-could-not-bootstrap-a-fresh-host-its-first-run-on-a-bare-container-todo-3a-per-67).
 
-🔴 **Not yet on the fleet:** the next `site.yml` run removes
-`/etc/sudoers.d/root_nopasswd` (a no-op grant) from every host carrying it.
-Delete that cleanup task once a fleet run shows no host carries it.
+✅ **Deployed 2026-10-11** to the 8 Linux hosts (`--limit 'all:!opnsense'`, see
+item 44). Each one carried `root_nopasswd`, and each removed it. The second run
+gave **changed=0** on 7; unifi-lxc gave changed=0 up to its known apt failure
+(item 45). Unverified: opnsense's `/usr/local/etc/sudoers.d`, where a FreeBSD
+copy would sit (no agent shell there). Delete the cleanup task once that is
+checked.
 
 **3b. One command: create → converge → verify → destroy — on the workbench ✅ DONE 2026-10-03**
 📌 **The point was never the command, it was where it runs.** A cloud session
