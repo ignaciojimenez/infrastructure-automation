@@ -37,6 +37,7 @@ All on `agent-lxc`, via cron:
 | Hourly **:07** | `investigate.sh --slack` | only for an alert with no open incident; one run per poll | `#home-alerts`: summary + plan file |
 | Sundays **09:17** | `investigate.sh --digest` | weekly | `#home-logging`: fleet-health summary + plan file |
 | Hourly **:29** | `mullvad_relay_signal.sh` | never | `#home-logging` only, and only when a relay changes state (plus a weekly reminder) |
+| Hourly **:57**, as **root** | `fleet_linear_sync.sh` | never | Linear: opens, keeps and closes `agent/fleet` issues; posts Tier 2 plans as comments |
 
 The three Tier-2 jobs share a **`flock`**, so they never run concurrently (which would saturate
 the 1-CPU/2GB box). Each exits immediately and free when there is nothing new to do.
@@ -74,6 +75,41 @@ trouble reading Mullvad's list is reported there too, once. A post Slack refuses
 run, per channel. It never calls the OPNsense API, so it needs no
 new privilege. ⚠️ It watches the relay list, not the tunnels: if a peer is repointed on OPNsense and
 not here, it silently watches the wrong relay.
+
+**Linear issues (`agent/fleet`)** — PER-85 part 1. `fleet_linear_sync.sh` turns Tier 1 findings
+into one Linear issue per incident key, the same `host.subject` key investigate.sh bills by. Both
+derive it from `/usr/local/lib/agent/incident_subjects.py`, so the issue and the Tier 2 incident
+cannot disagree. Its rules:
+
+- **New key:** an issue in `Todo`, project Fleet, labelled `agent/fleet` and `kind/broken`.
+- **Key still present:** no write, so there is no churn.
+- **Key absent, host observed:** the issue is marked absent and closed after 24 h, with the reason
+  as a comment.
+- **Key absent, host not observed:** nothing. A dark host proves nothing about its other findings.
+- **A fault that returns after close:** a new issue.
+- **Tier 2 plans:** once investigate.sh has explained a key, the filer posts its plan file as a
+  comment, once per plan. Tier 2 itself never touches Linear.
+- **What it reads:** `~/.agent/sweep_state.json`, which the sweep now writes on **every** run with
+  the hosts it actually observed. `last_anomaly.json` can't serve, because it is never cleared.
+- **Identity:** an attachment whose URL ends `?incident=<key>`, with the absence mark in its
+  metadata. This is the todo-harness convention.
+
+The Linear key is **Read + Write, team PER only**. It sits in `/etc/fleet-linear/auth.header`
+(0600 root) and reaches curl as `-H @file`. The filer, its wrapper and `incident_subjects.py` are
+root-owned in `/usr/local/lib/agent/`, so root runs nothing the agent account can rewrite. The
+model runs as the agent account, and OpenCode denies it `sudo`.
+
+The filer **fails, and pages**, on any of these:
+- stale sweep state (over 2 h);
+- more than 100 open issues;
+- any GraphQL error;
+- an issue opened without its marker;
+- findings that key to nothing.
+
+Its log is `/var/log/fleet_linear_sync.log`.
+
+⚠️ Only Tier 1 findings become issues. Incidents the Slack watch investigates have no issue, so
+their plans are not posted (see PER-108 for what the watch can and cannot see).
 
 ---
 
@@ -197,6 +233,5 @@ watermark.
   hung run shows as a `timeout` failure alert.
 - **Do not run investigations concurrently by hand** — the box is 1-CPU/2GB and will thrash; the
   `flock` protects the crons, but a manual parallel run bypasses nothing if you launch two.
-- **Rebuild-from-scratch is not yet "vault-password-only"** — a rebuild regenerates the agent's
-  SSH key, whose pubkey must be re-committed and pushed. Tracked in TODO.md with two options
-  (accept-and-document vs. vault the keypair); decide before testing a real rebuild.
+- **Rebuild-from-scratch is not "vault-password-only", by decision** — a rebuild mints a new
+  agent SSH key; re-commit its pubkey and re-run `agent_access.yml` (TODO.md item 11).

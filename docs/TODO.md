@@ -152,6 +152,28 @@ headings say what is urgent.
 
 ### 🟠 P2 — known risk, not currently biting
 
+**48. The model can `cat` two of agent-lxc's credentials**
+Found 2026-10-11 while placing PER-85's Linear key. The OpenCode allowlist
+permits `cat {{ agent_state_dir }}/*` (`opencode.json.j2`), and two credential
+files live in that directory: `opnsense_api.creds` (the firewall API
+key/secret) and `healthchecks_api.creds`. So "the agent never handles secrets"
+(AGENT_LXC.md, Security model) does not hold for those two. This is reasoned
+from the config and **not forced**: proving it would mean asking the model to
+print a live secret to the API.
+
+Both credentials are read-only, so the exposure is disclosure to the model
+provider plus a prompt-injection path to a read-only firewall API. Fix:
+move both files out of the state dir (e.g. `/etc/agent/`, root-owned with
+group read for the agent account, like `agent.env`), and change the allowlist
+to name files rather than a glob. ⚠️ Unverified: whether OpenCode's `*`
+also matches `../`. If it does, `cat ~/.agent/../../../etc/agent/agent.env`
+(the Anthropic key, the Slack read token) passes the same rule. Check that
+from OpenCode's matcher source before closing this.
+
+*Effort:* small. *Verify:* `cat` of the old path is gone, the sweep's
+opnsense and healthchecks checks still pass on agent-lxc, and an OpenCode
+headless `cat` of a new path is refused (ask it for a non-secret file there).
+
 **45. unifi-lxc cannot `apt update`: Ubiquiti's repo key fails Debian 13's SHA1 policy** ([PER-105](https://linear.app/lacopadeeuropa/issue/PER-105))
 Found 2026-10-11 during the 3a fleet deploy: `Update package cache` fails on
 unifi-lxc ("Failed to update apt cache after 5 retries"). A throwaway
@@ -512,35 +534,24 @@ known blanks (PVE updates, OPNsense firmware, backup restorability,
 role-owned script drift).
 ```
 
-**11. agent-lxc — Phase C (operator mode) and the rebuild-identity decision**
-Phases A+B are live; Tier 2 investigates real alerts. Phase C is **designed,
-not built**: `~/.claude/plans/phase-c-operator-plan.md` (§0: no operator key, no
-operator user — `choco` via the existing per-device Secure-Enclave keys,
-forwarded; every command gated by an OpenCode `ask` *and* a biometric tap; §0b:
-with the test rig, approval means seeing a diff **and a container test result**,
-never a command that has run nowhere). Its old preconditions (agent branch
-unmerged, Tier 2 never run clean) are gone.
+**11. agent-lxc rebuild re-keys the fleet by hand — accepted, documented**
+Phase C (operator mode) is superseded: [PER-69](https://linear.app/lacopadeeuropa/issue/PER-69)
+is closed and the loop is now [PER-85](https://linear.app/lacopadeeuropa/issue/PER-85)
+(diagnosis → Linear → builder). What remains is the rebuild note.
 
-Before the deferred destroy/rebuild test, decide the key identity:
-(1) accept + document the two-command re-key (rebuild mints a new
-`agent_lxc_ed25519`, copy the pubkey into `group_vars`, re-run
-`agent_access.yml`), or (2) vault the keypair so rebuild is vault-password-only.
-**Recommend (1)** — rebuilds are rare and the private key never leaving the box
-is the stronger posture. The test itself is ~20 min of disruption to a working
-observer; do it under whichever option is chosen, not blind.
+A destroy/rebuild of CT 103 mints a new `agent_lxc_ed25519`, by design: the
+private key never leaves the box. **Option (1) is the decision**, not vaulting
+the keypair. After a rebuild:
 
-*State:* planned (plan file is the source — do not delete it). *Effort:* large
-(Phase C), small (the decision). *Needs:* a laptop and Ignacio's sign-off on
-the plan.
+1. copy the pubkey the agent role prints into `agent_lxc_ssh_pubkey`
+   (`group_vars/all/main.yml`), commit, push;
+2. re-run `ansible-playbook ansible/playbooks/system/agent_access.yml`.
 
-```
-Start Phase C (operator mode). Read ~/.claude/plans/phase-c-operator-plan.md
-end to end first — §0's decisions (no operator key, no operator user, choco
-via forwarded Secure-Enclave keys, ask + biometric double gate) are settled,
-and §0b makes a container dry-run part of every approval. Decide the rebuild
-identity before the destroy/recreate test: recommended option (1), accept +
-document the two-command re-key. Operator reference: docs/AGENT_LXC.md.
-```
+Until step 2 the sweep reports every host as auth-rejected. That is correct,
+and it backs off rather than hammering. Rebuilds are rare, so two commands
+beat a fleet-trusted private key in the vault.
+
+*State:* decided; do it when a rebuild happens. *Effort:* small.
 
 **12. Small-fix batch — none worth its own slot, all real**
 One branch, tick them off. Phone-taggable lines marked 📱.
