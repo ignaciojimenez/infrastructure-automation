@@ -145,6 +145,42 @@ headings say what is urgent.
 
 ### 🟠 P2 — known risk, not currently biting
 
+**44. `bootstrap.yml` is unsafe on opnsense, and `site.yml` imports it with `always`**
+Found 2026-10-11 by a fleet `--check` of `bootstrap.yml` (TODO 3a). On opnsense it
+would **lock root's password** (`Lock root account`, `password_lock: true`), then
+**fail** on `Configure SSH daemon for key-only auth`. OPNsense keeps its sshd
+config under `/usr/local/etc/ssh/`, generated from `config.xml`; there is no
+`/etc/ssh/sshd_config`. Both are on `main` already. Neither comes from the 3a
+branch, which was deployed to the other 8 hosts and kept away from opnsense.
+
+`ssh_hardening.yml` ("Disable root user login", imported by `services.yml` on
+every host) locks root's password on FreeBSD as well; it spares only the shell.
+Yet `--check` shows root's password is **unlocked** on opnsense today. Either
+neither task has run there since it was written, or OPNsense rewrites
+`master.passwd` from `config.xml` and undoes the lock. Unknown which.
+
+🔴 **Unverified, and it is the part that matters:** whether locking root's
+FreeBSD password locks the OPNsense GUI or console admin. Root is that admin.
+Until this is known, **run `site.yml`, `services.yml` and `bootstrap.yml` with
+`--limit '!opnsense'`.** Not biting now only because nobody has.
+
+*Effort:* small. *Needs:* a laptop, and a way back into opnsense that does not
+depend on the root password (the console menu on cwwk via `qm terminal`).
+
+```
+TODO 44: make bootstrap.yml safe on opnsense. Read docs/TODO.md item 44 first.
+Start by finding out, from OPNsense's own source or docs (not memory), whether
+the GUI and console authenticate root against the FreeBSD password database
+or against config.xml. Then pick the simple, standard fix: most likely, skip
+the root password lock on FreeBSD in BOTH bootstrap.yml and ssh_hardening.yml
+(ssh_hardening's "Disable root user login" spares only the shell today), and
+skip bootstrap's sshd lineinfile there the way ssh_hardening already gates its
+sshd tasks on os_family == "debian", because OPNsense owns both. Prove it
+with `bootstrap.yml` and `services.yml` `--check --diff --limit opnsense`
+showing no change and no failure. Do not run it for real on
+opnsense without a console path open.
+```
+
 **37. vinylstreamer's wifi recovery undid its own fix — DEPLOYED, waiting on a lockout**
 On 2026-09-13 wlan0 dropped at 06:31 and stayed off until 09:00; the host itself
 stayed up. Layer 3 of `wifi_reconnect.sh` (driver reload) recovered the link on
