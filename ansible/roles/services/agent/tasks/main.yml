@@ -286,6 +286,117 @@
     - alert_token is defined and alert_token != ''
   tags: [agent, monitoring, mullvad, cron]
 
+# ============================================================
+# Shared incident keys (investigate.sh and the Linear filer)
+# ============================================================
+
+- name: Ensure the root-owned agent library directory exists
+  become: true
+  ansible.builtin.file:
+    path: "{{ agent_lib_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  tags: [agent, monitoring, investigate, linear, scripts]
+
+- name: Deploy the shared incident subject definition
+  become: true
+  ansible.builtin.copy:
+    src: "{{ inventory_dir }}/../../scripts/services/agent/incident_subjects.py"
+    dest: "{{ agent_incident_subjects_py }}"
+    owner: root
+    group: root
+    mode: '0644'
+  tags: [agent, monitoring, investigate, linear, scripts]
+
+# ============================================================
+# Linear filer (PER-85 part 1)
+#
+# Root, because root is the one account on this box the model cannot act as:
+# OpenCode runs as the agent account and denies sudo. A dedicated user would
+# need ACLs into that account's 0700 home to read the findings, for no gain in
+# what the model can reach. The wrapper is copied root-owned for the same
+# reason the script is: root runs nothing the agent account can rewrite.
+# ============================================================
+
+- name: Configure the Linear filer
+  when: enable_agent_linear_sync | bool
+  tags: [agent, monitoring, linear]
+  block:
+    - name: Ensure the Linear credential and state directories exist
+      become: true
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+      loop:
+        - "{{ agent_linear_dir }}"
+        - "{{ agent_linear_state_dir }}"
+
+    # A header file, so the key reaches curl as `-H @file` and never argv.
+    - name: Deploy the Linear credential
+      become: true
+      ansible.builtin.copy:
+        content: "Authorization: {{ vault_linear_fleet_api_key }}\n"
+        dest: "{{ agent_linear_auth_file }}"
+        owner: root
+        group: root
+        mode: '0600'
+      no_log: true
+
+    - name: Deploy the root-owned monitoring wrapper for the filer
+      become: true
+      ansible.builtin.copy:
+        src: "{{ inventory_dir }}/../../scripts/common/enhanced_monitoring_wrapper"
+        dest: "{{ agent_lib_dir }}/enhanced_monitoring_wrapper"
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Deploy the Linear filer
+      become: true
+      ansible.builtin.template:
+        src: "{{ inventory_dir }}/../../scripts/services/agent/fleet_linear_sync.sh.j2"
+        dest: "{{ agent_lib_dir }}/fleet_linear_sync.sh"
+        owner: root
+        group: root
+        mode: '0755'
+
+    # --state-file: the wrapper otherwise derives /home/<user>/.log, which
+    # for root is a directory that should not exist.
+    - name: Configure the Linear filer cron job
+      become: true
+      ansible.builtin.cron:
+        name: "Fleet findings to Linear (agent/fleet)"
+        minute: "{{ agent_linear_minute }}"
+        hour: "*"
+        job: >
+          {{ agent_lib_dir }}/enhanced_monitoring_wrapper
+          --monitoring-name=fleet_linear_sync
+          --state-file={{ agent_linear_state_dir }}/wrapper_state.json
+          --heartbeat-interval=daily
+          --notify-fixed=true
+          {{ logging_token }}
+          {{ alert_token }}
+          {{ agent_lib_dir }}/fleet_linear_sync.sh
+          >> {{ agent_linear_log }} 2>&1
+        user: root
+      when:
+        - logging_token is defined and logging_token != ''
+        - alert_token is defined and alert_token != ''
+
+- name: Remove the Linear filer cron job when disabled
+  become: true
+  ansible.builtin.cron:
+    name: "Fleet findings to Linear (agent/fleet)"
+    user: root
+    state: absent
+  when: not (enable_agent_linear_sync | bool)
+  tags: [agent, monitoring, linear]
+
 - name: Report agent deployment status
   ansible.builtin.debug:
     msg: |

@@ -70,6 +70,7 @@ python3 "$REPO_ROOT/tests/lib/render_j2.py" "$SWEEP_TMPL" "$WORK/sweep.sh" \
 
 python3 "$REPO_ROOT/tests/lib/render_j2.py" "$INVESTIGATE_TMPL" "$WORK/investigate.sh" \
     agent_env_file="$WORK/agent.env" \
+    agent_incident_subjects_py="$REPO_ROOT/scripts/services/agent/incident_subjects.py" \
     agent_state_dir="$AGENT_DIR" \
     agent_plans_dir="$WORK/plans" \
     agent_failure_alert_cooldown_seconds=21600 \

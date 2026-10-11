@@ -652,7 +652,11 @@ for entry in $FLEET; do total=$((total + 1)); done
 # the decision below can see HOW MANY there are. See the collapse block after
 # the loop for why that matters.
 SILENT=$(mktemp)
-trap 'rm -f "$FINDINGS" "$PROBE_OUT" "$SSH_ERR" "$API_OUT" "$SNAPSHOT" "$SILENT"' EXIT INT TERM
+# Hosts this sweep actually saw — answered and probed. Absence of a finding on
+# any other host proves nothing, so it is what lets fleet_linear_sync.sh close
+# an issue without closing one for a host that merely went dark.
+OBSERVED=$(mktemp)
+trap 'rm -f "$FINDINGS" "$PROBE_OUT" "$SSH_ERR" "$API_OUT" "$SNAPSHOT" "$SILENT" "$OBSERVED"' EXIT INT TERM
 
 # Resolver pre-check.
 #
@@ -699,6 +703,7 @@ for entry in $fleet_to_check; do
     if [ "$kind" = opnsense ]; then
         if check_opnsense "$host"; then
             reachable=$((reachable + 1))
+            echo "$host" >> "$OBSERVED"
         else
             echo "$host" >> "$SILENT"
         fi
@@ -755,6 +760,7 @@ for entry in $fleet_to_check; do
     fi
     backoff_clear "$host"
     reachable=$((reachable + 1))
+    echo "$host" >> "$OBSERVED"
 
     check_disk "$host"
 
@@ -826,6 +832,25 @@ count=$(wc -l < "$FINDINGS" | tr -d ' ')
 # Before the branch, so there is exactly one call site and neither exit path
 # can drift away from it.
 ping_healthcheck
+
+# Current state, written on EVERY sweep — healthy ones included. last_anomaly.json
+# cannot serve: it is deliberately left in place after the fleet recovers, so it
+# never says "fixed". fleet_linear_sync.sh reads this to open, keep and close
+# agent/fleet issues. Never allowed to change the sweep's exit status: a
+# missing or stale file is the filer's to report, and it does.
+write_sweep_state() {
+    _tmp=$(mktemp "$AGENT_DIR/.sweep_state.XXXXXX") || return 1
+    if jq -n --arg ts "$(date +%s)" --rawfile obs "$OBSERVED" --rawfile fnd "$FINDINGS" \
+        '{timestamp_epoch: ($ts | tonumber),
+          observed: ($obs | split("\n") | map(select(length > 0))),
+          findings: ($fnd | split("\n") | map(select(length > 0)))}' > "$_tmp"; then
+        chmod 0644 "$_tmp" && mv -f "$_tmp" "$AGENT_DIR/sweep_state.json"
+    else
+        rm -f "$_tmp"
+        return 1
+    fi
+}
+write_sweep_state || echo "WARN: could not write $AGENT_DIR/sweep_state.json" >&2
 
 if [ "$count" -eq 0 ]; then
     echo "Fleet OK — ${reachable}/${total} hosts reachable, no findings"

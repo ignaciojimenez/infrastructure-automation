@@ -1,0 +1,307 @@
+#!/bin/sh
+# fleet_linear_sync.sh — Tier 1 findings -> agent/fleet issues in Linear
+# (managed by Ansible; PER-85 part 1)
+#
+# Deterministic, no model involved. Each run reconciles the sweep's current
+# state (sweep_state.json, written by fleet_health_check.sh on every run)
+# against the open agent/fleet issues on team PER:
+#
+#   finding present, no open issue      -> open one (Todo, project Fleet)
+#   finding present, issue marked absent -> clear the mark
+#   finding gone, host observed          -> mark absent; close after
+#                                           CLOSE_AFTER_SECONDS absent
+#   finding gone, host NOT observed      -> nothing. A host that went dark
+#                                           proves nothing about its findings
+#
+# One issue per incident key (host.subject), the same key investigate.sh
+# bills by — derived here with the same incident_subjects.py and the same
+# normaliser, so the issue and the Tier 2 incident cannot disagree. Tier 2
+# never writes to Linear: when it has explained a key, its plan file is
+# posted here as a comment, once per issue.
+#
+# Identity is an attachment on the issue whose URL carries the key, and the
+# absence mark lives in that attachment's metadata — the convention
+# todo-harness uses for agent/sec. Linear holds the state; this box keeps only
+# which plans it has already posted.
+#
+# 🔴 Runs as ROOT, from root's crontab, and is the only thing that can read the
+# Linear credential (AUTH_FILE, 0600 root). The model runs as the agent
+# account, whose OpenCode allowlist denies sudo, so the key is out of its
+# reach. Everything this script reads from the agent account (findings, plan
+# text) is DATA: it only ever reaches jq --arg/--rawfile, never eval. It runs
+# nothing the agent account can rewrite — incident_subjects.py and this file
+# are root-owned.
+#
+# POSIX /bin/sh, jq, curl, python3.
+
+set -u
+
+AGENT_DIR="{{ agent_state_dir }}"
+SUBJECTS_PY="{{ agent_incident_subjects_py }}"
+AUTH_FILE="{{ agent_linear_auth_file }}"
+STATE_DIR="{{ agent_linear_state_dir }}"
+ENDPOINT="{{ agent_linear_endpoint }}"
+TEAM_ID="{{ agent_linear_team_id }}"
+PROJECT_ID="{{ agent_linear_project_id }}"
+TODO_STATE_ID="{{ agent_linear_todo_state_id }}"
+DONE_STATE_ID="{{ agent_linear_done_state_id }}"
+FLEET_LABEL_ID="{{ agent_linear_fleet_label_id }}"
+BROKEN_LABEL_ID="{{ agent_linear_broken_label_id }}"
+URL_BASE="{{ agent_linear_incident_url_base }}"
+CLOSE_AFTER_SECONDS={{ agent_linear_close_after_seconds }}
+STALE_AFTER_SECONDS={{ agent_linear_stale_after_seconds }}
+
+MARKER_SUBTITLE="fleet incident"
+SWEEP_STATE="$AGENT_DIR/sweep_state.json"
+INCIDENT_DIR="$AGENT_DIR/incidents"
+POSTED_DIR="$STATE_DIR/posted"
+
+# The clock is injectable so the 24 h close can be proven without waiting.
+NOW=${FLEET_LINEAR_NOW:-$(date +%s)}
+
+die() {
+    echo "ERROR: $*" >&2
+    exit 1
+}
+
+# Must match incident_key() in investigate.sh character for character: the
+# key is a filename there and an issue identity here. A unit test compares
+# the two.
+incident_key() {
+    printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9.-' '-' \
+        | sed 's/^-*//;s/-*$//' | cut -c1-80
+}
+
+is_number() {
+    case "${1:-}" in ''|*[!0-9]*) return 1 ;; esac
+}
+
+# ── Preconditions: refuse rather than reconcile against a guess ────────────
+
+[ -r "$AUTH_FILE" ] || die "no Linear credential at $AUTH_FILE"
+[ -r "$SUBJECTS_PY" ] || die "cannot read $SUBJECTS_PY"
+[ -r "$SWEEP_STATE" ] || die "no $SWEEP_STATE — has the Tier 1 sweep run since it learned to write one?"
+
+sweep_ts=$(jq -r '.timestamp_epoch // empty' "$SWEEP_STATE" 2>/dev/null)
+is_number "$sweep_ts" || die "$SWEEP_STATE has no usable timestamp"
+sweep_age=$((NOW - sweep_ts))
+# Stale state is a failure, not a quiet no-op: a filer that silently stops
+# reconciling looks exactly like a healthy fleet.
+[ "$sweep_age" -le "$STALE_AFTER_SECONDS" ] ||
+    die "sweep state is ${sweep_age}s old (limit ${STALE_AFTER_SECONDS}s) — Tier 1 has stopped writing it; reconciling nothing"
+
+mkdir -p "$POSTED_DIR" || die "cannot create $POSTED_DIR"
+
+WORK=$(mktemp -d) || die "mktemp failed"
+trap 'rm -rf "$WORK"' EXIT INT TERM
+
+# ── Linear transport ──────────────────────────────────────────────────────
+
+# gql <query> <variables-json> — prints the response's .data, or fails.
+# The credential reaches curl as a header FILE (-H @file), never as an
+# argument: argv is world-readable through /proc.
+gql() {
+    jq -n --arg q "$1" --argjson v "$2" '{query: $q, variables: $v}' > "$WORK/req" ||
+        { echo "ERROR: could not build request" >&2; return 1; }
+    if ! curl -sS --max-time 30 -H @"$AUTH_FILE" -H 'Content-Type: application/json' \
+        --data-binary @"$WORK/req" "$ENDPOINT" > "$WORK/resp" 2> "$WORK/curl_err"; then
+        echo "ERROR: Linear unreachable: $(head -c 300 "$WORK/curl_err")" >&2
+        return 1
+    fi
+    if ! jq -e '(.errors | not) and (.data != null)' "$WORK/resp" > /dev/null 2>&1; then
+        echo "ERROR: Linear refused the request: $(head -c 400 "$WORK/resp")" >&2
+        return 1
+    fi
+    jq -c '.data' "$WORK/resp"
+}
+
+# mutate <operation> <query> <variables-json> — a write that must say success.
+mutate() {
+    _out=$(gql "$2" "$3") || return 1
+    printf '%s' "$_out" | jq -e --arg op "$1" '.[$op].success == true' > /dev/null ||
+        { echo "ERROR: $1 did not report success: $_out" >&2; return 1; }
+    printf '%s' "$_out"
+}
+
+set_marker() {
+    # set_marker <issue id> <key> <metadata-json>
+    mutate attachmentCreate \
+        'mutation($i: AttachmentCreateInput!) { attachmentCreate(input: $i) { success } }' \
+        "$(jq -n --arg id "$1" --arg url "$URL_BASE$2" --arg t "Fleet incident $2" \
+            --arg st "$MARKER_SUBTITLE" --argjson m "$3" \
+            '{i: {issueId: $id, url: $url, title: $t, subtitle: $st, metadata: $m}}')" > /dev/null
+}
+
+comment() {
+    # comment <issue id> <body file>
+    mutate commentCreate \
+        'mutation($i: CommentCreateInput!) { commentCreate(input: $i) { success } }' \
+        "$(jq -n --arg id "$1" --rawfile b "$2" '{i: {issueId: $id, body: $b}}')" > /dev/null
+}
+
+# ── What the sweep says now ───────────────────────────────────────────────
+
+# Rows "<raw key>\t<host>\t<finding>", keyed by the shared definition.
+python3 -c "$(cat "$SUBJECTS_PY")
+import json, sys
+for k, h, line in finding_rows(json.load(open(sys.argv[1])).get(\"findings\", [])):
+    print(k + \"\\t\" + h + \"\\t\" + line)
+" "$SWEEP_STATE" > "$WORK/rows" || die "could not key the sweep findings"
+
+jq -r '.observed[]?' "$SWEEP_STATE" > "$WORK/observed"
+# Collapsed findings speak for the whole sweep, not one host: "fleet" (site
+# power or network loss) and "resolver" (the gateway DNS). The sweep itself
+# ran, so their absence is observed whenever its state is fresh.
+printf 'fleet\nresolver\n' >> "$WORK/observed"
+
+mkdir "$WORK/findings"
+: > "$WORK/current"
+_tab=$(printf '\t')
+while IFS="$_tab" read -r _raw _host _line; do
+    [ -n "$_raw" ] || continue
+    _k=$(incident_key "$_raw")
+    grep -qxF "$_k" "$WORK/current" || printf '%s\n' "$_k" >> "$WORK/current"
+    printf '%s\n' "$_line" >> "$WORK/findings/$_k"
+done < "$WORK/rows"
+
+# A sweep with findings that keyed to nothing means the format moved under
+# the parser. Opening nothing would read as "fleet healthy".
+_nfind=$(jq '.findings | length' "$SWEEP_STATE")
+if [ "$_nfind" -gt 0 ] && [ ! -s "$WORK/current" ]; then
+    die "$_nfind finding(s) in the sweep but none keyed — incident_subjects.py and the sweep disagree"
+fi
+
+# ── What Linear says now ──────────────────────────────────────────────────
+
+open_issues=$(gql 'query($team: ID!, $label: ID!) {
+  issues(first: 100, filter: {
+    team: { id: { eq: $team } },
+    labels: { some: { id: { eq: $label } } },
+    state: { type: { nin: ["completed", "canceled"] } }
+  }) {
+    pageInfo { hasNextPage }
+    nodes { id identifier attachments { nodes { url subtitle metadata } } }
+  }
+}' "$(jq -n --arg t "$TEAM_ID" --arg l "$FLEET_LABEL_ID" '{team: $t, label: $l}')") || exit 1
+
+# A partial view must not close anything; refuse it outright.
+[ "$(printf '%s' "$open_issues" | jq -r '.issues.pageInfo.hasNextPage')" = "false" ] ||
+    die "more than 100 open agent/fleet issues; refusing to reconcile a partial view"
+
+# "<key>\t<issue id>\t<identifier>\t<absent_since epoch or empty>"
+printf '%s' "$open_issues" | jq -r --arg base "$URL_BASE" --arg st "$MARKER_SUBTITLE" '
+  .issues.nodes[] as $i
+  | $i.attachments.nodes[]
+  | select(.subtitle == $st and (.url | startswith($base)))
+  | [(.url | ltrimstr($base)), $i.id, $i.identifier,
+     ((.metadata.absent_since // "") | tostring)]
+  | @tsv' > "$WORK/linear"
+
+issue_field() {
+    # issue_field <key> <column> — first open issue for key
+    awk -F '\t' -v k="$1" -v c="$2" '$1 == k { print $c; exit }' "$WORK/linear"
+}
+
+opened=0 kept=0 marked=0 cleared=0 closed=0 waiting=0 unobserved=0 posted=0
+
+# ── Present: open or keep ─────────────────────────────────────────────────
+
+: > "$WORK/active"
+while read -r key; do
+    [ -n "$key" ] || continue
+    id=$(issue_field "$key" 2)
+    if [ -n "$id" ]; then
+        ref=$(issue_field "$key" 3)
+        if [ -n "$(issue_field "$key" 4)" ]; then
+            set_marker "$id" "$key" '{}' || exit 1
+            echo "$ref $key: seen again; absence mark cleared"
+            cleared=$((cleared + 1))
+        else
+            kept=$((kept + 1))
+        fi
+    else
+        host=${key%%.*}
+        first=$(head -1 "$WORK/findings/$key")
+        title=$(printf '%s: %s' "$key" "${first#*: }" | cut -c1-120)
+        {
+            printf 'Tier 1 fleet sweep finding on **%s**, incident key `%s`.\n\n```\n' "$host" "$key"
+            cat "$WORK/findings/$key"
+            printf '```\n\n'
+            printf 'Machine-owned (`agent/fleet`): agent-lxc opened this and closes it once the finding has been absent for %sh on sweeps that could see the host. A Tier 2 plan, when there is one, arrives as a comment. Remove `agent/fleet` to adopt it.\n\n' "$((CLOSE_AFTER_SECONDS / 3600))"
+            printf 'Operator reference: docs/AGENT_LXC.md\n'
+        } > "$WORK/desc"
+        created=$(mutate issueCreate \
+            'mutation($i: IssueCreateInput!) { issueCreate(input: $i) { success issue { id identifier } } }' \
+            "$(jq -n --arg team "$TEAM_ID" --arg title "$title" --rawfile d "$WORK/desc" \
+                --arg p "$PROJECT_ID" --arg s "$TODO_STATE_ID" \
+                --arg l1 "$FLEET_LABEL_ID" --arg l2 "$BROKEN_LABEL_ID" \
+                '{i: {teamId: $team, title: $title, description: $d, projectId: $p,
+                      stateId: $s, labelIds: [$l1, $l2]}}')") || exit 1
+        id=$(printf '%s' "$created" | jq -r '.issueCreate.issue.id')
+        ref=$(printf '%s' "$created" | jq -r '.issueCreate.issue.identifier')
+        # Identity is planted immediately. An issue without its marker is
+        # invisible to the next run, which would open it again.
+        set_marker "$id" "$key" '{}' || die "$ref opened but its marker failed — the next run will open a duplicate"
+        printf '%s\t%s\t%s\t\n' "$key" "$id" "$ref" >> "$WORK/linear"
+        echo "$ref $key: opened"
+        opened=$((opened + 1))
+    fi
+    printf '%s\n' "$key" >> "$WORK/active"
+done < "$WORK/current"
+
+# ── Absent: mark, wait, close ─────────────────────────────────────────────
+
+while IFS="$_tab" read -r key id ref absent; do
+    [ -n "$key" ] || continue
+    grep -qxF "$key" "$WORK/current" && continue
+    host=${key%%.*}
+    if ! grep -qxF "$host" "$WORK/observed"; then
+        echo "$ref $key: $host not observed this sweep; absence proves nothing"
+        unobserved=$((unobserved + 1))
+        continue
+    fi
+    if ! is_number "$absent"; then
+        set_marker "$id" "$key" "$(jq -n --argjson t "$NOW" '{absent_since: $t}')" || exit 1
+        echo "$ref $key: absent; marked"
+        marked=$((marked + 1))
+    elif [ $((NOW - absent)) -ge "$CLOSE_AFTER_SECONDS" ]; then
+        printf 'Closed by agent-lxc fleet sweep — absent for %sh on sweeps that observed %s.\n' \
+            "$(((NOW - absent) / 3600))" "$host" > "$WORK/close"
+        comment "$id" "$WORK/close" || exit 1
+        mutate issueUpdate \
+            'mutation($id: String!, $i: IssueUpdateInput!) { issueUpdate(id: $id, input: $i) { success } }' \
+            "$(jq -n --arg id "$id" --arg s "$DONE_STATE_ID" '{id: $id, i: {stateId: $s}}')" > /dev/null || exit 1
+        echo "$ref $key: closed"
+        closed=$((closed + 1))
+    else
+        waiting=$((waiting + 1))
+    fi
+done < "$WORK/linear"
+
+# ── Tier 2 plans -> comments, once per issue ──────────────────────────────
+#
+# investigate.sh records "<opened> <last seen> <plan file>" per key when a
+# paid run explains it. The plan is posted to that key's issue the first time
+# it is seen; a later re-investigation (new plan file) is posted too.
+
+while read -r key; do
+    [ -f "$INCIDENT_DIR/$key" ] || continue
+    read -r _o _s plan < "$INCIDENT_DIR/$key" || continue
+    case "$plan" in ''|-) continue ;; esac
+    [ -r "$plan" ] || { echo "WARN: $key names plan $plan, which is unreadable" >&2; continue; }
+    id=$(issue_field "$key" 2)
+    ref=$(issue_field "$key" 3)
+    [ -n "$id" ] || continue
+    [ "$(cat "$POSTED_DIR/$ref" 2>/dev/null)" = "$plan" ] && continue
+    {
+        printf '**Tier 2 investigation plan** — `%s` on agent-lxc\n\n' "$plan"
+        head -c 60000 "$plan"
+    } > "$WORK/plan"
+    comment "$id" "$WORK/plan" || exit 1
+    printf '%s\n' "$plan" > "$POSTED_DIR/$ref"
+    echo "$ref $key: Tier 2 plan posted"
+    posted=$((posted + 1))
+done < "$WORK/active"
+
+echo "linear sync: $(wc -l < "$WORK/current" | tr -d ' ') incident(s) now; opened $opened, kept $kept, cleared $cleared, marked absent $marked, waiting $waiting, closed $closed, unobserved $unobserved, plans posted $posted"
+exit 0

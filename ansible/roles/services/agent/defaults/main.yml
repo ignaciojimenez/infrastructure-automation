@@ -239,3 +239,50 @@ agent_daily_spend_cap_usd: 2.00
 agent_digest_weekday: "0"
 agent_digest_hour: "9"
 agent_digest_minute: "17"
+
+# ------------------------------------------------------------
+# Shared, root-owned code
+# ------------------------------------------------------------
+# incident_subjects.py is the one definition of an incident key, read by
+# investigate.sh (agent account) and fleet_linear_sync.sh (root). Root-owned so
+# the root-run filer never executes anything the agent account can rewrite.
+agent_lib_dir: /usr/local/lib/agent
+agent_incident_subjects_py: "{{ agent_lib_dir }}/incident_subjects.py"
+
+# ------------------------------------------------------------
+# Linear filer — Tier 1 findings become agent/fleet issues (PER-85 part 1)
+# ------------------------------------------------------------
+# Deterministic; the model never touches Linear. Off until the vault holds a
+# key: Linear API key, Read + Write, team PER only, never Admin (Linear's key
+# settings allow both restrictions). Rendered into a root-only header file the
+# agent account cannot read.
+enable_agent_linear_sync: "{{ vault_linear_fleet_api_key is defined }}"
+agent_linear_dir: /etc/fleet-linear
+agent_linear_auth_file: "{{ agent_linear_dir }}/auth.header"
+agent_linear_state_dir: /var/lib/fleet-linear
+agent_linear_log: /var/log/fleet_linear_sync.log
+agent_linear_endpoint: "https://api.linear.app/graphql"
+
+# Workspace ids, not secrets: useless without a key. Static so the filer makes
+# no lookups, and fails loudly (GraphQL error) if one is ever deleted.
+agent_linear_team_id: "321cb6ff-678a-4e87-b4e8-5c9464de53c8"         # PER
+agent_linear_project_id: "2efb28ec-c35f-4aa7-a859-ea3628095d75"      # Fleet
+agent_linear_todo_state_id: "ab858e0f-c915-4b4b-baf4-99706f9f8210"   # Todo
+agent_linear_done_state_id: "5e4e5d0d-d7df-4754-bf08-bf14f1862090"   # Done
+agent_linear_fleet_label_id: "1215bd1c-a99a-4a04-babe-cea3558c085f"  # agent/fleet
+agent_linear_broken_label_id: "21bd5e64-d3f3-4906-bfcd-315e3194e5e6" # kind/broken
+
+# The identity marker's URL is this plus the incident key. Points at the
+# operator doc so the attachment is a useful link, not just a key.
+agent_linear_incident_url_base: "https://github.com/ignaciojimenez/infrastructure-automation/blob/main/docs/AGENT_LXC.md?incident="
+
+# Close after this long absent on sweeps that observed the host — the queue
+# protocol's agent/* rule (dotfiles docs/queue.md).
+agent_linear_close_after_seconds: 86400
+# The sweep is hourly; two missed runs means it has stopped, and the filer
+# fails rather than reconcile against an old picture.
+agent_linear_stale_after_seconds: 7200
+
+# :57 — after the :37 sweep and the :47 anomaly investigation, so a new
+# finding and its plan usually land in the same run.
+agent_linear_minute: "57"

@@ -34,7 +34,7 @@ printf '\n── Slack watch watermark\n'
 # ------------------------------------------------------------------
 # Extract the Slack parser from the template
 # ------------------------------------------------------------------
-python3 - "$TEMPLATE" "$WORK/parse.py" <<'PY'
+python3 - "$TEMPLATE" "$WORK/parse.py" "$REPO_ROOT/scripts/services/agent/incident_subjects.py" <<'PY'
 import re, sys
 src = open(sys.argv[1]).read()
 # Dummy-render the Jinja placeholders; none of them affect this logic.
@@ -44,9 +44,8 @@ hits = [b for b in blocks if "ERR json" in b]
 if len(hits) != 1:
     sys.exit("expected exactly one Slack parser block, found %d" % len(hits))
 # The parser is run as "$SUBJECT_PY" + its own block; prepend the shared
-# subject helpers the same way, or it would not run at all.
-subject = re.search(r"^SUBJECT_PY='\n(.*?)\n'$", src, re.S | re.M)
-open(sys.argv[2], "w").write((subject.group(1) + "\n" if subject else "") + hits[0])
+# subject helpers (incident_subjects.py) the same way, or it would not run.
+open(sys.argv[2], "w").write(open(sys.argv[3]).read() + "\n" + hits[0])
 PY
 [ -f "$WORK/parse.py" ] || { printf '   ✗ could not extract the parser\n'; exit 1; }
 
