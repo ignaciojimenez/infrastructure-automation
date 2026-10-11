@@ -230,6 +230,7 @@
   loop:
     - fleet_builder_poll.sh
     - fleet_builder_run.sh
+    - check_builder_isolation.sh
   tags: [workbench, builder]
 
 # The wrapper takes the Slack tokens as arguments. Kept in a 0700 root file
@@ -267,14 +268,19 @@
   loop:
     - fleet-builder.service
     - fleet-builder.timer
+    - fleet-builder-isolation.service
+    - fleet-builder-isolation.timer
   register: builder_units
   tags: [workbench, builder]
 
-- name: Enable the builder timer
+- name: Enable the builder timers
   become: true
   ansible.builtin.systemd_service:
-    name: fleet-builder.timer
+    name: "{{ item }}"
     enabled: true
     state: started
     daemon_reload: "{{ builder_units.changed }}"
+  loop:
+    - fleet-builder.timer
+    - fleet-builder-isolation.timer
   tags: [workbench, builder]

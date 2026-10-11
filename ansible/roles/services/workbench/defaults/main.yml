@@ -237,3 +237,9 @@ builder_git_email: "341093942+ignaciojimenez-builder@users.noreply.github.com"
 # :17 — after the sweep (:37), Tier 2 (:47) and the filer (:57) of the hour
 # before, so a plan posted at :57 is picked up twenty minutes later.
 builder_timer_oncalendar: "*-*-* *:17:00"
+
+# check_builder_isolation.sh — re-proves the boundary above every hour, as the
+# unattended account. :30, so a failed unit is already there for the :37 sweep,
+# which is what reports it (#home-alerts, and an agent/fleet issue).
+builder_interactive_home: "/home/{{ workbench_agent_user }}"
+builder_isolation_oncalendar: "*-*-* *:30:00"

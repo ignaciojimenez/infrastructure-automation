@@ -1,0 +1,49 @@
+#!/bin/sh
+# check_builder_isolation.sh — the unattended builder still cannot read what it
+# must not (managed by Ansible; PER-85 part 2)
+#
+# The builder's model edits code the harness then executes as
+# {{ builder_run_user }}, so whatever that account can read, the model can.
+# This re-proves, hourly, the boundary that was forced once by hand on
+# 2026-10-11: it reads each protected path AS that account and fails if any
+# read succeeds.
+#
+# 🔴 A path that does not exist is a FAILURE, not a pass. "cannot read" is
+# trivially true of a missing file, so a renamed credential would otherwise
+# turn this into a check that proves nothing and stays green forever.
+#
+# Runs as root from fleet-builder-isolation.timer; a failure leaves the unit
+# failed, which the agent-lxc sweep reports. POSIX /bin/sh.
+
+set -u
+
+# How root becomes the unattended account. Empty in the unit tests.
+RUN_AS="{{ builder_run_as }}"
+
+PROTECTED="{{ builder_linear_auth_file }}
+{{ builder_claude_env_file }}
+{{ builder_state_dir }}/wrapper_state.json
+{{ builder_lib_dir }}/entry.sh
+{{ builder_interactive_home }}/.claude/.credential.json
+{{ builder_interactive_home }}/.claude.json
+{{ builder_interactive_home }}/.git-credentials"
+
+missing=0 readable=0 denied=0
+while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    if [ ! -e "$path" ]; then
+        echo "MISSING: $path does not exist, so this check cannot prove it is unreadable"
+        missing=$((missing + 1))
+    # shellcheck disable=SC2086
+    elif $RUN_AS cat -- "$path" > /dev/null 2>&1; then
+        echo "READABLE: {{ builder_run_user }} can read $path"
+        readable=$((readable + 1))
+    else
+        denied=$((denied + 1))
+    fi
+done <<EOF
+$PROTECTED
+EOF
+
+echo "builder isolation: $denied denied, $readable readable, $missing missing"
+[ "$readable" -eq 0 ] && [ "$missing" -eq 0 ]
