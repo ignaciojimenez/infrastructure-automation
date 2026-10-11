@@ -50,9 +50,13 @@ printf '\n── check_services restart tolerance\n'
 # Counting the calls is the point: it is what proves a retry actually happened
 # rather than the case passing because the first sample was lucky.
 # ------------------------------------------------------------------
+#
+# Only `is-active testsvc` is counted. On Debian the script also asks about
+# unattended-upgrades.service, a branch macOS never reaches — counting every
+# call made this suite green on the laptop and red on every Linux box.
 cat > "$BIN/systemctl" <<STUB
 #!/bin/sh
-[ "\$1" = "is-active" ] || exit 0
+[ "\$1" = "is-active" ] && [ "\$2" = "testsvc" ] || exit 0
 n=\$(cat "$COUNT" 2>/dev/null || echo 0)
 n=\$((n + 1))
 echo "\$n" > "$COUNT"
