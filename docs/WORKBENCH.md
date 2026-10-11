@@ -253,6 +253,13 @@ separate thing:
   containers, not an operator. See [The test loop](#the-test-loop).
 - **No Secure-Enclave signing key.** Signed merges stay on the laptop, so
   nothing this box produces carries a human attestation.
+- **No push to `main`.** Git and `gh` here authenticate as the machine account
+  `ignaciojimenez-builder`. It has a classic PAT scoped to `public_repo` only,
+  and is a collaborator with the write role. `main`'s ruleset admits only the
+  admin role, so this box can push branches and open PRs, but cannot push,
+  force-push or merge to `main` (forced 2026-10-11, PER-107). A repo the
+  builder has not been invited to is read-only from here; invite it
+  deliberately, per repo.
 
 `system/agent_access.yml` *does* run here — it runs on `hosts: all`. That is
 intended and is not a hole: it templates an `authorized_keys` file and ships no

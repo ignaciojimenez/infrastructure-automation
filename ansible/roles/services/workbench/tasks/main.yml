@@ -286,7 +286,7 @@
     content: |
       github.com:
           oauth_token: {{ workbench_gh_token }}
-          user: {{ gh_profile }}
+          user: {{ workbench_gh_user }}
           git_protocol: https
     dest: "/home/{{ workbench_agent_user }}/.config/gh/hosts.yml"
     mode: '0600'
@@ -299,7 +299,7 @@
   ansible.builtin.copy:
     owner: "{{ workbench_agent_user }}"
     group: "{{ workbench_agent_user }}"
-    content: "https://{{ gh_profile }}:{{ workbench_gh_token }}@github.com\n"
+    content: "https://{{ workbench_gh_user }}:{{ workbench_gh_token }}@github.com\n"
     dest: "/home/{{ workbench_agent_user }}/.git-credentials"
     mode: '0600'
   no_log: true

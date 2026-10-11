@@ -60,5 +60,12 @@ workbench_remote_control_enabled: true
 # Neither is a fleet secret: the GitHub token reaches repos, and the Claude
 # token reaches Anthropic. Losing this box costs the two of them and nothing
 # on the network — which is the whole reason it holds no vault password.
+# The builder pushes as its OWN GitHub account, never as Ignacio (PER-107).
+# main carries a ruleset whose only bypass is the repo admin role; a token that
+# acts as the owner IS admin and walks straight through it. A collaborator gets
+# the write role: branches and PRs yes, main no. Classic PAT, `public_repo`
+# only — GitHub does not let fine-grained PATs write to another user's repo.
+# gh_profile stays the repo OWNER (clone URLs); this is who logs in.
+workbench_gh_user: ignaciojimenez-builder
 workbench_gh_token: "{{ vault_builder_gh_token }}"
 workbench_anthropic_token: "{{ vault_anthropic_builder_token }}"
