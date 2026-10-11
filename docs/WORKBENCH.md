@@ -236,6 +236,58 @@ provisioning script needs `provision_rig_access.yml` from the laptop.
 
 ---
 
+## The unattended builder (PER-85 part 2)
+
+Turns a Tier 1 finding into a draft PR with a test result, with nobody in the
+middle. Design and what was rejected: ARCHITECTURE_DECISIONS.md § Agent Access.
+
+```
+agent-lxc   :37 sweep -> :47 Tier 2 plan -> :57 filer: agent/fleet issue + plan comment
+workbench   :17 fleet-builder.timer (root): oldest Todo agent/fleet issue with a plan
+              -> attempt recorded -> as autobuilder: worktree builder/PER-x from origin/main
+              -> claude -p (file tools only, no MCP) -> diff limits -> unit tests -> rig_loop.sh
+              -> draft PR "fix(PER-x): …"   or, after 2 failures / a decline / 2 kills,
+                 draft PR "[hand-back] PER-x: …" (an empty commit; reasons + last diff in the body)
+agent-lxc   :57 filer: comments that PR on the issue, once
+```
+
+| Piece | Where | Owner / mode |
+|---|---|---|
+| poller, run script, isolation check | `/usr/local/lib/fleet-builder/` | root, 0755 |
+| read-only Linear key, Claude token | `/etc/fleet-builder/` | root, 0600 |
+| attempt state, daily count | `/var/lib/fleet-builder/issues/<PER-x>`, `daily/<UTC date>` | root, 0700 |
+| job dirs (prompt, claude.json, unit.log, rig.log, diff, cost) | `/var/lib/fleet-builder-jobs/<PER-x>-<n>` | autobuilder |
+| clone and worktrees | `/home/autobuilder/{repo,worktrees}` | autobuilder, 0700 |
+| log | `/var/log/fleet_builder.log` | root |
+
+**Why `autobuilder` and not `builder`.** The harness runs tests the model may
+have edited, so that code runs with the account's reach. `builder` has the
+claude.ai login, and on it `claude -p` loads Gmail, Drive, Calendar and Slack.
+`autobuilder` has no login, no MCP servers, and is refused every path in the
+table above that it does not own. `fleet-builder-isolation.timer` re-proves
+that hourly at :30 and fails its unit — which the sweep reports — if any of
+those becomes readable, **or missing**: a check that a missing file is
+"unreadable" would pass forever.
+
+**Limits** (`roles/services/workbench/defaults`, `builder_*`): 2 attempts per
+issue, 2 attempts per UTC day, 60 changed lines, no vault, CI, inventory or
+`docs/local/` paths, $3 and 30 min per model run. Nothing merges: the machine
+account cannot push to `main`.
+
+**Operating it** (as `choco`, with sudo):
+
+```sh
+sudo systemctl start fleet-builder.service       # one poll now
+sudo systemctl kill fleet-builder.service        # abort; the attempt is already counted
+sudo cat /var/lib/fleet-builder/issues/PER-123   # attempt history, final outcome
+sudo tail -50 /var/log/fleet_builder.log
+sudo rm /var/lib/fleet-builder/issues/PER-123    # let the builder try an issue afresh
+```
+
+**The one number:** share of builder PRs merged without edits, and cost per
+merged PR. Both come from GitHub alone: a PR merged with only commits authored
+by `ignaciojimenez-builder`, and the `builder-cost-usd:` line in its body.
+
 ## Deliberate absences
 
 None of these are toggles to flip. They are the reason the box exists as a

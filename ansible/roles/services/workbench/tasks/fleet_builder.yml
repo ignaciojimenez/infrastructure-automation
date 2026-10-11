@@ -1,0 +1,286 @@
+---
+# Unattended builder — PER-85 part 2
+#
+# Imported (static) from main.yml, so tags on these tasks are real tags and
+# `--tags builder` runs them, rather than skipping a dynamic include.
+#
+#   root timer  -> fleet_builder_poll.sh   Linear (read-only key), attempt
+#                                          state, limits. Root-only.
+#               -> fleet_builder_run.sh    as builder_run_user: worktree,
+#                                          `claude -p`, tests, draft PR.
+#
+# The split is by Unix account, on purpose: the model's code is executed by
+# the harness (the tests it may edit), so whatever that account can read, the
+# model can. It can read the GitHub token for this repo and the rig key. It
+# cannot read the Linear key, the attempt count, or a claude.ai login.
+
+- name: Create the unattended builder account
+  become: true
+  ansible.builtin.user:
+    name: "{{ builder_run_user }}"
+    shell: /bin/sh
+    create_home: true
+    home: "{{ builder_run_home }}"
+    password_lock: true
+    comment: "Unattended builder — draft PRs only, no claude.ai login (PER-85)"
+  tags: [workbench, builder]
+
+- name: Keep the unattended builder's home private
+  become: true
+  ansible.builtin.file:
+    path: "{{ builder_run_home }}"
+    state: directory
+    owner: "{{ builder_run_user }}"
+    group: "{{ builder_run_user }}"
+    mode: '0700'
+  tags: [workbench, builder]
+
+# ── Claude Code, as that account (the installer refuses root; see main.yml) ──
+
+- name: Check whether Claude Code is installed for the unattended builder
+  become: true
+  ansible.builtin.stat:
+    path: "{{ builder_claude_bin }}"
+  register: builder_claude_installed
+  tags: [workbench, builder]
+
+- name: Download the Claude Code installer for the unattended builder
+  become: true
+  become_user: "{{ builder_run_user }}"
+  ansible.builtin.get_url:
+    url: "{{ workbench_claude_install_url }}"
+    dest: "{{ builder_run_home }}/.claude_install.sh"
+    mode: '0700'
+  when: not builder_claude_installed.stat.exists
+  tags: [workbench, builder]
+
+- name: Install Claude Code for the unattended builder
+  become: true
+  become_user: "{{ builder_run_user }}"
+  ansible.builtin.command:
+    cmd: "{{ builder_run_home }}/.claude_install.sh {{ workbench_claude_channel }}"
+  when: not builder_claude_installed.stat.exists
+  changed_when: true
+  tags: [workbench, builder]
+
+- name: Remove the installer from the unattended builder's home
+  become: true
+  ansible.builtin.file:
+    path: "{{ builder_run_home }}/.claude_install.sh"
+    state: absent
+  tags: [workbench, builder]
+
+# ── GitHub: the same machine account as the interactive builder ─────────────
+# Root writes and chowns, for the reason given in main.yml: no world-readable
+# temp file for a token.
+
+- name: Ensure the unattended builder's config directories exist
+  become: true
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ builder_run_user }}"
+    group: "{{ builder_run_user }}"
+    mode: '0700'
+  loop:
+    - "{{ builder_run_home }}/.config"
+    - "{{ builder_run_home }}/.config/gh"
+    - "{{ builder_run_home }}/.ssh"
+  tags: [workbench, builder]
+
+- name: Authenticate the GitHub CLI for the unattended builder
+  become: true
+  ansible.builtin.copy:
+    owner: "{{ builder_run_user }}"
+    group: "{{ builder_run_user }}"
+    content: |
+      github.com:
+          oauth_token: {{ workbench_gh_token }}
+          user: {{ workbench_gh_user }}
+          git_protocol: https
+    dest: "{{ builder_run_home }}/.config/gh/hosts.yml"
+    mode: '0600'
+  no_log: true
+  tags: [workbench, builder]
+
+- name: Store git credentials for the unattended builder
+  become: true
+  ansible.builtin.copy:
+    owner: "{{ builder_run_user }}"
+    group: "{{ builder_run_user }}"
+    content: "https://{{ workbench_gh_user }}:{{ workbench_gh_token }}@github.com\n"
+    dest: "{{ builder_run_home }}/.git-credentials"
+    mode: '0600'
+  no_log: true
+  tags: [workbench, builder]
+
+- name: Configure git for the unattended builder
+  become: true
+  ansible.builtin.copy:
+    owner: "{{ builder_run_user }}"
+    group: "{{ builder_run_user }}"
+    content: |
+      # Managed by Ansible (roles/services/workbench). Do not edit.
+      [credential]
+          helper = store
+      [user]
+          name = {{ builder_git_name }}
+          email = {{ builder_git_email }}
+    dest: "{{ builder_run_home }}/.gitconfig"
+    mode: '0600'
+  tags: [workbench, builder]
+
+# ── The rig key: copied on the box; the private half never leaves it ────────
+# provision_rig_access.yml generated it in the interactive builder's home and
+# authorised it on cwwk. The unattended builder uses the same grant: CT
+# 198/199 and five verbs, nothing else.
+
+- name: Give the unattended builder the rig key
+  become: true
+  ansible.builtin.copy:
+    src: "/home/{{ workbench_agent_user }}/.ssh/{{ item.name }}"
+    dest: "{{ builder_run_home }}/.ssh/{{ item.name }}"
+    remote_src: true
+    owner: "{{ builder_run_user }}"
+    group: "{{ builder_run_user }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { name: rig_runner_ed25519, mode: '0600' }
+    - { name: rig_runner_ed25519.pub, mode: '0644' }
+  tags: [workbench, builder]
+
+# ── Root side: credentials, scripts, state ─────────────────────────────────
+
+- name: Ensure the builder's root-only directories exist
+  become: true
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+  loop:
+    - "{{ builder_etc_dir }}"
+    - "{{ builder_state_dir }}"
+  tags: [workbench, builder]
+
+# root:<run user> 0750: the run script reads the previous attempt's job dir for
+# a hand-back; nobody else needs to.
+- name: Ensure the builder jobs directory exists
+  become: true
+  ansible.builtin.file:
+    path: "{{ builder_jobs_dir }}"
+    state: directory
+    owner: root
+    group: "{{ builder_run_user }}"
+    mode: '0750'
+  tags: [workbench, builder]
+
+- name: Ensure the builder library directory exists
+  become: true
+  ansible.builtin.file:
+    path: "{{ builder_lib_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  tags: [workbench, builder]
+
+# A header file, so the key reaches curl as `-H @file` and never argv.
+- name: Deploy the builder's read-only Linear key
+  become: true
+  ansible.builtin.copy:
+    content: "Authorization: {{ vault_builder_linear_api_key }}\n"
+    dest: "{{ builder_linear_auth_file }}"
+    owner: root
+    group: root
+    mode: '0600'
+  no_log: true
+  tags: [workbench, builder]
+
+- name: Deploy the builder's Claude token
+  become: true
+  ansible.builtin.copy:
+    content: "CLAUDE_CODE_OAUTH_TOKEN={{ workbench_anthropic_token }}\n"
+    dest: "{{ builder_claude_env_file }}"
+    owner: root
+    group: root
+    mode: '0600'
+  no_log: true
+  tags: [workbench, builder]
+
+- name: Deploy the root-owned monitoring wrapper for the builder
+  become: true
+  ansible.builtin.copy:
+    src: "{{ inventory_dir }}/../../scripts/common/enhanced_monitoring_wrapper"
+    dest: "{{ builder_lib_dir }}/enhanced_monitoring_wrapper"
+    owner: root
+    group: root
+    mode: '0755'
+  tags: [workbench, builder]
+
+- name: Deploy the builder scripts
+  become: true
+  ansible.builtin.template:
+    src: "{{ inventory_dir }}/../../scripts/services/workbench/{{ item }}.j2"
+    dest: "{{ builder_lib_dir }}/{{ item }}"
+    owner: root
+    group: root
+    mode: '0755'
+  loop:
+    - fleet_builder_poll.sh
+    - fleet_builder_run.sh
+    - check_builder_isolation.sh
+  tags: [workbench, builder]
+
+# The wrapper takes the Slack tokens as arguments. Kept in a 0700 root file
+# rather than the unit, because unit properties are readable over D-Bus by any
+# local user. ⚠️ They are still in the wrapper's argv while it runs — the same
+# exposure as every cron line in the fleet (PER-15).
+- name: Deploy the builder entry point
+  become: true
+  ansible.builtin.copy:
+    content: |
+      #!/bin/sh
+      # Managed by Ansible (roles/services/workbench). Do not edit.
+      exec {{ builder_lib_dir }}/enhanced_monitoring_wrapper \
+          --monitoring-name=fleet_builder \
+          --state-file={{ builder_state_dir }}/wrapper_state.json \
+          --heartbeat-interval=daily \
+          --notify-fixed=true \
+          {{ logging_token }} {{ alert_token }} \
+          {{ builder_lib_dir }}/fleet_builder_poll.sh
+    dest: "{{ builder_lib_dir }}/entry.sh"
+    owner: root
+    group: root
+    mode: '0700'
+  no_log: true
+  tags: [workbench, builder]
+
+- name: Deploy the builder units
+  become: true
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    owner: root
+    group: root
+    mode: '0644'
+  loop:
+    - fleet-builder.service
+    - fleet-builder.timer
+    - fleet-builder-isolation.service
+    - fleet-builder-isolation.timer
+  register: builder_units
+  tags: [workbench, builder]
+
+- name: Enable the builder timers
+  become: true
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+    daemon_reload: "{{ builder_units.changed }}"
+  loop:
+    - fleet-builder.timer
+    - fleet-builder-isolation.timer
+  tags: [workbench, builder]

@@ -1,0 +1,24 @@
+# Unattended builder — PER-85 part 2
+# Managed by Ansible (roles/services/workbench). Do not edit on the host.
+#
+# Root, oneshot. The poller holds the read-only Linear key and the attempt
+# state; it hands the checkout, model and PR work to {{ builder_run_user }}.
+# A oneshot is never started twice concurrently, so overlapping timer ticks
+# cannot double an attempt.
+#
+# Kill it mid-attempt with `systemctl kill fleet-builder.service`: the attempt
+# is already on disk, so the next tick retries it or hands it back.
+
+[Unit]
+Description=Fleet builder: agent/fleet issues to draft PRs (PER-85)
+Documentation=https://github.com/{{ gh_profile }}/infrastructure-automation/blob/main/docs/WORKBENCH.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart={{ builder_lib_dir }}/entry.sh
+# The model run, the unit tests and two rig converges, with room to spare.
+TimeoutStartSec={{ builder_claude_timeout_seconds + builder_rig_timeout_seconds + 900 }}
+StandardOutput=append:{{ builder_log }}
+StandardError=append:{{ builder_log }}

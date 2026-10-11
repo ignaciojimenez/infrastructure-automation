@@ -93,6 +93,11 @@ cannot disagree. Its rules:
   the hosts it actually observed. `last_anomaly.json` can't serve, because it is never cleared.
 - **Identity:** an attachment whose URL ends `?incident=<key>`, with the absence mark in its
   metadata. This is the todo-harness convention.
+- **Builder PRs (PER-85 part 2):** each run reads the repo's 100 newest PRs from GitHub's API
+  without a token (the repo is public; the Linear key never goes to GitHub). A PR on
+  `builder/<PER-x>` by `ignaciojimenez-builder`, from this repo and not a fork, is commented on
+  that issue once — as a draft PR or a hand-back. If GitHub cannot be read, the run still
+  reconciles Linear, then fails so the wrapper pages. The builder itself: `docs/WORKBENCH.md`.
 
 The Linear key is **Read + Write, team PER only**. It sits in `/etc/fleet-linear/auth.header`
 (0600 root) and reaches curl as `-H @file`. The filer, its wrapper and `incident_subjects.py` are

@@ -1,0 +1,12 @@
+# Builder isolation check — PER-85 part 2
+# Managed by Ansible (roles/services/workbench). Do not edit on the host.
+#
+# Root, oneshot, no wrapper on purpose: a failure leaves this unit failed, and
+# the agent-lxc sweep reports failed units fleet-wide. That is the alert path.
+
+[Unit]
+Description=Builder isolation: {{ builder_run_user }} cannot read the builder's secrets (PER-85)
+
+[Service]
+Type=oneshot
+ExecStart={{ builder_lib_dir }}/check_builder_isolation.sh

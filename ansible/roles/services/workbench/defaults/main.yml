@@ -177,3 +177,69 @@ workbench_tmux_session: workbench
 # actually up, and a box that went quiet after a reboot is the failure mode
 # this exists to catch.
 workbench_heartbeat_minute: "*/15"
+
+# ============================================================
+# Unattended builder — PER-85 part 2 (tasks/fleet_builder.yml)
+#
+# A root timer reads Todo + agent/fleet issues with a READ-ONLY Linear key and
+# hands one at a time to a separate account that runs `claude -p` in a
+# worktree and opens a draft PR. Operator reference: docs/WORKBENCH.md.
+# ============================================================
+
+# On once the read-only key is in the vault, like the filer on agent-lxc.
+enable_fleet_builder: "{{ vault_builder_linear_api_key is defined }}"
+
+# 🔴 NOT workbench_agent_user. `builder` holds the claude.ai login, and with it
+# the account's connectors (Gmail, Drive, Calendar, Slack — forced 2026-10-11:
+# 102 MCP tools in a headless run on that login). The harness must run tests
+# the model wrote; as `builder`, that code could start `claude -p` with all of
+# them. This account has no claude.ai login, only a copy of the machine
+# GitHub token and the rig key. Names become permissions: it builds, unattended.
+builder_run_user: autobuilder
+builder_run_home: "/home/{{ builder_run_user }}"
+
+builder_lib_dir: /usr/local/lib/fleet-builder
+builder_etc_dir: /etc/fleet-builder
+builder_state_dir: /var/lib/fleet-builder
+builder_jobs_dir: /var/lib/fleet-builder-jobs
+builder_log: /var/log/fleet_builder.log
+builder_linear_auth_file: "{{ builder_etc_dir }}/linear.header"
+builder_claude_env_file: "{{ builder_etc_dir }}/claude.env"
+builder_run_script: "{{ builder_lib_dir }}/fleet_builder_run.sh"
+builder_run_as: "setpriv --reuid={{ builder_run_user }} --regid={{ builder_run_user }} --init-groups"
+
+# The same workspace IDs the filer uses (roles/services/agent/defaults). Read
+# from the API, not guessed; the filer has used them live since 2026-10-11.
+builder_linear_endpoint: "https://api.linear.app/graphql"
+builder_linear_team_id: "321cb6ff-678a-4e87-b4e8-5c9464de53c8"         # PER
+builder_linear_todo_state_id: "ab858e0f-c915-4b4b-baf4-99706f9f8210"   # Todo
+builder_linear_fleet_label_id: "1215bd1c-a99a-4a04-babe-cea3558c085f"  # agent/fleet
+
+# Shadow-mode limits (PER-85 design refinements). Two attempts mirrors Stripe's
+# two CI runs; the cap counts attempts, because attempts are what spend.
+builder_max_attempts: 2
+builder_daily_cap: 2
+builder_max_diff_lines: 60
+builder_model: sonnet
+builder_budget_usd: 3
+builder_claude_timeout_seconds: 1800
+builder_rig_timeout_seconds: 2700
+
+builder_repo_url: "https://github.com/{{ gh_profile }}/infrastructure-automation.git"
+builder_clone_dir: "{{ builder_run_home }}/repo"
+builder_worktrees_dir: "{{ builder_run_home }}/worktrees"
+builder_claude_bin: "{{ builder_run_home }}/.local/bin/claude"
+# GitHub's noreply form for the machine account (id from the users API), so
+# "merged without edits" can be read from commit authorship alone.
+builder_git_name: ignaciojimenez-builder
+builder_git_email: "341093942+ignaciojimenez-builder@users.noreply.github.com"
+
+# :17 — after the sweep (:37), Tier 2 (:47) and the filer (:57) of the hour
+# before, so a plan posted at :57 is picked up twenty minutes later.
+builder_timer_oncalendar: "*-*-* *:17:00"
+
+# check_builder_isolation.sh — re-proves the boundary above every hour, as the
+# unattended account. :30, so a failed unit is already there for the :37 sweep,
+# which is what reports it (#home-alerts, and an agent/fleet issue).
+builder_interactive_home: "/home/{{ workbench_agent_user }}"
+builder_isolation_oncalendar: "*-*-* *:30:00"

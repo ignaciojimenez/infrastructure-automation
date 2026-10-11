@@ -1,0 +1,12 @@
+# Builder isolation check — PER-85 part 2
+# Managed by Ansible (roles/services/workbench). Do not edit on the host.
+
+[Unit]
+Description=Builder isolation check, hourly (PER-85)
+
+[Timer]
+OnCalendar={{ builder_isolation_oncalendar }}
+Persistent=false
+
+[Install]
+WantedBy=timers.target
