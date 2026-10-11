@@ -86,6 +86,7 @@ export STUB_CTL="$WORK/ctl" STUB_STATE="$WORK/state" STUB_LOG="$WORK/stub.log"
 : > "$FAKE_LINEAR_ARGV"
 : > "$STUB_LOG"
 
+# shellcheck disable=SC2016  # literal: written for another shell to expand
 PLAN='**Tier 2 investigation plan** — `/x/plans/p.md` on agent-lxc'
 
 # seed <ref> <with plan: 1|0> [state id] — one agent/fleet issue in the fake.

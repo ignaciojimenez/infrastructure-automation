@@ -40,7 +40,9 @@ echo "token=${CLAUDE_CODE_OAUTH_TOKEN:-absent}" >> "$STUB_LOG"
 grep -q BROKEN scripts/check_x.sh && { echo "FAILED: check_x"; exit 1; }
 echo "✅ 3/3 unit suites passed"
 EOF
+# shellcheck disable=SC2016  # literal: written for another shell to expand
 printf '#!/bin/sh\necho "rig $(pwd | sed s:.*/::) token=${CLAUDE_CODE_OAUTH_TOKEN:-absent}" >> "$STUB_LOG"\n[ -z "${RIG_FAIL:-}" ] || { echo "changed=3 on second converge"; exit 1; }\necho "PASS: converged, second run changed=0"\n' > "$WORK/rig.sh"
+# shellcheck disable=SC2016  # literal: written for another shell to expand
 printf '#!/bin/sh\necho "threshold=$((90 + 1O))"\n' > "$WORK/seed/scripts/check_x.sh"
 git -C "$WORK/seed" add -A
 git -C "$WORK/seed" -c user.name=t -c user.email=t@t commit --quiet -m init

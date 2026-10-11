@@ -47,7 +47,10 @@ python3 "$REPO_ROOT/tests/lib/render_j2.py" "$TEMPLATE" "$WORK/sync.sh" \
     agent_linear_broken_label_id=label-broken \
     agent_linear_incident_url_base="$URL_BASE" \
     agent_linear_close_after_seconds="$CLOSE" \
-    agent_linear_stale_after_seconds=7200 || exit 1
+    agent_linear_stale_after_seconds=7200 \
+    agent_builder_pulls_url="https://api.github.invalid/repos/o/r/pulls" \
+    agent_builder_login=ignaciojimenez-builder \
+    agent_builder_repo=o/r || exit 1
 
 cp "$REPO_ROOT/tests/lib/fake_linear_curl.py" "$WORK/bin/curl"
 chmod +x "$WORK/bin/curl"
@@ -230,6 +233,69 @@ mv "$WORK/auth.off" "$WORK/auth.header"
 sweep $((T0 + 9 * HOUR + CLOSE)) "$ALL" "garbage-without-host-separator"
 run $((T0 + 9 * HOUR + CLOSE))
 if [ "$RC" -ne 0 ] && grep -q "none keyed" "$WORK/out"; then pass "findings that key to nothing fail, not read as healthy"; else fail "unkeyed findings: rc=$RC $(cat "$WORK/out")"; fi
+
+printf '\n── The builder'"'"'s draft PRs reach their issue, once each\n'
+
+# Fresh state: one open issue for the disk finding, nothing posted yet.
+rm -f "$FAKE_LINEAR_DB"; rm -rf "$WORK/state"; mkdir -p "$WORK/state"
+sweep "$T0" "$ALL" "$DISK"
+run "$T0"
+REF=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["issues"][0]["identifier"])' "$FAKE_LINEAR_DB")
+pr() {  # pr <number> <head ref> <login> <repo> <title>
+    printf '{"html_url":"https://github.com/o/r/pull/%s","title":"%s","user":{"login":"%s"},"head":{"ref":"%s","repo":{"full_name":"%s"}}}' "$1" "$5" "$3" "$2" "$4"
+}
+{
+    printf '['
+    pr 7 "builder/$REF" ignaciojimenez-builder o/r "fix($REF): fix the threshold"; printf ','
+    pr 8 "builder/$REF" mallory mallory/r "fix($REF): from a fork"; printf ','
+    pr 9 "builder/$REF" mallory o/r "fix($REF): wrong author"; printf ','
+    pr 10 "builder/PER-1" ignaciojimenez-builder o/r "fix(PER-1): another issue"
+    printf ']'
+} > "$WORK/pulls.json"
+export FAKE_GITHUB_PULLS="$WORK/pulls.json"
+sweep $((T0 + HOUR)) "$ALL" "$DISK"
+run $((T0 + HOUR))
+if [ "$RC" -eq 0 ] && [ "$(ops commentCreate)" = 1 ] &&
+   comments_of 0 | grep -q "Builder opened a draft PR.*https://github.com/o/r/pull/7$"; then
+    pass "the builder's PR is commented on its issue"
+else
+    fail "PR not posted: rc=$RC $(cat "$FAKE_LINEAR_LOG") / $(cat "$WORK/out")"
+fi
+if ! comments_of 0 | grep -q -e "pull/8" -e "pull/9" -e "pull/10"; then
+    pass "a fork, another author, or another issue's branch is ignored"
+else
+    fail "believed a PR it should not have: $(comments_of 0)"
+fi
+if grep -q "^github GET no-credential$" "$FAKE_LINEAR_LOG"; then
+    pass "the GitHub read carries no credential (the Linear key never goes to GitHub)"
+else
+    fail "GitHub read: $(grep github "$FAKE_LINEAR_LOG")"
+fi
+sweep $((T0 + 2 * HOUR)) "$ALL" "$DISK"
+run $((T0 + 2 * HOUR))
+if [ "$(ops commentCreate)" = 0 ]; then pass "the same PR is not posted twice"; else fail "PR re-posted"; fi
+{
+    printf '['
+    pr 11 "builder/$REF" ignaciojimenez-builder o/r "[hand-back] $REF: no fix passed the unit tests and the rig"; printf ','
+    pr 7 "builder/$REF" ignaciojimenez-builder o/r "fix($REF): fix the threshold"
+    printf ']'
+} > "$WORK/pulls.json"
+sweep $((T0 + 3 * HOUR)) "$ALL" "$DISK"
+run $((T0 + 3 * HOUR))
+if [ "$(ops commentCreate)" = 1 ] && comments_of 0 | grep -q "Builder handed this back.*pull/11$"; then
+    pass "a hand-back is commented as a hand-back"
+else
+    fail "hand-back: $(cat "$FAKE_LINEAR_LOG")"
+fi
+FAKE_GITHUB_FAIL=1; export FAKE_GITHUB_FAIL
+sweep $((T0 + 4 * HOUR)) "$ALL" "$DISK"
+run $((T0 + 4 * HOUR))
+unset FAKE_GITHUB_FAIL FAKE_GITHUB_PULLS
+if [ "$RC" -ne 0 ] && grep -q "could not read builder PRs" "$WORK/out" && grep -q "builder PRs posted 0" "$WORK/out"; then
+    pass "GitHub unreachable: Linear still reconciled, then the run fails (pages)"
+else
+    fail "GitHub failure swallowed: rc=$RC $(cat "$WORK/out")"
+fi
 
 printf '\n── The credential never reaches argv\n'
 

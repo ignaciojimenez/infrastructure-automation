@@ -286,3 +286,11 @@ agent_linear_stale_after_seconds: 7200
 # :57 — after the :37 sweep and the :47 anomaly investigation, so a new
 # finding and its plan usually land in the same run.
 agent_linear_minute: "57"
+
+# The builder's draft PRs (PER-85 part 2), read without a token: the repo is
+# public. The 100 most recent PRs, newest first — one request per run, well
+# inside GitHub's 60/h unauthenticated limit. Only PRs whose author is the
+# builder's login AND whose head is this repo are believed.
+agent_builder_login: ignaciojimenez-builder
+agent_builder_repo: "{{ gh_profile }}/infrastructure-automation"
+agent_builder_pulls_url: "https://api.github.com/repos/{{ agent_builder_repo }}/pulls?state=all&sort=created&direction=desc&per_page=100"

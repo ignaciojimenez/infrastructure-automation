@@ -15,6 +15,8 @@ only be tested against something that remembers the first.
     FAKE_LINEAR_ARGV  every argv, one per line — to prove the key is not in it
     FAKE_LINEAR_FAIL  operation name to answer with a GraphQL error
     FAKE_LINEAR_MORE  if set, the issues query reports hasNextPage
+    FAKE_GITHUB_PULLS JSON file answered to a GET (the builder-PR list)
+    FAKE_GITHUB_FAIL  if set, that GET fails as curl would
 """
 
 import json
@@ -30,6 +32,18 @@ def main() -> int:
     args = sys.argv[1:]
     with open(os.environ["FAKE_LINEAR_ARGV"], "a") as f:
         f.write(" ".join(args) + "\n")
+
+    # A GET with no body is the builder-PR read from GitHub (fleet_linear_sync).
+    # It must carry no credential: the Linear key never goes to GitHub.
+    if "--data-binary" not in args:
+        with open(os.environ["FAKE_LINEAR_LOG"], "a") as f:
+            f.write(f"github GET {'with-header-file' if any(a.startswith('@') for a in args) else 'no-credential'}\n")
+        if os.environ.get("FAKE_GITHUB_FAIL"):
+            print("curl: (6) Could not resolve host", file=sys.stderr)
+            return 6
+        pulls = os.environ.get("FAKE_GITHUB_PULLS")
+        print(open(pulls).read() if pulls and os.path.exists(pulls) else "[]")
+        return 0
 
     body = headers = None
     for i, a in enumerate(args):

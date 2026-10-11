@@ -49,12 +49,17 @@ FLEET_LABEL_ID="{{ agent_linear_fleet_label_id }}"
 BROKEN_LABEL_ID="{{ agent_linear_broken_label_id }}"
 URL_BASE="{{ agent_linear_incident_url_base }}"
 CLOSE_AFTER_SECONDS={{ agent_linear_close_after_seconds }}
+# The builder's draft PRs (PER-85 part 2): a public, unauthenticated read.
+PULLS_URL="{{ agent_builder_pulls_url }}"
+BUILDER_LOGIN="{{ agent_builder_login }}"
+BUILDER_REPO="{{ agent_builder_repo }}"
 STALE_AFTER_SECONDS={{ agent_linear_stale_after_seconds }}
 
 MARKER_SUBTITLE="fleet incident"
 SWEEP_STATE="$AGENT_DIR/sweep_state.json"
 INCIDENT_DIR="$AGENT_DIR/incidents"
 POSTED_DIR="$STATE_DIR/posted"
+PRS_POSTED_DIR="$STATE_DIR/builder_prs"
 
 # The clock is injectable so the 24 h close can be proven without waiting.
 NOW=${FLEET_LINEAR_NOW:-$(date +%s)}
@@ -90,7 +95,7 @@ sweep_age=$((NOW - sweep_ts))
 [ "$sweep_age" -le "$STALE_AFTER_SECONDS" ] ||
     die "sweep state is ${sweep_age}s old (limit ${STALE_AFTER_SECONDS}s) — Tier 1 has stopped writing it; reconciling nothing"
 
-mkdir -p "$POSTED_DIR" || die "cannot create $POSTED_DIR"
+mkdir -p "$POSTED_DIR" "$PRS_POSTED_DIR" || die "cannot create $POSTED_DIR"
 
 WORK=$(mktemp -d) || die "mktemp failed"
 trap 'rm -rf "$WORK"' EXIT INT TERM
@@ -303,5 +308,48 @@ while read -r key; do
     posted=$((posted + 1))
 done < "$WORK/active"
 
-echo "linear sync: $(wc -l < "$WORK/current" | tr -d ' ') incident(s) now; opened $opened, kept $kept, cleared $cleared, marked absent $marked, waiting $waiting, closed $closed, unobserved $unobserved, plans posted $posted"
+# ── The builder's draft PRs -> comments, once per PR ─────────────────────
+#
+# The builder on workbench-lxc holds no Linear write. Every issue it works
+# ends in a draft PR on builder/<PER-x>, from its own GitHub account: either
+# a fix or a "[hand-back]". This repo is public, so reading them needs no
+# token — and the Linear key must not go to GitHub, so this curl has no -H.
+#
+# Only PRs by the builder's login, from this repo's own branches, count. A
+# fork can name a branch builder/PER-1 too; that is not the builder.
+
+prs_posted=0 prs_failed=""
+if [ -s "$WORK/linear" ]; then
+    if curl -sS --max-time 30 -H 'Accept: application/vnd.github+json' \
+        "$PULLS_URL" > "$WORK/pulls" 2> "$WORK/pulls_err" &&
+       jq -e 'type == "array"' "$WORK/pulls" > /dev/null 2>&1; then
+        while IFS="$_tab" read -r key id ref absent; do
+            [ -n "$ref" ] || continue
+            jq -r --arg b "builder/$ref" --arg u "$BUILDER_LOGIN" --arg r "$BUILDER_REPO" '
+                .[] | select(.head.ref == $b and .user.login == $u and .head.repo.full_name == $r)
+                | [.html_url, .title] | @tsv' "$WORK/pulls" > "$WORK/prs_for"
+            while IFS="$_tab" read -r pr_url pr_title; do
+                case "$pr_url" in https://github.com/*/pull/[0-9]*) ;; *) continue ;; esac
+                grep -qxF "$pr_url" "$PRS_POSTED_DIR/$ref" 2>/dev/null && continue
+                case "$pr_title" in
+                    '[hand-back]'*) what="**Builder handed this back** — no fix passed the unit tests and the rig. Reasons are in the PR" ;;
+                    *) what="**Builder opened a draft PR** — tested with the unit tests and the rig; review and merge it by hand" ;;
+                esac
+                printf '%s: %s\n\n> %s\n' "$what" "$pr_url" "$pr_title" > "$WORK/pr_comment"
+                comment "$id" "$WORK/pr_comment" || exit 1
+                printf '%s\n' "$pr_url" >> "$PRS_POSTED_DIR/$ref"
+                echo "$ref: builder PR posted — $pr_url"
+                prs_posted=$((prs_posted + 1))
+            done < "$WORK/prs_for"
+        done < "$WORK/linear"
+    else
+        # Not fatal to the reconciliation above, which already happened; but
+        # a PR that never reaches its issue is the silent loss this exists to
+        # prevent, so the run still fails and the wrapper pages.
+        prs_failed="could not read builder PRs from GitHub: $(head -c 200 "$WORK/pulls_err" "$WORK/pulls" 2>/dev/null | tr '\n' ' ')"
+    fi
+fi
+
+echo "linear sync: $(wc -l < "$WORK/current" | tr -d ' ') incident(s) now; opened $opened, kept $kept, cleared $cleared, marked absent $marked, waiting $waiting, closed $closed, unobserved $unobserved, plans posted $posted, builder PRs posted $prs_posted"
+[ -z "$prs_failed" ] || die "$prs_failed"
 exit 0
