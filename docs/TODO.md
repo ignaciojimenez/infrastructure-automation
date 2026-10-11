@@ -145,6 +145,38 @@ headings say what is urgent.
 
 ### 🟠 P2 — known risk, not currently biting
 
+**45. unifi-lxc cannot `apt update`: Ubiquiti's repo key fails Debian 13's SHA1 policy**
+Found 2026-10-11 during the 3a fleet deploy: `Update package cache` fails on
+unifi-lxc ("Failed to update apt cache after 5 retries"). A throwaway
+unprivileged `apt-get update` shows why. Debian's `sqv` rejects the binding on
+Ubiquiti's key `4A228B2D…C0A52C50` (SHA1, "not considered secure since
+2026-02-01"). The repo's current `InRelease`, signed 2026-07-27, also needs a
+key the host does not have (`FCF764DF…6904B09E`). So:
+- **UniFi app updates are stuck.** Installed: 9.4.19; the cached UniFi list is
+  from Oct 2025.
+- **Every `bootstrap.yml`/`site.yml` run stops at the cache task on this host.**
+- **Debian security updates still arrive.** trixie-security lists refreshed 10 Oct.
+
+The repo is **not Ansible-managed**. `100-ubnt-unifi.sources` and the keyring
+`/etc/apt/keyrings/unifi-repo.gpg` came from Glenn R's install script
+(`glennr-*.sources`), not `roles/services/unifi`. Unverified: whether
+`FCF764DF…` is a published Ubiquiti key rotation.
+
+*Effort:* small. *Needs:* a laptop for the deploy.
+
+```
+TODO 45: unifi-lxc's apt update fails on Ubiquiti's repo signature. Read
+docs/TODO.md item 45 first. Get Ubiquiti's current repo signing key from
+Ubiquiti's own documentation (not a blog, not memory), confirm its
+fingerprint matches the FCF764DF… key the InRelease asks for, and that its
+binding passes sqv on Debian 13. Then bring the repo under Ansible in
+roles/services/unifi with deb822_repository (not apt_repository: it needs gpg
+on the target), replacing 100-ubnt-unifi.sources and the old keyring so apt
+does not see the repo twice. Prove: apt-get update clean on unifi-lxc,
+bootstrap.yml --limit unifi-lxc converges, second run changed=0. Do not
+upgrade the UniFi application as part of this; that is a separate decision.
+```
+
 **44. `bootstrap.yml` is unsafe on opnsense, and `site.yml` imports it with `always`**
 Found 2026-10-11 by a fleet `--check` of `bootstrap.yml` (TODO 3a). On opnsense it
 would **lock root's password** (`Lock root account`, `password_lock: true`), then
