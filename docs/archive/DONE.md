@@ -17,6 +17,7 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ## Contents
 
+- [2026-10-04 — bootstrap could not bootstrap a fresh host: its first run on a bare container (TODO 3a, PER-67)](#2026-10-04--bootstrap-could-not-bootstrap-a-fresh-host-its-first-run-on-a-bare-container-todo-3a-per-67)
 - [2026-10-04 — one fault, one paid investigation: Tier 2 dedup confirmed on a real alert (item 36, PER-58)](#2026-10-04--one-fault-one-paid-investigation-tier-2-dedup-confirmed-on-a-real-alert-item-36-per-58)
 - [2026-10-04 — a Home Assistant restart is not the phone answering, and the Eve doors get a day's grace](#2026-10-04--a-home-assistant-restart-is-not-the-phone-answering-and-the-eve-doors-get-a-days-grace)
 - [2026-09-28 — the test rig ran nothing: dead webhook tokens were the wrong shape, and the rig now owns its vault (item 43)](#2026-09-28--the-test-rig-ran-nothing-dead-webhook-tokens-were-the-wrong-shape-and-the-rig-now-owns-its-vault-item-43)
@@ -62,6 +63,54 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ---
 
+
+---
+
+## 2026-10-04 — bootstrap could not bootstrap a fresh host: its first run on a bare container (TODO 3a, PER-67)
+
+**The bare/root path of `bootstrap.yml` (the only one where it creates the
+infrastructure user) ran for the first time, on a `TEST_CT_BARE=1` CT 199, with
+no flags, the way a new host is bootstrapped.** On `main` it never got past its
+first task. The detection play probes `choco`, then `pi`, then `root`, but a
+refused login is UNREACHABLE, which `ignore_errors` does not cover, so the host
+left the play at the first probe. **Fixed with `ignore_unreachable` on that play,
+and the conditions now read the probe's stdout instead of `is failed`.** An
+unreachable result has no `failed` key, so `is succeeded` reads it as true and
+would have picked `choco` on a host where `choco` does not exist.
+
+The other three faults all come from one root cause: tasks used `ansible_user_id`,
+which is root under `become`. Each was also redundant, so the fix was deletion:
+
+| Task | What it did | Why deleting is safe |
+|---|---|---|
+| `Ensure user has sudo privileges` | wrote `/etc/sudoers.d/root_nopasswd`, on every `site.yml` run on every host | `system/preflight.yml` grants the connecting user's sudo, keyed on `ansible_user`. Replaced with a `state: absent` for the residue; delete that once no host carries it |
+| `Lock password authentication for user` | locked root's password, again | `Lock root account` follows it; `ssh_hardening.yml` locks `ansible_user`'s |
+| `Set up SSH keys from GitHub` (user-creation block) | fetched `github.com/<user>.keys`, missed by the gist migration | the gist's exclusive write replaces it in the same run (observed) |
+
+📌 **`site.yml` imports `bootstrap.yml` with tag `always`.** Bootstrap runs on
+every fleet host on every `site.yml` run, not only on new ones. That is why only
+redundant tasks were deleted: the fleet's behaviour changes only by losing
+`root_nopasswd`.
+
+**Proof, CT 199:**
+
+| Run | Result |
+|---|---|
+| `main`, bare | UNREACHABLE at the first probe, nothing ran |
+| detection fix only, fresh bare | ok=34 changed=14 failed=0; `root_nopasswd` present (bug forced) |
+| all fixes, fresh bare | ok=31 changed=11 failed=0, detected `root`; root SSH refused, `choco` + sudo works, root `/sbin/nologin` |
+| second run | detected `choco`, **changed=0** |
+| a planted `root_nopasswd` | changed=1, on exactly the removal task; the file is gone |
+| `site.yml` ×2, fact cache cleared between | ok=112 changed=32 → ok=111 **changed=0** |
+
+**Rig note, not a bug:** the provisioner installs the fleet's fail2ban jail
+(`maxretry=5`). A bare run uses 4 of those 5 failures (an invalid user plus a
+failed password for both `choco` and `pi`). Any other failed login within 10 min
+bans the control machine: `Connection refused` for 10 min, cleared with
+`fail2ban-client set sshd unbanip` through `pct exec`. A fresh real host has no
+fail2ban yet. Also left as found: `connected_as_root` is always true under
+`become`. That is harmless, because creating the infrastructure user is also
+correct when connected as `pi`.
 
 ---
 

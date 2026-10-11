@@ -22,7 +22,8 @@ prove the change converges before it reaches a fleet host, and **so that**
 `bootstrap.yml` — the one playbook that by definition cannot be tested on an
 already-bootstrapped host — is testable at all.
 
-**Status: ~70% built.** What exists is good and was nearly lost to a
+**Status: built, from a bare host through to `changed=0`.** Two gaps remain
+(below), and neither blocks proving a change. What exists was nearly lost to a
 documentation error (see TEST_CONTAINER.md).
 
 | Built | |
@@ -36,6 +37,7 @@ documentation error (see TEST_CONTAINER.md).
 |---|---|
 | ~~`bootstrap.yml` and a full `site.yml` have never been run against a container~~ | ✅ **Done 2026-09-21.** Both converge against CT 199, and a second `site.yml` run reports `changed=0` — see goal 3's re-decision for the numbers. Doing it found the reason it had to be done: four SSH tasks reported `changed` forever, because `bootstrap.yml` forced `PermitRootLogin no` while the canonical template sets `prohibit-password` on a test host. The rig could never have reported "converged". |
 | ~~No one-command loop~~ | ✅ **Done 2026-10-03, and it runs on the workbench.** `tests/rig_loop.sh`: destroy → create → converge → `changed=0` on a second converge → destroy, always. Driven over the `rig_ct` grant, converging through `inventory_test/` only, with no fleet key and no vault password on the box. See [WORKBENCH.md](WORKBENCH.md#the-test-loop). |
+| ~~The bare/root bootstrap path had never run~~ | ✅ **Done 2026-10-04.** On a `TEST_CT_BARE=1` container it could not bootstrap at all: a refused login is UNREACHABLE, so detection never reached `root`. Fixed and proven from bare to `changed=0` ([archive/DONE.md](archive/DONE.md#2026-10-04--bootstrap-could-not-bootstrap-a-fresh-host-its-first-run-on-a-bare-container-todo-3a-per-67)). |
 | Not in CI | `.github/workflows/` runs `ansible-lint` only |
 | No `--create` in the sandbox | a fresh container still needs `ssh cwwk` and a Touch ID tap |
 

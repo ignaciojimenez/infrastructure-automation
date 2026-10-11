@@ -257,7 +257,9 @@ gives 11/11 both ways on the same container, keeps its A/B teeth, and runs
 
 ✅ `bootstrap.yml` and a full `site.yml` converge against a container (2026-09-21),
 and `tests/rig_loop.sh` proves it per change from the workbench. The bare/root
-bootstrap path is still untested — TODO 3a.
+bootstrap path converges too (2026-10-04, TODO 3a). On a bare container, the run
+uses 4 of fail2ban's 5 allowed failures, so don't probe root by hand straight
+afterwards: a fifth failure bans the control machine for 10 min.
 
 ## 7. Destroy when done
 

@@ -56,7 +56,7 @@ renders it:
 > **№1** 37 *(waiting on a real lockout)* →
 > **№2** 42 *(entrance door alert disabled 19 Sep, needs physical inspection)* →
 > **№3** 38 *(small follow-ups: MQTT timeout, 403 detection)* →
-> **№4** 2 → **№5** 4 (plex) → **№6** 9 → **№7** 3a/3c *(3b done 3 Oct)* → **№8** 39 →
+> **№4** 2 → **№5** 4 (plex) → **№6** 9 → **№7** 3c *(3a done 4 Oct, 3b 3 Oct)* → **№8** 39 →
 > **№9** 5 → **№10** 19 → **№11** 12 → **№12** 10 → **№13** 11 → **№14** 6 →
 > **№15** 7 → **№16** 34 *(small; restores `changed=0` as a signal for the docker role)* →
 > **№17–19** 8/13/14 · **№20** 32 *(git-history rewrite —
@@ -144,6 +144,74 @@ close would silently repoint them. Numbers are addresses, not ranks — the
 headings say what is urgent.
 
 ### 🟠 P2 — known risk, not currently biting
+
+**45. unifi-lxc cannot `apt update`: Ubiquiti's repo key fails Debian 13's SHA1 policy**
+Found 2026-10-11 during the 3a fleet deploy: `Update package cache` fails on
+unifi-lxc ("Failed to update apt cache after 5 retries"). A throwaway
+unprivileged `apt-get update` shows why. Debian's `sqv` rejects the binding on
+Ubiquiti's key `4A228B2D…C0A52C50` (SHA1, "not considered secure since
+2026-02-01"). The repo's current `InRelease`, signed 2026-07-27, also needs a
+key the host does not have (`FCF764DF…6904B09E`). So:
+- **UniFi app updates are stuck.** Installed: 9.4.19; the cached UniFi list is
+  from Oct 2025.
+- **Every `bootstrap.yml`/`site.yml` run stops at the cache task on this host.**
+- **Debian security updates still arrive.** trixie-security lists refreshed 10 Oct.
+
+The repo is **not Ansible-managed**. `100-ubnt-unifi.sources` and the keyring
+`/etc/apt/keyrings/unifi-repo.gpg` came from Glenn R's install script
+(`glennr-*.sources`), not `roles/services/unifi`. Unverified: whether
+`FCF764DF…` is a published Ubiquiti key rotation.
+
+*Effort:* small. *Needs:* a laptop for the deploy.
+
+```
+TODO 45: unifi-lxc's apt update fails on Ubiquiti's repo signature. Read
+docs/TODO.md item 45 first. Get Ubiquiti's current repo signing key from
+Ubiquiti's own documentation (not a blog, not memory), confirm its
+fingerprint matches the FCF764DF… key the InRelease asks for, and that its
+binding passes sqv on Debian 13. Then bring the repo under Ansible in
+roles/services/unifi with deb822_repository (not apt_repository: it needs gpg
+on the target), replacing 100-ubnt-unifi.sources and the old keyring so apt
+does not see the repo twice. Prove: apt-get update clean on unifi-lxc,
+bootstrap.yml --limit unifi-lxc converges, second run changed=0. Do not
+upgrade the UniFi application as part of this; that is a separate decision.
+```
+
+**44. `bootstrap.yml` is unsafe on opnsense, and `site.yml` imports it with `always`**
+Found 2026-10-11 by a fleet `--check` of `bootstrap.yml` (TODO 3a). On opnsense it
+would **lock root's password** (`Lock root account`, `password_lock: true`), then
+**fail** on `Configure SSH daemon for key-only auth`. OPNsense keeps its sshd
+config under `/usr/local/etc/ssh/`, generated from `config.xml`; there is no
+`/etc/ssh/sshd_config`. Both are on `main` already. Neither comes from the 3a
+branch, which was deployed to the other 8 hosts and kept away from opnsense.
+
+`ssh_hardening.yml` ("Disable root user login", imported by `services.yml` on
+every host) locks root's password on FreeBSD as well; it spares only the shell.
+Yet `--check` shows root's password is **unlocked** on opnsense today. Either
+neither task has run there since it was written, or OPNsense rewrites
+`master.passwd` from `config.xml` and undoes the lock. Unknown which.
+
+🔴 **Unverified, and it is the part that matters:** whether locking root's
+FreeBSD password locks the OPNsense GUI or console admin. Root is that admin.
+Until this is known, **run `site.yml`, `services.yml` and `bootstrap.yml` with
+`--limit '!opnsense'`.** Not biting now only because nobody has.
+
+*Effort:* small. *Needs:* a laptop, and a way back into opnsense that does not
+depend on the root password (the console menu on cwwk via `qm terminal`).
+
+```
+TODO 44: make bootstrap.yml safe on opnsense. Read docs/TODO.md item 44 first.
+Start by finding out, from OPNsense's own source or docs (not memory), whether
+the GUI and console authenticate root against the FreeBSD password database
+or against config.xml. Then pick the simple, standard fix: most likely, skip
+the root password lock on FreeBSD in BOTH bootstrap.yml and ssh_hardening.yml
+(ssh_hardening's "Disable root user login" spares only the shell today), and
+skip bootstrap's sshd lineinfile there the way ssh_hardening already gates its
+sshd tasks on os_family == "debian", because OPNsense owns both. Prove it
+with `bootstrap.yml` and `services.yml` `--check --diff --limit opnsense`
+showing no change and no failure. Do not run it for real on
+opnsense without a console path open.
+```
 
 **37. vinylstreamer's wifi recovery undid its own fix — DEPLOYED, waiting on a lockout**
 On 2026-09-13 wlan0 dropped at 06:31 and stayed off until 09:00; the host itself
@@ -256,56 +324,22 @@ real inventory connecting as the infra user over sudo, `provision_test_container
 creates *and* destroys, and CT 198 covers Debian 12 for the Pis. **Do not rebuild
 any of that.**
 
-*State:* 3b done (2026-10-03); 3a half done; 3c open. *Effort:* 3a small, 3c small.
-*Needs:* a laptop, and CT 199 started (`ssh cwwk 'sudo /usr/sbin/pct start 199'`).
+*State:* 3a done (2026-10-04); 3b done (2026-10-03); 3c open. *Effort:* 3c small.
+*Needs:* the workbench (3c extends `rig_ct`, which already creates CT 198/199 with no tap).
 
-**3a. Run `bootstrap.yml` and a full `site.yml` against a container — half done**
-✅ **The non-bare path is done (2026-09-21/28).** `bootstrap.yml` and a full
-`site.yml` both converge CT 199 against `ansible/inventory_test/` with
-`failed=0`, and a second `site.yml` run reports `changed=0`. Doing it found two
-things that had made the rig useless: `bootstrap.yml` flipped `PermitRootLogin`
-on every run so the rig could never report `changed=0` at all, and the rig's
-dead webhook tokens were the wrong *shape*, so the wrapper rejected them at its
-format gate and **no checked script had ever run on the rig** (archive/DONE.md).
+**3a. Run `bootstrap.yml` and a full `site.yml` against a container ✅ DONE 2026-10-04**
+Both paths now converge. The non-bare path was proven 2026-09-21/28; the
+bare/root path (user creation) ran for the first time on 2026-10-04 and could
+not bootstrap a fresh host at all. Fixed, then proven from bare: bootstrap →
+`changed=0` as `choco` → `site.yml` → `changed=0`. Write-up:
+[archive/DONE.md](archive/DONE.md#2026-10-04--bootstrap-could-not-bootstrap-a-fresh-host-its-first-run-on-a-bare-container-todo-3a-per-67).
 
-🔴 **Still untested: the bare/root path**, which is the only state where
-`bootstrap.yml`'s user-creation branch executes — the half this item most
-exists for. Everything below still applies to it.
-
-```
-TODO 3a (PER-67): prove bootstrap.yml's bare/root path on a test container.
-Read docs/TODO.md item 3 (3a and 3b) and docs/TESTING_GOALS.md goal 1 first.
-The inventory, provisioning and test loop exist — do not rebuild them.
-
-The non-bare path is already proven (tests/rig_loop.sh converges site.yml to
-changed=0 from the workbench); do NOT redo it. What remains is bootstrap.yml
-against a TEST_CT_BARE=1 container with -e ansible_user=root — the only state
-where its user-creation branch runs at all.
-
-How, from the laptop (rig_ct on cwwk never makes a bare container — it takes
-no caller parameters, by design; do not add one):
-- create: ssh cwwk 'sudo -n env TEST_CT_BARE=1 sh -s' < tests/provision_test_container.sh
-  (CT 199, 10.30.40.205; root gets the laptop's read_agent key, which is also
-  what inventory_test resolves rig_ssh_key to on the laptop)
-- destroy when done, even on failure:
-  ssh cwwk 'sudo -n env TEST_CT_VMID=199 sh -s -- --destroy' < tests/provision_test_container.sh
-- inventory ansible/inventory_test/hosts.yml ONLY, never the fleet one; its own
-  vault holds nothing real. ansible-playbook is a zsh wrapper that pre-auths
-  Touch ID; use --forks 1.
-
-Expect it to cut its own connection: since 2026-10-03 bootstrap sets
-PermitRootLogin no and gives root /sbin/nologin, and it writes the gist keys
-plus the rig key to the infrastructure user, not root. That is the designed end
-state — a host reachable as choco with sudo, not as root — so the run must
-leave choco reachable before root goes away. If it doesn't, that ordering is
-the real bug.
-
-Expect other failures too — that branch has never executed. For each, record
-whether it is a real playbook bug or a rig artefact, and fix only the real
-ones. Finish with changed=0 on a second bootstrap run connecting as choco,
-then site.yml converging. Run CI's checks locally before pushing, merge with
-git ms, record the result in TODO 3a. Simple, standard fixes only.
-```
+✅ **Deployed 2026-10-11** to the 8 Linux hosts (`--limit 'all:!opnsense'`, see
+item 44). Each one carried `root_nopasswd`, and each removed it. The second run
+gave **changed=0** on 7; unifi-lxc gave changed=0 up to its known apt failure
+(item 45). Unverified: opnsense's `/usr/local/etc/sudoers.d`, where a FreeBSD
+copy would sit (no agent shell there). Delete the cleanup task once that is
+checked.
 
 **3b. One command: create → converge → verify → destroy — on the workbench ✅ DONE 2026-10-03**
 📌 **The point was never the command, it was where it runs.** A cloud session
@@ -354,9 +388,9 @@ Still open, same root cause:
   could never fire. Fixed 2026-10-03 (`ansible_user`), forced on CT 199: `main`
   connected as `pi` deleted `pi` mid-run and went unreachable; the fix skips it
   as `pi` and still removes `pi` when connected as `choco`.
-- `Ensure user has sudo privileges` writes `/etc/sudoers.d/root_nopasswd`
-  (present on cwwk). Harmless — root needs no sudoers — but it is not what the
-  task meant.
+- ✅ `Ensure user has sudo privileges` wrote `/etc/sudoers.d/root_nopasswd`.
+  Fixed 2026-10-04 in 3a: deleted (redundant with preflight's grant); residue
+  removed on the next run.
 - GitHub keys bootstrap already left in root's `authorized_keys` on fleet hosts
   stay until removed deliberately. Unverified which hosts carry them:
   **Inventoried 2026-10-04** (`choco` + become): the same 5 keys in root's
