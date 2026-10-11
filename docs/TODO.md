@@ -152,7 +152,7 @@ headings say what is urgent.
 
 ### 🟠 P2 — known risk, not currently biting
 
-**48. The model can `cat` two of agent-lxc's credentials**
+**48. The model can `cat` two of agent-lxc's credentials** ([PER-112](https://linear.app/lacopadeeuropa/issue/PER-112))
 Found 2026-10-11 while placing PER-85's Linear key. The OpenCode allowlist
 permits `cat {{ agent_state_dir }}/*` (`opencode.json.j2`), and two credential
 files live in that directory: `opnsense_api.creds` (the firewall API
