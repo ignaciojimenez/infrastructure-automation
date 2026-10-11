@@ -11,6 +11,7 @@
 #   tests/sandbox.sh --push             # copy the working tree's scripts over
 #   tests/sandbox.sh --run system_health_check.sh
 #   tests/sandbox.sh --reset            # back to baseline
+#   tests/sandbox.sh --create           # destroy and recreate it fresh
 #   tests/sandbox.sh --status
 #
 # --push copies what is in your working tree right now, uncommitted included,
@@ -18,6 +19,11 @@
 # vault, no commit, just the file on the box in a second so you can run it.
 # Use the playbooks when you want to test the *deploy*; use this when you want
 # to test the *script*.
+#
+# --create runs on the workbench: it drives the rig_ct grant (ssh rig_runner@cwwk),
+# the same one tests/rig_loop.sh uses, so it needs no Touch ID tap. It takes
+# rig_loop's lock for that VMID, so it cannot recreate a container out from
+# under a converge in progress.
 #
 # See docs/TEST_CONTAINER.md for what these containers are and are not a proxy
 # for. tests/run_tests.sh is the batch suite; this is the manual door.
@@ -29,7 +35,14 @@ REPO_ROOT=$(cd -- "$(dirname -- "$0")/.." && pwd)
 
 TARGET="${SANDBOX_TARGET:-10.30.40.205}"
 SSH_USER="${SANDBOX_USER:-choco}"
-SSH_KEY="${SSH_KEY:-$HOME/.ssh/read_agent_ed25519}"
+# The key a container accepts depends on which control machine created it:
+# rig_ct installs the workbench's rig key, the laptop's provisioner run installs
+# read_agent's. Same first-found order as inventory_test/hosts.yml.
+RIG_KEY="$HOME/.ssh/rig_runner_ed25519"
+if [ -z "${SSH_KEY:-}" ]; then
+    SSH_KEY="$HOME/.ssh/read_agent_ed25519"
+    [ -r "$RIG_KEY" ] && SSH_KEY="$RIG_KEY"
+fi
 ACTION=shell
 RUN_CMD=""
 
@@ -41,7 +54,7 @@ warn() { printf '\033[0;33m warn:\033[0m %s\n' "$1" >&2; }
 die()  { printf '\033[0;31merror:\033[0m %s\n' "$1" >&2; exit 1; }
 
 usage() {
-    sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,/manual door\./p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 while [ $# -gt 0 ]; do
@@ -51,6 +64,7 @@ while [ $# -gt 0 ]; do
         --target) TARGET="${2:?--target needs a host}"; shift 2 ;;
         --push)   ACTION=push; shift ;;
         --reset)  ACTION=reset; shift ;;
+        --create) ACTION=create; shift ;;
         --status) ACTION=status; shift ;;
         --run)    ACTION=run; RUN_CMD="${2:?--run needs a script name}"; shift 2 ;;
         --shell)  ACTION=shell; shift ;;
@@ -61,6 +75,66 @@ done
 
 SSH="ssh -i $SSH_KEY -o IdentitiesOnly=yes -o IdentityAgent=none \
      -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
+
+# ------------------------------------------------------------------
+# --create comes before the guard below: the container may not exist yet.
+# ------------------------------------------------------------------
+if [ "$ACTION" = create ]; then
+    # The only two containers the rig_ct grant accepts; anything else is
+    # refused here rather than by the hypervisor.
+    case "$TARGET" in
+        10.30.40.205) VMID=199 ;;
+        10.30.40.206) VMID=198 ;;
+        *) die "--create knows CT 199 (10.30.40.205) and CT 198 (--deb12) only" ;;
+    esac
+    [ "$SSH_USER" = root ] \
+        && die "--create makes a normal container. A bare one (root only) is made from the laptop: TEST_CT_BARE=1, see docs/TEST_CONTAINER.md"
+    [ -r "$RIG_KEY" ] \
+        || die "no $RIG_KEY: --create runs on the workbench. From the laptop, see docs/TEST_CONTAINER.md"
+
+    # rig_loop's lock: recreating a container mid-converge would read as a
+    # playbook failure in the other session.
+    LOCK="/tmp/rig_loop.$VMID.lock"
+    mkdir "$LOCK" 2>/dev/null \
+        || die "CT $VMID is in use by a rig_loop (or a stale lock: rmdir $LOCK)"
+    # dash runs an EXIT trap on `exit`, not on death by signal.
+    trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+
+    rig() {
+        ssh -n -i "$RIG_KEY" -o IdentitiesOnly=yes -o IdentityAgent=none \
+            -o ControlPath=none -o BatchMode=yes -o ConnectTimeout=10 \
+            -o StrictHostKeyChecking=accept-new \
+            rig_runner@10.30.40.51 "$1"
+    }
+
+    if rig "status $VMID" >/dev/null 2>&1; then
+        warn "this destroys CT $VMID and everything on it"
+        printf 'continue? [y/N] '
+        read -r reply || reply=""
+        case "$reply" in [yY]*) : ;; *) die "aborted" ;; esac
+        say "Destroying CT $VMID"
+        rig "destroy $VMID"
+    fi
+    say "Creating CT $VMID (a few minutes: it installs the test prerequisites)"
+    rig "create $VMID" >/dev/null
+
+    # A recreated container has a new host key; the old entry would fail the
+    # connection rather than protect it.
+    ssh-keygen -R "$TARGET" >/dev/null 2>&1 || true
+    _try=0
+    until $SSH -n "$SSH_USER@$TARGET" true 2>/dev/null; do
+        _try=$((_try + 1))
+        [ "$_try" -lt 15 ] || die "CT $VMID was created but $SSH_USER@$TARGET does not answer"
+        sleep 2
+    done
+
+    rmdir "$LOCK"
+    trap - EXIT INT TERM
+    say "Fresh. Verifying:"
+    exec "$0" --target "$TARGET" --status
+fi
 
 # ------------------------------------------------------------------
 # Same guard as run_tests.sh, for the same reason: --reset deletes things and
@@ -136,10 +210,8 @@ case "$ACTION" in
 
     reset)
         # A soft reset: everything a test or a hand-edit is likely to have
-        # changed, minus the container itself. It deliberately does NOT recreate
-        # the container — that needs `pct` on the Proxmox host, which needs
-        # someone at the machine. If the box is wedged past this, rebuild with
-        #   ssh cwwk 'sh -s -- --destroy' < tests/provision_test_container.sh
+        # changed, minus the container itself. If the box is wedged past this,
+        # rebuild it with --create (from the workbench).
         say "Resetting $remote_hostname to baseline"
 
         warn "this deletes $SCRIPTS_DIR, $LOGS_DIR and $SSH_USER's crontab"
