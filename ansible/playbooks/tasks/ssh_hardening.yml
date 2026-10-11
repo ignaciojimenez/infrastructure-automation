@@ -139,8 +139,13 @@
   # undone. Until that sync, FreeBSD marks the account *LOCKED*, which may refuse
   # the infrastructure user's SSH login, depending on OPNsense's PAM setup
   # (unverified). Not worth finding out on the firewall (PER-104).
+  #
+  # Not on Proxmox: the password is the hypervisor's only console login (root
+  # is locked) and its web UI login, as choco@pam behind TOTP. Locking it leaves
+  # a rescue boot as the only way in when SSH is down (PER-109).
   when:
     - os_family == 'debian'
+    - platform_type | default('') != 'proxmox'
     - not (is_test_environment | default(false))
   tags: [ssh, security]
 
