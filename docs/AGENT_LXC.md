@@ -108,6 +108,8 @@ The filer **fails, and pages**, on any of these:
 
 Its log is `/var/log/fleet_linear_sync.log`.
 
+📌 **Linear's reads lag its writes by up to ~30 s** (measured 2026-10-11): a mark set and read straight back can show the old value. Irrelevant to hourly runs; when poking it by hand, wait before concluding a write did nothing.
+
 ⚠️ Only Tier 1 findings become issues. Incidents the Slack watch investigates have no issue, so
 their plans are not posted (see PER-108 for what the watch can and cannot see).
 
