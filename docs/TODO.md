@@ -56,7 +56,7 @@ renders it:
 > **№1** 37 *(waiting on a real lockout)* →
 > **№2** 42 *(entrance door alert disabled 19 Sep, needs physical inspection)* →
 > **№3** 38 *(small follow-ups: MQTT timeout, 403 detection)* →
-> **№4** 2 → **№5** 4 (plex) → **№6** 9 → **№7** 44 *(opnsense: site runs lock root's password — PER-104)* → **№8** 39 →
+> **№4** 2 → **№5** 4 (plex) → **№6** 9 → **№7** 47 *(cwwk: a services run would lock `choco`'s password — decision)* → **№8** 39 →
 > **№9** 5 → **№10** 19 → **№11** 12 → **№12** 10 → **№13** 11 → **№14** 6 →
 > **№15** 7 → **№16** 34 *(small; restores `changed=0` as a signal for the docker role)* →
 > **№17** 45 *(unifi-lxc apt key — PER-105)* → **№18** 46 *(PER-106)* →
@@ -64,6 +64,8 @@ renders it:
 > decision only, default is no)* · **№23** 26 *(one UI toggle, global — his call)*
 > *(decision-gated — 32 needs his call on a public
 > force-push, the rest need him at the cabinet; not ranked)*
+
+✅ **44 closed on 2026-10-11** — write-up in [archive/DONE.md](archive/DONE.md#2026-10-11--opnsense-owns-its-accounts-the-playbooks-stop-locking-them-item-44-per-104); `site.yml`/`services.yml`/`bootstrap.yml` no longer need `--limit '!opnsense'`.
 
 ✅ **3 closed on 2026-10-11** — write-up in [archive/DONE.md](archive/DONE.md#2026-10-11--the-test-rig-does-what-it-was-built-for-item-3-per-67): a change is proven from a bare host to `changed=0`, from the workbench, with no tap. Its two leftovers are items 44 and 46.
 
@@ -148,6 +150,27 @@ headings say what is urgent.
 
 ### 🟠 P2 — known risk, not currently biting
 
+**47. cwwk: the next `services.yml` run would lock `choco`'s password — and Proxmox's UI may log in with it** ([PER-109](https://linear.app/lacopadeeuropa/issue/PER-109))
+Found 2026-10-11 by a `--tags security` check during item 44; identical on `main`.
+`ssh_hardening.yml` "Lock the user account password" reports `changed` on cwwk,
+so `choco`'s password is unlocked there today. Proxmox's web UI authenticates
+`@pam` users against that Linux password. **Unverified: whether the UI login is
+`choco@pam` or `root@pam`.** If it is `choco@pam`, the next untagged run of the
+task locks the UI out. It is the same class as item 44: an appliance that owns
+an account the playbook hardens.
+
+*Needs:* a decision first: which account logs in to the Proxmox UI.
+
+```
+TODO 47: decide whether ssh_hardening may lock choco's password on cwwk.
+First establish which account Ignacio uses for the Proxmox web UI (ask; or
+read /etc/pve/user.cfg and the access log on cwwk). If it is choco@pam, gate
+"Lock the user account password" off for platform_type == 'proxmox' with the
+reason, the way item 44 gated opnsense. If it is root@pam or a pve-realm user,
+the lock is correct: run services.yml --tags security --limit cwwk, confirm
+the UI login still works, then changed=0 on a second run.
+```
+
 **45. unifi-lxc cannot `apt update`: Ubiquiti's repo key fails Debian 13's SHA1 policy** ([PER-105](https://linear.app/lacopadeeuropa/issue/PER-105))
 Found 2026-10-11 during the 3a fleet deploy: `Update package cache` fails on
 unifi-lxc ("Failed to update apt cache after 5 retries"). A throwaway
@@ -178,46 +201,6 @@ on the target), replacing 100-ubnt-unifi.sources and the old keyring so apt
 does not see the repo twice. Prove: apt-get update clean on unifi-lxc,
 bootstrap.yml --limit unifi-lxc converges, second run changed=0. Do not
 upgrade the UniFi application as part of this; that is a separate decision.
-```
-
-**44. `bootstrap.yml` is unsafe on opnsense, and `site.yml` imports it with `always`** ([PER-104](https://linear.app/lacopadeeuropa/issue/PER-104))
-Found 2026-10-11 by a fleet `--check` of `bootstrap.yml` (TODO 3a). On opnsense it
-would **lock root's password** (`Lock root account`, `password_lock: true`), then
-**fail** on `Configure SSH daemon for key-only auth`. OPNsense keeps its sshd
-config under `/usr/local/etc/ssh/`, generated from `config.xml`; there is no
-`/etc/ssh/sshd_config`. Both are on `main` already. Neither comes from the 3a
-branch, which was deployed to the other 8 hosts and kept away from opnsense.
-
-`ssh_hardening.yml` ("Disable root user login", imported by `services.yml` on
-every host) locks root's password on FreeBSD as well; it spares only the shell.
-Yet `--check` shows root's password is **unlocked** on opnsense today. Either
-neither task has run there since it was written, or OPNsense rewrites
-`master.passwd` from `config.xml` and undoes the lock. Unknown which.
-
-🔴 **Unverified, and it is the part that matters:** whether locking root's
-FreeBSD password locks the OPNsense GUI or console admin. Root is that admin.
-Until this is known, **run `site.yml`, `services.yml` and `bootstrap.yml` with
-`--limit '!opnsense'`.** Not biting now only because nobody has.
-
-Also unchecked: whether an older bootstrap left `/usr/local/etc/sudoers.d/root_nopasswd`
-on opnsense (its FreeBSD path; the 3a cleanup task only covers `/etc/sudoers.d`).
-Once no host carries it, delete bootstrap's cleanup task.
-
-*Effort:* small. *Needs:* a laptop, and a way back into opnsense that does not
-depend on the root password (the console menu on cwwk via `qm terminal`).
-
-```
-TODO 44: make bootstrap.yml safe on opnsense. Read docs/TODO.md item 44 first.
-Start by finding out, from OPNsense's own source or docs (not memory), whether
-the GUI and console authenticate root against the FreeBSD password database
-or against config.xml. Then pick the simple, standard fix: most likely, skip
-the root password lock on FreeBSD in BOTH bootstrap.yml and ssh_hardening.yml
-(ssh_hardening's "Disable root user login" spares only the shell today), and
-skip bootstrap's sshd lineinfile there the way ssh_hardening already gates its
-sshd tasks on os_family == "debian", because OPNsense owns both. Prove it
-with `bootstrap.yml` and `services.yml` `--check --diff --limit opnsense`
-showing no change and no failure. Do not run it for real on
-opnsense without a console path open.
 ```
 
 **37. vinylstreamer's wifi recovery undid its own fix — DEPLOYED, waiting on a lockout**

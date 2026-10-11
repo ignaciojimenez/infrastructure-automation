@@ -48,16 +48,20 @@
     name: root
     state: present
     password_lock: true
-    # On FreeBSD (opnsense) root's shell is /usr/local/sbin/opnsense-shell — the
-    # console admin menu on VGA/serial. Replacing it with nologin would remove
-    # the console recovery path, so only lock the password there.
-    shell: "{{ '/sbin/nologin' if os_family == 'debian' else omit }}"
+    shell: /sbin/nologin
+  # Debian only. On opnsense, OPNsense owns root: its shell is opnsense-shell
+  # (the console recovery menu), and OPNsense unlocks root on every user sync
+  # because a locked root breaks its cron (opnsense/core src/etc/inc/auth.inc,
+  # local_user_set). Locking it here only breaks cron until the next sync
+  # undoes it (PER-104).
   # No longer skipped on test containers (2026-10-03). The skip kept root SSH
   # as the rig's "second way in", but bootstrap.yml already gave root nologin
   # there, so it protected nothing — and it left root-disabling as the one part
   # of hardening the rig never exercised. The rig is reached as the
   # infrastructure user and recreated per run.
-  when: ansible_user != "root"
+  when:
+    - os_family == 'debian'
+    - ansible_user != "root"
   tags: [ssh, security]
 
 # Root takes no SSH keys. PermitRootLogin is no and root's shell is nologin, so
@@ -129,7 +133,15 @@
   # that was never in the fleet inventory and has not been used in a long time.
   # Generalised to the flag the test inventory sets. See docs/TODO.md for the
   # devpi decision.
-  when: not (is_test_environment | default(false))
+  #
+  # Debian only: on opnsense, OPNsense owns local accounts and unlocks every
+  # enabled one on each user sync (auth.inc, local_user_set), so a lock here is
+  # undone. Until that sync, FreeBSD marks the account *LOCKED*, which may refuse
+  # the infrastructure user's SSH login, depending on OPNsense's PAM setup
+  # (unverified). Not worth finding out on the firewall (PER-104).
+  when:
+    - os_family == 'debian'
+    - not (is_test_environment | default(false))
   tags: [ssh, security]
 
 - name: Allow only specific users (optional)

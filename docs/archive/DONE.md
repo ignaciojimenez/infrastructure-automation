@@ -17,6 +17,7 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ## Contents
 
+- [2026-10-11 — OPNsense owns its accounts; the playbooks stop locking them (item 44, PER-104)](#2026-10-11--opnsense-owns-its-accounts-the-playbooks-stop-locking-them-item-44-per-104)
 - [2026-10-11 — the test rig does what it was built for (item 3, PER-67)](#2026-10-11--the-test-rig-does-what-it-was-built-for-item-3-per-67)
 - [2026-10-04 — bootstrap could not bootstrap a fresh host: its first run on a bare container (TODO 3a, PER-67)](#2026-10-04--bootstrap-could-not-bootstrap-a-fresh-host-its-first-run-on-a-bare-container-todo-3a-per-67)
 - [2026-10-04 — one fault, one paid investigation: Tier 2 dedup confirmed on a real alert (item 36, PER-58)](#2026-10-04--one-fault-one-paid-investigation-tier-2-dedup-confirmed-on-a-real-alert-item-36-per-58)
@@ -64,6 +65,52 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ---
 
+
+---
+
+## 2026-10-11 — OPNsense owns its accounts; the playbooks stop locking them (item 44, PER-104)
+
+**`bootstrap.yml` (imported by every `site.yml` with `always`) and
+`ssh_hardening.yml` (via `services.yml`) both locked root's password on
+opnsense, and `ssh_hardening` locked the infrastructure user's as well.**
+OPNsense's own source says not to. `auth.inc` `local_user_set` unlocks root on
+every user sync: *"The root account shall not be locked as this will have
+side-effects such as cron not working correctly"*. It also unlocks every enabled
+account, and writes `*` as each FreeBSD password hash, because the GUI and
+console authenticate against `config.xml`. On the box, root's field is `*`, its
+shell is `opnsense-shell`, and root has 11 cron entries. **So the lock could
+never stick, and until the next sync it could break the firewall's root cron.**
+Bootstrap's sshd `lineinfile` then failed outright, because OPNsense has no
+`/etc/ssh/sshd_config`. That is why `site.yml` had never got past bootstrap
+there.
+
+**We made every task that touches OPNsense-owned state Debian-only,** rather
+than special-casing opnsense task by task in reverse:
+- root's password lock (both files) and the infrastructure user's (`ssh_hardening`);
+- bootstrap's sshd edits;
+- hostname, `/etc/hosts` and timezone. Unchecked, these would have renamed the
+  running system to `opnsense`, appended to a generated `/etc/hosts`, and
+  switched `CET` to `Europe/Madrid`.
+
+The standing rule is in ARCHITECTURE_DECISIONS. It corrects the old one, which
+kept `password_lock` on both platforms. Also gone: bootstrap's `root_nopasswd`
+cleanup task. opnsense never carried one, and the 8 Linux hosts were cleaned on
+2026-10-04.
+
+| Check (`--check`) | Result |
+|---|---|
+| opnsense `bootstrap.yml` | before: 1 lock + `failed=1`; after: **changed=0, failed=0** |
+| opnsense `services.yml` | before: the user lock + 2 files; after: **failed=0**, only the two monitoring scripts (ours) |
+| 8 Linux hosts `bootstrap.yml` | changed=1 each: the package cache, as on `main` |
+| 8 Linux hosts `services.yml --tags security` | changed=0 on 6. cwwk and unifi-lxc show the same change on `main`, so there is no regression |
+
+Found doing it:
+- **cwwk would have `choco`'s password locked by the next untagged `services.yml`**,
+  and Proxmox's UI may log in with it. That is item 47, a decision.
+- `check_ssh_security.sh` and `run_all_monitoring.sh` are created on every host,
+  and nothing schedules either of them.
+- Unverified: whether a `*LOCKED*` FreeBSD account refuses SSH under OPNsense's PAM
+  stack. OpenSSH refuses one itself only with `UsePAM no`.
 
 ---
 
