@@ -22,8 +22,8 @@ prove the change converges before it reaches a fleet host, and **so that**
 `bootstrap.yml` — the one playbook that by definition cannot be tested on an
 already-bootstrapped host — is testable at all.
 
-**Status: built, from a bare host through to `changed=0`.** Two gaps remain
-(below), and neither blocks proving a change. What exists was nearly lost to a
+**Status: built, from a bare host through to `changed=0`.** One gap remains
+(CI, below), and it does not block proving a change. What exists was nearly lost to a
 documentation error (see TEST_CONTAINER.md).
 
 | Built | |
@@ -39,7 +39,7 @@ documentation error (see TEST_CONTAINER.md).
 | ~~No one-command loop~~ | ✅ **Done 2026-10-03, and it runs on the workbench.** `tests/rig_loop.sh`: destroy → create → converge → `changed=0` on a second converge → destroy, always. Driven over the `rig_ct` grant, converging through `inventory_test/` only, with no fleet key and no vault password on the box. See [WORKBENCH.md](WORKBENCH.md#the-test-loop). |
 | ~~The bare/root bootstrap path had never run~~ | ✅ **Done 2026-10-04.** On a `TEST_CT_BARE=1` container it could not bootstrap at all: a refused login is UNREACHABLE, so detection never reached `root`. Fixed and proven from bare to `changed=0` ([archive/DONE.md](archive/DONE.md#2026-10-04--bootstrap-could-not-bootstrap-a-fresh-host-its-first-run-on-a-bare-container-todo-3a-per-67)). |
 | Not in CI | `.github/workflows/` runs `ansible-lint` only |
-| No `--create` in the sandbox | a fresh container still needs `ssh cwwk` and a Touch ID tap |
+| ~~No `--create` in the sandbox~~ | ✅ **Done 2026-10-11.** `tests/sandbox.sh --create` recreates CT 199/198 from the workbench over the `rig_ct` grant, with no tap. A *bare* container is still a laptop job, by design. |
 
 ## Goal 2 — A quick throwaway host to try something on
 
@@ -47,8 +47,8 @@ documentation error (see TEST_CONTAINER.md).
 
 **Status: done.** `tests/sandbox.sh` — `--shell`, `--root`, `--deb12`, `--push`
 (working tree, uncommitted included, no Ansible and no vault), `--run`,
-`--reset`, `--status`. Only gap is the shared one: creating a fresh container
-still needs the Proxmox host.
+`--reset`, `--status`, and since 2026-10-11 `--create`: a fresh container from the
+workbench with no tap.
 
 ## Goal 3 — agent-lxc tests its own proposed fixes end to end
 

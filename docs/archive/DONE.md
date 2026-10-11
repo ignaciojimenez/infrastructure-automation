@@ -17,6 +17,7 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ## Contents
 
+- [2026-10-11 — the test rig does what it was built for (item 3, PER-67)](#2026-10-11--the-test-rig-does-what-it-was-built-for-item-3-per-67)
 - [2026-10-04 — bootstrap could not bootstrap a fresh host: its first run on a bare container (TODO 3a, PER-67)](#2026-10-04--bootstrap-could-not-bootstrap-a-fresh-host-its-first-run-on-a-bare-container-todo-3a-per-67)
 - [2026-10-04 — one fault, one paid investigation: Tier 2 dedup confirmed on a real alert (item 36, PER-58)](#2026-10-04--one-fault-one-paid-investigation-tier-2-dedup-confirmed-on-a-real-alert-item-36-per-58)
 - [2026-10-04 — a Home Assistant restart is not the phone answering, and the Eve doors get a day's grace](#2026-10-04--a-home-assistant-restart-is-not-the-phone-answering-and-the-eve-doors-get-a-days-grace)
@@ -66,6 +67,39 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ---
 
+## 2026-10-11 — the test rig does what it was built for (item 3, PER-67)
+
+**Goal 1 of [TESTING_GOALS.md](../TESTING_GOALS.md) is built.** A change to a
+Debian host can now be proven before it reaches the fleet, from the workbench,
+with no laptop and no tap. The three parts:
+
+- **3a — run what had never run (2026-10-04, deployed 10-11).** Bootstrap's
+  bare/root path could not bootstrap a fresh host at all. See the entry below.
+- **3b — one command (2026-10-03).** `tests/rig_loop.sh`, run as `builder` on
+  the workbench: destroy → create → converge → converge again requiring
+  `changed=0` → destroy, always. It is driven over the `rig_ct` grant: five
+  verbs on CT 198/199 through a forced command, still exactly 10 sudoers lines.
+  It converges through `inventory_test/` only, with a fake vault, so a PASS
+  means "this deploys", never "this works". Doing it found that bootstrap wrote
+  GitHub's keys into **root's** `authorized_keys` on every host. That led to
+  root SSH being removed from test containers and root's keys from the fleet,
+  and to keys being served from a gist, because GitHub deletes account keys
+  that are never used against GitHub (ARCHITECTURE_DECISIONS).
+- **3c — `sandbox.sh --create` (2026-10-11).** It recreates CT 199/198 over the
+  same grant, so a fresh box needs no tap either. It takes `rig_loop`'s lock for
+  that VMID, destroys only after a yes, and refuses `--root`; a bare container
+  is still made from the laptop, on purpose. Proven on the workbench as
+  `builder`: absent → created, fresh Debian 13, 0 failed units; then `n` → aborted,
+  nothing destroyed, no lock left. The control flow is pinned under dash by
+  `tests/unit/sandbox_create_test.sh`. Removing the lock-release trap turns it
+  red, and so does skipping the confirmation.
+
+**Left over, and filed rather than folded in:** opnsense is unsafe to converge
+(item 44, PER-104), and `wrapper_state_collision` still exercises as root
+(item 46, PER-106). Neither changes what goal 1 proves.
+
+---
+
 ## 2026-10-04 — bootstrap could not bootstrap a fresh host: its first run on a bare container (TODO 3a, PER-67)
 
 **The bare/root path of `bootstrap.yml` (the only one where it creates the
@@ -102,6 +136,12 @@ redundant tasks were deleted: the fleet's behaviour changes only by losing
 | second run | detected `choco`, **changed=0** |
 | a planted `root_nopasswd` | changed=1, on exactly the removal task; the file is gone |
 | `site.yml` ×2, fact cache cleared between | ok=112 changed=32 → ok=111 **changed=0** |
+
+**Fleet, 2026-10-11** (`bootstrap.yml --limit 'all:!opnsense'`, merge `27ae0d1`):
+all 8 Linux hosts carried `root_nopasswd`, and each removed it. The second run gave
+**changed=0** on 7. unifi-lxc gave changed=0 up to an `apt update` failure that
+was already there (item 45). opnsense was kept out because converging it would
+lock root's password (item 44).
 
 **Rig note, not a bug:** the provisioner installs the fleet's fail2ban jail
 (`maxretry=5`). A bare run uses 4 of those 5 failures (an invalid user plus a
@@ -1969,7 +2009,7 @@ ballast — and both times only a wording assertion caught it. Every case now
 asserts on wording as well as status.
 
 **Still open:** `wrapper_state_collision` has never dropped privilege — see
-[`TODO.md`](../TODO.md) item 3.
+[`TODO.md`](../TODO.md) item 46.
 
 ## 2026-08-17 — opnsense is read over its API, not a shell (L-H)
 
