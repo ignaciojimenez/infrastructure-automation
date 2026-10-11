@@ -150,7 +150,7 @@ headings say what is urgent.
 
 ### 🟠 P2 — known risk, not currently biting
 
-**47. cwwk: the next `services.yml` run would lock `choco`'s password — and Proxmox's UI may log in with it**
+**47. cwwk: the next `services.yml` run would lock `choco`'s password — and Proxmox's UI may log in with it** ([PER-109](https://linear.app/lacopadeeuropa/issue/PER-109))
 Found 2026-10-11 by a `--tags security` check during item 44; identical on `main`.
 `ssh_hardening.yml` "Lock the user account password" reports `changed` on cwwk,
 so `choco`'s password is unlocked there today. Proxmox's web UI authenticates
