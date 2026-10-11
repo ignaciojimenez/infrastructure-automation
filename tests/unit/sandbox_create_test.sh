@@ -4,7 +4,7 @@
 # Runs on the laptop: `ssh` and `ssh-keygen` are stubs, HOME is a scratch
 # directory holding a dummy rig key, and the script runs under dash. It proves
 # the refusals and the lock handling; only the workbench proves that rig_ct
-# actually builds a container (see docs/TODO.md item 3c for that run).
+# actually builds a container (docs/archive/DONE.md, 2026-10-11, has that run).
 #
 #   tests/unit/sandbox_create_test.sh
 #

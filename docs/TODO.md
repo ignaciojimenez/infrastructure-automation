@@ -56,13 +56,16 @@ renders it:
 > **№1** 37 *(waiting on a real lockout)* →
 > **№2** 42 *(entrance door alert disabled 19 Sep, needs physical inspection)* →
 > **№3** 38 *(small follow-ups: MQTT timeout, 403 detection)* →
-> **№4** 2 → **№5** 4 (plex) → **№6** 9 → **№7** 3c *(3a done 4 Oct, 3b 3 Oct)* → **№8** 39 →
+> **№4** 2 → **№5** 4 (plex) → **№6** 9 → **№7** 44 *(opnsense: site runs lock root's password — PER-104)* → **№8** 39 →
 > **№9** 5 → **№10** 19 → **№11** 12 → **№12** 10 → **№13** 11 → **№14** 6 →
 > **№15** 7 → **№16** 34 *(small; restores `changed=0` as a signal for the docker role)* →
-> **№17–19** 8/13/14 · **№20** 32 *(git-history rewrite —
-> decision only, default is no)* · **№21** 26 *(one UI toggle, global — his call)*
+> **№17** 45 *(unifi-lxc apt key — PER-105)* → **№18** 46 *(PER-106)* →
+> **№19–21** 8/13/14 · **№22** 32 *(git-history rewrite —
+> decision only, default is no)* · **№23** 26 *(one UI toggle, global — his call)*
 > *(decision-gated — 32 needs his call on a public
 > force-push, the rest need him at the cabinet; not ranked)*
+
+✅ **3 closed on 2026-10-11** — write-up in [archive/DONE.md](archive/DONE.md#2026-10-11--the-test-rig-does-what-it-was-built-for-item-3-per-67): a change is proven from a bare host to `changed=0`, from the workbench, with no tap. Its two leftovers are items 44 and 46.
 
 ✅ **16 closed on 2026-09-23** — write-up in [archive/DONE.md](archive/DONE.md#2026-09-23--the-thread-spof-stays-the-outage-it-would-guard-against-is-already-fixed-twice-over-per-23); accept-and-monitor, no purchase. Both causes of the original 5-day outage (route aging out, silent alerting) were already fixed by items 15 and the 2026-08-23 IPv6 route fix.
 
@@ -145,7 +148,7 @@ headings say what is urgent.
 
 ### 🟠 P2 — known risk, not currently biting
 
-**45. unifi-lxc cannot `apt update`: Ubiquiti's repo key fails Debian 13's SHA1 policy**
+**45. unifi-lxc cannot `apt update`: Ubiquiti's repo key fails Debian 13's SHA1 policy** ([PER-105](https://linear.app/lacopadeeuropa/issue/PER-105))
 Found 2026-10-11 during the 3a fleet deploy: `Update package cache` fails on
 unifi-lxc ("Failed to update apt cache after 5 retries"). A throwaway
 unprivileged `apt-get update` shows why. Debian's `sqv` rejects the binding on
@@ -177,7 +180,7 @@ bootstrap.yml --limit unifi-lxc converges, second run changed=0. Do not
 upgrade the UniFi application as part of this; that is a separate decision.
 ```
 
-**44. `bootstrap.yml` is unsafe on opnsense, and `site.yml` imports it with `always`**
+**44. `bootstrap.yml` is unsafe on opnsense, and `site.yml` imports it with `always`** ([PER-104](https://linear.app/lacopadeeuropa/issue/PER-104))
 Found 2026-10-11 by a fleet `--check` of `bootstrap.yml` (TODO 3a). On opnsense it
 would **lock root's password** (`Lock root account`, `password_lock: true`), then
 **fail** on `Configure SSH daemon for key-only auth`. OPNsense keeps its sshd
@@ -195,6 +198,10 @@ neither task has run there since it was written, or OPNsense rewrites
 FreeBSD password locks the OPNsense GUI or console admin. Root is that admin.
 Until this is known, **run `site.yml`, `services.yml` and `bootstrap.yml` with
 `--limit '!opnsense'`.** Not biting now only because nobody has.
+
+Also unchecked: whether an older bootstrap left `/usr/local/etc/sudoers.d/root_nopasswd`
+on opnsense (its FreeBSD path; the 3a cleanup task only covers `/etc/sudoers.d`).
+Once no host carries it, delete bootstrap's cleanup task.
 
 *Effort:* small. *Needs:* a laptop, and a way back into opnsense that does not
 depend on the root password (the console menu on cwwk via `qm terminal`).
@@ -311,168 +318,6 @@ while the role manages /etc/apt/keyrings/plexmediaserver.v2.gpg, so
 --diff first, then apply, then confirm: changed=0 on a second run, `apt-get
 update` clean with no NO_PUBKEY, plexmediaserver still active, and the
 installed version unchanged (state: present must not upgrade it).
-```
-
-**3. The test environment does not yet do the thing it was built for**
-✅ Goals are now written down: **[`TESTING_GOALS.md`](TESTING_GOALS.md) — read it
-first.** The rig merged on 2026-08-18 (`5d2563c`, 10/10 green) serves **goal 4**,
-monitoring-script regression. **Goal 1 — running real playbooks against a host
-that is created and destroyed — is ~70% built and is the actual gap.**
-
-📌 The plumbing already exists and is better than it looks: `inventory_test/hosts.yml` is a
-real inventory connecting as the infra user over sudo, `provision_test_container.sh`
-creates *and* destroys, and CT 198 covers Debian 12 for the Pis. **Do not rebuild
-any of that.**
-
-*State:* 3a done (2026-10-04); 3b done (2026-10-03); 3c open. *Effort:* 3c small.
-*Needs:* the workbench (3c extends `rig_ct`, which already creates CT 198/199 with no tap).
-
-**3a. Run `bootstrap.yml` and a full `site.yml` against a container ✅ DONE 2026-10-04**
-Both paths now converge. The non-bare path was proven 2026-09-21/28; the
-bare/root path (user creation) ran for the first time on 2026-10-04 and could
-not bootstrap a fresh host at all. Fixed, then proven from bare: bootstrap →
-`changed=0` as `choco` → `site.yml` → `changed=0`. Write-up:
-[archive/DONE.md](archive/DONE.md#2026-10-04--bootstrap-could-not-bootstrap-a-fresh-host-its-first-run-on-a-bare-container-todo-3a-per-67).
-
-✅ **Deployed 2026-10-11** to the 8 Linux hosts (`--limit 'all:!opnsense'`, see
-item 44). Each one carried `root_nopasswd`, and each removed it. The second run
-gave **changed=0** on 7; unifi-lxc gave changed=0 up to its known apt failure
-(item 45). Unverified: opnsense's `/usr/local/etc/sudoers.d`, where a FreeBSD
-copy would sit (no agent shell there). Delete the cleanup task once that is
-checked.
-
-**3b. One command: create → converge → verify → destroy — on the workbench ✅ DONE 2026-10-03**
-📌 **The point was never the command, it was where it runs.** A cloud session
-can already clone, edit and open a PR; what it can never do is reach this LAN to
-prove a change converges on a real host. That is the only thing the workbench
-has that a cloud session structurally cannot.
-
-`tests/rig_loop.sh`, run as `builder` on the workbench — usage and what each
-piece grants in [`WORKBENCH.md`](WORKBENCH.md#the-test-loop). Built on the two
-pieces that already existed (the rig's own vault, the `rig_ct` grant), neither
-rebuilt, the grant not widened: still exactly 10 command lines.
-
-What it took: Ansible on the box (a venv pinned to the laptop's 14.4.0 / core
-2.21 — Debian 13 ships 2.19); the rig key resolved per control machine, with
-`test_environment_ssh_key` read from that key's `.pub` instead of a literal;
-`rig_ct create` running `provision_test_container.sh` with literal values,
-which installs the workbench key — one definition of a test container instead
-of two; and a vault "password" that decrypts nothing, because `ansible.cfg`'s
-Keychain script exits 1 on Linux and Ansible aborts on that before loading
-anything.
-
-**Acceptance, forced from the workbench** (kicked off over SSH, every step
-executing on CT 104 with its own key and toolchain):
-
-| Run | Result |
-|---|---|
-| CT 199 destroyed, then `tests/rig_loop.sh` | create + provision → `site.yml` ok=109 changed=42 failed=0 → second run, fresh SSH sockets, ok=106 **changed=0** → destroyed. PASS |
-| a playbook that runs `bootstrap.yml` then `/bin/false` | changed=10, failed=1 → exit 1, **container destroyed**, lock released |
-
-Plus the control flow forced under dash with stubs: destroy also runs on a
-non-idempotent second run, a wrong host at the address, no recap line and
-SIGINT; a failed destroy fails the run.
-
-🔴 **Found doing it — `bootstrap.yml` used `ansible_user_id` as if it were the
-connecting user.** Under the play's `become` it is root. ✅ **Fixed for the
-keys (2026-10-03):** bootstrap wrote GitHub's keys into **root's**
-`authorized_keys` on every host — dead credentials on the fleet, and on a test
-container it replaced the rig key. It now writes the infrastructure user's,
-through `tasks/github_authorized_keys.yml`, shared with ssh_hardening so the two
-copies cannot drift again (only one of them had the test-host exception).
-Proven: fleet `--check` from the branch and from `main` identical, and the rig
-converged `site.yml` to `changed=0` with root's keys untouched.
-
-Still open, same root cause:
-- ✅ the guard meant to stop bootstrap deleting `pi` while connected as `pi`
-  could never fire. Fixed 2026-10-03 (`ansible_user`), forced on CT 199: `main`
-  connected as `pi` deleted `pi` mid-run and went unreachable; the fix skips it
-  as `pi` and still removes `pi` when connected as `choco`.
-- ✅ `Ensure user has sudo privileges` wrote `/etc/sudoers.d/root_nopasswd`.
-  Fixed 2026-10-04 in 3a: deleted (redundant with preflight's grant); residue
-  removed on the next run.
-- GitHub keys bootstrap already left in root's `authorized_keys` on fleet hosts
-  stay until removed deliberately. Unverified which hosts carry them:
-  **Inventoried 2026-10-04** (`choco` + become): the same 5 keys in root's
-  file on all 8 Linux hosts, written 2026-09-25 14:38 (agent-lxc Jul 22,
-  workbench Sep 20); opnsense has none. sshd says `permitrootlogin no`, so they
-  are dead credentials, not live access. On cwwk the exclusive write **replaced
-  Proxmox's symlink** to `/etc/pve/priv/authorized_keys` with a plain file,
-  dropping `root@cwwk`'s own key from root's set (single node, so nothing uses it
-  yet). Also: GitHub now lists **2** keys (the laptop's Touch ID key and one
-  other) where it listed 5 on 2026-10-03; the 3 de-listed keys still open
-  `choco` everywhere until the next exclusive write.
-  ✅ **Removed 2026-10-04** (`ssh_hardening`, tag `root_keys`) from the 7
-  non-Proxmox Linux hosts, second run changed=0, `choco`'s keys untouched.
-  cwwk (same day): `/etc/pve/priv/authorized_keys` trimmed to `root@cwwk` and
-  the link restored — `pvecm updatecerts` (every pveproxy start) merges a plain
-  root file back into the shared one, so deletion alone would not survive a
-  reboot. Proven by running `pvecm updatecerts` by hand: state unchanged, then
-  changed=0. `authorized_key` cannot write there (pmxcfs refuses its chown,
-  after the content is already replaced), so the task uses `copy`; forced with
-  an injected line.
-
-✅ **GitHub deletes the keys that grant fleet access (found and fixed 2026-10-04).** The
-3 de-listed keys were removed by GitHub itself for inactivity (security log).
-Only the laptop key ever talks to GitHub, so every other device's key will age
-out the same way — and the exclusive write then revokes it on every host. GitHub
-is the source of truth for `choco`'s keys (static write + `AuthorizedKeysCommand`),
-so this needed fixing before the next untagged `services.yml` or `bootstrap.yml` run.
-Fixed: the source is now a gist, read live and as the fallback (ARCHITECTURE_DECISIONS).
-`update_keys` also takes `%u` now — it used to hand the keys to every account with a
-shell, bypassing `read_agent`'s and `rig_runner`'s forced commands. Proven on CT 199:
-live path alone logs in; gist unreachable → lookup gives up at 5.02 s, static key
-still works; a bad source is refused with the file untouched. Fleet: 9 hosts, second
-run changed=0, same 5 keys everywhere now carrying device names.
-
-✅ **Root SSH is gone from test containers (2026-10-04).** Root had
-`/sbin/nologin` after bootstrap anyway, so `tests/run_tests.sh` (then root-only)
-worked only on a never-bootstrapped container. Now the suite connects as `choco`
-and arranges with `sudo -n` (`SUDO_*` stripped — the monitoring wrapper would
-otherwise keep root-run state in `/home/choco/.log`); sshd and bootstrap say
-`PermitRootLogin no` on test containers too; the provisioner gives root a key
-only with `TEST_CT_BARE=1`. Also fixed: bootstrap's "Lock root account" no
-longer replaces opnsense's console shell with nologin (unrun there since). Proven:
-suite 11/11 as root and as choco on one container, the A/B fault still splits
-them; a converged container runs the suite 11/11 (impossible before); fresh
-`rig_ct create 199` → root has no `authorized_keys`, root SSH refused; bare
-CT 198 → root key works; `rig_loop.sh` on `main` from the workbench → changed=41
-then **changed=0**, destroyed; rig_access redeployed from `main`, changed=0.
-
-Pre-existing drift seen in the fleet `--check` — ✅ both gone with the gist
-deploy (2026-10-04, `--tags keys,configuration`, second run changed=0): opnsense's
-two stray key comments, and the older `#!/bin/bash` `update_keys` on cobra,
-hifipi, dockassist and cwwk.
-
-**3c. `sandbox.sh --create`, so a fresh box does not need a laptop tap**
-Small, and it is the last thing standing between goal 2 and "done".
-
-**Not doing (decided 2026-08-18, option (a)):** agent-lxc gets no
-`pct create/destroy/exec` and no Linux-reachable vault. The agent proposes; a
-human runs the ephemeral test. **Reassess after 3b exists** — see
-[`TESTING_GOALS.md`](TESTING_GOALS.md) goal 3 for why the vault half is the
-expensive half.
-
-**Also open, narrower:** `wrapper_state_collision` is the one case that never
-drops privilege — it has no `run_uut` call, so it was out of scope for a
-mechanical conversion. The wrapper does run as the infrastructure user under cron
-on every fleet host.
-
-```
-Add `sandbox.sh --create` so a fresh box does not need a laptop tap. Read
-docs/TESTING_GOALS.md goal 2 and docs/TODO.md item 3c first — the scope
-boundary is already decided and is NOT up for redesign: agent-lxc gets no
-pct create/destroy/exec and no Linux-reachable vault (option (a), 18 Aug).
-The agent proposes; a human runs the ephemeral test.
-
-Do 3a and 3b first — 3b is the driver this extends, and building 3c against
-a driver that does not exist yet means guessing at its interface.
-
-Also open and narrower, fold it in only if it is genuinely one edit:
-wrapper_state_collision never drops privilege — it has no run_uut call, so
-the mechanical conversion skipped it, yet the wrapper DOES run as the
-infrastructure user under cron on every fleet host. Fixing it means the test
-exercises the privilege level production actually uses.
 ```
 
 **9. Runaway-process detection — the fan removed the only thing that caught the last one**
@@ -605,6 +450,23 @@ recap. Then move item 38 to docs/archive/DONE.md.
 ```
 
 ### 🟢 P3 — improvements, no urgency
+
+**46. `wrapper_state_collision` exercises the wrapper as root** ([PER-106](https://linear.app/lacopadeeuropa/issue/PER-106))
+Left over from item 3. It was to be folded in only if it was one edit, and it
+is not. Every other case arranges as root and exercises as the infrastructure
+user, the way cron runs the scripts on every fleet host. This one runs
+`enhanced_monitoring_wrapper` as root throughout, so a permission fault in its
+state writes would pass here and fail in production.
+
+```
+TODO 46: make tests/cases/wrapper_state_collision.sh exercise the wrapper as
+the infrastructure user. Read tests/lib/harness.sh (run_uut_as) first. Keep the
+ARRANGE step as root (the /etc/hosts pin); run the three concurrent wrapper
+calls and the interval checks as $INFRA_USER, with the work dir owned by that
+user. Prove it on a fresh CT 199 (tests/sandbox.sh --create from the
+workbench): the case passes, and it fails when the state dir is made
+unwritable to the infrastructure user.
+```
 
 **5. Tokens out of cron command lines.** healthchecks.io and Slack tokens sit in
 literal cron args, visible to `crontab -l` and `ps` — and to `read_agent` via
