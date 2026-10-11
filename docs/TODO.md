@@ -56,14 +56,16 @@ renders it:
 > **№1** 37 *(waiting on a real lockout)* →
 > **№2** 42 *(entrance door alert disabled 19 Sep, needs physical inspection)* →
 > **№3** 38 *(small follow-ups: MQTT timeout, 403 detection)* →
-> **№4** 2 → **№5** 4 (plex) → **№6** 9 → **№7** 47 *(cwwk: a services run would lock `choco`'s password — decision)* → **№8** 39 →
-> **№9** 5 → **№10** 19 → **№11** 12 → **№12** 10 → **№13** 11 → **№14** 6 →
-> **№15** 7 → **№16** 34 *(small; restores `changed=0` as a signal for the docker role)* →
-> **№17** 45 *(unifi-lxc apt key — PER-105)* → **№18** 46 *(PER-106)* →
-> **№19–21** 8/13/14 · **№22** 32 *(git-history rewrite —
-> decision only, default is no)* · **№23** 26 *(one UI toggle, global — his call)*
+> **№4** 2 → **№5** 4 (plex) → **№6** 9 → **№7** 39 →
+> **№8** 5 → **№9** 19 → **№10** 12 → **№11** 10 → **№12** 11 → **№13** 6 →
+> **№14** 7 → **№15** 34 *(small; restores `changed=0` as a signal for the docker role)* →
+> **№16** 45 *(unifi-lxc apt key — PER-105)* → **№17** 46 *(PER-106)* →
+> **№18–20** 8/13/14 · **№21** 32 *(git-history rewrite —
+> decision only, default is no)* · **№22** 26 *(one UI toggle, global — his call)*
 > *(decision-gated — 32 needs his call on a public
 > force-push, the rest need him at the cabinet; not ranked)*
+
+✅ **47 closed on 2026-10-11** — write-up in [archive/DONE.md](archive/DONE.md#2026-10-11--cwwk-keeps-chocos-password-it-is-the-only-console-login-item-47-per-109): the lock skips Proxmox hosts; the UI login is `choco@pam` behind TOTP.
 
 ✅ **44 closed on 2026-10-11** — write-up in [archive/DONE.md](archive/DONE.md#2026-10-11--opnsense-owns-its-accounts-the-playbooks-stop-locking-them-item-44-per-104); `site.yml`/`services.yml`/`bootstrap.yml` no longer need `--limit '!opnsense'`.
 
@@ -149,27 +151,6 @@ close would silently repoint them. Numbers are addresses, not ranks — the
 headings say what is urgent.
 
 ### 🟠 P2 — known risk, not currently biting
-
-**47. cwwk: the next `services.yml` run would lock `choco`'s password — and Proxmox's UI may log in with it** ([PER-109](https://linear.app/lacopadeeuropa/issue/PER-109))
-Found 2026-10-11 by a `--tags security` check during item 44; identical on `main`.
-`ssh_hardening.yml` "Lock the user account password" reports `changed` on cwwk,
-so `choco`'s password is unlocked there today. Proxmox's web UI authenticates
-`@pam` users against that Linux password. **Unverified: whether the UI login is
-`choco@pam` or `root@pam`.** If it is `choco@pam`, the next untagged run of the
-task locks the UI out. It is the same class as item 44: an appliance that owns
-an account the playbook hardens.
-
-*Needs:* a decision first: which account logs in to the Proxmox UI.
-
-```
-TODO 47: decide whether ssh_hardening may lock choco's password on cwwk.
-First establish which account Ignacio uses for the Proxmox web UI (ask; or
-read /etc/pve/user.cfg and the access log on cwwk). If it is choco@pam, gate
-"Lock the user account password" off for platform_type == 'proxmox' with the
-reason, the way item 44 gated opnsense. If it is root@pam or a pve-realm user,
-the lock is correct: run services.yml --tags security --limit cwwk, confirm
-the UI login still works, then changed=0 on a second run.
-```
 
 **45. unifi-lxc cannot `apt update`: Ubiquiti's repo key fails Debian 13's SHA1 policy** ([PER-105](https://linear.app/lacopadeeuropa/issue/PER-105))
 Found 2026-10-11 during the 3a fleet deploy: `Update package cache` fails on

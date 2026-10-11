@@ -17,6 +17,7 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ## Contents
 
+- [2026-10-11 — cwwk keeps `choco`'s password: it is the only console login (item 47, PER-109)](#2026-10-11--cwwk-keeps-chocos-password-it-is-the-only-console-login-item-47-per-109)
 - [2026-10-11 — OPNsense owns its accounts; the playbooks stop locking them (item 44, PER-104)](#2026-10-11--opnsense-owns-its-accounts-the-playbooks-stop-locking-them-item-44-per-104)
 - [2026-10-11 — the test rig does what it was built for (item 3, PER-67)](#2026-10-11--the-test-rig-does-what-it-was-built-for-item-3-per-67)
 - [2026-10-04 — bootstrap could not bootstrap a fresh host: its first run on a bare container (TODO 3a, PER-67)](#2026-10-04--bootstrap-could-not-bootstrap-a-fresh-host-its-first-run-on-a-bare-container-todo-3a-per-67)
@@ -67,6 +68,35 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 
 ---
+
+## 2026-10-11 — cwwk keeps `choco`'s password: it is the only console login (item 47, PER-109)
+
+**`ssh_hardening.yml` "Lock the user account password" would have locked
+`choco`'s Linux password on cwwk at the next `services.yml` run.** On the
+hypervisor that password is two things the playbook didn't account for:
+- **the only console login.** root's password has long been locked by the same
+  file, which is also why `root@pam` can't log in to the web UI;
+- **the web UI login,** as `choco@pam`, which holds `Administrator` on `/`.
+  Users, realms and permissions are all within reach of it; no root needed.
+
+Locking it would leave a rescue boot as the only way in when SSH is down. So
+the task now skips `platform_type == 'proxmox'`; every other Debian host keeps
+the lock. Since `choco` has NOPASSWD sudo, that password is effectively root on
+the hypervisor from the UI's node shell, so the UI login now also needs **TOTP**
+(enrolled 2026-10-11).
+
+**WebAuthn was tried first and dropped.** Proxmox needs a `webauthn:` entry in
+`datacenter.cfg`, and the browser must trust the UI's certificate, which is
+issued by Proxmox's own cluster CA. Trusting that CA would let root on cwwk
+intercept any HTTPS from the laptop; trusting the leaf alone means redoing it
+on each device at every renewal. Phishing resistance buys little for a
+LAN-only UI.
+
+| Check | Result |
+|---|---|
+| `services.yml --check --tags security --limit cwwk,cobra` on `main` | cwwk `changed=1` (the lock) |
+| same, on the branch | cwwk **changed=0**, lock task skipped; cobra still runs it, `ok` (already locked) |
+| `pvesh get /access/tfa/choco@pam` | one `totp` entry |
 
 ## 2026-10-11 — OPNsense owns its accounts; the playbooks stop locking them (item 44, PER-104)
 
