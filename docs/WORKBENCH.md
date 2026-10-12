@@ -244,12 +244,27 @@ middle. Design and what was rejected: ARCHITECTURE_DECISIONS.md § Agent Access.
 ```
 agent-lxc   :37 sweep -> :47 Tier 2 plan -> :57 filer: agent/fleet issue + plan comment
 workbench   :17 fleet-builder.timer (root): oldest Todo agent/fleet issue with a plan
-              -> attempt recorded -> as autobuilder: worktree builder/PER-x from origin/main
+              -> attempt recorded -> as autobuilder: worktree builder/fleet-<n> from origin/main
               -> claude -p (file tools only, no MCP) -> diff limits -> unit tests -> rig_loop.sh
-              -> draft PR "fix(PER-x): …"   or, after 2 failures / a decline / 2 kills,
-                 draft PR "[hand-back] PER-x: …" (an empty commit; reasons + last diff in the body)
-agent-lxc   :57 filer: comments that PR on the issue, once
+              -> draft PR "fix(fleet#<n>): …"   or, after 2 failures / a decline / 2 kills,
+                 draft PR "[hand-back] fleet#<n>: …" (an empty commit; reasons + last diff in the body)
+agent-lxc   :57 filer: comments that PR on the issue, once; and once more if the fix
+                merged 6 h ago and the finding is still there
 ```
+
+**No PR carries a linkable Linear identifier.** Issue PER-120 becomes
+`fleet#120` and branch `builder/fleet-120`, and the harness rewrites any
+`PER-<n>` the model wrote as `PER <n>`. The PER team's Git automation moves
+a linked issue to Done when its PR merges: PER-117 closed two seconds after
+its merge, before the fix was deployed. An `agent/fleet` issue closes only
+when the filer has seen the finding absent for a day. The filer's comment
+carries the link from issue to PR.
+
+**A merged fix that does not hold is a human's call.** The builder never
+retries an issue it has finished. If the finding is still there 6 h after
+the merge, the filer says so on the issue, once. Either the fix wasn't
+deployed or it didn't work, and looping the builder on its own failed fix is
+what shadow mode exists to prevent.
 
 | Piece | Where | Owner / mode |
 |---|---|---|

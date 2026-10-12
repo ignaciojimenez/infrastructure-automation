@@ -53,6 +53,7 @@ CLOSE_AFTER_SECONDS={{ agent_linear_close_after_seconds }}
 PULLS_URL="{{ agent_builder_pulls_url }}"
 BUILDER_LOGIN="{{ agent_builder_login }}"
 BUILDER_REPO="{{ agent_builder_repo }}"
+MERGED_GRACE_SECONDS=$(( {{ agent_builder_merged_grace_hours }} * 3600 ))
 STALE_AFTER_SECONDS={{ agent_linear_stale_after_seconds }}
 
 MARKER_SUBTITLE="fleet incident"
@@ -311,12 +312,20 @@ done < "$WORK/active"
 # ── The builder's draft PRs -> comments, once per PR ─────────────────────
 #
 # The builder on workbench-lxc holds no Linear write. Every issue it works
-# ends in a draft PR on builder/<PER-x>, from its own GitHub account: either
-# a fix or a "[hand-back]". This repo is public, so reading them needs no
-# token — and the Linear key must not go to GitHub, so this curl has no -H.
+# ends in a draft PR on builder/fleet-<n> (PER-<n>; the identifier is kept out
+# so Linear cannot link the PR and close the issue on merge, TODO 50), from its
+# own GitHub account: either a fix or a "[hand-back]". This repo is public, so
+# reading them needs no token — and the Linear key must not go to GitHub, so
+# this curl has no -H.
 #
 # Only PRs by the builder's login, from this repo's own branches, count. A
-# fork can name a branch builder/PER-1 too; that is not the builder.
+# fork can name a branch builder/fleet-1 too; that is not the builder.
+#
+# A merged fix whose finding is still present MERGED_GRACE_SECONDS later gets
+# one more comment. Either it was never deployed, or it did not fix the fault.
+# The builder does not retry an issue it has finished, and should not: a fix
+# that merged and did not hold is the builder's judgement failing, which is a
+# human's call (TODO 51).
 
 prs_posted=0 prs_failed=""
 if [ -s "$WORK/linear" ]; then
@@ -325,11 +334,25 @@ if [ -s "$WORK/linear" ]; then
        jq -e 'type == "array"' "$WORK/pulls" > /dev/null 2>&1; then
         while IFS="$_tab" read -r key id ref absent; do
             [ -n "$ref" ] || continue
-            jq -r --arg b "builder/$ref" --arg u "$BUILDER_LOGIN" --arg r "$BUILDER_REPO" '
+            jq -r --arg b "builder/fleet-${ref#*-}" --arg u "$BUILDER_LOGIN" --arg r "$BUILDER_REPO" '
                 .[] | select(.head.ref == $b and .user.login == $u and .head.repo.full_name == $r)
-                | [.html_url, .title] | @tsv' "$WORK/pulls" > "$WORK/prs_for"
-            while IFS="$_tab" read -r pr_url pr_title; do
+                | [.html_url, .title,
+                   (if .merged_at then (.merged_at | fromdateiso8601 | tostring) else "" end)] | @tsv' \
+                "$WORK/pulls" > "$WORK/prs_for"
+            while IFS="$_tab" read -r pr_url pr_title merged; do
                 case "$pr_url" in https://github.com/*/pull/[0-9]*) ;; *) continue ;; esac
+                if is_number "$merged" && [ $((NOW - merged)) -ge "$MERGED_GRACE_SECONDS" ] &&
+                   grep -qxF "$key" "$WORK/current" &&
+                   ! grep -qxF "persist $pr_url" "$PRS_POSTED_DIR/$ref" 2>/dev/null; then
+                    case "$pr_title" in '[hand-back]'*) ;; *)
+                        printf '**The builder'"'"'s fix did not clear this finding.** %s was merged %sh ago and the finding is still present. Either it is not deployed yet, or it did not fix the fault. The builder does not retry an issue it has finished, so this needs a human. Remove `agent/fleet` to adopt it.\n' \
+                            "$pr_url" "$(((NOW - merged) / 3600))" > "$WORK/pr_comment"
+                        comment "$id" "$WORK/pr_comment" || exit 1
+                        printf 'persist %s\n' "$pr_url" >> "$PRS_POSTED_DIR/$ref"
+                        echo "$ref: builder fix merged but finding persists — $pr_url"
+                        prs_posted=$((prs_posted + 1)) ;;
+                    esac
+                fi
                 grep -qxF "$pr_url" "$PRS_POSTED_DIR/$ref" 2>/dev/null && continue
                 case "$pr_title" in
                     '[hand-back]'*) what="**Builder handed this back** — no fix passed the unit tests and the rig. Reasons are in the PR" ;;

@@ -10,12 +10,19 @@
 # Tier 2 plan) or <job dir>/handback.md. This script runs as the unattended
 # account and does everything that needs a checkout:
 #
-#   attempt:  fresh worktree on builder/<PER-x> from origin/main
+#   attempt:  fresh worktree on builder/fleet-<n> from origin/main
 #             -> the model edits files (no shell, no MCP, no web)
 #             -> diff limits -> unit tests -> rig_loop.sh
-#             -> commit, push, draft PR "fix(PER-x): …"
-#   handback: an empty commit on builder/<PER-x> and a draft PR
-#             "[hand-back] PER-x: …" carrying the reasons and the last diff
+#             -> commit, push, draft PR "fix(fleet#<n>): …"
+#   handback: an empty commit on builder/fleet-<n> and a draft PR
+#             "[hand-back] fleet#<n>: …" carrying the reasons and the last diff
+#
+# 🔴 No PR, branch or commit carries a Linear identifier (PER-<n>) in a form
+# Linear can link. The PER team's Git automation moves a linked issue to Done
+# when its PR merges, which closed PER-117 two seconds after the merge, before
+# the fix was deployed (TODO 50). An agent/fleet issue is closed only by the
+# filer, after the finding has been absent for a day. The filer comments the
+# PR link on the issue, so the trail from issue to PR stays intact.
 #
 # Exit status is the protocol with the poller:
 #   0  a PR exists; stdout's last line is "PR <url>"
@@ -53,7 +60,6 @@ GIT_EMAIL="{{ builder_git_email }}"
 # Test seam: the unit tests swap the rig for a stub. Never set in production.
 RIG_LOOP=${FLEET_BUILDER_RIG_LOOP:-tests/rig_loop.sh}
 
-BRANCH="builder/$REF"
 WT="$WORKTREES/$REF"
 
 die() {
@@ -81,6 +87,18 @@ case "$REF" in PER-[0-9]*) ;; *) die "not an issue reference: $REF" ;; esac
 case "$REF" in *[!A-Za-z0-9-]*) die "not an issue reference: $REF" ;; esac
 [ -d "$JOB" ] && [ -w "$JOB" ] || die "job dir $JOB is not writable"
 
+# PER-120 -> fleet#120 in titles, builder/fleet-120 as the branch. The filer
+# matches the same branch name.
+TAG="fleet#${REF#*-}"
+BRANCH="builder/fleet-${REF#*-}"
+
+# unlink — read text on stdin and write it with every "<team key>-<digits>"
+# (any case) turned into "<team key> <digits>". That stops Linear linking the
+# PR to that issue. The model's summary and the Tier 2 plan can both name
+# issues; PER-85 itself appears in plans.
+_key_ci=$(printf '%s' "${REF%%-*}" | awk '{ for (i = 1; i <= length($0); i++) { c = substr($0, i, 1); printf "[%s%s]", toupper(c), tolower(c) } }')
+unlink() { sed -E "s/(^|[^A-Za-z0-9])(${_key_ci})-([0-9])/\1\2 \3/g"; }
+
 g() { git -c user.name="$GIT_NAME" -c user.email="$GIT_EMAIL" "$@"; }
 
 # ── A fresh worktree on builder/<ref>, from what main is NOW ──────────────
@@ -100,13 +118,15 @@ cd "$WT" || die "cannot enter $WT"
 # open_pr <title> <body file> — draft only, against main; reuse one that is
 # already open on this branch (a run that died after pushing).
 open_pr() {
+    _title=$(printf '%s\n' "$1" | unlink)
+    unlink < "$2" > "$2.unlinked" && mv "$2.unlinked" "$2"
     g push --quiet --force origin "$BRANCH" > "$JOB/push.log" 2>&1 ||
         { [ "$MODE" = attempt ] && fail 3 "push failed" "$JOB/push.log"; die "push failed: $(tail -c 300 "$JOB/push.log")"; }
     _url=$(gh pr list --head "$BRANCH" --state open --json url --jq '.[0].url // empty' 2>/dev/null)
     if [ -n "$_url" ]; then
-        gh pr edit "$_url" --title "$1" --body-file "$2" > /dev/null 2>&1 || true
+        gh pr edit "$_url" --title "$_title" --body-file "$2" > /dev/null 2>&1 || true
     else
-        _url=$(gh pr create --draft --base main --head "$BRANCH" --title "$1" --body-file "$2" 2> "$JOB/pr.err" | tail -1)
+        _url=$(gh pr create --draft --base main --head "$BRANCH" --title "$_title" --body-file "$2" 2> "$JOB/pr.err" | tail -1)
     fi
     case "$_url" in
         https://github.com/*/pull/[0-9]*) echo "PR $_url" ;;
@@ -133,8 +153,8 @@ if [ "$MODE" = handback ]; then
         fi
         printf '\nThis PR changes nothing. Close it once the issue has an owner.\n'
     } > "$JOB/body.md"
-    g commit --quiet --allow-empty -m "chore($REF): hand back to a human" || die "empty commit failed"
-    open_pr "[hand-back] $REF: no fix passed the unit tests and the rig" "$JOB/body.md"
+    g commit --quiet --allow-empty -m "chore($TAG): hand back to a human" || die "empty commit failed"
+    open_pr "[hand-back] $TAG: no fix passed the unit tests and the rig" "$JOB/body.md"
     exit 0
 fi
 
@@ -164,7 +184,8 @@ Rules:
   than fix this fault.
 - When you are done, write a commit subject (one line, under 60 characters,
   no issue number, no "fix:" type prefix) to .builder/subject and a short
-  explanation of the fix to .builder/summary.md.
+  explanation of the fix to .builder/summary.md. Do not say in it whether
+  tests were run: the harness runs them and reports the results itself.
 - If this is NOT a small code change in this repository (hardware, a full
   disk, a host that needs a human, a fix that only works by running commands
   on the host), change nothing and write one line explaining why to
@@ -197,8 +218,10 @@ if [ -s .builder/decline ]; then
 fi
 # The harness adds fix(<ref>): itself; a type prefix the model wrote anyway
 # would double it ("fix(PER-117): fix(builder): ...").
+# Cut at 60 characters, at a word boundary.
 subject=$(head -1 .builder/subject 2>/dev/null | tr -cd '[:alnum:][:space:][:punct:]' |
-    sed -E 's/^[a-z]+(\([^)]*\))?!?:[[:space:]]*//' | cut -c1-60)
+    sed -E 's/^[a-z]+(\([^)]*\))?!?:[[:space:]]*//' |
+    awk '{ if (length($0) > 60) { $0 = substr($0, 1, 61); sub(/[[:space:]]+[^[:space:]]*$/, "") } print }' | unlink)
 cp .builder/summary.md "$JOB/summary.md" 2>/dev/null || : > "$JOB/summary.md"
 rm -rf .builder
 
@@ -225,9 +248,9 @@ env -u CLAUDE_CODE_OAUTH_TOKEN timeout "$RIG_TIMEOUT" sh "$RIG_LOOP" > "$JOB/rig
 # ── Commit, push, draft PR ────────────────────────────────────────────────
 
 attempt=$(basename "$JOB" | sed 's/.*-//')
-g commit --quiet -m "fix($REF): ${subject:-builder fix}" || die "commit failed"
+g commit --quiet -m "fix($TAG): ${subject:-builder fix}" || die "commit failed"
 {
-    printf 'Fixes the fleet finding in Linear %s, from the agent-lxc Tier 2 plan.\n\n' "$REF"
+    printf 'For the agent/fleet issue %s in Linear, from the agent-lxc Tier 2 plan. The filer links this PR on the issue.\n\n' "$TAG"
     printf '%s\n\n' "$(head -c 4000 "$JOB/summary.md")"
     printf '## Verification\n\n'
     printf -- '- Unit tests: `%s`\n' "$(tail -1 "$JOB/unit.log")"
@@ -240,5 +263,5 @@ g commit --quiet -m "fix($REF): ${subject:-builder fix}" || die "commit failed"
     # computed from GitHub alone.
     printf 'builder-cost-usd: %s\nbuilder-attempt: %s\nbuilder-diff-lines: %s\n' "${cost:-unknown}" "$attempt" "$lines"
 } > "$JOB/body.md"
-open_pr "fix($REF): ${subject:-builder fix}" "$JOB/body.md"
+open_pr "fix($TAG): ${subject:-builder fix}" "$JOB/body.md"
 exit 0
