@@ -152,6 +152,49 @@ headings say what is urgent.
 
 ### 🟠 P2 — known risk, not currently biting
 
+**50. Merging a builder PR closes its issue before the fix is deployed**
+Seen 2026-10-12 (PER-85): PR #17 merged at 17:04:09Z and Linear moved PER-117
+to Done at 17:04:11Z. Linear's GitHub integration links the PR through the
+`PER-117` in its branch and title, and the team's merge automation closes the
+issue. The fault was still live on the host until the deploy. That breaks the
+`agent/fleet` contract, under which only the filer closes an issue, after
+24 h absent. A sweep that runs between the merge and the deploy finds no open
+issue for the key and opens a duplicate.
+
+```
+TODO 50: stop a merged builder PR from closing its agent/fleet issue. Read
+the PER team's Git automation settings via the Linear API first. If "PR
+merged" can be set to no state change for this team without affecting the
+human workflow, do that. Otherwise keep the issue ID out of the builder's
+branch and title (builder/<key-slug>), and rely on the filer's PR comment for
+the link. Prove it: merge a builder PR and the issue stays open until the
+filer closes it after 24 h absent.
+```
+
+**51. A fault that recurs on the same key gets no fresh plan and no build**
+Forced 2026-10-12 (PER-120). After the builder's fix for PER-117 was merged
+and deployed, a different fault failed the same unit. Three dedup layers
+each saw "the same incident":
+- the sweep's trigger only advances when the findings text changes;
+- Tier 2 does not re-bill an incident that is open within its quiet window;
+- the builder treats an issue that already has a final PR as finished.
+
+Untouched, the regression would have kept the old issue open, with the old
+plan and a merged PR, and the builder would never try again. Re-run with
+another open incident listed for the host, Tier 2 anchored on it. It
+reported "same incident, never cleared" from a stale log and skipped its own
+diagnostics. With the old incident moved out of its folder, it diagnosed the
+new cause correctly.
+
+```
+TODO 51: a builder fix that merged and deployed should end its incident.
+Option to evaluate first: when the filer sees a builder PR merged for a key,
+close the key's Tier 2 incident (move it out of incidents/) and reset the
+sweep's snapshot, so a recurrence after the fix is a new incident with a new
+issue. Prove it on the rig or with the unit fakes: fix merged -> the same key
+fails again -> new issue, new plan, new attempt.
+```
+
 **48. The model can `cat` two of agent-lxc's credentials** ([PER-112](https://linear.app/lacopadeeuropa/issue/PER-112))
 Found 2026-10-11 while placing PER-85's Linear key. The OpenCode allowlist
 permits `cat {{ agent_state_dir }}/*` (`opencode.json.j2`), and two credential
