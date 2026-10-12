@@ -34,7 +34,8 @@ sample() {
         RUNAWAY_IGNORE_FILE="$WORK/ignore" "$SH" "$CHECK" > "$WORK/out" 2>&1
     RC=$?
 }
-reset() { rm -f "$WORK/state"; printf '%s\n' "kvm" "Plex Transcoder" > "$WORK/ignore"; }
+# The deployed file starts with a "#" header line, like this one.
+reset() { rm -f "$WORK/state"; printf '%s\n' "# managed header" "kvm" "Plex Transcoder" > "$WORK/ignore"; }
 
 printf '\n── A process holding a core is flagged after three intervals, not before\n'
 reset
