@@ -679,62 +679,6 @@ error — the heartbeat curl fix must log a forced failure, the
 recovery-routing change must deliver a real recovery to the chosen channel.
 ```
 
-**19. `ha_state`'s error message sends you to the wrong place**
-Run without `sudo`, the helper reports:
-
-```
-ha_state: monitor token not found in /home/choco/homeassistant/secrets.yaml
-```
-
-The token is present and the helper works fine — `sudo ha_state <entity>`
-returns JSON, and the sudoers rule for it has existed all along. The message is
-simply wrong about *why* it failed: the helper runs as `read_agent`,
-`/home/choco` is `0700`, so the `sed` cannot open the file and an unreadable
-file is reported as a missing value.
-
-⚠️ **This is small, and it is here because it cost real time.** On 2026-08-24 a
-session read that message, concluded the helper had never worked, wrote it up as
-a third instance of "capability the unattended tier cannot use", and had to
-retract all of it once `sudo` was tried. **An error that misidentifies its own
-cause is worse than a vague one**, because it is confidently actionable in the
-wrong direction.
-
-*State:* **deployed and mostly verified 2026-09-05.**
-
-⚠️ **This entry said "Deployed to dockassist" and that was wrong.** The fix was
-merged on 2026-08-24 and sat **undeployed for 12 days**; a `--check` run of
-`agent_access.yml` on 2026-09-05 reported the helper as `changed`, with the
-sudo-branch block showing as an *addition*. It only surfaced because an
-unrelated run happened to touch that role. 📌 **"On `main`" is not a state this
-fleet has** — `changed=0` against the host is; see the standing note at the top
-of this file.
-
-Now genuinely deployed, and two of three branches forced on dockassist as
-`read_agent`: without `sudo` it names the unreadable file and says to use sudo;
-with `sudo` it returns JSON.
-
-🔴 **The third branch is still unforced** — "key absent from `secrets.yaml`".
-Its wording changed too ("monitor token not found" → "key ha_monitor_token is
-absent"), so that text has never been executed. Forcing it means mutating the
-live HA secrets file, which is why it was skipped rather than faked.
-
-```
-Verify the ha_state error-message fix on dockassist. Read docs/TODO.md item 19
-first — the helper is NOT broken, it needs sudo, and the old message hid that.
-Force BOTH branches as read_agent over SSH, not as choco:
-  ssh dockassist-agent 'ha_state binary_sensor.vinylstreamer_online'
-    -> must now say it cannot read the file and to use sudo
-  ssh dockassist-agent 'sudo ha_state binary_sensor.vinylstreamer_online'
-    -> must return JSON
-🔴 The sudo/no-sudo branches were forced on 2026-09-05 and both behave. What
-is LEFT is only the "key absent" branch: point the helper at a COPY of
-secrets.yaml with ha_monitor_token removed — do NOT edit the live file on the
-HA host. If the helper has no path override, add one for the test rather than
-mutating production. A message that is merely reworded but never executed has
-not been tested.
-```
-
-
 **34. The docker role reports `changed` on every run, so `changed=0` cannot be trusted for it**
 `Download Docker GPG key` uses `force: true`, so `get_url` re-fetches and
 reports `changed` every single run, which then drags `Add Docker repository`
