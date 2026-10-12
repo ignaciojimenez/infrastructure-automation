@@ -40,8 +40,13 @@ echo "token=${CLAUDE_CODE_OAUTH_TOKEN:-absent}" >> "$STUB_LOG"
 grep -q BROKEN scripts/check_x.sh && { echo "FAILED: check_x"; exit 1; }
 echo "✅ 3/3 unit suites passed"
 EOF
-# shellcheck disable=SC2016  # literal: written for another shell to expand
-printf '#!/bin/sh\necho "rig $(pwd | sed s:.*/::) token=${CLAUDE_CODE_OAUTH_TOKEN:-absent}" >> "$STUB_LOG"\n[ -z "${RIG_FAIL:-}" ] || { echo "changed=3 on second converge"; exit 1; }\necho "PASS: converged, second run changed=0"\n' > "$WORK/rig.sh"
+# The rig colours its verdict, as the real rig_loop.sh does.
+cat > "$WORK/rig.sh" <<'EOF'
+#!/bin/sh
+echo "rig $(pwd | sed s:.*/::) token=${CLAUDE_CODE_OAUTH_TOKEN:-absent}" >> "$STUB_LOG"
+[ -z "${RIG_FAIL:-}" ] || { echo "changed=3 on second converge"; exit 1; }
+printf '\033[0;32m==>\033[0m PASS: converged, second run changed=0\n'
+EOF
 # shellcheck disable=SC2016  # literal: written for another shell to expand
 printf '#!/bin/sh\necho "threshold=$((90 + 1O))"\n' > "$WORK/seed/scripts/check_x.sh"
 git -C "$WORK/seed" add -A
@@ -62,6 +67,8 @@ case "$FAKE_CLAUDE" in
                echo "A letter O was typed for a zero." > .builder/summary.md ;;
     decline)   echo "the disk is full; a human must clear it" > .builder/decline ;;
     nothing)   : ;;
+    prefixed)  printf '#!/bin/sh\necho "threshold=$((90 + 10))"\n' > scripts/check_x.sh
+               echo "fix(check_x): fix the threshold arithmetic" > .builder/subject ;;
     big)       seq 1 200 > scripts/big.txt; echo big > .builder/subject ;;
     forbidden) mkdir -p ansible/inventory/group_vars/all; echo x > ansible/inventory/group_vars/all/vault.yml ;;
     breaks)    echo BROKEN >> scripts/check_x.sh; echo breaks > .builder/subject ;;
@@ -151,10 +158,25 @@ if grep -q -- "--draft --base main --head builder/PER-951" "$STUB_DIR/gh.create"
 else
     fail "PR: $(cat "$STUB_DIR/gh.create") / $(cat "$STUB_DIR/gh.body")"
 fi
+if ! grep -q "$(printf '\033')" "$STUB_DIR/gh.body"; then
+    pass "the PR body carries no terminal colour codes"
+else
+    fail "escape codes in the PR body: $(grep -n "$(printf '\033')" "$STUB_DIR/gh.body" | od -c | head -3)"
+fi
 if ! git -C "$WORK/origin.git" show builder/PER-951 --stat | grep -q '\.builder'; then
     pass "the model's .builder/ notes are not committed"
 else
     fail ".builder/ committed"
+fi
+
+printf '\n── A subject that already has a type prefix gets one, not two\n'
+
+attempt PER-960 1 prefixed
+if [ "$(git -C "$WORK/origin.git" log -1 --format=%s builder/PER-960)" = "fix(PER-960): fix the threshold arithmetic" ] &&
+   grep -q -- "--title fix(PER-960): fix the threshold arithmetic --body-file" "$STUB_DIR/gh.create"; then
+    pass "commit and PR title read fix(PER-960): <subject>, the model's own prefix dropped"
+else
+    fail "prefix: $(git -C "$WORK/origin.git" log -1 --format=%s builder/PER-960 2>&1) / $(cat "$STUB_DIR/gh.create" 2>/dev/null)"
 fi
 
 printf '\n── Every way an attempt can fail exits 3 with a reason\n'
