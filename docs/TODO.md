@@ -152,7 +152,7 @@ headings say what is urgent.
 
 ### 🟠 P2 — known risk, not currently biting
 
-**52. The Tier 2 model shares a Unix account with every secret on agent-lxc**
+**52. The Tier 2 model shares a Unix account with every secret on agent-lxc** ([PER-122](https://linear.app/lacopadeeuropa/issue/PER-122))
 Left by PER-112 (2026-10-12). OpenCode runs as `choco`, the account the sweep
 needs, and `choco` can read `/etc/agent/` (the Anthropic key, the Slack read
 token, the OPNsense and healthchecks API credentials) by group. PER-112 closed
