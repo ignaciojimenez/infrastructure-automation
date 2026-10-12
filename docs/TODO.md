@@ -152,70 +152,24 @@ headings say what is urgent.
 
 ### 🟠 P2 — known risk, not currently biting
 
-**50. Merging a builder PR closes its issue before the fix is deployed**
-Seen 2026-10-12 (PER-85): PR #17 merged at 17:04:09Z and Linear moved PER-117
-to Done at 17:04:11Z. Linear's GitHub integration links the PR through the
-`PER-117` in its branch and title, and the team's merge automation closes the
-issue. The fault was still live on the host until the deploy. That breaks the
-`agent/fleet` contract, under which only the filer closes an issue, after
-24 h absent. A sweep that runs between the merge and the deploy finds no open
-issue for the key and opens a duplicate.
+**52. The Tier 2 model shares a Unix account with every secret on agent-lxc** ([PER-122](https://linear.app/lacopadeeuropa/issue/PER-122))
+Left by PER-112 (2026-10-12). OpenCode runs as `choco`, the account the sweep
+needs, and `choco` can read `/etc/agent/` (the Anthropic key, the Slack read
+token, the OPNsense and healthchecks API credentials) by group. PER-112 closed
+every path found and forced: no `read` tool, no reads outside `/home/choco`, no
+ssh option that reads a local file. But the boundary is OpenCode's permission
+engine and a coarse glob over command strings. Each OpenCode upgrade can change
+it, and a new tool defaults to allow (the top-level deny covers that today).
 
 ```
-TODO 50: stop a merged builder PR from closing its agent/fleet issue. Read
-the PER team's Git automation settings via the Linear API first. If "PR
-merged" can be set to no state change for this team without affecting the
-human workflow, do that. Otherwise keep the issue ID out of the builder's
-branch and title (builder/<key-slug>), and rely on the filer's PR comment for
-the link. Prove it: merge a builder PR and the issue stays open until the
-filer closes it after 24 h absent.
+TODO 52: run Tier 2's opencode as its own Unix account, the builder's pattern
+(roles/services/workbench/tasks/fleet_builder.yml, autobuilder). The account
+holds only the read_agent SSH key, its ssh_config and the opencode config;
+investigate.sh (choco) hands off with setpriv and passes ANTHROPIC_API_KEY
+in the environment. Prove it with the PER-112 probes run as the new account:
+`cat /etc/agent/agent.env` is "Permission denied" from the filesystem even
+with every OpenCode permission set to allow.
 ```
-
-**51. A fault that recurs on the same key gets no fresh plan and no build**
-Forced 2026-10-12 (PER-120). After the builder's fix for PER-117 was merged
-and deployed, a different fault failed the same unit. Three dedup layers
-each saw "the same incident":
-- the sweep's trigger only advances when the findings text changes;
-- Tier 2 does not re-bill an incident that is open within its quiet window;
-- the builder treats an issue that already has a final PR as finished.
-
-Untouched, the regression would have kept the old issue open, with the old
-plan and a merged PR, and the builder would never try again. Re-run with
-another open incident listed for the host, Tier 2 anchored on it. It
-reported "same incident, never cleared" from a stale log and skipped its own
-diagnostics. With the old incident moved out of its folder, it diagnosed the
-new cause correctly.
-
-```
-TODO 51: a builder fix that merged and deployed should end its incident.
-Option to evaluate first: when the filer sees a builder PR merged for a key,
-close the key's Tier 2 incident (move it out of incidents/) and reset the
-sweep's snapshot, so a recurrence after the fix is a new incident with a new
-issue. Prove it on the rig or with the unit fakes: fix merged -> the same key
-fails again -> new issue, new plan, new attempt.
-```
-
-**48. The model can `cat` two of agent-lxc's credentials** ([PER-112](https://linear.app/lacopadeeuropa/issue/PER-112))
-Found 2026-10-11 while placing PER-85's Linear key. The OpenCode allowlist
-permits `cat {{ agent_state_dir }}/*` (`opencode.json.j2`), and two credential
-files live in that directory: `opnsense_api.creds` (the firewall API
-key/secret) and `healthchecks_api.creds`. So "the agent never handles secrets"
-(AGENT_LXC.md, Security model) does not hold for those two. This is reasoned
-from the config and **not forced**: proving it would mean asking the model to
-print a live secret to the API.
-
-Both credentials are read-only, so the exposure is disclosure to the model
-provider plus a prompt-injection path to a read-only firewall API. Fix:
-move both files out of the state dir (e.g. `/etc/agent/`, root-owned with
-group read for the agent account, like `agent.env`), and change the allowlist
-to name files rather than a glob. ⚠️ Unverified: whether OpenCode's `*`
-also matches `../`. If it does, `cat ~/.agent/../../../etc/agent/agent.env`
-(the Anthropic key, the Slack read token) passes the same rule. Check that
-from OpenCode's matcher source before closing this.
-
-*Effort:* small. *Verify:* `cat` of the old path is gone, the sweep's
-opnsense and healthchecks checks still pass on agent-lxc, and an OpenCode
-headless `cat` of a new path is refused (ask it for a non-secret file there).
 
 **45. unifi-lxc cannot `apt update`: Ubiquiti's repo key fails Debian 13's SHA1 policy** ([PER-105](https://linear.app/lacopadeeuropa/issue/PER-105))
 Found 2026-10-11 during the 3a fleet deploy: `Update package cache` fails on
@@ -372,7 +326,13 @@ reach `#home-alerts` — a temperature reading cannot satisfy this; (b) record a
 fresh idle + pegged-core baseline post-fan so the next thermal comparison has a
 true reference.
 
-*State:* designed, not built. *Effort:* medium. *Needs:* a laptop.
+*State (2026-10-12):* built, `scripts/common/check_runaway.sh`. It runs every
+10 min on every host, opnsense included, and fails on a process at ≥90% of a
+core for three consecutive samples (~30 min). Per-host `runaway_ignore` in
+inventory covers what holds a core by design: kvm, the nightly backups'
+compressors, Plex transcodes, the builder. Unit-tested and run read-only on
+cobra, cwwk, unifi and vinylstreamer. *Still owed:* deploy, the forced
+acceptance below, and the post-fan baseline.
 
 ```
 Build the runaway-process check. Read docs/TODO.md item 9 first — the design
@@ -480,23 +440,6 @@ recap. Then move item 38 to docs/archive/DONE.md.
 
 ### 🟢 P3 — improvements, no urgency
 
-**49. The wrapper writes every Slack payload to a shared `/tmp` path** ([PER-116](https://linear.app/lacopadeeuropa/issue/PER-116))
-Found 2026-10-11 on the workbench (PER-85): `enhanced_monitoring_wrapper`
-writes each payload to `/tmp/slack_payload_debug.json` before sending. On a
-host where two accounts run the wrapper, whoever wrote first owns the file and
-the other is refused (`Permission denied` in `/var/log/fleet_builder.log`;
-root too, because of `fs.protected_regular` in sticky `/tmp`). The send still
-works, so nothing is lost today; but the file is world-readable script output,
-and on the workbench model-run code can read it.
-
-```
-TODO 49: in scripts/common/enhanced_monitoring_wrapper, stop writing
-/tmp/slack_payload_debug.json on every send. Write the payload only on a failed
-send, to a mktemp file under the wrapper's own state dir (0600), and log that
-path. Prove it with a tests/unit case: two users, both sends succeed, no file in
-/tmp. Deploy with deploy_monitoring.yml; second run changed=0.
-```
-
 **46. `wrapper_state_collision` exercises the wrapper as root** ([PER-106](https://linear.app/lacopadeeuropa/issue/PER-106))
 Left over from item 3. It was to be folded in only if it was one edit, and it
 is not. Every other case arranges as root and exercises as the infrastructure
@@ -532,21 +475,6 @@ on every host shows no tokens, and one forced failure still reaches
 #home-alerts.
 ```
 
-**6. FreeBSD monitoring code runs on no host.** `deploy_monitoring.yml` excludes
-`system_health_check.sh` from FreeBSD and actively removes it, so
-`freebsd_default_services()`, `freebsd_service_state()` and `read_load_1min()` are
-dormant. Either give them a FreeBSD test target (stock FreeBSD 14.3, not
-OPNsense — no official image exists) or delete them.
-
-```
-Close the FreeBSD dead-code question. Read docs/TODO.md item 6 and the L-B
-entry in docs/archive/DONE.md. deploy_monitoring.yml excludes
-system_health_check.sh from FreeBSD, so freebsd_default_services(),
-freebsd_service_state() and read_load_1min() run on no host. Recommendation:
-delete them (git has them) unless a stock FreeBSD 14.3 test VM is being built
-in the same session — dormant "verified" code is not a third option.
-```
-
 **7. Flap damping.** A fault that alternates pass/fail defeats repeat
 suppression. Deliberately deferred: *"fix forward if annoying."*
 
@@ -580,7 +508,7 @@ the checks that exist. **The blanks are the deliverable.** Known blanks going in
   `scripts/common/`; role-owned scripts rot silently (hifipi's did for 4 months).
   A periodic repo-vs-host checksum check is the known fix shape.
 
-*State:* method decided, not started. *Effort:* medium (it is a review — its
+*State (2026-10-12):* audit done — [`docs/COVERAGE.md`](COVERAGE.md). Nine blanks, ranked; blank 0 (where healthchecks.io alerts go) decides a dozen rows, close it first. Blanks become Linear issues only when they have an action.
 value is in being systematic). *Needs:* a laptop for the doc; reading can
 happen anywhere.
 
@@ -627,19 +555,24 @@ One branch, tick them off. Phone-taggable lines marked 📱.
   requires a `gpg` binary on the target and **fails outright without one**, which
   is what it did on agent-lxc. Any minimal host added to the fleet hits this.
 
-- `AGENTS.md` still says `deploy_monitoring.yml` deploys "monitoring scripts to
-  all hosts" — it syncs only `scripts/common/`. That wording is what hid the
-  hifipi drift; fix it.
+- ✅ 2026-10-12: `AGENTS.md` and `AGENT_INSTRUCTIONS.md` now say
+  `deploy_monitoring.yml` syncs `scripts/common/` plus the opnsense/proxmox
+  monitoring roles, and NOT `scripts/services/*`.
 - 📱 dockassist: `rm ~/.log/check_container.sh.json*` (orphaned state) and
   `~/crontab.bak.20260802`. hifipi: `rm ~/*.bak.20260802` (2 files).
-- `heartbeat_backup.sh:30` — `|| true` + discarded stderr means a failed ping is
-  invisible; log the curl exit status. If the nightly backup DOWN/UP pattern
+- ✅ 2026-10-12: `heartbeat_backup.sh` already logs the curl exit status (since
+  `3a527ff`); `tests/unit/heartbeat_backup_test.sh` now forces a failed ping and
+  fails on the old `|| true` shape. Not read on hosts: the rendered copies under
+  `~/.scripts/monitoring/` are outside `agent_read`. Also found: every host
+  carries an unrendered copy at `~/.scripts/heartbeat_backup.sh` (literal
+  `{{ … }}`, never scheduled), because `deploy_monitoring.yml` copies all of
+  `scripts/common/`. Dead weight; exclude it with the next touch of that task. If the nightly backup DOWN/UP pattern
   (seen 2026-08-09 and 08-11, all three hosts recovering in the same minute)
   recurs, read the healthchecks.io ping log first — it discriminates "cron
   didn't fire" from "path broke".
-- `read_agent`'s `from=` pin is `10.30.0.0/16`, but `ARCHITECTURE_DECISIONS.md`
-  claims single-IP pinning. Tighten the vault value or fix the doc (check the
-  laptop's DHCP reservation before tightening).
+- ✅ doc half: `ARCHITECTURE_DECISIONS.md` already states the pin is
+  `10.30.0.0/16`, a blast-radius limit rather than an identity check, because the
+  laptop has no fixed address. Narrowing it still needs a DHCP reservation first.
 - Recovery notifications go to `#home-logging` while the failure they clear sat
   in `#home-alerts` — a self-healed check looks permanently broken. One-line
   wrapper change; decide how loud recoveries should be.
@@ -648,8 +581,9 @@ One branch, tick them off. Phone-taggable lines marked 📱.
 - `templates/debian/sshd_config.j2` drops Debian's
   `Include /etc/ssh/sshd_config.d/*.conf` — add it (template wins by ordering)
   or state that drop-ins are unsupported.
-- Delete the never-deployed `docker-compose.yml.j2` + its dead handler in the
-  homeassistant role.
+- ✅ 2026-10-12: deleted the never-deployed `docker-compose.yml.j2`, its
+  `Stop homeassistant` handler and the unreferenced lowercase `Restart
+  homeassistant` duplicate (grep: no notifier anywhere).
 - 📱 Delete the 5 stale `unavailable` Tado automations in HA's UI (`.storage`,
   not repo-managed).
 - 📱 opnsense `/usr/local/bin` cruft (`monit-slack.sh{,.old}`,
@@ -667,7 +601,9 @@ One branch, tick them off. Phone-taggable lines marked 📱.
   inert — but they read as active config and are exactly the trap that cost
   five days. Delete them; the correct `dtoverlay=disable-bt` is already there.
 
-*State:* all diagnosed, none started. *Effort:* small each. *Needs:* mixed —
+*State:* 4 of 14 done 2026-10-12 (✅ above). Held deliberately while Ignacio
+is away: anything editing sshd config, Pi boot config or apt sources on hosts,
+the recovery-routing decision, and the INJECT_FACTS_AS_VARS sweep. *Effort:* small each. *Needs:* mixed —
 📱 lines work from a phone, the rest want a laptop.
 
 ```
@@ -678,62 +614,6 @@ it lands. Start with the AGENTS.md deploy_monitoring wording (it hid a
 error — the heartbeat curl fix must log a forced failure, the
 recovery-routing change must deliver a real recovery to the chosen channel.
 ```
-
-**19. `ha_state`'s error message sends you to the wrong place**
-Run without `sudo`, the helper reports:
-
-```
-ha_state: monitor token not found in /home/choco/homeassistant/secrets.yaml
-```
-
-The token is present and the helper works fine — `sudo ha_state <entity>`
-returns JSON, and the sudoers rule for it has existed all along. The message is
-simply wrong about *why* it failed: the helper runs as `read_agent`,
-`/home/choco` is `0700`, so the `sed` cannot open the file and an unreadable
-file is reported as a missing value.
-
-⚠️ **This is small, and it is here because it cost real time.** On 2026-08-24 a
-session read that message, concluded the helper had never worked, wrote it up as
-a third instance of "capability the unattended tier cannot use", and had to
-retract all of it once `sudo` was tried. **An error that misidentifies its own
-cause is worse than a vague one**, because it is confidently actionable in the
-wrong direction.
-
-*State:* **deployed and mostly verified 2026-09-05.**
-
-⚠️ **This entry said "Deployed to dockassist" and that was wrong.** The fix was
-merged on 2026-08-24 and sat **undeployed for 12 days**; a `--check` run of
-`agent_access.yml` on 2026-09-05 reported the helper as `changed`, with the
-sudo-branch block showing as an *addition*. It only surfaced because an
-unrelated run happened to touch that role. 📌 **"On `main`" is not a state this
-fleet has** — `changed=0` against the host is; see the standing note at the top
-of this file.
-
-Now genuinely deployed, and two of three branches forced on dockassist as
-`read_agent`: without `sudo` it names the unreadable file and says to use sudo;
-with `sudo` it returns JSON.
-
-🔴 **The third branch is still unforced** — "key absent from `secrets.yaml`".
-Its wording changed too ("monitor token not found" → "key ha_monitor_token is
-absent"), so that text has never been executed. Forcing it means mutating the
-live HA secrets file, which is why it was skipped rather than faked.
-
-```
-Verify the ha_state error-message fix on dockassist. Read docs/TODO.md item 19
-first — the helper is NOT broken, it needs sudo, and the old message hid that.
-Force BOTH branches as read_agent over SSH, not as choco:
-  ssh dockassist-agent 'ha_state binary_sensor.vinylstreamer_online'
-    -> must now say it cannot read the file and to use sudo
-  ssh dockassist-agent 'sudo ha_state binary_sensor.vinylstreamer_online'
-    -> must return JSON
-🔴 The sudo/no-sudo branches were forced on 2026-09-05 and both behave. What
-is LEFT is only the "key absent" branch: point the helper at a COPY of
-secrets.yaml with ha_monitor_token removed — do NOT edit the live file on the
-HA host. If the helper has no path override, add one for the test rather than
-mutating production. A message that is merely reworded but never executed has
-not been tested.
-```
-
 
 **34. The docker role reports `changed` on every run, so `changed=0` cannot be trusted for it**
 `Download Docker GPG key` uses `force: true`, so `get_url` re-fetches and

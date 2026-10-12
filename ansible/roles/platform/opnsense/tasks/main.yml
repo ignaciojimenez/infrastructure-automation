@@ -187,6 +187,23 @@
   become: true
   become_user: "{{ infrastructure_user }}"
 
+# The runaway-process check (PER-10) is a common script, so it lives in
+# scripts_dir, not scripts_dir/monitoring. 2026-08-07's ten-hour pegged core
+# was a process on this box, which every load check here reported as 17%.
+- name: Configure the runaway-process check cron job
+  ansible.builtin.cron:
+    name: "OPNsense runaway process check"
+    minute: "4-59/10"
+    user: "{{ infrastructure_user }}"
+    job: "/usr/local/bin/bash {{ scripts_dir }}/enhanced_monitoring_wrapper --heartbeat-interval=never --notify-fixed=true --monitoring-name=opnsense_runaway {{ logging_token }} {{ alert_token }} {{ scripts_dir }}/check_runaway.sh"
+    state: present
+  become: true
+  become_user: "{{ infrastructure_user }}"
+  when:
+    - alert_token is defined and alert_token != ''
+    - logging_token is defined and logging_token != ''
+  tags: [opnsense, monitoring]
+
 # DNS failover runs directly (not via enhanced_monitoring_wrapper) because it's
 # a state machine with its own Slack alerting and local logging fallback.
 # Token order is REVERSED from wrapper pattern: alert_token first, logging_token second.

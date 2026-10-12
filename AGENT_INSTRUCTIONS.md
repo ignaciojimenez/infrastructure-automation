@@ -15,7 +15,7 @@ ansible/
   playbooks/
     site.yml                         # Full orchestration — 8 phases
     services.yml                     # Service deployment (auto-discovers roles)
-    deploy_monitoring.yml            # Deploy monitoring scripts to all hosts
+    deploy_monitoring.yml            # scripts/common/ to every host + opnsense/proxmox monitoring; NOT scripts/services/*
     bootstrap.yml                    # First-run bootstrap
     system/                          # preflight, baseline, updates, validation
     platform/                        # Per-platform config (debian, freebsd, raspberrypi, lxc, proxmox)

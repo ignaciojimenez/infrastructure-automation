@@ -86,7 +86,9 @@ ansible-playbook ansible/playbooks/site.yml --limit hostname
 # Service-only update (e.g., after editing HA templates)
 ansible-playbook ansible/playbooks/services.yml --limit dockassist
 
-# Deploy monitoring scripts to all hosts
+# Sync scripts/common/ (wrapper, health check, runaway check) to every host, plus
+# the opnsense and proxmox monitoring roles. It does NOT ship a service role's
+# own scripts (scripts/services/*): those deploy with services.yml for that host.
 ansible-playbook ansible/playbooks/deploy_monitoring.yml
 ```
 

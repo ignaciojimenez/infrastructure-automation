@@ -1,6 +1,10 @@
 #!/bin/sh
-# POSIX-compliant System Health Check
-# Works on both Linux (Debian) and FreeBSD
+# POSIX-compliant System Health Check, for the Linux (Debian) hosts.
+#
+# FreeBSD is not a target. deploy_monitoring.yml removes this script from
+# opnsense, which runs its own check_system_health.sh, and its FreeBSD branches
+# were deleted on 2026-10-12 (PER-20) because they ran on no host. Dormant
+# code reads as verified when it is not; git has it.
 
 set -u
 
@@ -23,8 +27,6 @@ if [ -z "${OS_TYPE:-}" ]; then
     OS_TYPE="unknown"
     if [ -f /etc/debian_version ]; then
         OS_TYPE="debian"
-    elif [ "$(uname)" = "FreeBSD" ]; then
-        OS_TYPE="freebsd"
     elif [ -f /etc/redhat-release ]; then
         OS_TYPE="redhat"
     fi
@@ -256,12 +258,6 @@ check_memory() {
                 print_status "success" "Memory: ${mem_percent}% used${arc_note}"
             fi
         fi
-    elif [ "$OS_TYPE" = "freebsd" ]; then
-        # FreeBSD memory check
-        mem_info=$(sysctl -n hw.physmem hw.usermem 2>/dev/null)
-        if [ -n "$mem_info" ]; then
-            print_status "success" "Memory check completed (FreeBSD)"
-        fi
     else
         print_status "warning" "Memory check not available for $OS_TYPE"
     fi
@@ -292,7 +288,6 @@ in_container() {
     if command -v systemd-detect-virt >/dev/null 2>&1; then
         systemd-detect-virt --container --quiet && return 0
     fi
-    [ "$(sysctl -n security.jail.jailed 2>/dev/null || echo 0)" = "1" ] && return 0
     return 1
 }
 
@@ -321,12 +316,6 @@ read_load_1min() {
         return
     fi
 
-    if [ "$OS_TYPE" = "freebsd" ]; then
-        # `{ 0.24 0.25 0.24 }` — the braces are fields 1 and 5.
-        sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}'
-        return
-    fi
-
     # Last resort, for a host with neither. Handles `load average:` and
     # FreeBSD's `load averages:`, and drops the thousands/decimal comma that
     # Linux appends between the three figures.
@@ -338,11 +327,7 @@ check_load() {
     issues=0
 
     # Get number of CPUs
-    if [ "$OS_TYPE" = "freebsd" ]; then
-        cpu_count=$(sysctl -n hw.ncpu)
-    else
-        cpu_count=$(nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo 2>/dev/null || echo 1)
-    fi
+    cpu_count=$(nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo 2>/dev/null || echo 1)
 
     load_avg=$(read_load_1min)
 
@@ -409,67 +394,6 @@ check_load() {
     fi
     echo ""
     return $issues
-}
-
-# Stock FreeBSD's ssh rc script is `sshd`; OPNsense's is `openssh` — which the
-# repo already knows, in ssh_hardening's `service openssh onereload`. Probing
-# for the rc script answers the question directly, without the script needing
-# to know what OPNsense is, and without renaming `sshd` fleet-wide: a blanket
-# rename fixes the one firewall here and breaks stock FreeBSD, i.e. the §8b
-# test VM that exists to catch exactly this.
-freebsd_default_services() {
-    for _dir in /etc/rc.d /usr/local/etc/rc.d; do
-        if [ -f "$_dir/openssh" ]; then
-            echo "openssh cron"
-            return
-        fi
-    done
-    echo "sshd cron"
-}
-
-# Can this user see other users' processes at all? OPNsense answers no: as
-# `choco`, `pgrep -x cron` finds nothing on a host where root finds it seconds
-# later, and `ls -l /var/run/cron.pid` is `0600 root:wheel`. So for an
-# unprivileged caller there the process table is not an independent oracle —
-# it is a second way of being told "no".
-#
-# Probe the capability rather than the `security.bsd.see_other_uids` sysctl
-# behind it: PID 1 exists on every system and belongs to root, so failing to
-# see it means we cannot see root's daemons either, whatever the reason.
-can_inspect_processes() {
-    [ -n "$(ps -p 1 -o comm= 2>/dev/null)" ]
-}
-
-# Returns running | stopped | unknown.
-#
-# `service <name> status` answers from the rc script, and several of those read
-# a root-owned pidfile — so an unprivileged caller is told a running daemon is
-# not running. Measured on opnsense: `cron` ❌ as choco and ✅ as root, seconds
-# apart, on the same host.
-#
-# `unknown` is the honest answer when neither probe can see the truth, and it
-# is deliberately not a failure. Reporting "not running" for "not visible" is
-# how this check declared sshd dead over the SSH session running it.
-freebsd_service_state() {
-    _svc="$1"
-
-    if service "$_svc" status >/dev/null 2>&1; then
-        echo running
-        return
-    fi
-
-    if ! can_inspect_processes; then
-        echo unknown
-        return
-    fi
-
-    # Stock FreeBSD, where the rc name and the process name agree and an
-    # unprivileged user can see the process table, gets a real second opinion.
-    if pgrep -x "$_svc" >/dev/null 2>&1; then
-        echo running
-    else
-        echo stopped
-    fi
 }
 
 # Read the maintenance window declared for one service, if any.
@@ -622,23 +546,6 @@ check_services() {
                 issues=$((issues + 1))
             fi
         done
-    elif [ "$OS_TYPE" = "freebsd" ]; then
-        [ -n "$services" ] || services=$(freebsd_default_services)
-
-        for svc in $services; do
-            case $(freebsd_service_state "$svc") in
-                running)
-                    print_status "success" "Service $svc: running"
-                    ;;
-                stopped)
-                    print_status "error" "Service $svc: not running"
-                    issues=$((issues + 1))
-                    ;;
-                *)
-                    print_status "warning" "Service $svc: cannot verify as $(id -un) - no pidfile access and no view of other users' processes"
-                    ;;
-            esac
-        done
     else
         print_status "warning" "Service check not configured for $OS_TYPE"
     fi
@@ -762,22 +669,10 @@ check_pending_reboot() {
     return $issues
 }
 
-# ⚠️ `ping -W` is not portable, and the difference is not cosmetic: on Linux it
-# is SECONDS, on FreeBSD it is MILLISECONDS. Both man pages were read on the
-# real hosts (cobra and opnsense, 2026-08-13) rather than assumed. The previous
-# `-W 2` therefore meant "wait two seconds" on the Pis and "wait two
-# milliseconds" on the firewall — a timeout no reply can beat.
-#
-# Dormant rather than harmless: deploy_monitoring.yml excludes this script from
-# FreeBSD, so the broken branch runs on no host today. That is precisely the
-# class of bug the §G2 FreeBSD test target exists to catch, and it stays
-# unverifiable until that target exists.
+# `ping -W` is SECONDS on Linux (read on cobra, 2026-08-13). It is
+# milliseconds on FreeBSD, one more reason this script does not run there.
 ping_once() {
-    if [ "$OS_TYPE" = "freebsd" ]; then
-        ping -c 1 -W "$(( NETWORK_PROBE_TIMEOUT * 1000 ))" "$1" >/dev/null 2>&1
-    else
-        ping -c 1 -W "$NETWORK_PROBE_TIMEOUT" "$1" >/dev/null 2>&1
-    fi
+    ping -c 1 -W "$NETWORK_PROBE_TIMEOUT" "$1" >/dev/null 2>&1
 }
 
 ping_retry() {
@@ -844,73 +739,43 @@ check_link_speed() {
     found=0
     issues=0
 
-    if [ "$OS_TYPE" = "freebsd" ]; then
-        for iface in $(ifconfig -l 2>/dev/null); do
-            case "$iface" in lo*|pflog*|pfsync*|enc*|wg*|vlan*) continue ;; esac
-            ifconfig "$iface" 2>/dev/null | grep -q "status: active" || continue
-            found=1
-            media=$(ifconfig "$iface" 2>/dev/null | sed -n 's/.*media: Ethernet \(.*\)/\1/p' | head -1)
+    # SYSFS_NET exists so this can be tested against a fixture tree. It is
+    # never set in production.
+    for path in "${SYSFS_NET:-/sys/class/net}"/*; do
+        [ -e "$path" ] || continue
+        iface=$(basename "$path")
 
-            # FreeBSD is not consistent about capitalisation in media strings —
-            # this box reports "10Gbase-Twinax" and "2500Base-T" on adjacent
-            # interfaces. Match case-insensitively or 2500Base-T falls through
-            # to the unknown branch, which is exactly what happened first try.
-            media_lc=$(printf '%s' "$media" | tr '[:upper:]' '[:lower:]')
+        # Skip virtual interfaces. A real NIC has a device symlink;
+        # veth/bridge/tun do not, and their "speed" is meaningless —
+        # LXC veths report 10000 regardless of the physical link.
+        [ -e "$path/device" ] || continue
+        [ "$(cat "$path/operstate" 2>/dev/null)" = "up" ] || continue
+        found=1
 
-            case "$media_lc" in
-                *half-duplex*)
-                    print_status "error" "$iface: $media (half-duplex)"
-                    issues=$((issues + 1)) ;;
-                *1000base*|*2500base*|*5000base*|*10gbase*|*25gbase*|*40gbase*)
-                    print_status "success" "$iface: $media" ;;
-                *100base*|*10base*)
-                    print_status "error" "$iface: $media (below gigabit)"
-                    issues=$((issues + 1)) ;;
-                *)
-                    print_status "warning" "$iface: ${media:-unknown media}" ;;
-            esac
-        done
-    else
-        # SYSFS_NET exists so the Linux path can be tested against a fixture
-        # tree. It is never set in production — seven of eight hosts run this
-        # branch, and leaving it untestable would mean verifying only the
-        # FreeBSD half of a check whose whole point is that it reports faults.
-        for path in "${SYSFS_NET:-/sys/class/net}"/*; do
-            [ -e "$path" ] || continue
-            iface=$(basename "$path")
+        speed=$(cat "$path/speed" 2>/dev/null)
+        duplex=$(cat "$path/duplex" 2>/dev/null)
 
-            # Skip virtual interfaces. A real NIC has a device symlink;
-            # veth/bridge/tun do not, and their "speed" is meaningless —
-            # LXC veths report 10000 regardless of the physical link.
-            [ -e "$path/device" ] || continue
-            [ "$(cat "$path/operstate" 2>/dev/null)" = "up" ] || continue
-            found=1
+        # Wireless NICs report a rate that varies with signal; not a fault.
+        if [ -d "$path/wireless" ] || [ -e "$path/phy80211" ]; then
+            print_status "success" "$iface: wireless (${speed:-?}Mb/s, not graded)"
+            continue
+        fi
 
-            speed=$(cat "$path/speed" 2>/dev/null)
-            duplex=$(cat "$path/duplex" 2>/dev/null)
-
-            # Wireless NICs report a rate that varies with signal; not a fault.
-            if [ -d "$path/wireless" ] || [ -e "$path/phy80211" ]; then
-                print_status "success" "$iface: wireless (${speed:-?}Mb/s, not graded)"
-                continue
-            fi
-
-            case "$speed" in
-                ''|-1|0)
-                    print_status "warning" "$iface: link speed unavailable" ;;
-                *)
-                    if [ "$speed" -lt 1000 ] 2>/dev/null; then
-                        print_status "error" "$iface: ${speed}Mb/s ${duplex:-?} (below gigabit)"
-                        issues=$((issues + 1))
-                    elif [ "$duplex" = "half" ]; then
-                        print_status "error" "$iface: ${speed}Mb/s half-duplex"
-                        issues=$((issues + 1))
-                    else
-                        print_status "success" "$iface: ${speed}Mb/s ${duplex:-?}"
-                    fi ;;
-            esac
-        done
-    fi
+        case "$speed" in
+            ''|-1|0)
+                print_status "warning" "$iface: link speed unavailable" ;;
+            *)
+                if [ "$speed" -lt 1000 ] 2>/dev/null; then
+                    print_status "error" "$iface: ${speed}Mb/s ${duplex:-?} (below gigabit)"
+                    issues=$((issues + 1))
+                elif [ "$duplex" = "half" ]; then
+                    print_status "error" "$iface: ${speed}Mb/s half-duplex"
+                    issues=$((issues + 1))
+                else
+                    print_status "success" "$iface: ${speed}Mb/s ${duplex:-?}"
+                fi ;;
+        esac
+    done
 
     [ "$found" -eq 1 ] || print_status "warning" "No physical interfaces found (virtualised guest?)"
     echo ""
