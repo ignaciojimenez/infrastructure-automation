@@ -40,8 +40,12 @@
   refused. That is why the sweep's credentials live in /etc/agent/, not in
   ~/.agent/.
 
-  "ssh -*" is denied last: options before the host (-F, -i, -E) make ssh read
-  a local file of the model's choosing. A coarse filter, see below.
+  "ssh -*" and "ssh <host>-agent -*" (one per fleet host) are denied last. ssh parses options before
+  AND right after the host, and -F, -i or -E make it read a local file of the
+  model's choosing, which never passes the path check because ssh does not
+  take a path argument. No real remote command starts with "-". The host
+  is spelled out because "ssh *-agent -*" would also match a legitimate
+  "... qemu-guest-agent --no-pager". It is a coarse filter, see below.
 
   Glob matching on a command string is a coarse filter, not a security
   boundary. The real constraint on "ssh *-agent *" is the key itself: pinned to
@@ -71,7 +75,9 @@
       "cat {{ agent_state_dir }}/*": "allow",
       "ls {{ agent_state_dir }}*": "allow",
       "date*": "allow",
-      "ssh -*": "deny"
+      "ssh -*": "deny"{% for h in agent_fleet_hosts %},
+      "ssh {{ h.name }}-agent -*": "deny"{% endfor %}
+
     }
   },
 
