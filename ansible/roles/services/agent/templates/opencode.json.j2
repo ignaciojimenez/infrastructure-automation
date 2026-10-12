@@ -25,6 +25,24 @@
   "ask" is reserved for the Phase C operator, where a human is present by
   construction.
 
+  3. Every tool not named here defaults to ALLOW (OpenCode's built-in
+     "*": "allow"), and that includes `read`, `grep`, `glob` and `list`.
+     Forced 2026-10-12 (PER-112): a headless run's `read` tool opened
+     ~/.agent/last_anomaly.json, so it could open anything else under
+     /home/choco, which OpenCode treats as the project. The top-level
+     "*": "deny" below comes FIRST and hides every tool whose last matching
+     rule is a bare deny. Only bash survives, because its own rules come
+     after it.
+
+  Paths: a command that takes a file path (cat, ls, ...) is resolved, and a
+  path outside /home/choco is "external_directory", which a headless run
+  auto-rejects. Forced the same day: `cat ~/.agent/../../../etc/hostname` was
+  refused. That is why the sweep's credentials live in /etc/agent/, not in
+  ~/.agent/.
+
+  "ssh -*" is denied last: options before the host (-F, -i, -E) make ssh read
+  a local file of the model's choosing. A coarse filter, see below.
+
   Glob matching on a command string is a coarse filter, not a security
   boundary. The real constraint on "ssh *-agent *" is the key itself: pinned to
   10.30.40.203, mapped to a read-only account, revocable fleet-wide in one run.
@@ -42,6 +60,7 @@
   },
 
   "permission": {
+    "*": "deny",
     "edit": "deny",
     "write": "deny",
     "webfetch": "deny",
@@ -51,7 +70,8 @@
       "ssh *-agent *": "allow",
       "cat {{ agent_state_dir }}/*": "allow",
       "ls {{ agent_state_dir }}*": "allow",
-      "date*": "allow"
+      "date*": "allow",
+      "ssh -*": "deny"
     }
   },
 

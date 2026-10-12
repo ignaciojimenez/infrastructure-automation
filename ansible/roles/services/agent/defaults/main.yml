@@ -82,7 +82,11 @@ agent_opnsense_api_pubkey_pin: "sha256//eX/oOnHGacY+Z41pCAhi2/cxAREZHgcqW5ODY4yi
 
 # 0600, primary-user-owned. Read by the sweep and fed to curl on stdin, so the
 # secret never appears in argv or the environment.
-agent_opnsense_api_creds_path: "{{ agent_state_dir }}/opnsense_api.creds"
+# Beside agent.env, never in agent_state_dir (PER-112). OpenCode treats its
+# working directory, /home/choco, as the project, so any file under it is
+# inside the model's reach. Outside it, every path argument is
+# "external_directory", which a headless run auto-rejects (forced 2026-10-12).
+agent_opnsense_api_creds_path: "{{ agent_env_file | dirname }}/opnsense_api.creds"
 
 agent_opnsense_api_timeout: 15
 
@@ -109,7 +113,7 @@ agent_opnsense_monitoring_check_name: "OPNsense monitoring alive"
 
 # 0600, primary-user-owned, one `api_key=` line. Read-only key: nothing on this
 # container should be able to pause or delete a check.
-agent_healthchecks_api_key_file: "{{ agent_state_dir }}/healthchecks_api.creds"
+agent_healthchecks_api_key_file: "{{ agent_env_file | dirname }}/healthchecks_api.creds"   # see agent_opnsense_api_creds_path
 
 # Back-off applied to a host that REJECTS this container's SSH key, doubling
 # from the base and capped at the max. Only failed *authentication* backs off:
