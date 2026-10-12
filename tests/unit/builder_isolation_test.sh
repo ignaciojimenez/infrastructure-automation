@@ -35,6 +35,7 @@ render() {
         builder_linear_auth_file="$WORK/etc/linear.header" \
         builder_claude_env_file="$WORK/etc/claude.env" \
         builder_state_dir="$WORK/state" \
+        builder_jobs_dir="$WORK/jobs" \
         builder_lib_dir="$WORK/lib" \
         builder_interactive_home="$WORK/home" || exit 1
 }
