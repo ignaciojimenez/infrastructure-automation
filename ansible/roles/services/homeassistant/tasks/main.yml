@@ -653,6 +653,29 @@
   when: enable_matter_server | default(true)
   tags: [homeassistant, matter, docker]
 
+# The tunnel is how the phone reaches Home Assistant away from home, and with it
+# presence. Nothing watched it (docs/COVERAGE.md blank 5). This reports a
+# stopped container; it cannot see a tunnel that runs and does not connect.
+- name: Configure Cloudflared container monitoring cron job
+  ansible.builtin.cron:
+    name: "Cloudflared container check"
+    minute: "*/10"
+    job: >
+      {{ scripts_dir }}/enhanced_monitoring_wrapper
+      --heartbeat-interval=daily
+      --notify-fixed=true
+      --monitoring-name=cloudflared_container
+      {{ logging_token }}
+      {{ alert_token }}
+      {{ scripts_dir }}/check_container.sh {{ alert_token }} cloudflared
+      >> {{ logs_dir }}/cloudflared_check.log 2>&1
+    user: "{{ ansible_user }}"
+  when:
+    - enable_cloudflare_tunnel | default(true)
+    - logging_token is defined and logging_token != ''
+    - alert_token is defined and alert_token != ''
+  tags: [homeassistant, cloudflare, monitoring, cron]
+
 - name: Configure Matter Server container monitoring cron job
   ansible.builtin.cron:
     name: "Matter Server container check"
