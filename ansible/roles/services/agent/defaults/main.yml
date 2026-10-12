@@ -294,3 +294,6 @@ agent_linear_minute: "57"
 agent_builder_login: ignaciojimenez-builder
 agent_builder_repo: "{{ gh_profile }}/infrastructure-automation"
 agent_builder_pulls_url: "https://api.github.com/repos/{{ agent_builder_repo }}/pulls?state=all&sort=created&direction=desc&per_page=100"
+# A merged builder fix whose finding is still present this long after the
+# merge gets one comment: not deployed, or the fix did not hold (TODO 51).
+agent_builder_merged_grace_hours: 6

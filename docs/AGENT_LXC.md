@@ -95,8 +95,10 @@ cannot disagree. Its rules:
   metadata. This is the todo-harness convention.
 - **Builder PRs (PER-85 part 2):** each run reads the repo's 100 newest PRs from GitHub's API
   without a token (the repo is public; the Linear key never goes to GitHub). A PR on
-  `builder/<PER-x>` by `ignaciojimenez-builder`, from this repo and not a fork, is commented on
-  that issue once — as a draft PR or a hand-back. If GitHub cannot be read, the run still
+  `builder/fleet-<n>` (issue PER-<n>; no linkable identifier, so a merge cannot close the
+  issue) by `ignaciojimenez-builder`, from this repo and not a fork, is commented on that issue
+  once — as a draft PR or a hand-back. A merged fix whose finding is still present
+  `agent_builder_merged_grace_hours` (6) later gets one more comment, for a human. If GitHub cannot be read, the run still
   reconciles Linear, then fails so the wrapper pages. The builder itself: `docs/WORKBENCH.md`.
 
 The Linear key is **Read + Write, team PER only**. It sits in `/etc/fleet-linear/auth.header`

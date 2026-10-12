@@ -50,7 +50,8 @@ python3 "$REPO_ROOT/tests/lib/render_j2.py" "$TEMPLATE" "$WORK/sync.sh" \
     agent_linear_stale_after_seconds=7200 \
     agent_builder_pulls_url="https://api.github.invalid/repos/o/r/pulls" \
     agent_builder_login=ignaciojimenez-builder \
-    agent_builder_repo=o/r || exit 1
+    agent_builder_repo=o/r \
+    agent_builder_merged_grace_hours=6 || exit 1
 
 cp "$REPO_ROOT/tests/lib/fake_linear_curl.py" "$WORK/bin/curl"
 chmod +x "$WORK/bin/curl"
@@ -241,15 +242,18 @@ rm -f "$FAKE_LINEAR_DB"; rm -rf "$WORK/state"; mkdir -p "$WORK/state"
 sweep "$T0" "$ALL" "$DISK"
 run "$T0"
 REF=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["issues"][0]["identifier"])' "$FAKE_LINEAR_DB")
-pr() {  # pr <number> <head ref> <login> <repo> <title>
-    printf '{"html_url":"https://github.com/o/r/pull/%s","title":"%s","user":{"login":"%s"},"head":{"ref":"%s","repo":{"full_name":"%s"}}}' "$1" "$5" "$3" "$2" "$4"
+pr() {  # pr <number> <head ref> <login> <repo> <title> [merged_at ISO]
+    printf '{"html_url":"https://github.com/o/r/pull/%s","title":"%s","user":{"login":"%s"},"head":{"ref":"%s","repo":{"full_name":"%s"}},"merged_at":%s}' \
+        "$1" "$5" "$3" "$2" "$4" "$(if [ -n "${6:-}" ]; then printf '"%s"' "$6"; else printf null; fi)"
 }
+BR="builder/fleet-${REF#*-}"   # the builder never puts PER-<n> in a branch (TODO 50)
 {
     printf '['
-    pr 7 "builder/$REF" ignaciojimenez-builder o/r "fix($REF): fix the threshold"; printf ','
-    pr 8 "builder/$REF" mallory mallory/r "fix($REF): from a fork"; printf ','
-    pr 9 "builder/$REF" mallory o/r "fix($REF): wrong author"; printf ','
-    pr 10 "builder/PER-1" ignaciojimenez-builder o/r "fix(PER-1): another issue"
+    pr 7 "$BR" ignaciojimenez-builder o/r "fix(fleet#${REF#*-}): fix the threshold"; printf ','
+    pr 8 "$BR" mallory mallory/r "fix(fleet#${REF#*-}): from a fork"; printf ','
+    pr 9 "$BR" mallory o/r "fix(fleet#${REF#*-}): wrong author"; printf ','
+    pr 10 "builder/fleet-1" ignaciojimenez-builder o/r "fix(fleet#1): another issue"; printf ','
+    pr 12 "builder/$REF" ignaciojimenez-builder o/r "fix($REF): the old branch name"
     printf ']'
 } > "$WORK/pulls.json"
 export FAKE_GITHUB_PULLS="$WORK/pulls.json"
@@ -261,8 +265,8 @@ if [ "$RC" -eq 0 ] && [ "$(ops commentCreate)" = 1 ] &&
 else
     fail "PR not posted: rc=$RC $(cat "$FAKE_LINEAR_LOG") / $(cat "$WORK/out")"
 fi
-if ! comments_of 0 | grep -q -e "pull/8" -e "pull/9" -e "pull/10"; then
-    pass "a fork, another author, or another issue's branch is ignored"
+if ! comments_of 0 | grep -q -e "pull/8" -e "pull/9" -e "pull/10" -e "pull/12"; then
+    pass "a fork, another author, another issue's branch, or a PER-<n> branch is ignored"
 else
     fail "believed a PR it should not have: $(comments_of 0)"
 fi
@@ -276,8 +280,8 @@ run $((T0 + 2 * HOUR))
 if [ "$(ops commentCreate)" = 0 ]; then pass "the same PR is not posted twice"; else fail "PR re-posted"; fi
 {
     printf '['
-    pr 11 "builder/$REF" ignaciojimenez-builder o/r "[hand-back] $REF: no fix passed the unit tests and the rig"; printf ','
-    pr 7 "builder/$REF" ignaciojimenez-builder o/r "fix($REF): fix the threshold"
+    pr 11 "$BR" ignaciojimenez-builder o/r "[hand-back] fleet#${REF#*-}: no fix passed the unit tests and the rig"; printf ','
+    pr 7 "$BR" ignaciojimenez-builder o/r "fix(fleet#${REF#*-}): fix the threshold"
     printf ']'
 } > "$WORK/pulls.json"
 sweep $((T0 + 3 * HOUR)) "$ALL" "$DISK"
@@ -296,6 +300,37 @@ if [ "$RC" -ne 0 ] && grep -q "could not read builder PRs" "$WORK/out" && grep -
 else
     fail "GitHub failure swallowed: rc=$RC $(cat "$WORK/out")"
 fi
+
+printf '\n── A merged fix that did not clear its finding is flagged once, after a grace period\n'
+
+iso() { python3 -c 'import datetime,sys; print(datetime.datetime.fromtimestamp(int(sys.argv[1]), datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))' "$1"; }
+MERGED=$((T0 + 5 * HOUR))
+{
+    printf '['
+    pr 7 "$BR" ignaciojimenez-builder o/r "fix(fleet#${REF#*-}): fix the threshold" "$(iso "$MERGED")"; printf ','
+    pr 11 "$BR" ignaciojimenez-builder o/r "[hand-back] fleet#${REF#*-}: no fix passed the unit tests and the rig" "$(iso "$MERGED")"
+    printf ']'
+} > "$WORK/pulls.json"
+export FAKE_GITHUB_PULLS="$WORK/pulls.json"
+sweep $((MERGED + 5 * HOUR)) "$ALL" "$DISK"
+run $((MERGED + 5 * HOUR))
+if [ "$RC" -eq 0 ] && [ "$(ops commentCreate)" = 0 ]; then pass "within the grace period: no comment"; else fail "early: $(cat "$WORK/out")"; fi
+sweep $((MERGED + 6 * HOUR)) "$ALL"
+run $((MERGED + 6 * HOUR))
+if [ "$RC" -eq 0 ] && [ "$(ops commentCreate)" = 0 ]; then pass "finding gone after the merge: no comment"; else fail "absent finding flagged: $(cat "$WORK/out")"; fi
+sweep $((MERGED + 7 * HOUR)) "$ALL" "$DISK"
+run $((MERGED + 7 * HOUR))
+if [ "$RC" -eq 0 ] && [ "$(ops commentCreate)" = 1 ] &&
+   comments_of 0 | grep -q "fix did not clear this finding.*pull/7 was merged 7h ago"; then
+    pass "merged fix, finding present after the grace period: one comment naming the PR"
+else
+    fail "persisting finding: rc=$RC $(cat "$WORK/out") / $(comments_of 0 | tail -2)"
+fi
+if ! comments_of 0 | grep "did not clear" | grep -q "pull/11"; then pass "a merged hand-back is not flagged"; else fail "hand-back flagged"; fi
+sweep $((MERGED + 8 * HOUR)) "$ALL" "$DISK"
+run $((MERGED + 8 * HOUR))
+if [ "$(ops commentCreate)" = 0 ]; then pass "the same merged PR is flagged only once"; else fail "flagged twice"; fi
+unset FAKE_GITHUB_PULLS
 
 printf '\n── The credential never reaches argv\n'
 

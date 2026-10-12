@@ -69,6 +69,11 @@ case "$FAKE_CLAUDE" in
     nothing)   : ;;
     prefixed)  printf '#!/bin/sh\necho "threshold=$((90 + 10))"\n' > scripts/check_x.sh
                echo "fix(check_x): fix the threshold arithmetic" > .builder/subject ;;
+    mentions)  printf '#!/bin/sh\necho "threshold=$((90 + 10))"\n' > scripts/check_x.sh
+               echo "fix PER-85 threshold maths" > .builder/subject
+               echo "Same fault as PER-85 and per-117; see PER-120." > .builder/summary.md ;;
+    long)      printf '#!/bin/sh\necho "threshold=$((90 + 10))"\n' > scripts/check_x.sh
+               echo "make the isolation check look for the wrapper state where the wrapper writes it" > .builder/subject ;;
     big)       seq 1 200 > scripts/big.txt; echo big > .builder/subject ;;
     forbidden) mkdir -p ansible/inventory/group_vars/all; echo x > ansible/inventory/group_vars/all/vault.yml ;;
     breaks)    echo BROKEN >> scripts/check_x.sh; echo breaks > .builder/subject ;;
@@ -116,7 +121,7 @@ attempt() {
         "$SH" "$WORK/run.sh" attempt "$1" "$JOB" > "$WORK/out" 2> "$WORK/err"
     RC=$?
 }
-branch_files() { git -C "$WORK/origin.git" diff --name-only main "builder/$1" 2>/dev/null; }
+branch_files() { git -C "$WORK/origin.git" diff --name-only main "builder/fleet-${1#*-}" 2>/dev/null; }
 
 printf '\n── A good fix: tested, pushed, draft PR\n'
 
@@ -146,12 +151,12 @@ else
     fail "token in test env, or tests not run: $(cat "$STUB_LOG")"
 fi
 if [ "$(branch_files PER-951)" = "scripts/check_x.sh" ] &&
-   [ "$(git -C "$WORK/origin.git" log -1 --format='%an|%s' builder/PER-951)" = "ignaciojimenez-builder|fix(PER-951): fix the threshold arithmetic" ]; then
-    pass "builder/PER-951 pushed: one file, authored by the builder, titled fix(PER-951)"
+   [ "$(git -C "$WORK/origin.git" log -1 --format='%an|%s' builder/fleet-951)" = "ignaciojimenez-builder|fix(fleet#951): fix the threshold arithmetic" ]; then
+    pass "builder/fleet-951 pushed: one file, authored by the builder, titled fix(fleet#951)"
 else
-    fail "pushed branch: $(branch_files PER-951) / $(git -C "$WORK/origin.git" log -1 --format='%an|%s' builder/PER-951 2>&1)"
+    fail "pushed branch: $(branch_files PER-951) / $(git -C "$WORK/origin.git" log -1 --format='%an|%s' builder/fleet-951 2>&1)"
 fi
-if grep -q -- "--draft --base main --head builder/PER-951" "$STUB_DIR/gh.create" &&
+if grep -q -- "--draft --base main --head builder/fleet-951" "$STUB_DIR/gh.create" &&
    grep -q '^builder-cost-usd: 0.4217$' "$STUB_DIR/gh.body" && grep -q "3/3 unit suites passed" "$STUB_DIR/gh.body" &&
    grep -q "second run changed=0" "$STUB_DIR/gh.body"; then
     pass "draft PR against main, body has the test results and a machine-readable cost"
@@ -163,7 +168,7 @@ if ! grep -q "$(printf '\033')" "$STUB_DIR/gh.body"; then
 else
     fail "escape codes in the PR body: $(grep -n "$(printf '\033')" "$STUB_DIR/gh.body" | od -c | head -3)"
 fi
-if ! git -C "$WORK/origin.git" show builder/PER-951 --stat | grep -q '\.builder'; then
+if ! git -C "$WORK/origin.git" show builder/fleet-951 --stat | grep -q '\.builder'; then
     pass "the model's .builder/ notes are not committed"
 else
     fail ".builder/ committed"
@@ -172,11 +177,40 @@ fi
 printf '\n── A subject that already has a type prefix gets one, not two\n'
 
 attempt PER-960 1 prefixed
-if [ "$(git -C "$WORK/origin.git" log -1 --format=%s builder/PER-960)" = "fix(PER-960): fix the threshold arithmetic" ] &&
-   grep -q -- "--title fix(PER-960): fix the threshold arithmetic --body-file" "$STUB_DIR/gh.create"; then
-    pass "commit and PR title read fix(PER-960): <subject>, the model's own prefix dropped"
+if [ "$(git -C "$WORK/origin.git" log -1 --format=%s builder/fleet-960)" = "fix(fleet#960): fix the threshold arithmetic" ] &&
+   grep -q -- "--title fix(fleet#960): fix the threshold arithmetic --body-file" "$STUB_DIR/gh.create"; then
+    pass "commit and PR title read fix(fleet#960): <subject>, the model's own prefix dropped"
 else
-    fail "prefix: $(git -C "$WORK/origin.git" log -1 --format=%s builder/PER-960 2>&1) / $(cat "$STUB_DIR/gh.create" 2>/dev/null)"
+    fail "prefix: $(git -C "$WORK/origin.git" log -1 --format=%s builder/fleet-960 2>&1) / $(cat "$STUB_DIR/gh.create" 2>/dev/null)"
+fi
+
+printf '\n── Nothing the builder publishes can link (and so close) a Linear issue\n'
+
+attempt PER-962 1 mentions
+# The title as published; --body-file names a local job dir, never published.
+title_of() { sed 's/ --body-file .*//' "$STUB_DIR/gh.create"; }
+linkable=$({ title_of; cat "$STUB_DIR/gh.body"; } | grep -o '[Pp][Ee][Rr]-[0-9][0-9]*' | sort -u | tr '\n' ' ')
+if [ "$RC" -eq 0 ] && [ -z "$linkable" ] && grep -q "Same fault as PER 85 and per 117; see PER 120" "$STUB_DIR/gh.body" &&
+   grep -q -- "--head builder/fleet-962 --title fix(fleet#962): fix PER 85 threshold maths" "$STUB_DIR/gh.create" &&
+   ! git -C "$WORK/origin.git" log -1 --format=%B builder/fleet-962 | grep -q 'PER-[0-9]'; then
+    pass "title, body, branch and commit carry no PER-<n>; the model's own mentions are unlinked"
+else
+    fail "linkable identifiers: [$linkable] rc=$RC $(cat "$STUB_DIR/gh.create" 2>/dev/null)"
+fi
+
+printf '\n── A long subject is cut at a word, never mid-word\n'
+
+attempt PER-963 1 long
+long_subject="make the isolation check look for the wrapper state where the wrapper writes it"
+got=$(git -C "$WORK/origin.git" log -1 --format=%s builder/fleet-963 | sed 's/^fix(fleet#963): //')
+case "$long_subject" in
+    "$got "*) cut_ok=1 ;;
+    *) cut_ok=0 ;;
+esac
+if [ "$cut_ok" = 1 ] && [ "${#got}" -le 60 ] && [ "${#got}" -ge 40 ]; then
+    pass "subject cut to ${#got} characters at a word boundary: '$got'"
+else
+    fail "subject cut wrong: '$got' (${#got} chars)"
 fi
 
 printf '\n── Every way an attempt can fail exits 3 with a reason\n'
@@ -213,7 +247,7 @@ fi
 printf '\n── A retry replaces the branch, never stacks on it\n'
 
 attempt PER-955 2 fix
-if [ "$RC" -eq 0 ] && [ "$(git -C "$WORK/origin.git" rev-list --count main..builder/PER-955)" = 1 ]; then
+if [ "$RC" -eq 0 ] && [ "$(git -C "$WORK/origin.git" rev-list --count main..builder/fleet-955)" = 1 ]; then
     pass "attempt 2 starts from origin/main again: one commit on the branch"
 else
     fail "retry: rc=$RC $(cat "$WORK/err")"
@@ -224,12 +258,13 @@ printf '\n── Hand-back: an empty draft PR that says why\n'
 rm -rf "$STUB_DIR"; mkdir -p "$STUB_DIR"
 HB="$WORK/jobs/PER-953-handback"
 mkdir -p "$HB"
-printf 'Handing back.\n\n- attempt 1: diff is 200 changed lines\n' > "$HB/handback.md"
+printf 'Handing back PER-953.\n\n- attempt 1: diff is 200 changed lines\n' > "$HB/handback.md"
 HOME="$WORK/home" PATH="$WORK/bin:$PATH" "$SH" "$WORK/run.sh" handback PER-953 "$HB" > "$WORK/out" 2> "$WORK/err"
 RC=$?
-if [ "$RC" -eq 0 ] && grep -q '\[hand-back\] PER-953' "$STUB_DIR/gh.create" &&
-   [ -z "$(branch_files PER-953)" ] && [ "$(git -C "$WORK/origin.git" rev-list --count main..builder/PER-953)" = 1 ] &&
-   grep -q "diff is 200 changed lines" "$STUB_DIR/gh.body" && grep -q "big.txt" "$STUB_DIR/gh.body"; then
+if [ "$RC" -eq 0 ] && grep -q '\[hand-back\] fleet#953' "$STUB_DIR/gh.create" &&
+   [ -z "$(branch_files PER-953)" ] && [ "$(git -C "$WORK/origin.git" rev-list --count main..builder/fleet-953)" = 1 ] &&
+   grep -q "diff is 200 changed lines" "$STUB_DIR/gh.body" && grep -q "big.txt" "$STUB_DIR/gh.body" &&
+   grep -q "Handing back PER 953" "$STUB_DIR/gh.body" && ! { title_of; cat "$STUB_DIR/gh.body"; } | grep -q 'PER-953'; then
     pass "[hand-back] draft PR: no file changes, reasons and the last diff in the body"
 else
     fail "hand-back: rc=$RC $(cat "$WORK/err") / $(cat "$STUB_DIR/gh.create" 2>/dev/null)"
