@@ -18,7 +18,7 @@ through Unbound on the gateway (10.30.40.254).
 {% elif h.name == 'dockassist' %}
 | `dockassist` | RPi | Home Assistant, Matter, Mosquitto, Cloudflared (Docker) | **Controls the heating** (Tado, via HA automations). Restarting HA drops heating control and presence detection until it comes back. Treat as life-comfort critical; propose restarts only with a stated reason. |
 {% else %}
-| `{{ h.name }}` | {{ 'LXC' if h.name == 'unifi' else 'RPi' }} | {{ 'UniFi Network controller' if h.name == 'unifi' else ('Plex, Transmission, Samba' if h.name == 'cobra' else ('MPD, Shairport, Raspotify' if h.name == 'hifipi' else 'Icecast, Liquidsoap, detect_audio')) }} | |
+| `{{ h.name }}` | {{ h.platform }} | {{ h.runs }} | |
 {% endif %}
 {% endfor %}
 
@@ -26,7 +26,7 @@ You run on `agent-lxc` (10.30.40.203), an unprivileged LXC on `cwwk`. You are
 therefore downstream of both `cwwk` and `opnsense`: if either is broken, your
 own visibility is degraded and every host may appear unreachable. The Tier 1
 sweep pre-checks DNS for exactly this reason — if it reported a resolver fault,
-believe that over "all 7 hosts are down".
+believe that over "all {{ agent_fleet_hosts | length }} hosts are down".
 
 ## What `read_agent` can actually see
 

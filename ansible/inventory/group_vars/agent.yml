@@ -32,6 +32,8 @@ enable_agent: true
 # Reached as <name>-agent, which resolves via the ~/.ssh/config deployed by
 # the agent role. Keep in sync with hosts.yml.
 #
+# `platform` and `runs` describe the host to the Tier 2 model (AGENTS.md.j2);
+# every host without a hand-written row there needs both, or the deploy fails.
 # `kind` selects which probes run, because the checks are not portable:
 #   linux    — disk, failed systemd units, monitoring-cron freshness
 #   proxmox  — linux checks plus zpool health and CT/VM run state
@@ -40,14 +42,22 @@ enable_agent: true
 agent_fleet_hosts:
   - name: cobra
     kind: linux
+    platform: RPi
+    runs: Plex, Transmission, Samba
   - name: dockassist
     kind: linux
   - name: hifipi
     kind: linux
+    platform: RPi
+    runs: MPD, Shairport, Raspotify
   - name: vinylstreamer
     kind: linux
+    platform: RPi
+    runs: Icecast, Liquidsoap, detect_audio
   - name: unifi
     kind: linux
+    platform: LXC
+    runs: UniFi Network controller
   - name: cwwk
     kind: proxmox
   - name: opnsense
@@ -67,6 +77,8 @@ agent_fleet_hosts:
   # same reason opnsense stayed in this list rather than trusting its own crons.
   - name: workbench-lxc
     kind: linux
+    platform: LXC
+    runs: Claude Code workbench (phone sessions) and the unattended fleet builder; no fleet access
 
 # Disk usage percentage at or above which a host is flagged.
 agent_disk_threshold: 85
