@@ -326,7 +326,13 @@ reach `#home-alerts` — a temperature reading cannot satisfy this; (b) record a
 fresh idle + pegged-core baseline post-fan so the next thermal comparison has a
 true reference.
 
-*State:* designed, not built. *Effort:* medium. *Needs:* a laptop.
+*State (2026-10-12):* built, `scripts/common/check_runaway.sh`. It runs every
+10 min on every host, opnsense included, and fails on a process at ≥90% of a
+core for three consecutive samples (~30 min). Per-host `runaway_ignore` in
+inventory covers what holds a core by design: kvm, the nightly backups'
+compressors, Plex transcodes, the builder. Unit-tested and run read-only on
+cobra, cwwk, unifi and vinylstreamer. *Still owed:* deploy, the forced
+acceptance below, and the post-fan baseline.
 
 ```
 Build the runaway-process check. Read docs/TODO.md item 9 first — the design

@@ -60,6 +60,30 @@
   # as system_health_check.sh already includes disk and memory checks
   # System health check is deployed to ALL hosts, including network_controller
 
+# One process holding about a full core for 30 minutes (PER-10): three
+# consecutive 10-minute samples at 90% or more. Load checks divide by core
+# count and cannot see it. opnsense schedules the same script from its own
+# role. No heartbeat: a healthy sample says nothing worth posting.
+- name: Set up the runaway-process check (Debian/Linux)
+  ansible.builtin.cron:
+    name: "Runaway process check"
+    minute: "{{ runaway_check_minute | default('4-59/10') }}"
+    job: >
+      {{ scripts_dir }}/enhanced_monitoring_wrapper
+      --heartbeat-interval=never
+      --notify-fixed=true
+      --monitoring-name=runaway_check
+      {{ logging_token }}
+      {{ alert_token }}
+      {{ scripts_dir }}/check_runaway.sh
+      >> {{ logs_dir }}/runaway_check.log 2>&1
+    user: "{{ primary_user }}"
+  when:
+    - os_family == "debian"
+    - logging_token is defined
+    - alert_token is defined
+  tags: [monitoring, cron]
+
 # FreeBSD deliberately has no equivalent of the cron above. `roles/platform/
 # opnsense` already schedules eight wrapped checks, including its own
 # `check_system_health.sh`, which covers memory, disk and load with FreeBSD-
