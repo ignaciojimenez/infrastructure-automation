@@ -2,9 +2,9 @@
 # Regression test: check_link_speed must COUNT its faults and RETURN the total.
 #
 # Runs on the laptop — no container, no network, no NIC. The function
-# definitions are extracted from system_health_check.sh, `ifconfig` is stubbed
-# for the FreeBSD path, and a fixture tree stands in for /sys/class/net on the
-# Linux path.
+# definitions are extracted from system_health_check.sh, and a fixture tree
+# stands in for /sys/class/net. (The FreeBSD path and its cases were deleted
+# with the code on 2026-10-12, PER-20: the script runs on no FreeBSD host.)
 #
 #   tests/unit/link_speed_exit_test.sh
 #
@@ -64,46 +64,6 @@ if ! grep -q '^check_link_speed()' "$WORK/funcs.sh"; then
     printf '     If the function was lifted onto another branch, move this test with it.\n'
     exit 1
 fi
-
-# ------------------------------------------------------------------
-# FreeBSD path — ifconfig stubbed
-# ------------------------------------------------------------------
-cat > "$WORK/freebsd.sh" <<'EOF'
-# Sourcing runs the script's prologue, which prints a banner. Suppress it so
-# the only thing on stdout is the exit code under test.
-. "$1" >/dev/null 2>&1
-OS_TYPE=freebsd
-ifconfig() {
-    if [ "$1" = "-l" ]; then echo "$IFACES"; return; fi
-    case "$1" in
-        good) printf '\tstatus: active\n\tmedia: Ethernet 10Gbase-Twinax <full-duplex>\n' ;;
-        gig)  printf '\tstatus: active\n\tmedia: Ethernet 1000baseT <full-duplex>\n' ;;
-        slow) printf '\tstatus: active\n\tmedia: Ethernet 100baseTX <full-duplex>\n' ;;
-        half) printf '\tstatus: active\n\tmedia: Ethernet 1000baseT <half-duplex>\n' ;;
-        down) printf '\tstatus: no carrier\n' ;;
-    esac
-}
-IFACES="$2"
-check_link_speed >/dev/null 2>&1
-echo $?
-EOF
-
-check_bsd() {
-    got=$(sh "$WORK/freebsd.sh" "$WORK/funcs.sh" "$1" 2>/dev/null)
-    if [ "$got" = "$2" ]; then
-        pass "freebsd [$1] -> $2"
-    else
-        fail "freebsd [$1] -> expected $2, got ${got:-<none>}"
-    fi
-}
-
-check_bsd "good"      0
-check_bsd "gig"       0
-check_bsd "slow"      1        # 100baseTX — below gigabit
-check_bsd "half"      1        # half-duplex at gigabit
-check_bsd "slow half" 2        # both faults counted, not collapsed
-check_bsd "good slow" 1        # a healthy NIC must not mask a faulty one
-check_bsd "down"      0        # no active interface is advisory, not a fault
 
 # ------------------------------------------------------------------
 # Linux path — fixture tree via SYSFS_NET
