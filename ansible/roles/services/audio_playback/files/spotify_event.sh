@@ -12,8 +12,12 @@
 # Never fail the caller — a broker blip must not block raspotify from starting.
 [ -n "$MQTT_BROKER" ] || exit 0
 
+# Each publish is capped at 5 s (PER-62). With the broker unreachable,
+# mosquitto_pub waited out a TCP connect for 150 s or more (forced on hifipi,
+# 2026-10-12), past systemd's 90 s start limit, so raspotify never started.
+# Two publishes per event: at most ~10 s.
 pub() {
-    mosquitto_pub -h "$MQTT_BROKER" -p "${MQTT_PORT:-1883}" \
+    timeout 5 mosquitto_pub -h "$MQTT_BROKER" -p "${MQTT_PORT:-1883}" \
         -u "$MQTT_USERNAME" -P "$MQTT_PASSWORD" \
         -r -t "${MQTT_TOPIC:-raspotify/hifipi}/$1" -m "$2" 2>/dev/null || true
 }
