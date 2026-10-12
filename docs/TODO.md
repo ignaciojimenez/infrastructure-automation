@@ -437,7 +437,7 @@ recap. Then move item 38 to docs/archive/DONE.md.
 
 ### 🟢 P3 — improvements, no urgency
 
-**49. The wrapper writes every Slack payload to a shared `/tmp` path**
+**49. The wrapper writes every Slack payload to a shared `/tmp` path** ([PER-116](https://linear.app/lacopadeeuropa/issue/PER-116))
 Found 2026-10-11 on the workbench (PER-85): `enhanced_monitoring_wrapper`
 writes each payload to `/tmp/slack_payload_debug.json` before sending. On a
 host where two accounts run the wrapper, whoever wrote first owns the file and
