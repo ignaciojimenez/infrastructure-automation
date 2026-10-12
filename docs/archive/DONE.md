@@ -2276,7 +2276,7 @@ default to.
   every account could read. Now only a payload Slack *rejected* is kept, at
   `<state file>.failed_payload.json`, created 0600 by the account that ran the job.
   `tests/unit/wrapper_payload_file_test.sh`: the old wrapper fails all three checks.
-  Deployed with `deploy_monitoring.yml`.
+  `deploy_monitoring.yml` ships it fleet-wide and deletes the old `/tmp` file.
 
 - **2026-08-19 — cwwk memory trim considered and dropped.** OPNsense's VM is
   allocated 12 GB and uses ~3.5 GB, but the host has headroom and shrinking it
