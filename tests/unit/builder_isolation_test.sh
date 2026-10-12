@@ -62,6 +62,12 @@ else
     fail "the check does not protect .claude/.credentials.json (the name Claude Code writes)"
 fi
 
+if [ -e "$WORK/state/wrapper_state.json" ] && [ ! -e "$WORK/jobs/wrapper_state.json" ]; then
+    pass "the wrapper state is checked where the wrapper writes it (state dir, not jobs dir)"
+else
+    fail "the check looks for wrapper_state.json outside the builder state dir"
+fi
+
 printf '\n── The boundary is broken: a protected path is readable\n'
 render ""
 run
