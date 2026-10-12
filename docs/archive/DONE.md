@@ -17,6 +17,8 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ## Contents
 
+- [2026-10-12 — the Tier 2 model could read two credentials through a tool nobody had restricted (item 48, PER-112)](#2026-10-12--the-tier-2-model-could-read-two-credentials-through-a-tool-nobody-had-restricted-item-48-per-112)
+- [2026-10-12 — the builder proves itself twice, and two ways its own merges went wrong (PER-85, items 50 and 51)](#2026-10-12--the-builder-proves-itself-twice-and-two-ways-its-own-merges-went-wrong-per-85-items-50-and-51)
 - [2026-10-11 — cwwk keeps `choco`'s password: it is the only console login (item 47, PER-109)](#2026-10-11--cwwk-keeps-chocos-password-it-is-the-only-console-login-item-47-per-109)
 - [2026-10-11 — OPNsense owns its accounts; the playbooks stop locking them (item 44, PER-104)](#2026-10-11--opnsense-owns-its-accounts-the-playbooks-stop-locking-them-item-44-per-104)
 - [2026-10-11 — the test rig does what it was built for (item 3, PER-67)](#2026-10-11--the-test-rig-does-what-it-was-built-for-item-3-per-67)
@@ -66,6 +68,76 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ---
 
+
+---
+
+## 2026-10-12 — the Tier 2 model could read two credentials through a tool nobody had restricted (item 48, PER-112)
+
+**Item 48 suspected the bash allowlist, `cat ~/.agent/*`. The bigger hole
+was a tool the config never named.** OpenCode 1.18.4's built-in permissions
+are `"*": "allow"`, with only `.env` files and paths outside the project set
+to `ask`. `opencode.json` narrowed bash, edit, write and webfetch and nothing
+else. A headless run's `read` tool opened `~/.agent/last_anomaly.json`
+(forced, non-secret target). The OPNsense and healthchecks API credentials
+sat beside it, readable the same way.
+
+Read from the 1.18.4 source, then forced live:
+- `*` in a pattern is the regex `.*`, so `cat ~/.agent/*` also matches `../`.
+  But a command that takes a path is resolved first, and a path outside
+  `/home/choco` (OpenCode's project directory) is `external_directory`, which
+  a headless run auto-rejects (`run.ts`: "auto-rejecting").
+  `cat ~/.agent/../../../etc/hostname` was refused.
+- The bash permission key is still `bash` (renamed in code to "shell", kept
+  as "bash" "for compatibility"), and each tree-sitter-parsed command is
+  matched separately, so `;` chaining doesn't slip through.
+- ssh takes no path argument, so `-F`/`-i`/`-E` read local files unchecked.
+
+Fix: a top-level `"*": "deny"` hides every tool but bash (forced: the model
+listed bash as its only tool). Both credentials move to `/etc/agent/` beside
+`agent.env`, and the old copies are deleted. ssh with an option before the
+host is denied, and so is one right after it, spelled out per host because a
+blanket `ssh *-agent -*` would deny `... qemu-guest-agent --no-pager`. The
+sweep still read both credentials (8/8, no unknowns). What it does not fix:
+the model runs as the account that owns the secrets (item 52).
+
+---
+
+## 2026-10-12 — the builder proves itself twice, and two ways its own merges went wrong (PER-85, items 50 and 51)
+
+**Two planted faults each became a tested draft PR with no human in the
+middle, and both PRs were merged without edits.** The first, a typo in the
+isolation check (PER-117 → PR #17, $0.10), followed the Tier 2 plan's own
+hypothesis. The second (PER-120 → PR #18, $0.05) was harder on purpose. The
+investigator can list neither directory, so its plan guessed wrong. It
+called the file transient and proposed removing it from the protected list,
+which would have weakened a security check to silence it. Attempt 1 was
+SIGKILLed mid-model-run, leaving no orphaned process and the attempt on
+disk. Attempt 2 traced `--state-file=` in the role, wrote "It was not a
+transient-file problem", and fixed the variable.
+
+**Item 50: merging a builder PR closed its issue before the deploy.** The PER
+team's Git automation moves a linked issue to Done on merge. PER-117 and
+PER-120 both closed within seconds of their merges. Between merge and deploy,
+the filer saw the live finding with no open issue and opened PER-121, a
+duplicate with a plan that the builder would have attempted once the daily
+cap reset. Fix (`3f1513f`): builder PRs carry `fleet#<n>` on
+`builder/fleet-<n>`, and any `PER-<n>` the model writes becomes `PER <n>`.
+Proven live with probe PR #19: unlinked for over 5 minutes, then linked
+within seconds once `PER-120` was put in its title.
+
+**Item 51, redesigned before building.** The ask was "a regression after a
+builder fix gets a fresh build". The sweep's trigger, Tier 2's quiet window
+and the builder's finished state each treat a same-key recurrence as the
+old incident. But a fix that merged and did not hold is the builder's
+judgement failing, and retrying would loop on it. So the filer now comments
+once, 6 h after a merge, if the finding is still present, for a human. This
+is unit-tested only (forced with the presence check removed). Waiting out
+6 h live would add nothing the fake clock doesn't show.
+
+**A test-procedure lesson:** renaming an incident record inside
+`~/.agent/incidents/` still counts as an open incident for the host. Tier 2
+anchored on it ("same incident, never cleared") and skipped its diagnostics,
+for $0.15. Move a record *out* of the folder to retire it.
 
 ---
 
