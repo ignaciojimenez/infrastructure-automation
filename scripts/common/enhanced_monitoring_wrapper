@@ -191,9 +191,6 @@ send_slack_notification() {
   json_payload="${json_payload//TIMESTAMP/$escaped_timestamp}"
   json_payload="${json_payload//OUTPUT/$escaped_output}"
   
-  # Save payload to debug file before sending
-  echo "${json_payload}" > /tmp/slack_payload_debug.json
-  
   # Log the payload for debugging (without sensitive information)
   if [ "$is_alert" = "true" ]; then
     log_msg "Sending notification to Slack (ALERT)"
@@ -206,7 +203,17 @@ send_slack_notification() {
   
   if [ "$response" != "ok" ]; then
     log_msg "${YELLOW}Warning: Slack notification may not have been sent properly. Response: ${response}${NC}"
-    log_msg "${YELLOW}Debug payload saved to /tmp/slack_payload_debug.json${NC}"
+    # Keep the rejected payload for debugging, and only that one. Never a
+    # shared /tmp path (PER-116): on a host where two accounts run the wrapper,
+    # whoever wrote first owned it and the other was refused, and the file
+    # held script output readable by every account. This sits next to this
+    # job's own state file, created 0600 by the account that ran it.
+    local debug_file="${STATE_FILE%.json}.failed_payload.json"
+    if (umask 077; printf '%s\n' "${json_payload}" > "$debug_file") 2>/dev/null; then
+      log_msg "${YELLOW}Rejected payload saved to ${debug_file}${NC}"
+    else
+      log_msg "${YELLOW}Could not save the rejected payload to ${debug_file}${NC}"
+    fi
     
     # Try an even simpler payload as fallback
     local fallback_payload="{\"text\":\"${emoji} Script execution on ${escaped_hostname}: ${escaped_status} (Exit code: ${escaped_exit_code})\"}"

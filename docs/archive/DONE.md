@@ -2342,6 +2342,14 @@ default to.
 
 ## Smaller closed items
 
+- **2026-10-12 — the wrapper no longer writes every Slack payload to `/tmp` (item 49, PER-116).**
+  It wrote `/tmp/slack_payload_debug.json` before every send. On the workbench, where root and
+  `autobuilder` both run it, the second account was refused, and the file was script output
+  every account could read. Now only a payload Slack *rejected* is kept, at
+  `<state file>.failed_payload.json`, created 0600 by the account that ran the job.
+  `tests/unit/wrapper_payload_file_test.sh`: the old wrapper fails all three checks.
+  `deploy_monitoring.yml` ships it fleet-wide and deletes the old `/tmp` file.
+
 - **2026-08-19 — cwwk memory trim considered and dropped.** OPNsense's VM is
   allocated 12 GB and uses ~3.5 GB, but the host has headroom and shrinking it
   costs a firewall restart (= internet outage). Revisit only if cwwk actually

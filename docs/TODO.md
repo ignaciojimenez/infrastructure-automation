@@ -434,23 +434,6 @@ recap. Then move item 38 to docs/archive/DONE.md.
 
 ### 🟢 P3 — improvements, no urgency
 
-**49. The wrapper writes every Slack payload to a shared `/tmp` path** ([PER-116](https://linear.app/lacopadeeuropa/issue/PER-116))
-Found 2026-10-11 on the workbench (PER-85): `enhanced_monitoring_wrapper`
-writes each payload to `/tmp/slack_payload_debug.json` before sending. On a
-host where two accounts run the wrapper, whoever wrote first owns the file and
-the other is refused (`Permission denied` in `/var/log/fleet_builder.log`;
-root too, because of `fs.protected_regular` in sticky `/tmp`). The send still
-works, so nothing is lost today; but the file is world-readable script output,
-and on the workbench model-run code can read it.
-
-```
-TODO 49: in scripts/common/enhanced_monitoring_wrapper, stop writing
-/tmp/slack_payload_debug.json on every send. Write the payload only on a failed
-send, to a mktemp file under the wrapper's own state dir (0600), and log that
-path. Prove it with a tests/unit case: two users, both sends succeed, no file in
-/tmp. Deploy with deploy_monitoring.yml; second run changed=0.
-```
-
 **46. `wrapper_state_collision` exercises the wrapper as root** ([PER-106](https://linear.app/lacopadeeuropa/issue/PER-106))
 Left over from item 3. It was to be folded in only if it was one edit, and it
 is not. Every other case arranges as root and exercises as the infrastructure

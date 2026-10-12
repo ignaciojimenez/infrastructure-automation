@@ -52,6 +52,15 @@
       when: os_family == "freebsd"
       tags: [monitoring, scripts]
 
+    # The wrapper wrote every Slack payload here until PER-116. It now keeps
+    # only a rejected payload, beside its own state file, so this copy is just
+    # stale script output that any account can read.
+    - name: Remove the wrapper's old shared payload file
+      ansible.builtin.file:
+        path: /tmp/slack_payload_debug.json
+        state: absent
+      tags: [monitoring, scripts]
+
     # The critical-service list is inventory-driven, because a host that calls
     # a service something else should say so in inventory rather than in a
     # script shipped to all seven — opnsense's ssh rc script is `openssh`, and
