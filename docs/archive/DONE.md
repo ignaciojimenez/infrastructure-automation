@@ -2349,6 +2349,13 @@ default to.
   `<state file>.failed_payload.json`, created 0600 by the account that ran the job.
   `tests/unit/wrapper_payload_file_test.sh`: the old wrapper fails all three checks.
   `deploy_monitoring.yml` ships it fleet-wide and deletes the old `/tmp` file.
+- **2026-10-12 — `ha_state`'s last error branch forced, without touching the live secrets (item 19, PER-16).**
+  The deployed helper, with only its `SECRETS=` line rewritten to a throwaway copy that lacked
+  the key, printed `ha_state: key ha_monitor_token is absent from …` and exited 1, run as
+  `read_agent` on dockassist. A `cmp` confirmed that line was the only difference from the
+  deployed file. A path override was deliberately not added: the helper runs through `sudo`, so
+  an override would let the caller choose a file for root to read. All three branches have now
+  run on the host.
 
 - **2026-08-19 — cwwk memory trim considered and dropped.** OPNsense's VM is
   allocated 12 GB and uses ~3.5 GB, but the host has headroom and shrinking it
