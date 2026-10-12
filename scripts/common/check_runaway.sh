@@ -76,7 +76,7 @@ printf '%s\n' "$CURRENT" | awk -v now="$NOW" -v prev_ts="$prev_ts" \
     }
     BEGIN {
         FS = "\t"
-        while ((getline line < ignore) > 0) if (line != "") skip[line] = 1
+        while ((getline line < ignore) > 0) if (line != "" && substr(line, 1, 1) != "#") skip[line] = 1
         if (prev_ts != "") {
             getline line < state   # the epoch line
             while ((getline line < state) > 0) {

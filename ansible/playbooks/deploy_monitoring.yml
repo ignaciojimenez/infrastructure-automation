@@ -96,12 +96,14 @@
       tags: [monitoring, scripts, config]
 
     # check_runaway.sh (PER-10) never flags these process names. One per line,
-    # because ps prints some with spaces ("Plex Transcoder"). An empty file is
-    # deployed where inventory names none, so every host has one to read.
+    # because ps prints some with spaces ("Plex Transcoder"). Every host gets a
+    # file. The header line is load-bearing: `copy` rejects empty `content` as
+    # "src (or content) is required", which failed every host with no list.
     - name: Deploy the runaway-check ignore list
       ansible.builtin.copy:
         dest: "{{ monitoring_config_dir }}/runaway_ignore"
         content: |
+          # Managed by deploy_monitoring.yml (inventory: runaway_ignore). One ps comm name per line.
           {% for name in runaway_ignore | default([]) %}
           {{ name }}
           {% endfor %}
