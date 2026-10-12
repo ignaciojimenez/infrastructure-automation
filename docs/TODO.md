@@ -152,27 +152,24 @@ headings say what is urgent.
 
 ### 🟠 P2 — known risk, not currently biting
 
-**48. The model can `cat` two of agent-lxc's credentials** ([PER-112](https://linear.app/lacopadeeuropa/issue/PER-112))
-Found 2026-10-11 while placing PER-85's Linear key. The OpenCode allowlist
-permits `cat {{ agent_state_dir }}/*` (`opencode.json.j2`), and two credential
-files live in that directory: `opnsense_api.creds` (the firewall API
-key/secret) and `healthchecks_api.creds`. So "the agent never handles secrets"
-(AGENT_LXC.md, Security model) does not hold for those two. This is reasoned
-from the config and **not forced**: proving it would mean asking the model to
-print a live secret to the API.
+**52. The Tier 2 model shares a Unix account with every secret on agent-lxc**
+Left by PER-112 (2026-10-12). OpenCode runs as `choco`, the account the sweep
+needs, and `choco` can read `/etc/agent/` (the Anthropic key, the Slack read
+token, the OPNsense and healthchecks API credentials) by group. PER-112 closed
+every path found and forced: no `read` tool, no reads outside `/home/choco`, no
+ssh option that reads a local file. But the boundary is OpenCode's permission
+engine and a coarse glob over command strings. Each OpenCode upgrade can change
+it, and a new tool defaults to allow (the top-level deny covers that today).
 
-Both credentials are read-only, so the exposure is disclosure to the model
-provider plus a prompt-injection path to a read-only firewall API. Fix:
-move both files out of the state dir (e.g. `/etc/agent/`, root-owned with
-group read for the agent account, like `agent.env`), and change the allowlist
-to name files rather than a glob. ⚠️ Unverified: whether OpenCode's `*`
-also matches `../`. If it does, `cat ~/.agent/../../../etc/agent/agent.env`
-(the Anthropic key, the Slack read token) passes the same rule. Check that
-from OpenCode's matcher source before closing this.
-
-*Effort:* small. *Verify:* `cat` of the old path is gone, the sweep's
-opnsense and healthchecks checks still pass on agent-lxc, and an OpenCode
-headless `cat` of a new path is refused (ask it for a non-secret file there).
+```
+TODO 52: run Tier 2's opencode as its own Unix account, the builder's pattern
+(roles/services/workbench/tasks/fleet_builder.yml, autobuilder). The account
+holds only the read_agent SSH key, its ssh_config and the opencode config;
+investigate.sh (choco) hands off with setpriv and passes ANTHROPIC_API_KEY
+in the environment. Prove it with the PER-112 probes run as the new account:
+`cat /etc/agent/agent.env` is "Permission denied" from the filesystem even
+with every OpenCode permission set to allow.
+```
 
 **45. unifi-lxc cannot `apt update`: Ubiquiti's repo key fails Debian 13's SHA1 policy** ([PER-105](https://linear.app/lacopadeeuropa/issue/PER-105))
 Found 2026-10-11 during the 3a fleet deploy: `Update package cache` fails on

@@ -17,6 +17,7 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ## Contents
 
+- [2026-10-12 — the Tier 2 model could read two credentials through a tool nobody had restricted (item 48, PER-112)](#2026-10-12--the-tier-2-model-could-read-two-credentials-through-a-tool-nobody-had-restricted-item-48-per-112)
 - [2026-10-12 — the builder proves itself twice, and two ways its own merges went wrong (PER-85, items 50 and 51)](#2026-10-12--the-builder-proves-itself-twice-and-two-ways-its-own-merges-went-wrong-per-85-items-50-and-51)
 - [2026-10-11 — cwwk keeps `choco`'s password: it is the only console login (item 47, PER-109)](#2026-10-11--cwwk-keeps-chocos-password-it-is-the-only-console-login-item-47-per-109)
 - [2026-10-11 — OPNsense owns its accounts; the playbooks stop locking them (item 44, PER-104)](#2026-10-11--opnsense-owns-its-accounts-the-playbooks-stop-locking-them-item-44-per-104)
@@ -67,6 +68,37 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ---
 
+
+---
+
+## 2026-10-12 — the Tier 2 model could read two credentials through a tool nobody had restricted (item 48, PER-112)
+
+**Item 48 suspected the bash allowlist, `cat ~/.agent/*`. The bigger hole
+was a tool the config never named.** OpenCode 1.18.4's built-in permissions
+are `"*": "allow"`, with only `.env` files and paths outside the project set
+to `ask`. `opencode.json` narrowed bash, edit, write and webfetch and nothing
+else. A headless run's `read` tool opened `~/.agent/last_anomaly.json`
+(forced, non-secret target). The OPNsense and healthchecks API credentials
+sat beside it, readable the same way.
+
+Read from the 1.18.4 source, then forced live:
+- `*` in a pattern is the regex `.*`, so `cat ~/.agent/*` also matches `../`.
+  But a command that takes a path is resolved first, and a path outside
+  `/home/choco` (OpenCode's project directory) is `external_directory`, which
+  a headless run auto-rejects (`run.ts`: "auto-rejecting").
+  `cat ~/.agent/../../../etc/hostname` was refused.
+- The bash permission key is still `bash` (renamed in code to "shell", kept
+  as "bash" "for compatibility"), and each tree-sitter-parsed command is
+  matched separately, so `;` chaining doesn't slip through.
+- ssh takes no path argument, so `-F`/`-i`/`-E` read local files unchecked.
+
+Fix: a top-level `"*": "deny"` hides every tool but bash (forced: the model
+listed bash as its only tool). Both credentials move to `/etc/agent/` beside
+`agent.env`, and the old copies are deleted. ssh with an option before the
+host is denied, and so is one right after it, spelled out per host because a
+blanket `ssh *-agent -*` would deny `... qemu-guest-agent --no-pager`. The
+sweep still read both credentials (8/8, no unknowns). What it does not fix:
+the model runs as the account that owns the secrets (item 52).
 
 ---
 
