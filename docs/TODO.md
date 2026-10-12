@@ -627,19 +627,24 @@ One branch, tick them off. Phone-taggable lines marked 📱.
   requires a `gpg` binary on the target and **fails outright without one**, which
   is what it did on agent-lxc. Any minimal host added to the fleet hits this.
 
-- `AGENTS.md` still says `deploy_monitoring.yml` deploys "monitoring scripts to
-  all hosts" — it syncs only `scripts/common/`. That wording is what hid the
-  hifipi drift; fix it.
+- ✅ 2026-10-12: `AGENTS.md` and `AGENT_INSTRUCTIONS.md` now say
+  `deploy_monitoring.yml` syncs `scripts/common/` plus the opnsense/proxmox
+  monitoring roles, and NOT `scripts/services/*`.
 - 📱 dockassist: `rm ~/.log/check_container.sh.json*` (orphaned state) and
   `~/crontab.bak.20260802`. hifipi: `rm ~/*.bak.20260802` (2 files).
-- `heartbeat_backup.sh:30` — `|| true` + discarded stderr means a failed ping is
-  invisible; log the curl exit status. If the nightly backup DOWN/UP pattern
+- ✅ 2026-10-12: `heartbeat_backup.sh` already logs the curl exit status (since
+  `3a527ff`); `tests/unit/heartbeat_backup_test.sh` now forces a failed ping and
+  fails on the old `|| true` shape. Not read on hosts: the rendered copies under
+  `~/.scripts/monitoring/` are outside `agent_read`. Also found: every host
+  carries an unrendered copy at `~/.scripts/heartbeat_backup.sh` (literal
+  `{{ … }}`, never scheduled), because `deploy_monitoring.yml` copies all of
+  `scripts/common/`. Dead weight; exclude it with the next touch of that task. If the nightly backup DOWN/UP pattern
   (seen 2026-08-09 and 08-11, all three hosts recovering in the same minute)
   recurs, read the healthchecks.io ping log first — it discriminates "cron
   didn't fire" from "path broke".
-- `read_agent`'s `from=` pin is `10.30.0.0/16`, but `ARCHITECTURE_DECISIONS.md`
-  claims single-IP pinning. Tighten the vault value or fix the doc (check the
-  laptop's DHCP reservation before tightening).
+- ✅ doc half: `ARCHITECTURE_DECISIONS.md` already states the pin is
+  `10.30.0.0/16`, a blast-radius limit rather than an identity check, because the
+  laptop has no fixed address. Narrowing it still needs a DHCP reservation first.
 - Recovery notifications go to `#home-logging` while the failure they clear sat
   in `#home-alerts` — a self-healed check looks permanently broken. One-line
   wrapper change; decide how loud recoveries should be.
@@ -648,8 +653,9 @@ One branch, tick them off. Phone-taggable lines marked 📱.
 - `templates/debian/sshd_config.j2` drops Debian's
   `Include /etc/ssh/sshd_config.d/*.conf` — add it (template wins by ordering)
   or state that drop-ins are unsupported.
-- Delete the never-deployed `docker-compose.yml.j2` + its dead handler in the
-  homeassistant role.
+- ✅ 2026-10-12: deleted the never-deployed `docker-compose.yml.j2`, its
+  `Stop homeassistant` handler and the unreferenced lowercase `Restart
+  homeassistant` duplicate (grep: no notifier anywhere).
 - 📱 Delete the 5 stale `unavailable` Tado automations in HA's UI (`.storage`,
   not repo-managed).
 - 📱 opnsense `/usr/local/bin` cruft (`monit-slack.sh{,.old}`,
@@ -667,7 +673,9 @@ One branch, tick them off. Phone-taggable lines marked 📱.
   inert — but they read as active config and are exactly the trap that cost
   five days. Delete them; the correct `dtoverlay=disable-bt` is already there.
 
-*State:* all diagnosed, none started. *Effort:* small each. *Needs:* mixed —
+*State:* 4 of 14 done 2026-10-12 (✅ above). Held deliberately while Ignacio
+is away: anything editing sshd config, Pi boot config or apt sources on hosts,
+the recovery-routing decision, and the INJECT_FACTS_AS_VARS sweep. *Effort:* small each. *Needs:* mixed —
 📱 lines work from a phone, the rest want a laptop.
 
 ```
