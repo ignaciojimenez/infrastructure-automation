@@ -72,7 +72,7 @@ mode=$(ls -ln "$DEBUG" 2>/dev/null | cut -c1-10)
 if [ "$mode" = "-rw-------" ] && grep -q "$MARK" "$DEBUG" && grep -q "Rejected payload saved to $DEBUG" "$WORK/out"; then
     pass "a rejected send keeps the payload beside the state file, 0600, and logs where"
 else
-    fail "rejected send: mode=[$mode] $(cat "$DEBUG" 2>&1 | head -c 200) / $(grep -i payload "$WORK/out")"
+    fail "rejected send: mode=[$mode] $(head -c 200 "$DEBUG" 2>&1) / $(grep -i payload "$WORK/out")"
 fi
 if [ "$(old_print)" = "$before" ] && ! grep -q "$MARK" "$OLD" 2>/dev/null; then
     pass "a rejected send does not touch the old shared /tmp path either"
