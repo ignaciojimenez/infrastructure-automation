@@ -86,6 +86,19 @@
       when: critical_services is not defined
       tags: [monitoring, scripts, config]
 
+    # check_runaway.sh (PER-10) never flags these process names. One per line,
+    # because ps prints some with spaces ("Plex Transcoder"). An empty file is
+    # deployed where inventory names none, so every host has one to read.
+    - name: Deploy the runaway-check ignore list
+      ansible.builtin.copy:
+        dest: "{{ monitoring_config_dir }}/runaway_ignore"
+        content: |
+          {% for name in runaway_ignore | default([]) %}
+          {{ name }}
+          {% endfor %}
+        mode: '0644'
+      tags: [monitoring, scripts, config]
+
     # Only restart when something was actually deployed. This previously ran
     # unconditionally, which made the whole playbook permanently report
     # changed=1 per host (masking real diffs) and needlessly bounced cron on
