@@ -2356,6 +2356,14 @@ default to.
   deployed file. A path override was deliberately not added: the helper runs through `sudo`, so
   an override would let the caller choose a file for root to read. All three branches have now
   run on the host.
+- **2026-10-12 — the FreeBSD branches of `system_health_check.sh` are deleted (item 6, PER-20).**
+  `deploy_monitoring.yml` removes the script from opnsense, which runs its own
+  `check_system_health.sh`, so the service, load, memory, ping and link-speed branches for FreeBSD
+  ran on no host. That included a `ping -W` in milliseconds that no reply could beat. No stock
+  FreeBSD test VM was being built, so they are deleted (git has them), along with the test cases
+  that exercised them. Proof the Linux path is untouched: the old and new scripts, run back to
+  back as `read_agent` on cobra, cwwk, unifi, dockassist and vinylstreamer, gave identical
+  output (numbers masked) and the same exit codes.
 
 - **2026-08-19 — cwwk memory trim considered and dropped.** OPNsense's VM is
   allocated 12 GB and uses ~3.5 GB, but the host has headroom and shrinking it

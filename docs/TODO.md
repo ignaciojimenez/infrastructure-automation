@@ -475,21 +475,6 @@ on every host shows no tokens, and one forced failure still reaches
 #home-alerts.
 ```
 
-**6. FreeBSD monitoring code runs on no host.** `deploy_monitoring.yml` excludes
-`system_health_check.sh` from FreeBSD and actively removes it, so
-`freebsd_default_services()`, `freebsd_service_state()` and `read_load_1min()` are
-dormant. Either give them a FreeBSD test target (stock FreeBSD 14.3, not
-OPNsense — no official image exists) or delete them.
-
-```
-Close the FreeBSD dead-code question. Read docs/TODO.md item 6 and the L-B
-entry in docs/archive/DONE.md. deploy_monitoring.yml excludes
-system_health_check.sh from FreeBSD, so freebsd_default_services(),
-freebsd_service_state() and read_load_1min() run on no host. Recommendation:
-delete them (git has them) unless a stock FreeBSD 14.3 test VM is being built
-in the same session — dormant "verified" code is not a third option.
-```
-
 **7. Flap damping.** A fault that alternates pass/fail defeats repeat
 suppression. Deliberately deferred: *"fix forward if annoying."*
 
