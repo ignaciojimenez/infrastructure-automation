@@ -508,7 +508,7 @@ the checks that exist. **The blanks are the deliverable.** Known blanks going in
   `scripts/common/`; role-owned scripts rot silently (hifipi's did for 4 months).
   A periodic repo-vs-host checksum check is the known fix shape.
 
-*State:* method decided, not started. *Effort:* medium (it is a review — its
+*State (2026-10-12):* audit done — [`docs/COVERAGE.md`](COVERAGE.md). Nine blanks, ranked; blank 0 (where healthchecks.io alerts go) decides a dozen rows, close it first. Blanks become Linear issues only when they have an action.
 value is in being systematic). *Needs:* a laptop for the doc; reading can
 happen anywhere.
 
