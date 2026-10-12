@@ -55,6 +55,12 @@ else
     fail "healthy boundary: rc=$RC $(cat "$WORK/out")"
 fi
 
+if [ -e "$WORK/home/.claude/.credentials.json" ]; then
+    pass "the Claude login is checked under its real name, .credentials.json"
+else
+    fail "the check does not protect .claude/.credentials.json (the name Claude Code writes)"
+fi
+
 printf '\n── The boundary is broken: a protected path is readable\n'
 render ""
 run
