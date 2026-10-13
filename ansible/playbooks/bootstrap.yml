@@ -324,6 +324,22 @@
         - enable_ufw | default(false) | bool
       tags: [bootstrap, firewall]
 
+    # `ufw enable` loads the rules but never starts ufw.service, so on a host
+    # that has not rebooted since, the unit reads `inactive (dead)` over a
+    # working firewall, and the critical-services check (ufw is listed on
+    # agent-lxc and workbench-lxc) pages for it. Seen on workbench-lxc
+    # 2026-10-13: a closed port was dropped like agent-lxc's, not refused
+    # like a ufw-less host's. Starting the unit re-applies the same rules.
+    - name: Start the ufw unit, so its state matches the loaded rules
+      ansible.builtin.systemd:
+        name: ufw
+        state: started
+        enabled: true
+      when:
+        - ansible_os_family == "Debian"
+        - enable_ufw | default(false) | bool
+      tags: [bootstrap, firewall]
+
   handlers:
     - name: Restart SSH
       ansible.builtin.service:
