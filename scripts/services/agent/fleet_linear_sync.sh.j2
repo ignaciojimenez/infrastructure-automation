@@ -1,10 +1,11 @@
 #!/bin/sh
-# fleet_linear_sync.sh — Tier 1 findings -> agent/fleet issues in Linear
-# (managed by Ansible; PER-85 part 1)
+# fleet_linear_sync.sh — Tier 1 findings and alert hand-offs -> agent/fleet
+# issues in Linear (managed by Ansible; PER-85)
 #
 # Deterministic, no model involved. Each run reconciles the sweep's current
-# state (sweep_state.json, written by fleet_health_check.sh on every run)
-# against the open agent/fleet issues on team PER:
+# state (sweep_state.json, written by fleet_health_check.sh on every run), plus
+# the alert incidents Tier 2 handed off as repo changes (see "Alert hand-offs"
+# below), against the open agent/fleet issues on team PER:
 #
 #   finding present, no open issue      -> open one (Todo, project Fleet)
 #   finding present, issue marked absent -> clear the mark
@@ -59,6 +60,8 @@ STALE_AFTER_SECONDS={{ agent_linear_stale_after_seconds }}
 MARKER_SUBTITLE="fleet incident"
 SWEEP_STATE="$AGENT_DIR/sweep_state.json"
 INCIDENT_DIR="$AGENT_DIR/incidents"
+HANDOFF_DIR="$AGENT_DIR/handoff"
+INCIDENT_QUIET_SECONDS=$(( {{ agent_incident_quiet_hours }} * 3600 ))
 POSTED_DIR="$STATE_DIR/posted"
 PRS_POSTED_DIR="$STATE_DIR/builder_prs"
 
@@ -177,6 +180,36 @@ if [ "$_nfind" -gt 0 ] && [ ! -s "$WORK/current" ]; then
     die "$_nfind finding(s) in the sweep but none keyed — incident_subjects.py and the sweep disagree"
 fi
 
+# ── Alert hand-offs: Tier 2's repo-change verdicts on Slack alerts ────────
+#
+# The sweep sees failed units, disk and stale monitoring. Most faults page
+# instead as a check's own "Script Failed" in #home-alerts, which only
+# investigate.sh --slack reads. When its plan judges the durable fix to be a
+# repo change, it writes handoff/<key> holding "<host>: <alert text>".
+#
+# Such a key is PRESENT while its incident is open: an alert has named it
+# within the incident quiet window, the same rule investigate.sh bills by. It
+# then takes exactly the path a sweep finding takes — open, plan comment,
+# builder PR comments, absent, close — so nothing below is new. A key already
+# found by the sweep stays a sweep finding.
+#
+# Keys without a host ("alert-…") are skipped: no sweep observes them, so their
+# absence could never be proven and the issue would never close.
+
+: > "$WORK/alerts"
+for _hf in "$HANDOFF_DIR"/*; do
+    [ -f "$_hf" ] || continue
+    _k=$(incident_key "${_hf##*/}")
+    case "$_k" in *.tmp) continue ;; [a-z0-9]*.[a-z0-9]*) ;; *) continue ;; esac
+    grep -qxF "$_k" "$WORK/current" && continue
+    _seen=""
+    [ -f "$INCIDENT_DIR/$_k" ] && read -r _o _seen _p < "$INCIDENT_DIR/$_k"
+    is_number "$_seen" && [ $((NOW - _seen)) -lt "$INCIDENT_QUIET_SECONDS" ] || continue
+    printf '%s\n' "$_k" >> "$WORK/current"
+    printf '%s\n' "$_k" >> "$WORK/alerts"
+    head -1 "$_hf" | cut -c1-1500 > "$WORK/findings/$_k"
+done
+
 # ── What Linear says now ──────────────────────────────────────────────────
 
 open_issues=$(gql 'query($team: ID!, $label: ID!) {
@@ -229,13 +262,23 @@ while read -r key; do
         host=${key%%.*}
         first=$(head -1 "$WORK/findings/$key")
         title=$(printf '%s: %s' "$key" "${first#*: }" | cut -c1-120)
-        {
-            printf 'Tier 1 fleet sweep finding on **%s**, incident key `%s`.\n\n```\n' "$host" "$key"
-            cat "$WORK/findings/$key"
-            printf '```\n\n'
-            printf 'Machine-owned (`agent/fleet`): agent-lxc opened this and closes it once the finding has been absent for %sh on sweeps that could see the host. A Tier 2 plan, when there is one, arrives as a comment. Remove `agent/fleet` to adopt it.\n\n' "$((CLOSE_AFTER_SECONDS / 3600))"
-            printf 'Operator reference: docs/AGENT_LXC.md\n'
-        } > "$WORK/desc"
+        if grep -qxF "$key" "$WORK/alerts"; then
+            {
+                printf 'Alert in #home-alerts on **%s**, incident key `%s`. Tier 2 investigated it and judged the durable fix to be a change to the repo.\n\n```\n' "$host" "$key"
+                cat "$WORK/findings/$key"
+                printf '```\n\n'
+                printf 'Machine-owned (`agent/fleet`): agent-lxc opened this and closes it once no alert has named the key for %sh, and then %sh more on sweeps that could see the host. The Tier 2 plan arrives as a comment. Remove `agent/fleet` to adopt it.\n\n' "$((INCIDENT_QUIET_SECONDS / 3600))" "$((CLOSE_AFTER_SECONDS / 3600))"
+                printf 'Operator reference: docs/AGENT_LXC.md\n'
+            } > "$WORK/desc"
+        else
+            {
+                printf 'Tier 1 fleet sweep finding on **%s**, incident key `%s`.\n\n```\n' "$host" "$key"
+                cat "$WORK/findings/$key"
+                printf '```\n\n'
+                printf 'Machine-owned (`agent/fleet`): agent-lxc opened this and closes it once the finding has been absent for %sh on sweeps that could see the host. A Tier 2 plan, when there is one, arrives as a comment. Remove `agent/fleet` to adopt it.\n\n' "$((CLOSE_AFTER_SECONDS / 3600))"
+                printf 'Operator reference: docs/AGENT_LXC.md\n'
+            } > "$WORK/desc"
+        fi
         created=$(mutate issueCreate \
             'mutation($i: IssueCreateInput!) { issueCreate(input: $i) { success issue { id identifier } } }' \
             "$(jq -n --arg team "$TEAM_ID" --arg title "$title" --rawfile d "$WORK/desc" \
@@ -271,8 +314,13 @@ while IFS="$_tab" read -r key id ref absent; do
         echo "$ref $key: absent; marked"
         marked=$((marked + 1))
     elif [ $((NOW - absent)) -ge "$CLOSE_AFTER_SECONDS" ]; then
-        printf 'Closed by agent-lxc fleet sweep — absent for %sh on sweeps that observed %s.\n' \
-            "$(((NOW - absent) / 3600))" "$host" > "$WORK/close"
+        if [ -f "$HANDOFF_DIR/$key" ]; then
+            printf 'Closed by agent-lxc — no alert has named this for over %sh, then absent for %sh on sweeps that observed %s.\n' \
+                "$((INCIDENT_QUIET_SECONDS / 3600))" "$(((NOW - absent) / 3600))" "$host" > "$WORK/close"
+        else
+            printf 'Closed by agent-lxc fleet sweep — absent for %sh on sweeps that observed %s.\n' \
+                "$(((NOW - absent) / 3600))" "$host" > "$WORK/close"
+        fi
         comment "$id" "$WORK/close" || exit 1
         mutate issueUpdate \
             'mutation($id: String!, $i: IssueUpdateInput!) { issueUpdate(id: $id, input: $i) { success } }' \
@@ -373,6 +421,6 @@ if [ -s "$WORK/linear" ]; then
     fi
 fi
 
-echo "linear sync: $(wc -l < "$WORK/current" | tr -d ' ') incident(s) now; opened $opened, kept $kept, cleared $cleared, marked absent $marked, waiting $waiting, closed $closed, unobserved $unobserved, plans posted $posted, builder PRs posted $prs_posted"
+echo "linear sync: $(wc -l < "$WORK/current" | tr -d ' ') incident(s) now ($(wc -l < "$WORK/alerts" | tr -d ' ') from alerts); opened $opened, kept $kept, cleared $cleared, marked absent $marked, waiting $waiting, closed $closed, unobserved $unobserved, plans posted $posted, builder PRs posted $prs_posted"
 [ -z "$prs_failed" ] || die "$prs_failed"
 exit 0

@@ -37,7 +37,7 @@ All on `agent-lxc`, via cron:
 | Hourly **:07** | `investigate.sh --slack` | only for an alert with no open incident; one run per poll | `#home-alerts`: summary + plan file |
 | Sundays **09:17** | `investigate.sh --digest` | weekly | `#home-logging`: fleet-health summary + plan file |
 | Hourly **:29** | `mullvad_relay_signal.sh` | never | `#home-logging` only, and only when a relay changes state (plus a weekly reminder) |
-| Hourly **:57**, as **root** | `fleet_linear_sync.sh` | never | Linear: opens, keeps and closes `agent/fleet` issues; posts Tier 2 plans as comments |
+| Hourly **:57**, as **root** | `fleet_linear_sync.sh` | never | Linear: opens, keeps and closes `agent/fleet` issues for sweep findings and repo-change alert hand-offs; posts Tier 2 plans as comments |
 
 The three Tier-2 jobs share a **`flock`**, so they never run concurrently (which would saturate
 the 1-CPU/2GB box). Each exits immediately and free when there is nothing new to do.
@@ -91,6 +91,16 @@ cannot disagree. Its rules:
   comment, once per plan. Tier 2 itself never touches Linear.
 - **What it reads:** `~/.agent/sweep_state.json`, which the sweep now writes on **every** run with
   the hosts it actually observed. `last_anomaly.json` can't serve, because it is never cleared.
+- **Alert hand-offs (2026-10-13):** the sweep sees failed units, disk and stale monitoring, but
+  most faults page as a check's own "Script Failed", which only `investigate.sh --slack` reads.
+  Its plan now carries `Action: repo-change | host-action | none` and `Fixes incidents: <keys>`
+  (one key per root cause). On `repo-change`, investigate.sh writes `~/.agent/handoff/<key>`
+  (`<host>: <alert text>`) for each named key it actually investigated, and clears the hand-off of
+  every investigated key first, so the latest plan's verdict always wins. The filer treats such a
+  key as present while its incident is open (an alert named it within the 26 h quiet window) and
+  then runs it through the same open, plan, builder-PR and close rules as a sweep finding. Hostless
+  `alert-…` keys are never filed: nothing could observe them gone. A key the sweep also reports
+  stays a sweep finding.
 - **Identity:** an attachment whose URL ends `?incident=<key>`, with the absence mark in its
   metadata. This is the todo-harness convention.
 - **Builder PRs (PER-85 part 2):** each run reads the repo's 100 newest PRs from GitHub's API
