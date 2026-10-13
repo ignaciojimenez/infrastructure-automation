@@ -11,3 +11,10 @@ enable_ufw: false
 enable_unifi_backup: true
 unifi_backup_frequency: "daily"
 unifi_backup_retention_days: 7
+
+# Ubiquiti's apt repository (PER-105). The suite pins the app's release line;
+# moving it is an app upgrade, a separate decision. The checksum pins the
+# 2026 signing key (fingerprint FCF764DFE6488B0F899E91A17C84148C6904B09E).
+unifi_repo_suite: "unifi-9.4"
+unifi_repo_key_url: "https://dl.ui.com/unifi/unifi-repo.gpg"
+unifi_repo_key_sha256: "ee166984e9f50cd365c5c404864218bd1725b709ab5cc26d812ca2c7e823462d"

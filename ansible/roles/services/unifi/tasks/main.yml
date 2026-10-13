@@ -82,6 +82,53 @@
         var: install_log.stdout_lines
       tags: [unifi, install]
 
+# ============================================================
+# Ubiquiti's apt repository (PER-105)
+#
+# The install script above adds a source trusting Ubiquiti's 2011 key
+# (4A228B2D…, SHA-1 bindings), which Debian 13's sqv refuses, so `apt update`
+# failed on this host and every site.yml stopped at its cache task. The repo's
+# InRelease is now signed twice: by that key and by a 2026 RSA-4096 key with
+# SHA-512 bindings (FCF764DF…), published at dl.ui.com. Verified 2026-10-13:
+# the new key gives a good signature on unifi-9.4's InRelease.
+#
+# The key is pinned by checksum: a trust anchor that changes upstream should
+# fail this task loudly, not be accepted silently.
+# ============================================================
+
+- name: Install Ubiquiti's 2026 repository key
+  become: true
+  ansible.builtin.get_url:
+    url: "{{ unifi_repo_key_url }}"
+    dest: /etc/apt/keyrings/unifi-repo-2026.gpg
+    checksum: "sha256:{{ unifi_repo_key_sha256 }}"
+    mode: '0644'
+  tags: [unifi, apt]
+
+- name: Declare the UniFi repository, signed by that key
+  become: true
+  ansible.builtin.deb822_repository:
+    name: unifi
+    types: [deb]
+    uris: https://www.ui.com/downloads/unifi/debian
+    suites: "{{ unifi_repo_suite }}"
+    components: [ubiquiti]
+    architectures: [amd64]
+    signed_by: /etc/apt/keyrings/unifi-repo-2026.gpg
+    state: present
+  tags: [unifi, apt]
+
+# Left in place, apt would see the repo twice, once through the refused key.
+- name: Remove the install script's source and its SHA-1 key
+  become: true
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/apt/sources.list.d/100-ubnt-unifi.sources
+    - /etc/apt/keyrings/unifi-repo.gpg
+  tags: [unifi, apt]
+
 - name: Wait for UniFi service to be created
   ansible.builtin.wait_for:
     path: "{{ unifi_service_file }}"

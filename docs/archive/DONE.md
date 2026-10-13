@@ -17,6 +17,8 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ## Contents
 
+- [2026-10-13 — unifi-lxc trusted only the key Debian 13 refuses (item 45, PER-105)](#2026-10-13--unifi-lxc-trusted-only-the-key-debian-13-refuses-item-45-per-105)
+- [2026-10-13 — three items closed, one of them was never broken (items 9, 34, 38)](#2026-10-13--three-items-closed-one-of-them-was-never-broken-items-9-34-38)
 - [2026-10-12 — the Tier 2 model could read two credentials through a tool nobody had restricted (item 48, PER-112)](#2026-10-12--the-tier-2-model-could-read-two-credentials-through-a-tool-nobody-had-restricted-item-48-per-112)
 - [2026-10-12 — the builder proves itself twice, and two ways its own merges went wrong (PER-85, items 50 and 51)](#2026-10-12--the-builder-proves-itself-twice-and-two-ways-its-own-merges-went-wrong-per-85-items-50-and-51)
 - [2026-10-11 — cwwk keeps `choco`'s password: it is the only console login (item 47, PER-109)](#2026-10-11--cwwk-keeps-chocos-password-it-is-the-only-console-login-item-47-per-109)
@@ -70,6 +72,24 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 
 ---
+
+
+
+## 2026-10-13 — unifi-lxc trusted only the key Debian 13 refuses (item 45, PER-105)
+
+Since September every `site.yml` stopped on unifi-lxc at `Update package cache`, which also held PER-87's fleet acceptance. The host's only Ubiquiti key was the 2011 RSA-2048 key (`4A228B2D…`), and its SHA-1 bindings fail Debian 13's `sqv` policy. Ubiquiti did not keep SHA-1, as forum threads assumed. It **dual-signs**: the same `InRelease` also carries a signature from an RSA-4096 key created 2026-04-01 with SHA-512 bindings (`FCF764DFE6488B0F899E91A17C84148C6904B09E`), served at `dl.ui.com/unifi/unifi-repo.gpg`. That signature verified on the live `unifi-9.4` `InRelease`. The new key is vouched for by its host (Ubiquiti's own download domain over HTTPS) and by signing the same release the old trusted key signs. No public rotation announcement was found.
+
+`roles/services/unifi` now owns the source. It installs that key **pinned by sha256**, so an upstream key change fails the task rather than being trusted silently. It declares the repo with `deb822_repository`, and removes the install script's source and the old key. `apt-get update` is clean, `site.yml --limit unifi-lxc` converges with `changed=0` twice, and UniFi stays on 9.4.19: moving the suite is an app upgrade, a separate decision. Rejected: re-enabling SHA-1 in the crypto policy, or `APT::Key::GPGVCommand`. Both are common forum workarounds, and both weaken verification for every source on the host.
+
+The same run found unifi-lxc's backup heartbeat still the pre-`3a527ff` `|| true` shape, an instance of COVERAGE blank 4 (role-owned drift). It was redeployed.
+
+## 2026-10-13 — three items closed, one of them was never broken (items 9, 34, 38)
+
+**Item 9, runaway-process detection (PER-10).** `check_runaway.sh` runs on all nine hosts. It samples `ps` every 10 minutes and alerts on a process holding ≥90% of a core for 3 samples, with a per-host ignore list in the inventory. Proven by forcing it: a busy-loop on cwwk reached `#home-alerts` at 08:31:52, and Tier 2 named the process correctly. The post-fan baseline is 49 °C idle, and 74 °C with 896 throttle events after 3–4 minutes of one pegged core. The item assumed the fan had silenced `check_thermal.sh` for this case; it had not, and the thermal check alerted too. The runaway check is still the detector worth having, because it names the process.
+
+**Item 38, hifipi's two Spotify follow-ups (PER-62).** `spotify_event.sh` wraps `mosquitto_pub` in `timeout 5`. With the broker pointed at an unroutable address, the hook returns in 10 s, where it used to hang for 150 s and stop raspotify starting at all. `check_raspotify.sh` now names a 403 from Spotify instead of restarting into it. That part is proven by unit test only, since forcing it live needs Spotify to refuse the egress again.
+
+**Item 34, the docker role "never" converging (PER-22): no fault.** `changed=2` appears only under `--check`, (observed, not traced in the module source: check mode cannot compare a forced download it does not make, and the repository task followed it). Two real runs on dockassist were `changed=0`. The key on disk is byte-identical to Docker's current key and was last written in January 2024. `force: true` stays: it is what picks up a rotated upstream key. **Run real twice before believing a check-mode `changed`.** Also, `--tags docker` on dockassist is not docker-role-only: Home Assistant's image-pull and container tasks carry the same tag, so add `--skip-tags homeassistant` when you mean the role.
 
 ## 2026-10-12 — the Tier 2 model could read two credentials through a tool nobody had restricted (item 48, PER-112)
 
