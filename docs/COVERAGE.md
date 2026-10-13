@@ -41,7 +41,7 @@ Every "healthchecks.io" in the tables means "you are told".
 | 4 | **Role-owned script drift** | `deploy_monitoring.yml` syncs only `scripts/common/`. A role's own checks change only when that role is deployed; hifipi's rotted for 4 months. Nothing compares deployed and repo | seeded |
 | 5 | **cloudflared** (remote access to Home Assistant) | A stopped container is now checked (deployed 2026-10-13). A tunnel that runs and does not connect is still invisible. Away from home, the app reaches HA through it, so presence decays too, slowly and attributed elsewhere | new |
 | 6 | **Network gear: APs, switch, links between them** | The UniFi controller is not read by anything (its API is unreadable to this repo). An AP down shows only as the hosts behind it going quiet. A backbone port that renegotiates to 10M-half is caught only for links a host terminates (link-speed check) | new |
-| 7 | **Updates not arriving** | Pending reboots fail after 7 days ✅. But nothing says whether unattended-upgrades *ran*, or whether a source still updates. Live example: unifi-lxc's Ubiquiti repo has failed Debian 13's key policy since September (PER-105, shelved), and nothing reports it. Whether Debian's own security updates still flow there is reasoned (apt skips one bad source), not checked | new |
+| 7 | **Updates not arriving** | Pending reboots fail after 7 days ✅. But nothing says whether unattended-upgrades *ran*, or whether a source still updates. Example: unifi-lxc's Ubiquiti source failed Debian 13's key policy for a month (fixed 2026-10-13, PER-105), and only a `site.yml` run noticed. | new |
 | 8 | **Raw template copies shipped as live scripts** | `deploy_monitoring.yml` copies `scripts/common/heartbeat_backup.sh` unrendered (literal `{{ … }}`) to every host's `~/.scripts`. It's never scheduled, so harmless today, but the drift check in #4 would have to know it's dead | new (found while auditing) |
 
 ## Per host
@@ -123,7 +123,7 @@ Every "healthchecks.io" in the tables means "you are told".
 | Failure mode | What tells you | How fast | |
 |---|---|---|---|
 | Controller service / web UI down | checks */13, */15 with restart | 15 min | ✅ |
-| apt source failing (Ubiquiti's key, PER-105) | nothing | — | ❌ (blank 7) |
+| An apt source starts failing (as Ubiquiti's key did until PER-105, 2026-10-13) | nothing, until a `site.yml` run stops at the cache task | — | ❌ (blank 7) |
 | Backup unrestorable | vzdump restore tested 2026-03-30; the `.unf` backup never | quarterly / never | ⚠️ (blank 1) |
 | An AP or switch down | nothing reads the controller | — | ❌ (blank 6) |
 

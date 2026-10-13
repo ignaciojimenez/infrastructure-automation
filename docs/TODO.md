@@ -55,15 +55,17 @@ renders it:
 
 > **№1** 37 *(waiting on a real lockout)* →
 > **№2** 42 *(entrance door alert disabled 19 Sep, needs physical inspection)* →
-> **№3** 38 *(small follow-ups: MQTT timeout, 403 detection)* →
-> **№4** 2 → **№5** 4 (plex) → **№6** 9 → **№7** 39 →
-> **№8** 5 → **№9** 19 → **№10** 12 → **№11** 10 → **№12** 11 → **№13** 6 →
-> **№14** 7 → **№15** 34 *(small; restores `changed=0` as a signal for the docker role)* →
-> **№16** 45 *(unifi-lxc apt key — PER-105)* → **№17** 46 *(PER-106)* →
-> **№18–20** 8/13/14 · **№21** 32 *(git-history rewrite —
-> decision only, default is no)* · **№22** 26 *(one UI toggle, global — his call)*
+> **№3** 2 → **№4** 4 (plex) → **№5** 39 →
+> **№6** 5 → **№7** 12 → **№8** 10 → **№9** 11 →
+> **№10** 7 → **№11** 46 *(PER-106)* →
+> **№12–14** 8/13/14 · **№15** 32 *(git-history rewrite —
+> decision only, default is no)* · **№16** 26 *(one UI toggle, global — his call)*
 > *(decision-gated — 32 needs his call on a public
 > force-push, the rest need him at the cabinet; not ranked)*
+
+✅ **45 closed on 2026-10-13** — write-up in [archive/DONE.md](archive/DONE.md#2026-10-13--unifi-lxc-trusted-only-the-key-debian-13-refuses-item-45-per-105): Ubiquiti's 2026 key, pinned by checksum, in a role-owned source.
+
+✅ **9, 34, 38 closed on 2026-10-13** — write-up in [archive/DONE.md](archive/DONE.md#2026-10-13--three-items-closed-one-of-them-was-never-broken-items-9-34-38): runaway detection proven end to end; hifipi's MQTT hang fixed; the docker role was already idempotent outside `--check`.
 
 ✅ **47 closed on 2026-10-11** — write-up in [archive/DONE.md](archive/DONE.md#2026-10-11--cwwk-keeps-chocos-password-it-is-the-only-console-login-item-47-per-109): the lock skips Proxmox hosts; the UI login is `choco@pam` behind TOTP.
 
@@ -171,38 +173,6 @@ in the environment. Prove it with the PER-112 probes run as the new account:
 with every OpenCode permission set to allow.
 ```
 
-**45. unifi-lxc cannot `apt update`: Ubiquiti's repo key fails Debian 13's SHA1 policy** ([PER-105](https://linear.app/lacopadeeuropa/issue/PER-105))
-Found 2026-10-11 during the 3a fleet deploy: `Update package cache` fails on
-unifi-lxc ("Failed to update apt cache after 5 retries"). A throwaway
-unprivileged `apt-get update` shows why. Debian's `sqv` rejects the binding on
-Ubiquiti's key `4A228B2D…C0A52C50` (SHA1, "not considered secure since
-2026-02-01"). The repo's current `InRelease`, signed 2026-07-27, also needs a
-key the host does not have (`FCF764DF…6904B09E`). So:
-- **UniFi app updates are stuck.** Installed: 9.4.19; the cached UniFi list is
-  from Oct 2025.
-- **Every `bootstrap.yml`/`site.yml` run stops at the cache task on this host.**
-- **Debian security updates still arrive.** trixie-security lists refreshed 10 Oct.
-
-The repo is **not Ansible-managed**. `100-ubnt-unifi.sources` and the keyring
-`/etc/apt/keyrings/unifi-repo.gpg` came from Glenn R's install script
-(`glennr-*.sources`), not `roles/services/unifi`. Unverified: whether
-`FCF764DF…` is a published Ubiquiti key rotation.
-
-*Effort:* small. *Needs:* a laptop for the deploy.
-
-```
-TODO 45: unifi-lxc's apt update fails on Ubiquiti's repo signature. Read
-docs/TODO.md item 45 first. Get Ubiquiti's current repo signing key from
-Ubiquiti's own documentation (not a blog, not memory), confirm its
-fingerprint matches the FCF764DF… key the InRelease asks for, and that its
-binding passes sqv on Debian 13. Then bring the repo under Ansible in
-roles/services/unifi with deb822_repository (not apt_repository: it needs gpg
-on the target), replacing 100-ubnt-unifi.sources and the old keyring so apt
-does not see the repo twice. Prove: apt-get update clean on unifi-lxc,
-bootstrap.yml --limit unifi-lxc converges, second run changed=0. Do not
-upgrade the UniFi application as part of this; that is a separate decision.
-```
-
 **37. vinylstreamer's wifi recovery undid its own fix — DEPLOYED, waiting on a lockout**
 On 2026-09-13 wlan0 dropped at 06:31 and stayed off until 09:00; the host itself
 stayed up. Layer 3 of `wifi_reconnect.sh` (driver reload) recovered the link on
@@ -303,47 +273,6 @@ update` clean with no NO_PUBKEY, plexmediaserver still active, and the
 installed version unchanged (state: present must not upgrade it).
 ```
 
-**9. Runaway-process detection — the fan removed the only thing that caught the last one**
-On 2026-08-07 a single pegged core (a `grep -r` reading a chroot's `/dev/random`
-forever on the OPNsense guest) held cwwk at ~95 °C for **ten hours**. The only
-alert came from `check_thermal.sh`'s throttle delta — an accidental, downstream,
-misattributing detector. **The fan (fitted 2026-08-10) removes it**: fan-OK
-idle + one pegged core ≈ 68–71 °C, so the same incident now produces no throttle
-delta, no temperature warning, and no alert of any kind. And the load checks
-cannot see it by construction — `load ÷ cores` means one pegged core of 8 reads
-"16% healthy", and the container branch reads cgroup pressure, which one busy
-task never raises. Failure class 4: check exists, works correctly, cannot cover
-the mode it appears to cover.
-
-Design already settled in the old write-up: alert on a single process sustaining
-~100% of one core across N consecutive samples, reusing `check_thermal.sh`'s
-counter-delta idiom (sample process CPU-time, alert on sustained growth), placed
-**where the process runs** — a pegged core on the firewall is nearly always
-wrong, while `kvm` at 109% on cwwk is sometimes legitimate. Host scope is the
-open decision. Two acceptance criteria carried over: (a) peg one core on the
-cooled box (`timeout 300 sh -c 'while :; do :; done'`) and watch a real alert
-reach `#home-alerts` — a temperature reading cannot satisfy this; (b) record a
-fresh idle + pegged-core baseline post-fan so the next thermal comparison has a
-true reference.
-
-*State (2026-10-12):* built, `scripts/common/check_runaway.sh`. It runs every
-10 min on every host, opnsense included, and fails on a process at ≥90% of a
-core for three consecutive samples (~30 min). Per-host `runaway_ignore` in
-inventory covers what holds a core by design: kvm, the nightly backups'
-compressors, Plex transcodes, the builder. Unit-tested and run read-only on
-cobra, cwwk, unifi and vinylstreamer. *Still owed:* deploy, the forced
-acceptance below, and the post-fan baseline.
-
-```
-Build the runaway-process check. Read docs/TODO.md item 9 first — the design
-constraints (counter-delta idiom, place it where the process runs, firewall vs
-hypervisor scope) are settled there. Any new check must count its faults and
-return the total — reporting via print_status alone contributes nothing.
-Acceptance is a forced failure: peg one core on cwwk with
-`timeout 300 sh -c 'while :; do :; done'` and watch the alert reach
-#home-alerts. Then record a fresh idle + pegged-core thermal baseline.
-```
-
 **39. The HA plug watchdog cannot fire through a flapping ping**
 vinylstreamer was off the network for 2.5 h on 2026-09-13, yet HA recorded it
 offline only 08:57–09:00, and the *offline 15 min → power-cycle the plug*
@@ -383,59 +312,6 @@ If it flapped: change the trigger from "offline continuously 15 min" to
 counts, which include unavailable). Before deploying, show it (a) fires on the
 06:30-09:00 flap pattern and (b) does not fire across an HA restart. Deploy with
 --tags config AND check which other tags consume the same entities.
-```
-
-**38. Spotify refuses Mullvad exits — hifipi now egresses direct; two small follow-ups**
-✅ **Resolved 2026-09-13.** raspotify on hifipi died at the weekly 00:00
-restart with `403 Forbidden`. A same-client test settled it (laptop curl
-tunnelled out through hifipi → 403, through dockassist → 200), and so did
-Mullvad's per-relay proxies: Spotify refused the one exit VLAN 40 was on, not
-Mullvad as a whole. It landed on that exit because VLAN 40/80's failover group
-lost NL1 and NL2 around 10 Sep (item 41).
-
-**Fix, on OPNsense (not managed in this repo):** a floating rule, interface
-VLAN 40, `from hifipi to ! USED_LAN_NETS`, gateway WAN. Verified: hifipi egresses
-direct and gets 200; cobra (the control, same VLAN) still egresses via Mullvad;
-hifipi still reaches Home Assistant, MQTT and DNS; raspotify is active with no 403.
-
-🔴 **Three traps hit on the way — read before touching this rule again:**
-- **A *URL Table (IPs)* alias downloads a file of IP addresses.** Pointed at
-  `https://*.spotify.com` it yields an empty table and a rule that matches
-  nothing. Hostnames need a *Host(s)* alias (re-resolved every 300 s; no
-  wildcards). A true wildcard needs dnsmasq's IPset feature, which requires
-  dnsmasq in the DNS path — rejected as too invasive for one service.
-- **`to any` on a route-to rule sends inter-VLAN traffic to the WAN gateway.** It
-  broke hifipi → dockassist (HA, MQTT) and TCP DNS. The destination must be
-  `! USED_LAN_NETS`, exactly like the VLAN rule it overrides.
-- **Rules covering several interfaces load before single-interface rules,
-  whatever their sequence** (observed on 26.7.2: a sequence-126 single-interface
-  rule loaded after a sequence-131 VLAN 40+80 rule). Floating rules load before
-  both, which is why the override is floating.
-
-**Follow-ups (small, laptop):**
-1. `spotify_event.sh` calls `mosquitto_pub` with **no timeout**, from raspotify's
-   `ExecStartPre`. With the broker unreachable it hung past systemd's 90 s start
-   limit, so raspotify never started — any MQTT outage would do the same. Wrap
-   it in `timeout`.
-2. `check_raspotify.sh` should recognise the 403 in the journal and report
-   *Spotify refuses this egress IP* instead of restarting pointlessly.
-
-*State:* resolved; follow-ups open. *Effort:* small. *Needs:* laptop.
-
-```
-Close the item 38 follow-ups. Read docs/TODO.md item 38 — the routing fix is
-DONE on OPNsense and verified; do not touch the firewall rule.
-
-(1) In roles/services/audio_playback/files/spotify_event.sh, bound every
-mosquitto_pub with `timeout` (a few seconds), so an unreachable broker can never
-block raspotify's ExecStartPre. Force it: point the broker at an unroutable
-address (a unit-test stub is enough) and show the reset path returns within the
-timeout instead of hanging.
-(2) Make check_raspotify.sh detect "403 Forbidden" in the unit's recent journal
-and report "Spotify refuses this egress IP" without restarting. Force the branch
-with a stubbed journal line and watch the message fire.
-Deploy with services.yml --limit hifipi --check --diff first, and count the
-recap. Then move item 38 to docs/archive/DONE.md.
 ```
 
 ### 🟢 P3 — improvements, no urgency
@@ -558,8 +434,11 @@ One branch, tick them off. Phone-taggable lines marked 📱.
 - ✅ 2026-10-12: `AGENTS.md` and `AGENT_INSTRUCTIONS.md` now say
   `deploy_monitoring.yml` syncs `scripts/common/` plus the opnsense/proxmox
   monitoring roles, and NOT `scripts/services/*`.
-- 📱 dockassist: `rm ~/.log/check_container.sh.json*` (orphaned state) and
-  `~/crontab.bak.20260802`. hifipi: `rm ~/*.bak.20260802` (2 files).
+- ✅ 2026-10-13: the orphaned `check_container.sh.json*` state and the
+  `*.bak.20260802` files on dockassist and hifipi were already gone when listed.
+- ✅ 2026-10-13: unifi-lxc's rendered `heartbeat_backup_unifi.sh` was the old
+  `|| true` shape: role-owned drift (COVERAGE blank 4). Redeployed with
+  `--tags unifi`. The other backup heartbeats were not checked.
 - ✅ 2026-10-12: `heartbeat_backup.sh` already logs the curl exit status (since
   `3a527ff`); `tests/unit/heartbeat_backup_test.sh` now forces a failed ping and
   fails on the old `|| true` shape. Not read on hosts: the rendered copies under
@@ -613,43 +492,6 @@ it lands. Start with the AGENTS.md deploy_monitoring wording (it hid a
 4-month drift). For each fix verify the behaviour, not the absence of the
 error — the heartbeat curl fix must log a forced failure, the
 recovery-routing change must deliver a real recovery to the chosen channel.
-```
-
-**34. The docker role reports `changed` on every run, so `changed=0` cannot be trusted for it**
-`Download Docker GPG key` uses `force: true`, so `get_url` re-fetches and
-reports `changed` every single run, which then drags `Add Docker repository`
-along with it. A `--tags docker` run on a fully-converged dockassist shows
-`changed=2` before any real change is made.
-
-🐛 **Why this is more than cosmetic:** `changed=0` on a second run is the only
-convergence signal this fleet has — "merged" is not a state it possesses. A
-role that can never report it removes that signal exactly where Docker config
-now lives (`docker_daemon_options`, added 2026-09-04). Any future session
-verifying a Docker change has to eyeball task names instead of trusting the
-recap.
-
-*State:* observed 2026-09-04 while shipping the daemon.json change; not
-investigated further. *Effort:* small. *Needs:* a laptop (Ansible deploy).
-
-```
-Make the docker role idempotent so `changed=0` means something. Read
-docs/TODO.md item 34 — the two offending tasks are named there, do not
-re-derive them.
-
-In roles/services/docker/tasks/main.yml, `Download Docker GPG key` has
-force: true. Establish FIRST whether it is load-bearing (git log / blame the
-line — it may have been added to recover from a corrupted key) before removing
-it. If it can go, prefer a checksum or a creates-style guard over deleting the
-force outright, so a genuinely changed upstream key is still picked up.
-
-🔴 Verify the way this repo verifies idempotency, not by reading the diff:
-run the role twice back-to-back and require changed=0 on the SECOND run —
-and note that fact caching freezes ansible_date_time for an hour, so
-back-to-back runs are NOT proof on their own for tasks that template a
-timestamp. These two tasks do not, so they are a fair test.
-
-Do not touch the daemon.json task while here; it is verified working and
-its `when` guard is deliberate.
 ```
 
 ### 🧊 Blocked on Ignacio, not on work
