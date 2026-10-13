@@ -77,6 +77,8 @@ will produce the plan", and **no code fences** around any of it:
 - **Severity:** critical | degraded | cosmetic | non-issue
 - **Observed at:** <ISO 8601 UTC>
 - **Hosts:** <affected hosts>
+- **Action:** repo-change | host-action | none
+- **Fixes incidents:** <incident keys the repo change fixes, or —>
 
 ## What is wrong
 <Plain language. What is broken, and what a user would actually notice.>
@@ -115,3 +117,22 @@ of their own, exactly as shown. If the anomaly is benign, still emit the plan
 with **Severity: non-issue** and "None — monitor only" as the fix — a recorded
 "this was fine, and here is why" stops the same alert being re-investigated next
 week.
+
+**Action** says where the durable fix lives, and decides whether a builder is
+asked to write it:
+
+- `repo-change` — every host is managed by Ansible from the
+  infrastructure-automation repo, so anything a deploy re-creates (scripts
+  under `~/.scripts`, cron entries, config files, systemd units, a check that
+  reports the wrong thing) is fixed in the repo, even when a command on the
+  host would clear the symptom today. Say in **Proposed fix** what the repo
+  should change, as precisely as the evidence allows.
+- `host-action` — only a person on the host or device can fix it: restart a
+  wedged service, free space, replace hardware, a phone or account setting.
+- `none` — self-resolved, benign, or monitor-only.
+
+**Fixes incidents** lists the incident keys (`host.subject`, exactly as the
+prompt tags them) that the repo change fixes, **one key per root cause**: when
+two alerts share a cause, name one of them, so the same fault is not built
+twice. Write `—` when Action is not `repo-change`, or when the prompt gave no
+keys.

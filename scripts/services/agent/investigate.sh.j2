@@ -44,6 +44,9 @@ INCIDENT_DIR="$AGENT_DIR/incidents"
 INCIDENT_QUIET_SECONDS=$(( {{ agent_incident_quiet_hours }} * 3600 ))
 INCIDENT_MAX_AGE_SECONDS=$(( {{ agent_incident_max_age_days }} * 86400 ))
 SPEND_DIR="$AGENT_DIR/spend"
+# Alert incidents whose plan says the fix is a repo change, for the filer to
+# turn into queue issues — see write_handoffs below.
+HANDOFF_DIR="$AGENT_DIR/handoff"
 DAILY_SPEND_CAP="{{ agent_daily_spend_cap_usd }}"
 FLEET_HOSTS="{% for h in agent_fleet_hosts %}{{ h.name }} {% endfor %}"
 
@@ -60,7 +63,7 @@ ts_is_positive() {
 # way). The lock makes any second caller a clean no-op — anomaly, slack, and
 # digest modes all share it, so they serialize rather than pile up.
 LOCK="$AGENT_DIR/.investigate.lock"
-mkdir -p "$AGENT_DIR" "$INCIDENT_DIR" "$SPEND_DIR"
+mkdir -p "$AGENT_DIR" "$INCIDENT_DIR" "$SPEND_DIR" "$HANDOFF_DIR"
 
 # Prompts are assembled into a file rather than piped, because run_and_report
 # must run in THIS shell — it sets AGENT_RC/AGENT_COST that the callers read
@@ -92,7 +95,7 @@ mkdir -p "$PLANS_DIR"
 
 # Closed incidents and old ledger days are dead weight; anything this old is
 # past every window below.
-find "$INCIDENT_DIR" "$SPEND_DIR" -type f -mtime +30 -exec rm -f {} + 2>/dev/null
+find "$INCIDENT_DIR" "$SPEND_DIR" "$HANDOFF_DIR" -type f -mtime +30 -exec rm -f {} + 2>/dev/null
 
 # ============================================================
 # SSH auth back-off — the hosts this agent must not touch
@@ -469,6 +472,62 @@ $_note"
 }
 
 # ============================================================
+# Hand-off to the builder — alert incidents whose fix is a repo change
+#
+# The Tier 1 sweep's findings reach the queue through fleet_linear_sync.sh.
+# Alerts did not: a check's own "Script Failed" in #home-alerts — most real
+# faults — bought a plan that was posted to Slack and went no further. On
+# 2026-10-13 workbench-lxc paged about ufw for 22 h, got a $0.49 plan, and the
+# repo fix it needed never reached the builder.
+#
+# So after a successful Slack-mode run, the plan's own verdict decides: when
+# its header says "Action: repo-change", each key it lists under "Fixes
+# incidents" that this run actually investigated gets handoff/<key>, holding
+# "<host>: <alert text>". The filer (root) reads these as DATA and files them
+# like sweep findings; nothing here touches Linear.
+#
+# Fails toward NOT filing. A plan with no verdict, another verdict, or keys
+# this run did not investigate hands nothing off, and says so in the log. One
+# key per root cause is the contract (infra-monitor.md), so one fault is built
+# once even when it paged in several voices.
+# ============================================================
+
+# write_handoffs <plan file> "<keys investigated>" <rows file>
+# Rows are the Slack parse: "<ts>\t<raw key>\t<alert text>".
+write_handoffs() {
+    # The latest plan is the verdict. A key re-investigated after a lapse, now
+    # judged host-action, must not be filed on an older plan's repo-change.
+    for _ok in $2; do rm -f "$HANDOFF_DIR/$_ok"; done
+    [ -r "$1" ] || return 0
+    _action=$(sed -n 's/^- \*\*Action:\*\*[[:space:]]*//p' "$1" | head -1 | awk '{print $1}')
+    if [ "$_action" != "repo-change" ]; then
+        echo "plan verdict '${_action:-none given}': no hand-off to the builder"
+        return 0
+    fi
+    _named=$(sed -n 's/^- \*\*Fixes incidents:\*\*[[:space:]]*//p' "$1" | head -1 \
+        | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9.-' ' ')
+    _handed=""
+    for _hk in $_named; do
+        case " $2 " in *" $_hk "*) ;; *) continue ;; esac
+        case " $_handed " in *" $_hk "*) continue ;; esac
+        _ht=""
+        while IFS="$(printf '\t')" read -r _rts _rkey _rtext; do
+            [ "$(incident_key "$_rkey")" = "$_hk" ] || continue
+            _ht=$_rtext
+            break
+        done < "$3"
+        printf '%s: %s\n' "${_hk%%.*}" "${_ht:-alert text unavailable}" > "$HANDOFF_DIR/$_hk.tmp" &&
+            mv -f "$HANDOFF_DIR/$_hk.tmp" "$HANDOFF_DIR/$_hk" &&
+            _handed="$_handed $_hk"
+    done
+    if [ -n "$_handed" ]; then
+        echo "handed off to the builder:$_handed"
+    else
+        echo "WARN: plan says repo-change but names none of the investigated keys ($2); no hand-off" >&2
+    fi
+}
+
+# ============================================================
 # Weekly digest
 # ============================================================
 
@@ -709,6 +768,7 @@ PROMPT
             for _k in $_keys; do
                 incident_open "$_k" "$REPORT_PLAN"
             done
+            write_handoffs "$REPORT_PLAN" "$_keys" "$_tmp"
             _investigated=$_count
         fi
     fi

@@ -36,6 +36,7 @@ URL_BASE="https://example.invalid/AGENT_LXC.md?incident="
 python3 "$REPO_ROOT/tests/lib/render_j2.py" "$TEMPLATE" "$WORK/sync.sh" \
     agent_state_dir="$AGENT_DIR" \
     agent_incident_subjects_py="$REPO_ROOT/scripts/services/agent/incident_subjects.py" \
+    agent_incident_quiet_hours=26 \
     agent_linear_auth_file="$WORK/auth.header" \
     agent_linear_state_dir="$WORK/state" \
     agent_linear_endpoint="https://api.linear.invalid/graphql" \
