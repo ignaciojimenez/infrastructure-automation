@@ -51,5 +51,10 @@
         user: "{{ ansible_user }}"
         commands: ALL
         nopassword: true
-      when: ansible_user != "root"
+      # Debian only (PER-87). OPNsense owns its accounts (PER-104): its sudo
+      # rule comes from the appliance, and become already works there without
+      # this file, whose /etc/sudoers.d path does not exist on FreeBSD anyway.
+      when:
+        - ansible_os_family == "Debian"
+        - ansible_user != "root"
       tags: [sudo]
