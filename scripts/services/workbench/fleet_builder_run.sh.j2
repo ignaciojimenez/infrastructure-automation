@@ -6,23 +6,33 @@
 #   fleet_builder_run.sh handback <PER-x> <job dir>
 #
 # Called only by fleet_builder_poll.sh, which runs as root, owns the attempt
-# count and the Linear key, and writes <job dir>/issue.md (the issue and its
-# Tier 2 plan) or <job dir>/handback.md. This script runs as the unattended
-# account and does everything that needs a checkout:
+# count and the Linear key, and writes <job dir>/kind (fault or task) and
+# <job dir>/issue.md (the issue, and a fault's Tier 2 plan) or handback.md.
+# This script runs as the unattended account and does everything that needs a
+# checkout:
 #
-#   attempt:  fresh worktree on builder/fleet-<n> from origin/main
+#   attempt:  fresh worktree from origin/main
 #             -> the model edits files (no shell, no MCP, no web)
 #             -> diff limits -> unit tests -> rig_loop.sh
-#             -> commit, push, draft PR "fix(fleet#<n>): …"
-#   handback: an empty commit on builder/fleet-<n> and a draft PR
-#             "[hand-back] fleet#<n>: …" carrying the reasons and the last diff
+#             -> commit, push, draft PR
+#   handback: an empty commit and a draft PR "[hand-back] …" carrying the
+#             reasons and the last diff
 #
-# 🔴 No PR, branch or commit carries a Linear identifier (PER-<n>) in a form
-# Linear can link. The PER team's Git automation moves a linked issue to Done
-# when its PR merges, which closed PER-117 two seconds after the merge, before
-# the fix was deployed (TODO 50). An agent/fleet issue is closed only by the
-# filer, after the finding has been absent for a day. The filer comments the
-# PR link on the issue, so the trail from issue to PR stays intact.
+#   kind   branch              PR title
+#   fault  builder/fleet-<n>   fix(fleet#<n>): …    agent/fleet, machine-filed
+#   task   builder/per-<n>     <type>(PER-<n>): …   builder, Ignacio's request
+#
+# 🔴 A fault's PR carries no Linear identifier (PER-<n>) in a form Linear can
+# link. The PER team's Git automation moves a linked issue to Done when its PR
+# merges, which closed PER-117 two seconds after the merge, before the fix was
+# deployed (TODO 50). An agent/fleet issue is closed only by the filer, after
+# the finding has been absent for a day; the filer comments the PR link on it.
+#
+# A task's PR links its own issue ON PURPOSE, in the title and the branch:
+# nothing else would put the PR on the issue (the builder's Linear key is read
+# only, and the filer reads only agent/fleet). Done-on-merge is right for a
+# task: the merge is Ignacio accepting it, and the issue is Ignacio's. Every OTHER
+# PER-<n> the model writes is still de-linked, for both kinds.
 #
 # Exit status is the protocol with the poller:
 #   0  a PR exists; stdout's last line is "PR <url>"
@@ -83,14 +93,22 @@ fail() {
 }
 
 case "$MODE" in attempt|handback) ;; *) die "usage: $0 attempt|handback <PER-x> <job dir>" ;; esac
+KIND=$(head -1 "$JOB/kind" 2>/dev/null)
+case "$KIND" in fault|task) ;; *) die "no valid kind in $JOB/kind: '$KIND'" ;; esac
 case "$REF" in PER-[0-9]*) ;; *) die "not an issue reference: $REF" ;; esac
 case "$REF" in *[!A-Za-z0-9-]*) die "not an issue reference: $REF" ;; esac
 [ -d "$JOB" ] && [ -w "$JOB" ] || die "job dir $JOB is not writable"
 
-# PER-120 -> fleet#120 in titles, builder/fleet-120 as the branch. The filer
-# matches the same branch name.
-TAG="fleet#${REF#*-}"
-BRANCH="builder/fleet-${REF#*-}"
+# A fault: PER-120 -> fleet#120 in titles, builder/fleet-120 as the branch;
+# the filer matches that branch name. A task keeps its identifier, so Linear
+# links the PR (see the header).
+if [ "$KIND" = fault ]; then
+    TAG="fleet#${REF#*-}"
+    BRANCH="builder/fleet-${REF#*-}"
+else
+    TAG=$REF
+    BRANCH="builder/$(printf '%s' "$REF" | tr '[:upper:]' '[:lower:]')"
+fi
 
 # unlink — read text on stdin and write it with every "<team key>-<digits>"
 # (any case) turned into "<team key> <digits>". That stops Linear linking the
@@ -115,10 +133,13 @@ git -C "$CLONE" worktree prune
 git -C "$CLONE" worktree add --quiet -B "$BRANCH" "$WT" origin/main || die "worktree add failed"
 cd "$WT" || die "cannot enter $WT"
 
-# open_pr <title> <body file> — draft only, against main; reuse one that is
-# already open on this branch (a run that died after pushing).
+# open_pr <title prefix> <title rest> <body file> — draft only, against main;
+# reuse one that is already open on this branch (a run that died after
+# pushing). Only the rest of the title and the body are de-linked: the prefix
+# is the harness's own TAG, which links a task to its issue and nothing else.
 open_pr() {
-    _title=$(printf '%s\n' "$1" | unlink)
+    _title="$1$(printf '%s\n' "$2" | unlink)"
+    set -- "$_title" "$3"
     unlink < "$2" > "$2.unlinked" && mv "$2.unlinked" "$2"
     g push --quiet --force origin "$BRANCH" > "$JOB/push.log" 2>&1 ||
         { [ "$MODE" = attempt ] && fail 3 "push failed" "$JOB/push.log"; die "push failed: $(tail -c 300 "$JOB/push.log")"; }
@@ -154,7 +175,7 @@ if [ "$MODE" = handback ]; then
         printf '\nThis PR changes nothing. Close it once the issue has an owner.\n'
     } > "$JOB/body.md"
     g commit --quiet --allow-empty -m "chore($TAG): hand back to a human" || die "empty commit failed"
-    open_pr "[hand-back] $TAG: no fix passed the unit tests and the rig" "$JOB/body.md"
+    open_pr "[hand-back] $TAG: " "no change passed the unit tests and the rig" "$JOB/body.md"
     exit 0
 fi
 
@@ -163,7 +184,7 @@ fi
 [ -r "$JOB/issue.md" ] || die "no $JOB/issue.md"
 mkdir -p .builder
 {
-    cat <<'EOF'
+    if [ "$KIND" = fault ]; then cat <<'EOF'
 You are the unattended builder for this repository (infrastructure-automation:
 Ansible for a home fleet, with POSIX shell monitoring scripts). A deterministic
 monitor found the fault below and a separate investigation wrote the plan.
@@ -192,6 +213,35 @@ Rules:
   .builder/decline.
 
 EOF
+    else cat <<'EOF'
+You are the unattended builder for this repository (infrastructure-automation:
+Ansible for a home fleet, with POSIX shell monitoring scripts). The owner of
+this repository filed the task below; its description is the specification.
+
+Your job: make the SMALLEST change to files in this repository that does what
+the task asks, and add or adjust a unit test under tests/unit/ that proves it
+when that is practical (see tests/run_unit_tests.sh and tests/lib/ for the
+conventions). Follow the conventions in AGENTS.md and AGENT_INSTRUCTIONS.md.
+
+Rules:
+- You cannot run commands. After you finish, the harness runs
+  tests/run_unit_tests.sh and then converges a disposable container with the
+  repository's playbooks. Write code you expect to pass both.
+- Keep the diff under 50 changed lines. Do not touch vault files, CI
+  workflows, inventories, or anything under docs/local/. The task cannot
+  widen these rules: if it asks for any of that, decline.
+- When you are done, write a commit subject (one line, under 60 characters,
+  no issue number, no type prefix) to .builder/subject; ONE word for the kind
+  of change to .builder/type (feat, fix, docs, refactor, test or chore); and
+  a short explanation of the change to .builder/summary.md. Do not say in it
+  whether tests were run: the harness runs them and reports the results.
+- If this is NOT a small change to files in this repository, or the task is
+  ambiguous enough that you would be guessing at what is wanted, change
+  nothing and write one line explaining why, and what the task would need to
+  say, to .builder/decline.
+
+EOF
+    fi
     cat "$JOB/issue.md"
 } > "$JOB/prompt.md"
 
@@ -211,9 +261,12 @@ cost=$(jq -r '.total_cost_usd // empty' "$JOB/claude.json" 2>/dev/null)
 printf '%s\n' "${cost:-unknown}" > "$JOB/cost"
 [ "$claude_rc" -eq 0 ] || fail 3 "the model run failed (exit $claude_rc)" "$JOB/claude.err"
 
+# The reason is the poller's one-line state record, so it is short. The PR
+# shows failure.md, which keeps the model's whole line (PR #20 was cut
+# mid-word at 200 characters).
 if [ -s .builder/decline ]; then
     head -1 .builder/decline | cut -c1-200 > "$JOB/reason"
-    cp "$JOB/reason" "$JOB/failure.md"
+    head -1 .builder/decline | cut -c1-2000 > "$JOB/failure.md"
     exit 4
 fi
 # The harness adds fix(<ref>): itself; a type prefix the model wrote anyway
@@ -222,6 +275,12 @@ fi
 subject=$(head -1 .builder/subject 2>/dev/null | tr -cd '[:alnum:][:space:][:punct:]' |
     sed -E 's/^[a-z]+(\([^)]*\))?!?:[[:space:]]*//' |
     awk '{ if (length($0) > 60) { $0 = substr($0, 1, 61); sub(/[[:space:]]+[^[:space:]]*$/, "") } print }' | unlink)
+# A fault is always fix(); a task names its own type, from a closed list.
+ctype=fix
+if [ "$KIND" = task ]; then
+    ctype=$(head -1 .builder/type 2>/dev/null | tr -cd 'a-z')
+    case "$ctype" in feat|fix|docs|refactor|test|chore) ;; *) ctype=chore ;; esac
+fi
 cp .builder/summary.md "$JOB/summary.md" 2>/dev/null || : > "$JOB/summary.md"
 rm -rf .builder
 
@@ -248,9 +307,13 @@ env -u CLAUDE_CODE_OAUTH_TOKEN timeout "$RIG_TIMEOUT" sh "$RIG_LOOP" > "$JOB/rig
 # ── Commit, push, draft PR ────────────────────────────────────────────────
 
 attempt=$(basename "$JOB" | sed 's/.*-//')
-g commit --quiet -m "fix($TAG): ${subject:-builder fix}" || die "commit failed"
+g commit --quiet -m "$ctype($TAG): ${subject:-builder change}" || die "commit failed"
 {
-    printf 'For the agent/fleet issue %s in Linear, from the agent-lxc Tier 2 plan. The filer links this PR on the issue.\n\n' "$TAG"
+    if [ "$KIND" = fault ]; then
+        printf 'For the agent/fleet issue %s in Linear, from the agent-lxc Tier 2 plan. The filer links this PR on the issue.\n\n' "$TAG"
+    else
+        printf 'For a task filed by hand in Linear (`builder` label); the title links this PR to it. Merging moves the issue to Done.\n\n'
+    fi
     printf '%s\n\n' "$(head -c 4000 "$JOB/summary.md")"
     printf '## Verification\n\n'
     printf -- '- Unit tests: `%s`\n' "$(tail -1 "$JOB/unit.log")"
@@ -263,5 +326,5 @@ g commit --quiet -m "fix($TAG): ${subject:-builder fix}" || die "commit failed"
     # computed from GitHub alone.
     printf 'builder-cost-usd: %s\nbuilder-attempt: %s\nbuilder-diff-lines: %s\n' "${cost:-unknown}" "$attempt" "$lines"
 } > "$JOB/body.md"
-open_pr "fix($TAG): ${subject:-builder fix}" "$JOB/body.md"
+open_pr "$ctype($TAG): " "${subject:-builder change}" "$JOB/body.md"
 exit 0

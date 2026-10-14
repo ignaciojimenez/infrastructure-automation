@@ -238,12 +238,15 @@ provisioning script needs `provision_rig_access.yml` from the laptop.
 
 ## The unattended builder (PER-85 part 2)
 
-Turns a Tier 1 finding into a draft PR with a test result, with nobody in the
-middle. Design and what was rejected: ARCHITECTURE_DECISIONS.md § Agent Access.
+Turns a Linear issue into a draft PR with a test result, with nobody in the
+middle. Two kinds of issue feed it: **faults** the fleet found itself
+(`agent/fleet`, filed by agent-lxc from a sweep or an alert) and **tasks**
+Ignacio asked for (`builder`, filed by hand or through Claude). Design and what
+was rejected: ARCHITECTURE_DECISIONS.md § Agent Access.
 
 ```
 agent-lxc   :37 sweep -> :47 Tier 2 plan -> :57 filer: agent/fleet issue + plan comment
-workbench   :17 fleet-builder.timer (root): oldest Todo agent/fleet issue with a plan
+workbench   :17 fleet-builder.timer (root): oldest ready Todo issue, agent/fleet or builder
               -> attempt recorded -> as autobuilder: worktree builder/fleet-<n> from origin/main
               -> claude -p (file tools only, no MCP) -> diff limits -> unit tests -> rig_loop.sh
               -> draft PR "fix(fleet#<n>): …"   or, after 2 failures / a decline / 2 kills,
@@ -252,7 +255,27 @@ agent-lxc   :57 filer: comments that PR on the issue, once; and once more if the
                 merged 6 h ago and the finding is still there
 ```
 
-**No PR carries a linkable Linear identifier.** Issue PER-120 becomes
+**Tasks: the `builder` label (2026-10-14).** Any Todo issue on team PER with
+the `builder` label is ready at once: no plan, its **description is the spec**.
+Comments are not read, so a comment can't change what gets built, and an
+empty description waits. It is held to every limit below. The prompt says the
+task cannot widen them, and asks for a decline (with what the task would need
+to say) rather than a guess. Differences from a fault:
+
+| | fault (`agent/fleet`) | task (`builder`) |
+|---|---|---|
+| ready when | a Tier 2 plan comment exists | at once, if the description is not empty |
+| branch / title | `builder/fleet-<n>`, `fix(fleet#<n>): …` | `builder/per-<n>`, `<type>(PER-<n>): …`, type from a closed list |
+| link to the issue | the filer's comment | Linear's own, from the title and branch |
+| closes | the filer, once the finding is absent for a day | Linear, when Ignacio merges the PR |
+
+`builder` is deliberately **not** an `agent/*` label: that group means
+machine-owned and auto-closing, and a task stays Ignacio's. Merging is him
+accepting it, which is why Done-on-merge is right here and wrong for a fault.
+An issue carrying both labels is a fault. Each kind is read from its own
+label, never inferred from the other's absence.
+
+**No fault's PR carries a linkable Linear identifier.** Issue PER-120 becomes
 `fleet#120` and branch `builder/fleet-120`, and the harness rewrites any
 `PER-<n>` the model wrote as `PER <n>`. The PER team's Git automation moves
 a linked issue to Done when its PR merges: PER-117 closed two seconds after

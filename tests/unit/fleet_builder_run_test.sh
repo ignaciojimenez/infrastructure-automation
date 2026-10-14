@@ -78,6 +78,15 @@ case "$FAKE_CLAUDE" in
     forbidden) mkdir -p ansible/inventory/group_vars/all; echo x > ansible/inventory/group_vars/all/vault.yml ;;
     breaks)    echo BROKEN >> scripts/check_x.sh; echo breaks > .builder/subject ;;
     crash)     exit 2 ;;
+    task)      printf '#!/bin/sh\necho "threshold=$((90 + 10))"\n' > scripts/check_x.sh
+               echo "add a dry-run flag, like PER-85 asked" > .builder/subject
+               echo feat > .builder/type
+               echo "Adds --dry-run; see PER-120." > .builder/summary.md ;;
+    badtype)   printf '#!/bin/sh\necho "threshold=$((90 + 10))"\n' > scripts/check_x.sh
+               echo "tidy check_x" > .builder/subject
+               echo 'feat; rm -rf /' > .builder/type ;;
+    longdecline) printf 'renaming every host touches the inventory, which this builder may not change; split it into %s and say which file holds each name END\n' \
+                   "$(printf 'x%.0s' $(seq 1 220))" > .builder/decline ;;
 esac
 echo '{"type":"result","total_cost_usd":0.4217,"is_error":false}'
 EOF
@@ -116,12 +125,14 @@ attempt() {
     rm -rf "$STUB_DIR"; mkdir -p "$STUB_DIR"; : > "$STUB_LOG"
     JOB="$WORK/jobs/$1-$2"
     mkdir -p "$JOB"
+    printf '%s\n' "${KIND:-fault}" > "$JOB/kind"
     printf '# %s: check_x threshold wrong\n\n**Tier 2 investigation plan** — fix the 1O typo\n' "$1" > "$JOB/issue.md"
     FAKE_CLAUDE=$3 CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat-UNITTEST HOME="$WORK/home" PATH="$WORK/bin:$PATH" \
         "$SH" "$WORK/run.sh" attempt "$1" "$JOB" > "$WORK/out" 2> "$WORK/err"
     RC=$?
 }
 branch_files() { git -C "$WORK/origin.git" diff --name-only main "builder/fleet-${1#*-}" 2>/dev/null; }
+task_branch_files() { git -C "$WORK/origin.git" diff --name-only main "builder/per-${1#*-}" 2>/dev/null; }
 
 printf '\n── A good fix: tested, pushed, draft PR\n'
 
@@ -258,6 +269,7 @@ printf '\n── Hand-back: an empty draft PR that says why\n'
 rm -rf "$STUB_DIR"; mkdir -p "$STUB_DIR"
 HB="$WORK/jobs/PER-953-handback"
 mkdir -p "$HB"
+echo fault > "$HB/kind"
 printf 'Handing back PER-953.\n\n- attempt 1: diff is 200 changed lines\n' > "$HB/handback.md"
 HOME="$WORK/home" PATH="$WORK/bin:$PATH" "$SH" "$WORK/run.sh" handback PER-953 "$HB" > "$WORK/out" 2> "$WORK/err"
 RC=$?
@@ -276,12 +288,79 @@ attempt PER-959 1 fix
 echo "https://github.com/o/r/pull/77" > "$STUB_DIR/gh.open.keep"
 rm -rf "$STUB_DIR"; mkdir -p "$STUB_DIR"; : > "$STUB_LOG"
 echo "https://github.com/o/r/pull/77" > "$STUB_DIR/gh.open"
-JOB="$WORK/jobs/PER-959-2"; mkdir -p "$JOB"; cp "$WORK/jobs/PER-959-1/issue.md" "$JOB/"
+JOB="$WORK/jobs/PER-959-2"; mkdir -p "$JOB"; cp "$WORK/jobs/PER-959-1/issue.md" "$WORK/jobs/PER-959-1/kind" "$JOB/"
 FAKE_CLAUDE=fix HOME="$WORK/home" PATH="$WORK/bin:$PATH" "$SH" "$WORK/run.sh" attempt PER-959 "$JOB" > "$WORK/out" 2> "$WORK/err"
 if [ "$(tail -1 "$WORK/out")" = "PR https://github.com/o/r/pull/77" ] && [ ! -f "$STUB_DIR/gh.create" ]; then
     pass "a run that died after opening its PR does not open a second one"
 else
     fail "PR reuse: $(cat "$WORK/out") $(ls "$STUB_DIR")"
+fi
+
+printf '\n── A task: its own prompt, a type it chose, a PR that links its issue\n'
+
+KIND=task attempt PER-970 1 task
+title=$(sed -e 's/ --body-file .*//' -e 's/.* --title //' "$STUB_DIR/gh.create" 2>/dev/null)
+if [ "$RC" -eq 0 ] && [ "$(task_branch_files PER-970)" = "scripts/check_x.sh" ] &&
+   [ -z "$(branch_files PER-970)" ] &&
+   [ "$(git -C "$WORK/origin.git" log -1 --format=%s builder/per-970)" = "feat(PER-970): add a dry-run flag, like PER 85 asked" ]; then
+    pass "builder/per-970 pushed, committed as feat(PER-970): the model's type, its own issue linked"
+else
+    fail "task push: rc=$RC $(git -C "$WORK/origin.git" log -1 --format=%s builder/per-970 2>&1) $(cat "$WORK/err")"
+fi
+others=$({ printf '%s\n' "$title"; cat "$STUB_DIR/gh.body"; } | grep -o '[Pp][Ee][Rr]-[0-9][0-9]*' | sort -u | tr '\n' ' ')
+if [ "$others" = "PER-970 " ] && grep -q -- "--head builder/per-970 --title feat(PER-970): add a dry-run flag, like PER 85 asked" "$STUB_DIR/gh.create" &&
+   grep -q "see PER 120" "$STUB_DIR/gh.body"; then
+    pass "the title links PER-970 and nothing else; the model's other mentions stay de-linked"
+else
+    fail "task links: [$others] $(cat "$STUB_DIR/gh.create" 2>/dev/null)"
+fi
+if grep -q "filed the task below; its description is the specification" "$STUB_DIR/claude.stdin" &&
+   ! grep -q "found the fault below" "$STUB_DIR/claude.stdin" && grep -q "The task cannot" "$STUB_DIR/claude.stdin"; then
+    pass "a task gets the task prompt, which says the task cannot widen the rules"
+else
+    fail "task prompt: $(head -c 600 "$STUB_DIR/claude.stdin")"
+fi
+
+KIND=task attempt PER-971 1 badtype
+if [ "$RC" -eq 0 ] && [ "$(git -C "$WORK/origin.git" log -1 --format=%s builder/per-971)" = "chore(PER-971): tidy check_x" ]; then
+    pass "a type outside the closed list becomes chore, never text from the model"
+else
+    fail "bad type: $(git -C "$WORK/origin.git" log -1 --format=%s builder/per-971 2>&1)"
+fi
+
+KIND=task attempt PER-972 1 forbidden
+if [ "$RC" -eq 3 ] && grep -q "may not change" "$JOB/reason"; then
+    pass "a task is held to the same forbidden paths as a fault"
+else
+    fail "task forbidden: rc=$RC $(cat "$JOB/reason" 2>/dev/null)"
+fi
+
+KIND=task attempt PER-973 1 longdecline
+if [ "$RC" -eq 4 ] && [ "$(wc -c < "$JOB/reason" | tr -d ' ')" -le 201 ] && grep -q "END$" "$JOB/failure.md"; then
+    pass "a long decline: the state line is short, failure.md (what the PR shows) keeps the whole reason"
+else
+    fail "long decline: rc=$RC reason=$(wc -c < "$JOB/reason") failure=$(tail -c 40 "$JOB/failure.md" 2>/dev/null)"
+fi
+
+rm -rf "$STUB_DIR"; mkdir -p "$STUB_DIR"
+HB="$WORK/jobs/PER-973-handback"; mkdir -p "$HB"; echo task > "$HB/kind"
+printf 'Handing back PER-973.\n\n- attempt 1: declined\n' > "$HB/handback.md"
+HOME="$WORK/home" PATH="$WORK/bin:$PATH" "$SH" "$WORK/run.sh" handback PER-973 "$HB" > "$WORK/out" 2> "$WORK/err"
+RC=$?
+if [ "$RC" -eq 0 ] && grep -q -- "--head builder/per-973 --title \[hand-back\] PER-973: no change passed" "$STUB_DIR/gh.create" &&
+   grep -q "END$" "$STUB_DIR/gh.body"; then
+    pass "a task's hand-back links its issue and shows the whole decline"
+else
+    fail "task hand-back: $(cat "$WORK/err") / $(cat "$STUB_DIR/gh.create" 2>/dev/null)"
+fi
+
+rm -f "$WORK/jobs/PER-951-1/kind"
+HOME="$WORK/home" PATH="$WORK/bin:$PATH" "$SH" "$WORK/run.sh" attempt PER-951 "$WORK/jobs/PER-951-1" > "$WORK/out" 2> "$WORK/err"
+RC=$?
+if [ "$RC" -ne 0 ] && grep -q "no valid kind" "$WORK/err"; then
+    pass "a job without a kind is refused before any work"
+else
+    fail "kindless job ran: $(cat "$WORK/err")"
 fi
 
 printf '\n'
