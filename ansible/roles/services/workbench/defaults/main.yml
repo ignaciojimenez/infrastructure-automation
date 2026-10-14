@@ -222,7 +222,13 @@ builder_linear_task_label_id: "1e0f001f-ff86-432a-ac22-22e8e987eb19"   # builder
 # two CI runs; the cap counts attempts, because attempts are what spend.
 builder_max_attempts: 2
 builder_daily_cap: 2
-builder_max_diff_lines: 60
+# Changed lines, counted apart (2026-10-14). Code is where review effort and
+# risk sit; a test is the proof the issue asks for, and one written to this
+# repo's conventions is 60-100 lines on its own (PER-131's 7-line fix came
+# with a 95-line test, refused under the old single limit of 60). The test
+# ceiling only guards against a runaway, such as a generated fixture.
+builder_max_diff_lines: 100
+builder_max_test_lines: 400
 builder_model: sonnet
 builder_budget_usd: 3
 builder_claude_timeout_seconds: 1800

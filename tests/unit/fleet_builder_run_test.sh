@@ -75,6 +75,12 @@ case "$FAKE_CLAUDE" in
     long)      printf '#!/bin/sh\necho "threshold=$((90 + 10))"\n' > scripts/check_x.sh
                echo "make the isolation check look for the wrapper state where the wrapper writes it" > .builder/subject ;;
     big)       seq 1 200 > scripts/big.txt; echo big > .builder/subject ;;
+    bigtest)   printf '#!/bin/sh\necho "threshold=$((90 + 10))"\n' > scripts/check_x.sh
+               mkdir -p tests/unit; seq 1 150 > tests/unit/check_x_test.sh
+               echo "fix the threshold, with a thorough test" > .builder/subject ;;
+    hugetest)  printf '#!/bin/sh\necho "threshold=$((90 + 10))"\n' > scripts/check_x.sh
+               mkdir -p tests/unit; seq 1 500 > tests/unit/check_x_test.sh
+               echo hugetest > .builder/subject ;;
     forbidden) mkdir -p ansible/inventory/group_vars/all; echo x > ansible/inventory/group_vars/all/vault.yml ;;
     breaks)    echo BROKEN >> scripts/check_x.sh; echo breaks > .builder/subject ;;
     crash)     exit 2 ;;
@@ -115,6 +121,7 @@ python3 "$REPO_ROOT/tests/lib/render_j2.py" "$TEMPLATE" "$WORK/run.sh" \
     builder_claude_timeout_seconds=1800 \
     builder_rig_timeout_seconds=2700 \
     builder_max_diff_lines=60 \
+    builder_max_test_lines=300 \
     builder_git_name=ignaciojimenez-builder \
     builder_git_email=builder@example.invalid || exit 1
 
@@ -245,6 +252,22 @@ check_fail PER-956 crash "model run failed" "the model run itself failing"
 RIG_FAIL=1; export RIG_FAIL
 check_fail PER-957 fix "rig_loop.sh failed" "a rig that does not converge to changed=0"
 unset RIG_FAIL
+
+printf '\n── Code and tests are counted apart\n'
+
+attempt PER-964 1 bigtest
+if [ "$RC" -eq 0 ] && grep -q '^builder-diff-lines: 2$' "$STUB_DIR/gh.body" &&
+   grep -q '^builder-test-lines: 150$' "$STUB_DIR/gh.body"; then
+    pass "a small fix with a 150-line test passes: the test does not count against the code limit"
+else
+    fail "fix + big test: rc=$RC $(cat "$JOB/reason" 2>/dev/null) $(grep builder- "$STUB_DIR/gh.body" 2>/dev/null)"
+fi
+check_fail PER-965 hugetest "tests/ changes are 500 lines; the limit is 300" "a test change past its own, higher ceiling"
+if grep -q "under 60 changed lines outside tests/" "$STUB_DIR/claude.stdin" && grep -q "may use up to 300" "$STUB_DIR/claude.stdin"; then
+    pass "the prompt states the limits the harness enforces, from the same variables"
+else
+    fail "prompt limits: $(grep -n 'Keep the' "$STUB_DIR/claude.stdin")"
+fi
 
 printf '\n── Declined: exit 4, nothing pushed\n'
 
