@@ -214,6 +214,9 @@ builder_linear_endpoint: "https://api.linear.app/graphql"
 builder_linear_team_id: "321cb6ff-678a-4e87-b4e8-5c9464de53c8"         # PER
 builder_linear_todo_state_id: "ab858e0f-c915-4b4b-baf4-99706f9f8210"   # Todo
 builder_linear_fleet_label_id: "1215bd1c-a99a-4a04-babe-cea3558c085f"  # agent/fleet
+# Ignacio's own requests. Not an agent/* label: the issue stays his, and the
+# builder only opens a draft PR. Created 2026-10-14; ID read back from the API.
+builder_linear_task_label_id: "1e0f001f-ff86-432a-ac22-22e8e987eb19"   # builder
 
 # Shadow-mode limits (PER-85 design refinements). Two attempts mirrors Stripe's
 # two CI runs; the cap counts attempts, because attempts are what spend.

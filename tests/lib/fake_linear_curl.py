@@ -85,12 +85,14 @@ def main() -> int:
                 "description": i.get("description", ""),
                 "url": f"https://linear.invalid/issue/{i['identifier']}",
                 "createdAt": i.get("createdAt", f"2026-10-11T00:{n:02d}:00Z"),
+                "labels": None if os.environ.get("FAKE_LINEAR_NO_LABELS") else {"nodes": [{"id": label} for label in i["labelIds"]]},
                 "attachments": {"nodes": i["attachments"]},
                 "comments": {"nodes": [comment(c, k) for k, c in enumerate(i.get("comments", []))]},
             }
             for n, i in enumerate(db["issues"])
             if i["state_type"] not in CLOSED_TYPES
-            and v["label"] in i["labelIds"]
+            # The filer asks for one label; the builder for any of a list.
+            and any(label in i["labelIds"] for label in v.get("labels", [v.get("label")]))
             and i["teamId"] == v["team"]
             and ("todo" not in v or i.get("stateId") == v["todo"])
         ]

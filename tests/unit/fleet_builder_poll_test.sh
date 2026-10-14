@@ -47,10 +47,12 @@ printf '%s %s %s started_on_disk=%s token=%s\n' "$mode" "$ref" "$(basename "$job
     "$last_started" "${CLAUDE_CODE_OAUTH_TOKEN:+set}" >> "$STUB_LOG"
 if [ "$mode" = handback ]; then
     cp "$job/handback.md" "$STUB_CTL/$ref.handback"
+    cp "$job/kind" "$STUB_CTL/$ref.handback.kind" 2>/dev/null
     echo "PR https://github.com/o/r/pull/9$(printf '%s' "$ref" | tr -cd 0-9)"
     exit 0
 fi
 cp "$job/issue.md" "$STUB_CTL/$ref.prompt.$(basename "$job")"
+cp "$job/kind" "$STUB_CTL/$ref.kind.$(basename "$job")" 2>/dev/null
 case "$behaviour" in
     ok)      echo "noise"; echo "PR https://github.com/o/r/pull/$(printf '%s' "$ref" | tr -cd 0-9)"; exit 0 ;;
     fail)    echo "unit tests failed" > "$job/reason"; echo "FAILED: test_x" > "$job/failure.md"; exit 3 ;;
@@ -66,6 +68,7 @@ python3 "$REPO_ROOT/tests/lib/render_j2.py" "$TEMPLATE" "$WORK/poll.sh" \
     builder_linear_endpoint="https://api.linear.invalid/graphql" \
     builder_linear_team_id=team-per \
     builder_linear_fleet_label_id=label-fleet \
+    builder_linear_task_label_id=label-builder \
     builder_linear_todo_state_id=state-todo \
     builder_state_dir="$WORK/state" \
     builder_jobs_dir="$WORK/jobs" \
@@ -89,11 +92,13 @@ export STUB_CTL="$WORK/ctl" STUB_STATE="$WORK/state" STUB_LOG="$WORK/stub.log"
 # shellcheck disable=SC2016  # literal: written for another shell to expand
 PLAN='**Tier 2 investigation plan** — `/x/plans/p.md` on agent-lxc'
 
-# seed <ref> <with plan: 1|0> [state id] — one agent/fleet issue in the fake.
+# seed <ref> <with plan: 1|0> [state id] [labels] [description] — one issue
+# in the fake; agent/fleet unless labels say otherwise.
 seed() {
-    python3 - "$FAKE_LINEAR_DB" "$1" "$2" "${3:-state-todo}" "$PLAN" <<'EOF'
+    python3 - "$FAKE_LINEAR_DB" "$1" "$2" "${3:-state-todo}" "$PLAN" \
+        "${4:-label-fleet,label-broken}" "${5-$1 description}" <<'EOF'
 import json, os, sys
-path, ref, with_plan, state, plan = sys.argv[1:]
+path, ref, with_plan, state, plan, labels, description = sys.argv[1:]
 db = json.load(open(path)) if os.path.exists(path) else {"issues": [], "n": 0}
 db["n"] += 1
 comments = [{"body": "a human note", "createdAt": "2026-10-11T00:00:00Z"}]
@@ -101,8 +106,8 @@ if with_plan == "1":
     comments.append({"body": plan + "\n\nOLD PLAN", "createdAt": "2026-10-11T01:00:00Z"})
     comments.append({"body": plan + "\n\nNEWEST PLAN: fix check_x.sh", "createdAt": "2026-10-11T02:00:00Z"})
 db["issues"].append({
-    "id": f"iss-{db['n']}", "identifier": ref, "title": f"{ref} title", "description": f"{ref} description",
-    "teamId": "team-per", "labelIds": ["label-fleet", "label-broken"], "stateId": state,
+    "id": f"iss-{db['n']}", "identifier": ref, "title": f"{ref} title", "description": description,
+    "teamId": "team-per", "labelIds": labels.split(","), "stateId": state,
     "state_type": "unstarted", "attachments": [], "comments": comments,
     "createdAt": f"2026-10-11T00:{db['n']:02d}:00Z",
 })
@@ -274,12 +279,78 @@ seed PER-909 1 state-backlog
 run $((T4 + 2 * DAY))
 if ! grep -q PER-909 "$STUB_LOG"; then pass "an agent/fleet issue outside Todo is never picked"; else fail "picked a non-Todo issue"; fi
 
+printf '\n── Tasks: the builder label, the description is the spec\n'
+
+T5=$((T4 + 5 * DAY))
+seed PER-920 0 state-todo label-builder "Add a --dry-run flag to check_x.sh"
+seed PER-921 0 state-todo label-builder ""
+seed PER-922 0 state-todo label-broken "an issue with neither builder label"
+: > "$STUB_LOG"
+run "$T5"
+prompt="$WORK/ctl/PER-920.prompt.PER-920-1"
+if [ "$RC" -eq 0 ] && state PER-920 | grep -q '^final [0-9]* pr ' &&
+   [ "$(cat "$WORK/ctl/PER-920.kind.PER-920-1")" = task ]; then
+    pass "a builder-labelled issue is attempted with NO plan, and the run is told it is a task"
+else
+    fail "task not attempted: $(state PER-920) / $(cat "$WORK/out")"
+fi
+if grep -q "Add a --dry-run flag" "$prompt" && ! grep -q "a human note" "$prompt" &&
+   ! grep -q "Tier 2" "$prompt"; then
+    pass "a task's prompt is its title and description: no comment reaches it"
+else
+    fail "task prompt: $(cat "$prompt")"
+fi
+run $((T5 + 3600))
+if [ -z "$(state PER-921)" ] && ! grep -q PER-921 "$STUB_LOG" && grep -q "1 tasks with no description" "$WORK/out"; then
+    pass "a task with an empty description waits, and spends nothing"
+else
+    fail "empty task: $(state PER-921) / $(cat "$WORK/out")"
+fi
+if ! grep -q PER-922 "$STUB_LOG" && [ -z "$(state PER-922)" ]; then
+    pass "an issue with neither label is never picked"
+else
+    fail "picked an unlabelled issue: $(state PER-922)"
+fi
+if [ "$(cat "$WORK/ctl/PER-902.kind.PER-902-1")" = fault ]; then
+    pass "an agent/fleet issue is still run as a fault"
+else
+    fail "fleet issue kind: $(cat "$WORK/ctl/PER-902.kind.PER-902-1" 2>&1)"
+fi
+
+seed PER-923 1 state-todo label-fleet,label-builder
+run $((T5 + DAY))
+if [ "$(cat "$WORK/ctl/PER-923.kind.PER-923-1")" = fault ]; then
+    pass "an issue carrying both labels is a fault: agent/fleet says the machine filed it"
+else
+    fail "both labels: $(cat "$WORK/ctl/PER-923.kind.PER-923-1" 2>&1) / $(cat "$WORK/out")"
+fi
+
+seed PER-924 0 state-todo label-builder "Rename every host"
+echo decline > "$WORK/ctl/PER-924"
+run $((T5 + 2 * DAY))
+if state PER-924 | grep -q '^final [0-9]* handback ' && [ "$(cat "$WORK/ctl/PER-924.handback.kind")" = task ] &&
+   ! grep -q 'https://linear' "$WORK/ctl/PER-924.handback"; then
+    pass "a declined task is handed back as a task, with no issue URL to mangle"
+else
+    fail "task hand-back: $(state PER-924) / $(cat "$WORK/ctl/PER-924.handback" 2>&1)"
+fi
+
+seed PER-925 1
+FAKE_LINEAR_NO_LABELS=1; export FAKE_LINEAR_NO_LABELS
+run $((T5 + 3 * DAY))
+unset FAKE_LINEAR_NO_LABELS
+if [ -z "$(state PER-925)" ] && grep -q "PER-925 carries neither label" "$WORK/out"; then
+    pass "a response without labels skips the issue: a fault never becomes a task by omission"
+else
+    fail "no-labels response: $(state PER-925) / $(cat "$WORK/out")"
+fi
+
 printf '\n── Refusals: each fails loudly and attempts nothing\n'
 
 seed PER-910 1
 : > "$STUB_LOG"
 FAKE_LINEAR_FAIL=issues; export FAKE_LINEAR_FAIL
-run $((T4 + 3 * DAY))
+run $((T5 + 4 * DAY))
 unset FAKE_LINEAR_FAIL
 if [ "$RC" -ne 0 ] && [ ! -s "$STUB_LOG" ] && [ -z "$(state PER-910)" ]; then
     pass "a GraphQL error: non-zero, nothing recorded, nothing run"
@@ -287,13 +358,13 @@ else
     fail "GraphQL error: rc=$RC $(cat "$WORK/out")"
 fi
 mv "$WORK/auth.header" "$WORK/auth.off"
-run $((T4 + 3 * DAY))
+run $((T5 + 3 * DAY))
 mv "$WORK/auth.off" "$WORK/auth.header"
 if [ "$RC" -ne 0 ] && [ ! -s "$STUB_LOG" ]; then pass "no Linear key: non-zero"; else fail "ran without a key"; fi
 echo ok > "$WORK/ctl/PER-910"
 cat > "$WORK/run.ok" < "$WORK/run.sh"
 printf '#!/bin/sh\necho "PR https://evil.example/pull/1"\nexit 0\n' > "$WORK/run.sh"
-run $((T4 + 3 * DAY))
+run $((T5 + 3 * DAY))
 cp "$WORK/run.ok" "$WORK/run.sh"
 if [ "$RC" -ne 0 ] && ! state PER-910 | grep -q '^final'; then
     pass "a 'PR' line that is not a github.com PR URL is not accepted as success"

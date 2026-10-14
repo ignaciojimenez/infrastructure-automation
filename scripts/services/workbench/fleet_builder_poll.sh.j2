@@ -1,12 +1,20 @@
 #!/bin/sh
-# fleet_builder_poll.sh — agent/fleet issues -> builder attempts -> draft PRs
+# fleet_builder_poll.sh — Linear issues -> builder attempts -> draft PRs
 # (managed by Ansible; PER-85 part 2)
+#
+# Two kinds of work, one queue:
+#
+#   fault  agent/fleet — filed by agent-lxc from a sweep or an alert; ready
+#          once a Tier 2 plan comment arrives
+#   task   builder     — filed by Ignacio, by hand or through Claude; ready
+#          at once, its description is the spec
+#
+# An issue carrying both is a fault: agent/fleet says the machine filed it.
 #
 # Deterministic, no model involved. Each run:
 #
-#   1. lists Todo + agent/fleet issues on team PER (read-only Linear key);
-#   2. picks the oldest issue that has a Tier 2 plan comment and no final
-#      outcome yet;
+#   1. lists Todo issues on team PER with either label (read-only Linear key);
+#   2. picks the oldest one that is ready and has no final outcome yet;
 #   3. records the attempt BEFORE any work starts, then hands it to
 #      fleet_builder_run.sh as the unattended account;
 #   4. records what came back.
@@ -43,6 +51,7 @@ TOKEN_ENV_FILE="{{ builder_claude_env_file }}"
 ENDPOINT="{{ builder_linear_endpoint }}"
 TEAM_ID="{{ builder_linear_team_id }}"
 FLEET_LABEL_ID="{{ builder_linear_fleet_label_id }}"
+TASK_LABEL_ID="{{ builder_linear_task_label_id }}"
 TODO_STATE_ID="{{ builder_linear_todo_state_id }}"
 STATE_DIR="{{ builder_state_dir }}"
 JOBS_DIR="{{ builder_jobs_dir }}"
@@ -75,9 +84,9 @@ trap 'rm -rf "$WORK"' EXIT INT TERM
 
 # ── Linear (read only) ────────────────────────────────────────────────────
 
-jq -n --arg t "$TEAM_ID" --arg l "$FLEET_LABEL_ID" --arg s "$TODO_STATE_ID" '{
-  query: "query($team: ID!, $label: ID!, $todo: ID!) { issues(first: 50, orderBy: createdAt, filter: { team: { id: { eq: $team } }, labels: { some: { id: { eq: $label } } }, state: { id: { eq: $todo } } }) { pageInfo { hasNextPage } nodes { id identifier title description url createdAt comments(first: 100) { nodes { body createdAt } } } } }",
-  variables: {team: $t, label: $l, todo: $s}
+jq -n --arg t "$TEAM_ID" --arg f "$FLEET_LABEL_ID" --arg k "$TASK_LABEL_ID" --arg s "$TODO_STATE_ID" '{
+  query: "query($team: ID!, $labels: [ID!]!, $todo: ID!) { issues(first: 50, orderBy: createdAt, filter: { team: { id: { eq: $team } }, labels: { some: { id: { in: $labels } } }, state: { id: { eq: $todo } } }) { pageInfo { hasNextPage } nodes { id identifier title description url createdAt labels { nodes { id } } comments(first: 100) { nodes { body createdAt } } } } }",
+  variables: {team: $t, labels: [$f, $k], todo: $s}
 }' > "$WORK/req" || die "could not build request"
 
 # The key reaches curl as a header FILE, never an argument: argv is
@@ -154,12 +163,14 @@ pr_url_of() {
 }
 
 handback() {
-    # handback <ref> <issue url>
+    # handback <ref> <kind>. No issue URL in the body: the run script de-links
+    # every PER-<n> in it, which broke the URL (PR #20). A fault's issue gets
+    # the PR link from the filer; a task's PR title links it in Linear.
     _ref=$1
     _job=$(new_job "$_ref" handback)
+    printf '%s\n' "$2" > "$_job/kind"
     {
-        printf 'The builder is handing **%s** back to a human: no fix was produced that passed the unit tests and the rig.\n\n' "$_ref"
-        printf 'Issue: %s\n\n' "$2"
+        printf 'The builder is handing **%s** back to a human: no change was produced that passed the unit tests and the rig.\n\n' "$_ref"
         handback_reasons "$(state_of "$_ref")"
     } > "$_job/handback.md"
     run_as handback "$_ref" "$_job"
@@ -174,11 +185,21 @@ handback() {
 
 # ── Pick one action ───────────────────────────────────────────────────────
 
-waiting_plan=0 at_cap=0 done_already=0
+waiting_plan=0 waiting_spec=0 at_cap=0 done_already=0
 while read -r issue; do
     ref=$(printf '%s' "$issue" | jq -r '.identifier')
-    url=$(printf '%s' "$issue" | jq -r '.url')
     case "$ref" in *[!A-Za-z0-9-]*|'') echo "WARN: skipping malformed identifier" >&2; continue ;; esac
+    # Each kind is read from its own label, never inferred from the other's
+    # absence: a response without labels must not turn a fault into a task.
+    has_label() { printf '%s' "$issue" | jq -e --arg l "$1" 'any(.labels.nodes[]?; .id == $l)' > /dev/null 2>&1; }
+    if has_label "$FLEET_LABEL_ID"; then
+        kind=fault
+    elif has_label "$TASK_LABEL_ID"; then
+        kind=task
+    else
+        echo "WARN: $ref carries neither label; skipped" >&2
+        continue
+    fi
 
     if is_final "$ref"; then
         done_already=$((done_already + 1))
@@ -187,16 +208,27 @@ while read -r issue; do
 
     n=$(attempts_of "$ref")
     if is_declined "$ref" || [ "$n" -ge "$MAX_ATTEMPTS" ]; then
-        handback "$ref" "$url"
+        handback "$ref" "$kind"
         exit 0
     fi
 
-    # Newest plan wins: a re-investigation supersedes the first one.
-    plan=$(printf '%s' "$issue" | jq -r --arg p "$PLAN_PREFIX" '
-        [.comments.nodes[] | select(.body | startswith($p))] | sort_by(.createdAt) | last | .body // empty')
-    if [ -z "$plan" ]; then
-        waiting_plan=$((waiting_plan + 1))
-        continue
+    description=$(printf '%s' "$issue" | jq -r '.description // ""')
+    if [ "$kind" = fault ]; then
+        # Newest plan wins: a re-investigation supersedes the first one.
+        plan=$(printf '%s' "$issue" | jq -r --arg p "$PLAN_PREFIX" '
+            [.comments.nodes[] | select(.body | startswith($p))] | sort_by(.createdAt) | last | .body // empty')
+        if [ -z "$plan" ]; then
+            waiting_plan=$((waiting_plan + 1))
+            continue
+        fi
+    else
+        # A task's spec is its description, and only that: comments are not
+        # read, so a comment cannot change what is built. An empty one waits.
+        plan=""
+        if [ -z "$(printf '%s' "$description" | tr -d '[:space:]')" ]; then
+            waiting_spec=$((waiting_spec + 1))
+            continue
+        fi
     fi
 
     if [ "$(spent_today)" -ge "$DAILY_CAP" ]; then
@@ -206,10 +238,11 @@ while read -r issue; do
 
     attempt=$((n + 1))
     job=$(new_job "$ref" "$attempt")
+    printf '%s\n' "$kind" > "$job/kind"
     {
         printf '# %s: %s\n\n' "$ref" "$(printf '%s' "$issue" | jq -r '.title')"
-        printf '%s\n\n' "$(printf '%s' "$issue" | jq -r '.description // ""')"
-        printf '%s\n' "$plan"
+        printf '%s\n\n' "$description"
+        [ -z "$plan" ] || printf '%s\n' "$plan"
         prev="$JOBS_DIR/$ref-$n/failure.md"
         if [ "$n" -gt 0 ] && [ -r "$prev" ]; then
             printf '\n## Your previous attempt failed\n\n'
@@ -237,18 +270,18 @@ while read -r issue; do
             echo "attempt $attempt $NOW failed declined: ${reason:-no reason given}" >> "$(state_of "$ref")"
             echo "declined $NOW ${reason:-no reason given}" >> "$(state_of "$ref")"
             echo "$ref: declined — ${reason:-no reason given}"
-            handback "$ref" "$url"
+            handback "$ref" "$kind"
             ;;
         *)
             echo "attempt $attempt $NOW failed ${reason:-run exited $rc}" >> "$(state_of "$ref")"
             echo "$ref: attempt $attempt failed — ${reason:-run exited $rc}"
             if [ "$attempt" -ge "$MAX_ATTEMPTS" ]; then
-                handback "$ref" "$url"
+                handback "$ref" "$kind"
             fi
             ;;
     esac
     exit 0
 done < "$WORK/issues"
 
-echo "builder poll: nothing to do ($(wc -l < "$WORK/issues" | tr -d ' ') open; $done_already finished, $waiting_plan waiting for a plan, $at_cap held by the daily cap of $DAILY_CAP)"
+echo "builder poll: nothing to do ($(wc -l < "$WORK/issues" | tr -d ' ') open; $done_already finished, $waiting_plan waiting for a plan, $waiting_spec tasks with no description, $at_cap held by the daily cap of $DAILY_CAP)"
 exit 0
