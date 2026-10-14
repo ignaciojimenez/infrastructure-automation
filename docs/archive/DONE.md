@@ -17,6 +17,7 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ## Contents
 
+- [2026-10-14 — every builder attempt failed its unit tests, whatever it changed (PER-131)](#2026-10-14--every-builder-attempt-failed-its-unit-tests-whatever-it-changed-per-131)
 - [2026-10-14 — an alert reached the builder, and the builder rightly refused it (alert intake, PER-130)](#2026-10-14--an-alert-reached-the-builder-and-the-builder-rightly-refused-it-alert-intake-per-130)
 - [2026-10-13 — unifi-lxc trusted only the key Debian 13 refuses (item 45, PER-105)](#2026-10-13--unifi-lxc-trusted-only-the-key-debian-13-refuses-item-45-per-105)
 - [2026-10-13 — three items closed, one of them was never broken (items 9, 34, 38)](#2026-10-13--three-items-closed-one-of-them-was-never-broken-items-9-34-38)
@@ -76,11 +77,19 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 
 
+## 2026-10-14 — every builder attempt failed its unit tests, whatever it changed (PER-131)
+
+**A test-isolation leak, found by the first request.** PER-131, the first issue labelled `builder`, was handed back after two attempts (PR #21). Attempt 1 failed in `maintenance_window`, an unrelated suite, which listed `ssh cron fail2ban ufw` where the test sets `testsvc`. The health-check tests set `HEALTH_CHECK_CONF=/nonexistent` to mean "no config". The script then fell through to the host's own `/etc/monitoring/health_check.conf`, and on the workbench that file sets the real `CRITICAL_SERVICES`. The laptop and CI have no such file, so the suite passed everywhere except where the builder runs. Since the workbench got that file (2026-10-13), every builder attempt failed its unit tests, whatever it changed.
+
+Reproduced on the laptop by planting a fleet-like config at `/usr/local/etc/monitoring/health_check.conf`: `maintenance_window` and `service_recheck` failed. After the fix (an explicit `HEALTH_CHECK_CONF` is the only file read), the full suite passed with that config still planted. Attempt 2 could not have found this, because the builder runs nothing itself; it widened its change past the 60-line limit instead.
+
+**Proven on the way:** a `builder` request reached the build line, and Linear attached the hand-back PR to PER-131 on its own (title `[hand-back] PER-131: …`), so the link path works without the filer.
+
 ## 2026-10-14 — an alert reached the builder, and the builder rightly refused it (alert intake, PER-130)
 
 **Alerts are now an input to the builder, proven live.** `6102355` adds the hand-off: when Tier 2 judges a #home-alerts fault to be `**Action:** repo-change`, `investigate.sh` writes a hand-off for each incident key the plan names, and the filer opens an `agent/fleet` issue from it. Proven by planting a misspelt critical service (`unattended-upgrade`) on workbench-lxc (`7099058`). The alert posted at 00:32. Tier 2 named the exact line, saw that the real daemon was running, and judged it a repo change. The filer opened PER-130 at 01:57 with the plan as a comment. The builder picked it up at 02:17.
 
-**The builder handed it back, and that was correct.** Attempt 1's change failed the unit tests (its diff stays in the job dir; not read, because `autobuilder`'s jobs are root-only). Attempt 2 declined: the typo was in `ansible/inventory/`, which the builder may not touch, and an alias in the script "would only hide it". Draft PR #20 changes nothing. The plant was reverted by hand. **The planted fault was badly chosen, because it sat in a path the builder's guard forbids.** A plant is only an end-to-end test if every stage is allowed to act on it. The builder's own leg, from issue to green PR, was already proven twice on Tier 1 issues (PR #17, #18), and it does not care where an issue came from, so no second plant was run.
+**The builder handed it back, and that was correct.** Attempt 1 failed the unit tests. That was most likely not its change: see the next entry. The unit suite failed on the workbench whatever was changed. Attempt 2 declined: the typo was in `ansible/inventory/`, which the builder may not touch, and an alias in the script "would only hide it". Draft PR #20 changes nothing. The plant was reverted by hand. **The planted fault was badly chosen, because it sat in a path the builder's guard forbids.** A plant is only an end-to-end test if every stage is allowed to act on it. The builder's own leg, from issue to green PR, was already proven twice on Tier 1 issues (PR #17, #18), and it does not care where an issue came from, so no second plant was run.
 
 Two defects in the hand-back body went to item 12: the issue URL is broken by the de-linking, and the decline reason is cut mid-word.
 

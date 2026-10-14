@@ -130,8 +130,16 @@ CRITICAL_SERVICES="${CRITICAL_SERVICES:-}"
 # Overridable only so tests/unit/memory_arc_test.sh can feed fixtures.
 MEMINFO_FILE="${MEMINFO_FILE:-/proc/meminfo}"
 ARCSTATS_FILE="${ARCSTATS_FILE:-/proc/spl/kstat/zfs/arcstats}"
-for _conf in "${HEALTH_CHECK_CONF:-}" /usr/local/etc/monitoring/health_check.conf /etc/monitoring/health_check.conf; do
-    if [ -n "$_conf" ] && [ -r "$_conf" ]; then
+#
+# HEALTH_CHECK_CONF, when set, is the ONLY file read; it never falls through to
+# the host's own. Tests set it to /nonexistent to mean "no config", and with a
+# fallthrough every fleet host answered with its real CRITICAL_SERVICES
+# instead, the builder's workbench included: from 2026-10-13 every builder
+# attempt failed the unit tests there, whatever it changed (PER-131).
+_confs="/usr/local/etc/monitoring/health_check.conf /etc/monitoring/health_check.conf"
+[ -z "${HEALTH_CHECK_CONF:-}" ] || _confs=$HEALTH_CHECK_CONF
+for _conf in $_confs; do
+    if [ -r "$_conf" ]; then
         # shellcheck source=/dev/null
         . "$_conf"
         break
