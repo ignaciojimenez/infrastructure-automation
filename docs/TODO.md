@@ -474,6 +474,12 @@ One branch, tick them off. Phone-taggable lines marked 📱.
   `site.yml --limit unifi-lxc --check --diff` and align per-item.
 - `INJECT_FACTS_AS_VARS` goes away in ansible-core 2.24; the repo uses bare
   fact names everywhere. Mechanical repo-wide sweep, own branch.
+- The builder's hand-back PR body (PR #20, 2026-10-14) has two defects, both in
+  `scripts/services/workbench/`. `unlink` turns `PER-130` into `PER 130` to
+  stop Linear auto-closing the issue (item 50's fix), and that also breaks the
+  issue URL it prints: drop the URL, since the filer links the PR on the issue
+  anyway. And the decline reason is cut at 200 characters, mid-word: cut at a
+  sentence or word boundary, or carry the whole `.builder/decline` line.
 - cobra and dockassist still carry malformed `dt_overlay="disable-bt"` /
   `dt_overlay="disable-wifi"` lines in `/boot/firmware/config.txt`, left by an
   old `rpi-provisioner`. The directive is `dtoverlay=`, unquoted, so they are

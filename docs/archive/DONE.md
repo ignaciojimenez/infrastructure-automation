@@ -17,6 +17,7 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ## Contents
 
+- [2026-10-14 — an alert reached the builder, and the builder rightly refused it (alert intake, PER-130)](#2026-10-14--an-alert-reached-the-builder-and-the-builder-rightly-refused-it-alert-intake-per-130)
 - [2026-10-13 — unifi-lxc trusted only the key Debian 13 refuses (item 45, PER-105)](#2026-10-13--unifi-lxc-trusted-only-the-key-debian-13-refuses-item-45-per-105)
 - [2026-10-13 — three items closed, one of them was never broken (items 9, 34, 38)](#2026-10-13--three-items-closed-one-of-them-was-never-broken-items-9-34-38)
 - [2026-10-12 — the Tier 2 model could read two credentials through a tool nobody had restricted (item 48, PER-112)](#2026-10-12--the-tier-2-model-could-read-two-credentials-through-a-tool-nobody-had-restricted-item-48-per-112)
@@ -74,6 +75,14 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 ---
 
 
+
+## 2026-10-14 — an alert reached the builder, and the builder rightly refused it (alert intake, PER-130)
+
+**Alerts are now an input to the builder, proven live.** `6102355` adds the hand-off: when Tier 2 judges a #home-alerts fault to be `**Action:** repo-change`, `investigate.sh` writes a hand-off for each incident key the plan names, and the filer opens an `agent/fleet` issue from it. Proven by planting a misspelt critical service (`unattended-upgrade`) on workbench-lxc (`7099058`). The alert posted at 00:32. Tier 2 named the exact line, saw that the real daemon was running, and judged it a repo change. The filer opened PER-130 at 01:57 with the plan as a comment. The builder picked it up at 02:17.
+
+**The builder handed it back, and that was correct.** Attempt 1's change failed the unit tests (its diff stays in the job dir; not read, because `autobuilder`'s jobs are root-only). Attempt 2 declined: the typo was in `ansible/inventory/`, which the builder may not touch, and an alias in the script "would only hide it". Draft PR #20 changes nothing. The plant was reverted by hand. **The planted fault was badly chosen, because it sat in a path the builder's guard forbids.** A plant is only an end-to-end test if every stage is allowed to act on it. The builder's own leg, from issue to green PR, was already proven twice on Tier 1 issues (PR #17, #18), and it does not care where an issue came from, so no second plant was run.
+
+Two defects in the hand-back body went to item 12: the issue URL is broken by the de-linking, and the decline reason is cut mid-word.
 
 ## 2026-10-13 — unifi-lxc trusted only the key Debian 13 refuses (item 45, PER-105)
 
