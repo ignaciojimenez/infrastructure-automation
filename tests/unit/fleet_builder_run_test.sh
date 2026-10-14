@@ -105,6 +105,9 @@ case "$1 $2" in
                  while [ $# -gt 0 ]; do [ "$1" = --body-file ] && cp "$2" "$STUB_DIR/gh.body"; shift; done
                  echo "https://github.com/o/r/pull/42" ;;
     "pr edit") printf '%s\n' "$*" > "$STUB_DIR/gh.edit" ;;
+    "api -X")  [ -n "${GH_EDIT_FAIL:-}" ] && { echo "HTTP 403: Resource not accessible" >&2; exit 1; }
+               printf '%s\n' "$*" > "$STUB_DIR/gh.api"
+               while [ $# -gt 0 ]; do [ "$1" = --input ] && cp "$2" "$STUB_DIR/gh.api.json"; shift; done ;;
 esac
 EOF
 # timeout: macOS has none by default; the real one only adds a deadline.
@@ -317,6 +320,25 @@ if [ "$(tail -1 "$WORK/out")" = "PR https://github.com/o/r/pull/77" ] && [ ! -f 
     pass "a run that died after opening its PR does not open a second one"
 else
     fail "PR reuse: $(cat "$WORK/out") $(ls "$STUB_DIR")"
+fi
+if grep -q -- "-X PATCH repos/{owner}/{repo}/pulls/77 --input" "$STUB_DIR/gh.api" 2>/dev/null &&
+   [ "$(jq -r .title "$STUB_DIR/gh.api.json")" = "fix(fleet#959): fix the threshold arithmetic" ] &&
+   jq -r .body "$STUB_DIR/gh.api.json" | grep -q "3/3 unit suites passed"; then
+    pass "the reused PR gets this run's title and body, through the REST API"
+else
+    fail "PR edit: $(cat "$STUB_DIR/gh.api" 2>/dev/null) $(cat "$STUB_DIR/gh.api.json" 2>/dev/null | head -c 300)"
+fi
+
+rm -rf "$STUB_DIR"; mkdir -p "$STUB_DIR"; : > "$STUB_LOG"
+echo "https://github.com/o/r/pull/77" > "$STUB_DIR/gh.open"
+JOB="$WORK/jobs/PER-959-3"; mkdir -p "$JOB"; cp "$WORK/jobs/PER-959-1/issue.md" "$WORK/jobs/PER-959-1/kind" "$JOB/"
+GH_EDIT_FAIL=1 FAKE_CLAUDE=fix HOME="$WORK/home" PATH="$WORK/bin:$PATH" "$SH" "$WORK/run.sh" attempt PER-959 "$JOB" > "$WORK/out" 2> "$WORK/err"
+RC=$?
+if [ "$RC" -eq 3 ] && grep -q "editing the open PR failed" "$JOB/reason" && grep -q "HTTP 403" "$JOB/failure.md" &&
+   ! grep -q "^PR " "$WORK/out"; then
+    pass "a failed edit of the open PR fails the attempt, with GitHub's error, instead of passing silently"
+else
+    fail "silent edit failure: rc=$RC out=$(cat "$WORK/out") reason=$(cat "$JOB/reason" 2>/dev/null)"
 fi
 
 printf '\n── A task: its own prompt, a type it chose, a PR that links its issue\n'
