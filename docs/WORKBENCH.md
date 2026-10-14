@@ -308,7 +308,9 @@ those becomes readable, **or missing**: a check that a missing file is
 "unreadable" would pass forever.
 
 **Limits** (`roles/services/workbench/defaults`, `builder_*`): 2 attempts per
-issue, 2 attempts per UTC day, 60 changed lines, no vault, CI, inventory or
+issue, 2 attempts per UTC day, 100 changed lines outside `tests/` and 400 inside it
+(counted apart since 2026-10-14: a test is the proof, and PER-131's 7-line fix
+came with a 95-line test that the old single limit of 60 refused), no vault, CI, inventory or
 `docs/local/` paths, $3 and 30 min per model run. Nothing merges: the machine
 account cannot push to `main`.
 
