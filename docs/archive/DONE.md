@@ -83,6 +83,8 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 Reproduced on the laptop by planting a fleet-like config at `/usr/local/etc/monitoring/health_check.conf`: `maintenance_window` and `service_recheck` failed. After the fix (an explicit `HEALTH_CHECK_CONF` is the only file read), the full suite passed with that config still planted. Attempt 2 could not have found this, because the builder runs nothing itself; it widened its change past the 60-line limit instead.
 
+**How PER-131 finished: merged with edits.** Two more faults surfaced on the retry. The 60-line limit counted the requested test (a 7-line fix with a 95-line test was refused), so code and tests are now counted apart: 100 and 400. The builder's PR edits failed silently (`gh pr edit … || true`), so PR #21 kept stale reasons; that is now a REST PATCH that fails loudly. Attempt 2's code was correct. Its test stub read the unit name from `$4` where `systemctl show -p LoadState --value <name>` puts it in `$5`, which one test run would have shown, and the builder can run none. It was merged as two commits: the builder's diff verbatim, under its own authorship, then the one-character human edit (plus a shellcheck directive CI needed). **That is the first real data point for PER-126: a correct change, failed by a test it could not run.**
+
 **Proven on the way:** a `builder` request reached the build line, and Linear attached the hand-back PR to PER-131 on its own (title `[hand-back] PER-131: …`), so the link path works without the filer.
 
 ## 2026-10-14 — an alert reached the builder, and the builder rightly refused it (alert intake, PER-130)
