@@ -502,6 +502,12 @@ check_services() {
         # genuine detection by SERVICE_RECHECK_ATTEMPTS × SERVICE_RECHECK_DELAY
         # against a cron that runs every 15 minutes — a rounding error.
         for svc in $services; do
+            # A name that is no unit at all is a typo, not an outage: say so now.
+            if [ "$(systemctl show -p LoadState --value "$svc" 2>/dev/null)" = not-found ]; then
+                print_status "error" "Service $svc: no such unit (check the name in critical_services)"
+                issues=$((issues + 1))
+                continue
+            fi
             _attempt=1
             _state=down
             while [ "$_attempt" -le "$SERVICE_RECHECK_ATTEMPTS" ]; do
