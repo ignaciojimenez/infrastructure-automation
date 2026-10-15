@@ -477,6 +477,11 @@ One branch, tick them off. Phone-taggable lines marked 📱.
 - ✅ 2026-10-14: the builder's hand-back PR body no longer prints the issue
   URL (de-linking broke it, PR #20), and the PR shows the model's whole
   decline line instead of the first 200 characters.
+- `wrapper_alert_dedup` failed once in a full laptop run (2026-10-15, one check;
+  the failing line was not captured), then passed three runs in a row on its
+  own. Intermittent, and the branch under test did not touch the wrapper. On the
+  builder, two attempts and an intermittent test make an expensive mix. Next
+  time it fails, keep the full output and find the timing it depends on.
 - cobra and dockassist still carry malformed `dt_overlay="disable-bt"` /
   `dt_overlay="disable-wifi"` lines in `/boot/firmware/config.txt`, left by an
   old `rpi-provisioner`. The directive is `dtoverlay=`, unquoted, so they are
