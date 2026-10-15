@@ -1,7 +1,7 @@
 #!/bin/sh
 # A CRITICAL_SERVICES name that is no systemd unit is reported as "no such
 # unit" at once, not re-checked and called "not running". `systemctl` is stubbed.
-# shellcheck disable=SC2329  # svc_line, has and polls are invoked through check()
+# shellcheck disable=SC2317,SC2329  # svc_line, has and polls are invoked through check()
 set -u
 
 CDPATH=''

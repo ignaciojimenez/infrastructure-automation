@@ -326,7 +326,7 @@ if grep -q -- "-X PATCH repos/{owner}/{repo}/pulls/77 --input" "$STUB_DIR/gh.api
    jq -r .body "$STUB_DIR/gh.api.json" | grep -q "3/3 unit suites passed"; then
     pass "the reused PR gets this run's title and body, through the REST API"
 else
-    fail "PR edit: $(cat "$STUB_DIR/gh.api" 2>/dev/null) $(cat "$STUB_DIR/gh.api.json" 2>/dev/null | head -c 300)"
+    fail "PR edit: $(cat "$STUB_DIR/gh.api" 2>/dev/null) $(head -c 300 "$STUB_DIR/gh.api.json" 2>/dev/null)"
 fi
 
 rm -rf "$STUB_DIR"; mkdir -p "$STUB_DIR"; : > "$STUB_LOG"
