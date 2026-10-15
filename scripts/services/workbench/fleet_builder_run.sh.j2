@@ -146,7 +146,13 @@ open_pr() {
         { [ "$MODE" = attempt ] && fail 3 "push failed" "$JOB/push.log"; die "push failed: $(tail -c 300 "$JOB/push.log")"; }
     _url=$(gh pr list --head "$BRANCH" --state open --json url --jq '.[0].url // empty' 2>/dev/null)
     if [ -n "$_url" ]; then
-        gh pr edit "$_url" --title "$_title" --body-file "$2" > /dev/null 2>&1 || true
+        # REST, not `gh pr edit`: that failed for the builder's token and
+        # the `|| true` hid it, so PR #21 kept the previous round's title
+        # and reasons (2026-10-14). A PR that misdescribes its own branch is
+        # worse than no PR, so a failed edit now fails the run.
+        jq -n --arg t "$_title" --rawfile b "$2" '{title: $t, body: $b}' > "$JOB/pr_edit.json"
+        gh api -X PATCH "repos/{owner}/{repo}/pulls/${_url##*/}" --input "$JOB/pr_edit.json" > /dev/null 2> "$JOB/pr.err" ||
+            { [ "$MODE" = attempt ] && fail 3 "editing the open PR failed" "$JOB/pr.err"; die "editing the open PR failed: $(cat "$JOB/pr.err")"; }
     else
         _url=$(gh pr create --draft --base main --head "$BRANCH" --title "$_title" --body-file "$2" 2> "$JOB/pr.err" | tail -1)
     fi
