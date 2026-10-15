@@ -1,6 +1,7 @@
 #!/bin/sh
 # A CRITICAL_SERVICES name that is no systemd unit is reported as "no such
 # unit" at once, not re-checked and called "not running". `systemctl` is stubbed.
+# shellcheck disable=SC2329  # svc_line, has and polls are invoked through check()
 set -u
 
 CDPATH=''
@@ -20,7 +21,7 @@ COUNT="$WORK/count"
 cat > "$WORK/bin/systemctl" <<STUB
 #!/bin/sh
 case "\$1" in
-show) [ "\$4" = ghostsvc ] && echo not-found || echo loaded ;;
+show) [ "\$5" = ghostsvc ] && echo not-found || echo loaded ;;
 is-active) [ "\$2" = upsvc ] || [ "\$2" = unattended-upgrades.service ] || echo x >> "$COUNT"
     [ "\$2" = upsvc ]; exit \$? ;;
 esac
