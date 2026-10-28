@@ -515,11 +515,22 @@ check_opnsense_monitoring_alive() {
     # exposes only unique_key, so name is the stable identifier available to the
     # least-privileged key that can answer this. Read-only is the right key here
     # — nothing should be able to pause or delete checks from this container.
-    _hc_rc=0
-    _hc_http=$(printf 'header = "X-Api-Key: %s"\n' "$_hc_key" | \
-        curl -K - -s -o "$API_OUT" -w '%{http_code}' \
-             --max-time "$OPNSENSE_API_TIMEOUT" \
-             "https://healthchecks.io/api/v3/checks/" 2>/dev/null) || _hc_rc=$?
+    #
+    # A transport failure (DNS blip, reset, timeout) is retried twice before it
+    # becomes a finding: one failed lookup says nothing, and a finding opens a
+    # ticket. A persistent failure still reports, with the last curl exit.
+    _hc_try=0
+    while :; do
+        _hc_try=$((_hc_try + 1))
+        _hc_rc=0
+        _hc_http=$(printf 'header = "X-Api-Key: %s"\n' "$_hc_key" | \
+            curl -K - -s -o "$API_OUT" -w '%{http_code}' \
+                 --max-time "$OPNSENSE_API_TIMEOUT" \
+                 "https://healthchecks.io/api/v3/checks/" 2>/dev/null) || _hc_rc=$?
+        [ "$_hc_rc" -eq 0 ] && break
+        [ "$_hc_try" -ge 3 ] && break
+        sleep "${HEALTHCHECKS_RETRY_DELAY:-5}"
+    done
 
     if [ "$_hc_rc" -ne 0 ]; then
         note "$_host" "$_unknown: curl exit ${_hc_rc}"
