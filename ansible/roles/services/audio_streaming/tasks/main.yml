@@ -165,6 +165,32 @@
   notify: restart liquidsoap
   tags: [audio_streaming, liquidsoap]
 
+# The stock wait-online unit gives up after ~60 s, but this Pi's brcmfmac chip
+# took minutes to bring wlan0 up after the 2026-10-28 plug-watchdog power cycle,
+# leaving a failed unit behind. Nothing here Requires= network-online.target,
+# so a longer wait only quiets a false alarm.
+- name: Create NetworkManager-wait-online drop-in directory
+  become: true
+  ansible.builtin.file:
+    path: /etc/systemd/system/NetworkManager-wait-online.service.d
+    state: directory
+    mode: '0755'
+  when: enable_wifi_reconnect_watchdog | default(false)
+  tags: [audio_streaming, network]
+
+- name: Extend NetworkManager-wait-online timeout for slow Wi-Fi bring-up
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/NetworkManager-wait-online.service.d/override.conf
+    content: |
+      [Service]
+      ExecStart=
+      ExecStart=/usr/bin/nm-online -s -q --timeout=180
+      TimeoutStartSec=200
+    mode: '0644'
+  when: enable_wifi_reconnect_watchdog | default(false)
+  tags: [audio_streaming, network]
+
 - name: Reload systemd daemon
   become: true
   ansible.builtin.systemd:
