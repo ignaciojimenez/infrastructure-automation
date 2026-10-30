@@ -422,7 +422,8 @@ One branch, tick them off. Phone-taggable lines marked 📱.
 
 - `ansible.builtin.apt_repository` is deprecated and goes away in ansible-core
   2.25 (we run 2.21.3). **Three call sites left**: `services/docker`,
-  `services/audio_playback`, `services/plex`.
+  `services/audio_playback`, `services/plex`. 🤖 Builder tasks PER-154 / 155 / 156
+  (2026-10-31).
   ✅ `playbooks/tasks/speedtest_cli.yml` was migrated to `deb822_repository` on
   2026-09-05 and **is the worked example** — it also documents the two traps:
   the old `.list` must be explicitly removed or apt sees the repo twice, and
@@ -445,7 +446,8 @@ One branch, tick them off. Phone-taggable lines marked 📱.
   `~/.scripts/monitoring/` are outside `agent_read`. Also found: every host
   carries an unrendered copy at `~/.scripts/heartbeat_backup.sh` (literal
   `{{ … }}`, never scheduled), because `deploy_monitoring.yml` copies all of
-  `scripts/common/`. Dead weight; exclude it with the next touch of that task. If the nightly backup DOWN/UP pattern
+  `scripts/common/`. Dead weight; exclude it with the next touch of that task.
+  🤖 Builder task PER-157 (2026-10-31). If the nightly backup DOWN/UP pattern
   (seen 2026-08-09 and 08-11, all three hosts recovering in the same minute)
   recurs, read the healthchecks.io ping log first — it discriminates "cron
   didn't fire" from "path broke".
@@ -487,6 +489,7 @@ One branch, tick them off. Phone-taggable lines marked 📱.
   old `rpi-provisioner`. The directive is `dtoverlay=`, unquoted, so they are
   inert — but they read as active config and are exactly the trap that cost
   five days. Delete them; the correct `dtoverlay=disable-bt` is already there.
+  🤖 Builder task PER-158 (2026-10-31).
 
 *State:* 4 of 14 done 2026-10-12 (✅ above). Held deliberately while Ignacio
 is away: anything editing sshd config, Pi boot config or apt sources on hosts,
