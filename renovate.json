@@ -1,0 +1,20 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "enabledManagers": ["custom.regex"],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Container images pinned in Ansible vars, annotated with a `# renovate:` line",
+      "managerFilePatterns": [
+        "/(^|/)defaults/main\\.ya?ml$/",
+        "/(^|/)group_vars/.+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+\\w+_version:\\s*\"?(?<currentValue>[^\"\\s]+)\"?"
+      ]
+    }
+  ],
+  "timezone": "Europe/Amsterdam",
+  "schedule": ["before 6am on monday"]
+}
