@@ -32,6 +32,17 @@ fi
 
 mkdir -p "$WORK/bin"
 
+# The function parses last_ping with GNU `date -d` (agent-lxc is Debian). On
+# the laptop BSD date has no -d, so put coreutils' gdate first on PATH.
+if ! date -d @0 >/dev/null 2>&1; then
+    if command -v gdate >/dev/null 2>&1; then
+        ln -s "$(command -v gdate)" "$WORK/bin/date"
+    else
+        printf '   - no GNU date (brew install coreutils); skipping\n\nPASS\n'
+        exit 0
+    fi
+fi
+
 # The function body only; it has no template syntax inside it.
 sed -n '/^check_opnsense_monitoring_alive() {/,/^}/p' "$TEMPLATE" > "$WORK/func.sh"
 if [ ! -s "$WORK/func.sh" ]; then
@@ -66,6 +77,9 @@ export CALLS
 PATH="$WORK/bin:$PATH"
 export PATH
 
+# The variables and stubs below are read by the sourced function, which the
+# linter cannot follow.
+# shellcheck disable=SC2034,SC2329
 run() {
     # run <fails-before-success>
     CURL_FAILS=$1
