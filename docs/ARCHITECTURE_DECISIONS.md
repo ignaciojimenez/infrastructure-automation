@@ -313,6 +313,9 @@ set — see `docs/BACKUP_AND_RECOVERY.md`.
   - Separate container: `cloudflared`
   - Token-based auth from Ansible vault
   - External URL: ha.ignacio.systems
+  - Image pinned to an exact release (`cloudflared_version`), never `:latest` — a
+    present tag is never re-pulled, so `:latest` silently froze for five months
+    past a vendor security upgrade (PER-134)
 
 - **Docker deployment** - Not Home Assistant OS
   - Containers: `home-assistant`, `matter-server`, `cloudflared`
