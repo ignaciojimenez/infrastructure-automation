@@ -14,7 +14,7 @@ through Unbound on the gateway (10.30.40.254).
 {% if h.name == 'cwwk' %}
 | `cwwk` | Debian / Proxmox | Hypervisor | **Hosts the OPNsense VM (100).** Rebooting it or stopping VM 100 takes the whole network offline, including your own route in. Runs hot — thermal events are diagnosed via `package_throttle_count`, not `sensors`. |
 {% elif h.name == 'opnsense' %}
-| `opnsense` | FreeBSD | Firewall, Unbound DNS, WireGuard, CrowdSec | **No systemd and no journal** — `systemctl`/`journalctl` do not exist. Use `service`, `pfctl`, `cscli`. This is the internet and DNS gateway; restarting services here is user-visible immediately. |
+| `opnsense` | FreeBSD | Firewall, Unbound DNS, WireGuard, CrowdSec | **Do not SSH here.** `read_agent` has no shell by design: OPNsense resets every non-admin account to `nologin`, so "This account is currently not available" is expected, not a fault — never report it as one. The firewall's disk, default route and monitoring freshness come from the Tier 1 sweep's API checks; quote those. Anything that needs a shell (CrowdSec decisions, `pfctl` state, service status) goes in the plan as "needs a human with admin access". This is the internet and DNS gateway. |
 {% elif h.name == 'dockassist' %}
 | `dockassist` | RPi | Home Assistant, Matter, Mosquitto, Cloudflared (Docker) | **Controls the heating** (Tado, via HA automations). Restarting HA drops heating control and presence detection until it comes back. Treat as life-comfort critical; propose restarts only with a stated reason. |
 {% else %}
