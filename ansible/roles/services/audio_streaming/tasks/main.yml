@@ -182,10 +182,11 @@
   become: true
   ansible.builtin.copy:
     dest: /etc/systemd/system/NetworkManager-wait-online.service.d/override.conf
+    # The stock unit reads its timeout from NM_ONLINE_TIMEOUT (60 on Debian),
+    # so override that and leave upstream's ExecStart alone.
     content: |
       [Service]
-      ExecStart=
-      ExecStart=/usr/bin/nm-online -s -q --timeout=180
+      Environment=NM_ONLINE_TIMEOUT=180
       TimeoutStartSec=200
     mode: '0644'
   when: enable_wifi_reconnect_watchdog | default(false)

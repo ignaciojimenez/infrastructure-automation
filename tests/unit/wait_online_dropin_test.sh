@@ -7,7 +7,8 @@
 # After the 2026-10-28 plug-watchdog power cycle, wlan0 did not exist until ~2
 # minutes after boot, so the stock unit failed and left a "1 failed systemd
 # unit" finding behind. Static check on the audio_streaming role: the drop-in
-# must be deployed, must reset ExecStart, and must allow >60 s.
+# must be deployed, must raise NM_ONLINE_TIMEOUT (which the stock ExecStart
+# reads) above 60 s, and systemd's start timeout must outlast it.
 
 set -u
 
@@ -29,17 +30,11 @@ else
     fail "role does not deploy a wait-online drop-in"
 fi
 
-if grep -Eq '^[[:space:]]+ExecStart=[[:space:]]*$' "$TASKS"; then
-    pass "drop-in clears the stock ExecStart first"
-else
-    fail "drop-in does not reset ExecStart"
-fi
-
-timeout=$(sed -n 's/.*nm-online.*--timeout=\([0-9][0-9]*\).*/\1/p' "$TASKS" | head -n 1)
+timeout=$(sed -n 's/^[[:space:]]*Environment=NM_ONLINE_TIMEOUT=\([0-9][0-9]*\).*/\1/p' "$TASKS" | head -n 1)
 if [ -n "$timeout" ] && [ "$timeout" -gt 60 ]; then
-    pass "nm-online timeout is ${timeout}s (> 60)"
+    pass "NM_ONLINE_TIMEOUT is ${timeout}s (> 60)"
 else
-    fail "nm-online timeout missing or not above 60 s"
+    fail "NM_ONLINE_TIMEOUT missing or not above 60 s"
 fi
 
 start=$(sed -n 's/^[[:space:]]*TimeoutStartSec=\([0-9][0-9]*\).*/\1/p' "$TASKS" | head -n 1)
