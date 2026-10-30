@@ -170,10 +170,20 @@
 # ============================================================
 # Cloudflare Tunnel Configuration
 # ============================================================
+#
+# 📌 Pinned, not :latest (PER-134). `source: pull` never re-pulls a tag that is
+# already present, so :latest froze at whatever was first pulled — 2026.5.0 sat
+# here for five months, past Cloudflare's 2026-10 "upgrade to ≥ 2026.10.2"
+# notice (eMudhra intermediates). An upgrade is now a one-line diff in
+# defaults/main.yml, and the container is recreated because the image changed.
+#
+# Log rotation: the default json-file log grows forever on an SD card, and an
+# unclean power loss left NUL bytes in it that made `docker logs` stop at
+# 2026-08-09. Rotation bounds both the size and the blast radius of that.
 
 - name: Pull Cloudflared Docker image
   community.docker.docker_image:
-    name: cloudflare/cloudflared:latest
+    name: "cloudflare/cloudflared:{{ cloudflared_version }}"
     source: pull
   become: true
   become_user: "{{ ansible_user }}"
@@ -183,9 +193,13 @@
 - name: Create and start Cloudflared tunnel container
   community.docker.docker_container:
     name: cloudflared
-    image: cloudflare/cloudflared:latest
+    image: "cloudflare/cloudflared:{{ cloudflared_version }}"
     restart_policy: unless-stopped
     network_mode: host
+    log_driver: json-file
+    log_options:
+      max-size: 10m
+      max-file: "3"
     command: "tunnel --no-autoupdate run --token {{ vault_cloudflare_tunnel_token }}"
     state: started
   become: true

@@ -15,6 +15,8 @@ homeassistant_version: "stable"
 matter_server_version: "stable"
 mosquitto_container_name: "mosquitto"
 mosquitto_version: "2"
+# Exact release, never :latest — see the Cloudflare Tunnel section of tasks/main.yml.
+cloudflared_version: "2026.10.7"
 
 # Config directories
 homeassistant_config_dir: "/home/{{ ansible_user }}/homeassistant"
