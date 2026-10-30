@@ -11,11 +11,19 @@ enable_thread_wifi_link: false   # Second IPv6-only leg onto the Thread BR's VLA
 
 # Container names
 homeassistant_container_name: "home-assistant"
-homeassistant_version: "stable"
-matter_server_version: "stable"
 mosquitto_container_name: "mosquitto"
-mosquitto_version: "2"
-# Exact release, never :latest — see the Cloudflare Tunnel section of tasks/main.yml.
+
+# Image versions: exact releases, never a rolling tag. `source: pull` never
+# re-pulls a tag that is already present, so :latest/stable freeze silently
+# (PER-134). Renovate reads each `# renovate:` line and opens a PR when
+# upstream moves (renovate.json, PER-149); merging still needs a deploy.
+# Home Assistant is the exception: `update_ha` is its deliberate upgrade path.
+homeassistant_version: "stable"
+# renovate: datasource=docker depName=ghcr.io/home-assistant-libs/python-matter-server
+matter_server_version: "8.1.0"
+# renovate: datasource=docker depName=eclipse-mosquitto
+mosquitto_version: "2.1.2-alpine"
+# renovate: datasource=docker depName=cloudflare/cloudflared
 cloudflared_version: "2026.10.7"
 
 # Config directories

@@ -47,7 +47,7 @@
 
 - name: Pull Mosquitto Docker image
   community.docker.docker_image:
-    name: "eclipse-mosquitto:{{ mosquitto_version | default('2') }}"
+    name: "eclipse-mosquitto:{{ mosquitto_version }}"
     source: pull
   become_user: "{{ ansible_user }}"
   tags: [homeassistant, mqtt, docker]
@@ -66,7 +66,7 @@
     cmd: >
       docker run --rm
       -v {{ mosquitto_data_dir }}/config:/mosquitto/config
-      eclipse-mosquitto:{{ mosquitto_version | default('2') }}
+      eclipse-mosquitto:{{ mosquitto_version }}
       mosquitto_passwd -b -c /mosquitto/config/passwd
       {{ vault_mqtt_username }} {{ vault_mqtt_password }}
   become_user: "{{ ansible_user }}"
@@ -91,7 +91,7 @@
 - name: Create and start Mosquitto container
   community.docker.docker_container:
     name: "{{ mosquitto_container_name | default('mosquitto') }}"
-    image: "eclipse-mosquitto:{{ mosquitto_version | default('2') }}"
+    image: "eclipse-mosquitto:{{ mosquitto_version }}"
     restart_policy: unless-stopped
     network_mode: host
     volumes:

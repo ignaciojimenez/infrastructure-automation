@@ -645,7 +645,7 @@
 
 - name: Pull Matter Server Docker image
   community.docker.docker_image:
-    name: "ghcr.io/home-assistant-libs/python-matter-server:{{ matter_server_version | default('stable') }}"
+    name: "ghcr.io/home-assistant-libs/python-matter-server:{{ matter_server_version }}"
     source: pull
   become_user: "{{ ansible_user }}"
   when: enable_matter_server | default(true)
@@ -654,7 +654,7 @@
 - name: Create and start Matter Server container
   community.docker.docker_container:
     name: matter-server
-    image: "ghcr.io/home-assistant-libs/python-matter-server:{{ matter_server_version | default('stable') }}"
+    image: "ghcr.io/home-assistant-libs/python-matter-server:{{ matter_server_version }}"
     restart_policy: unless-stopped
     network_mode: host
     security_opts:
