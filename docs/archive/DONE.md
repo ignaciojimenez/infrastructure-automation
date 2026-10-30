@@ -17,6 +17,7 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ## Contents
 
+- [2026-10-31 — the builder's code was right every time; its tests were not (PER-126 review)](#2026-10-31--the-builders-code-was-right-every-time-its-tests-were-not-per-126-review)
 - [2026-10-14 — every builder attempt failed its unit tests, whatever it changed (PER-131)](#2026-10-14--every-builder-attempt-failed-its-unit-tests-whatever-it-changed-per-131)
 - [2026-10-14 — an alert reached the builder, and the builder rightly refused it (alert intake, PER-130)](#2026-10-14--an-alert-reached-the-builder-and-the-builder-rightly-refused-it-alert-intake-per-130)
 - [2026-10-13 — unifi-lxc trusted only the key Debian 13 refuses (item 45, PER-105)](#2026-10-13--unifi-lxc-trusted-only-the-key-debian-13-refuses-item-45-per-105)
@@ -76,6 +77,12 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 ---
 
 
+
+## 2026-10-31 — the builder's code was right every time; its tests were not (PER-126 review)
+
+**Five real inputs in 19 days of shadow mode, three merged, none without edits — and every edit was to a test.** PER-131 (test stub read `$4` for `$5`), #23 / PER-146 (new test failed CI's shellcheck SC2034/SC2329, and used GNU `date -d` so it reported a false finding on macOS), #25 / PER-148 (style: `Environment=NM_ONLINE_TIMEOUT` instead of rewriting `ExecStart`; the 180 s value was not grounded — on 10-28 wlan0 appeared ~2.3 min after boot and associated at ~7 min). Two hand-backs: #24 correct; #26 sound in outcome but built on Tier 2 misreading a flapping host as dead (PER-151). Builder spend ≈ $0.17 per merged PR; hand-backs record no cost, so the full figure is unknown.
+
+**Decided: hold the work class and limits, and review on an event, not a date** — after three more real-fault or task PRs. A calendar extension was proposed and rejected: waiting does not produce inputs. Instead the queue was fed with six `builder` tasks from item 12 / PER-134 (PER-153–158), each repo-only, under the limits, with a test required to fail against `main`. The harness gap — it runs unit tests and the rig but not CI's lint — is PER-159.
 
 ## 2026-10-14 — every builder attempt failed its unit tests, whatever it changed (PER-131)
 
