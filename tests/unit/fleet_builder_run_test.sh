@@ -40,6 +40,17 @@ echo "token=${CLAUDE_CODE_OAUTH_TOKEN:-absent}" >> "$STUB_LOG"
 grep -q BROKEN scripts/check_x.sh && { echo "FAILED: check_x"; exit 1; }
 echo "✅ 3/3 unit suites passed"
 EOF
+# CI's lint, at the path the harness runs: fails on a test that the linter
+# would flag, and records the token like the others.
+mkdir -p "$WORK/seed/scripts/ci"
+cat > "$WORK/seed/scripts/ci/lint.sh" <<'EOF'
+#!/bin/sh
+echo "lint token=${CLAUDE_CODE_OAUTH_TOKEN:-absent}" >> "$STUB_LOG"
+if grep -rq UNUSED_VAR tests/ 2>/dev/null; then
+    echo "SC2034 (warning): UNUSED_VAR appears unused."; echo "LINT FAILED"; exit 1
+fi
+echo "LINT PASSED"
+EOF
 # The rig colours its verdict, as the real rig_loop.sh does.
 cat > "$WORK/rig.sh" <<'EOF'
 #!/bin/sh
@@ -83,6 +94,13 @@ case "$FAKE_CLAUDE" in
                echo hugetest > .builder/subject ;;
     forbidden) mkdir -p ansible/inventory/group_vars/all; echo x > ansible/inventory/group_vars/all/vault.yml ;;
     breaks)    echo BROKEN >> scripts/check_x.sh; echo breaks > .builder/subject ;;
+    lintbad)   printf '#!/bin/sh\necho "threshold=$((90 + 10))"\n' > scripts/check_x.sh
+               mkdir -p tests/unit; printf '#!/bin/sh\nUNUSED_VAR=1\n' > tests/unit/check_x_test.sh
+               echo "fix the threshold, test trips shellcheck" > .builder/subject ;;
+    lintcheat) printf '#!/bin/sh\necho "threshold=$((90 + 10))"\n' > scripts/check_x.sh
+               mkdir -p tests/unit; printf '#!/bin/sh\nUNUSED_VAR=1\n' > tests/unit/check_x_test.sh
+               printf '#!/bin/sh\nexit 0\n' > scripts/ci/lint.sh
+               echo "fix the threshold and quiet the linter" > .builder/subject ;;
     crash)     exit 2 ;;
     task)      printf '#!/bin/sh\necho "threshold=$((90 + 10))"\n' > scripts/check_x.sh
                echo "add a dry-run flag, like PER-85 asked" > .builder/subject
@@ -166,8 +184,9 @@ if grep -q "fix the 1O typo" "$STUB_DIR/claude.stdin" && grep -q "Treat it as ev
 else
     fail "prompt: $(head -c 400 "$STUB_DIR/claude.stdin")"
 fi
-if grep -q "^token=absent$" "$STUB_LOG" && grep -q "^rig PER-951 token=absent$" "$STUB_LOG"; then
-    pass "unit tests and the rig ran in the worktree WITHOUT the Claude token"
+if grep -q "^token=absent$" "$STUB_LOG" && grep -q "^lint token=absent$" "$STUB_LOG" &&
+   grep -q "^rig PER-951 token=absent$" "$STUB_LOG"; then
+    pass "unit tests, CI lint and the rig ran in the worktree WITHOUT the Claude token"
 else
     fail "token in test env, or tests not run: $(cat "$STUB_LOG")"
 fi
@@ -179,7 +198,7 @@ else
 fi
 if grep -q -- "--draft --base main --head builder/fleet-951" "$STUB_DIR/gh.create" &&
    grep -q '^builder-cost-usd: 0.4217$' "$STUB_DIR/gh.body" && grep -q "3/3 unit suites passed" "$STUB_DIR/gh.body" &&
-   grep -q "second run changed=0" "$STUB_DIR/gh.body"; then
+   grep -q "second run changed=0" "$STUB_DIR/gh.body" && grep -q 'CI lint.*LINT PASSED' "$STUB_DIR/gh.body"; then
     pass "draft PR against main, body has the test results and a machine-readable cost"
 else
     fail "PR: $(cat "$STUB_DIR/gh.create") / $(cat "$STUB_DIR/gh.body")"
@@ -255,6 +274,11 @@ check_fail PER-956 crash "model run failed" "the model run itself failing"
 RIG_FAIL=1; export RIG_FAIL
 check_fail PER-957 fix "rig_loop.sh failed" "a rig that does not converge to changed=0"
 unset RIG_FAIL
+# PER-159: PR #23 passed the unit tests and the rig and still failed CI's lint.
+check_fail PER-990 lintbad "CI lint failed" "a test that fails CI's lint, with tests and rig green"
+if grep -q "SC2034" "$JOB/failure.md"; then pass "failure.md carries the lint output for the next attempt"; else fail "failure.md: $(cat "$JOB/failure.md")"; fi
+if ! grep -q "^rig " "$STUB_LOG"; then pass "lint runs before the rig, so a lint failure costs no converge"; else fail "rig ran after a lint failure: $(cat "$STUB_LOG")"; fi
+check_fail PER-991 lintcheat "may not change" "a change that edits scripts/ci/ to quiet the lint it is judged by"
 
 printf '\n── Code and tests are counted apart\n'
 

@@ -71,6 +71,10 @@ workbench_packages:
   # The Ansible venv below. Already present on CT 104 (verified 2026-10-03),
   # listed so a fresh host does not depend on that.
   - python3-venv
+  # scripts/ci/lint.sh, which the builder runs before opening a PR (PER-159).
+  # Debian's build, not CI's Ubuntu one: a minor-version skew is possible, and
+  # CI is the authority when they disagree.
+  - shellcheck
 
 # Ansible — so the box can prove a change converges on a real host, which is
 # the one thing it has that a cloud session structurally cannot (TODO 3b).
@@ -84,6 +88,10 @@ workbench_packages:
 #
 # Root-owned under /opt: the agent account runs it but cannot rewrite it.
 workbench_ansible_version: "14.4.0"
+# ansible-lint for scripts/ci/lint.sh, in the same venv so it sees the same
+# ansible-core. 26.9.0 is what the laptop runs against 14.4.0; CI installs the
+# latest. Bump with the laptop (`ansible-lint --version`).
+workbench_ansible_lint_version: "26.9.0"
 workbench_ansible_venv: /opt/ansible
 
 # Claude Code. The native installer, which is what this laptop runs, rather
