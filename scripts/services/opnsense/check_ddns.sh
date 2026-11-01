@@ -2,8 +2,9 @@
 # check_ddns.sh
 # Verify that DDNS updates your freemyip.com record properly
 # Ported from opnsense-monitoring repo
+# Usage: check_ddns.sh <ddns-hostname>  (cron passes vault_ddns_hostname)
 
-HOST="chocohome.freemyip.com"
+HOST="${1:?usage: check_ddns.sh <ddns-hostname>}"
 WAN_IP=$(curl -s https://api.ipify.org)
 
 if [ -z "$WAN_IP" ]; then

@@ -126,8 +126,9 @@ agent_small_model: "anthropic/claude-haiku-4-5"
 #
 # ✅ Proven on 2026-09-05 before this was enabled: 930.58/935.32 Mbps against
 # dockassist's 940.94/940.11 on the same pinned server, with the egress
-# confirmed as Mullvad (AS 31173 Services AB, 193.32.249.134 vs dockassist's
-# 87.210.114.214). It saturates, so it measures the tunnel and not its own NIC.
+# confirmed as Mullvad (AS 31173 Services AB, 193.32.249.134) rather than
+# dockassist's direct ISP egress. It saturates, so it measures the tunnel and
+# not its own NIC.
 enable_internet_speed_check: true
 
 # 🔴 :14, NOT :07 — dockassist runs at :07 and the two share one WAN link.
