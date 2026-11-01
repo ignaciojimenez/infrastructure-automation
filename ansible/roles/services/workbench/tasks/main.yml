@@ -46,16 +46,6 @@
   when: os_family == "debian"
   tags: [workbench, packages]
 
-- name: Remove the pinned toolchain the cooldown replaced
-  become: true
-  ansible.builtin.file:
-    path: "{{ item }}"
-    state: absent
-  loop:
-    - /opt/shellcheck-v0.11.0
-    - /opt/shellcheck-v0.11.0.tar.gz
-  tags: [workbench, packages]
-
 - name: Deploy the lint toolchain installer
   become: true
   ansible.builtin.copy:
@@ -119,6 +109,18 @@
   loop:
     - ansible-lint
     - shellcheck
+  tags: [workbench, packages]
+
+# After the links move, so a failed first build never leaves PATH pointing at
+# a deleted binary.
+- name: Remove the pinned toolchain the cooldown replaced
+  become: true
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /opt/shellcheck-v0.11.0
+    - /opt/shellcheck-v0.11.0.tar.gz
   tags: [workbench, packages]
 
 # ============================================================
