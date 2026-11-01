@@ -52,26 +52,17 @@ jobs:
         with:
           python-version: "3.12"
 
-      # Versions come from scripts/ci/tool-versions.conf, the one pin CI, the
-      # builder and the laptop share; lint.sh refuses to run on any other.
-      - name: Install ansible-lint (pinned)
+      # ansible, ansible-lint and shellcheck at the newest versions public for
+      # 20+ days: the same script and cooldown the workbench's builder installs
+      # with, so the two land on the same versions (PER-159). The `ansible`
+      # package carries the collections ansible-lint resolves. The token only
+      # lifts the GitHub API rate limit for the shellcheck release lookup.
+      - name: Install lint tools (20-day cooldown)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
-          . scripts/ci/tool-versions.conf
-          pip install "ansible-lint==$ANSIBLE_LINT_VERSION"
-
-      - name: Install Ansible collections
-        run: ansible-galaxy collection install community.general community.docker ansible.posix
-
-      # The upstream release, not Ubuntu's apt build: apt's version moves with
-      # the runner image, and a different shellcheck is a different verdict.
-      - name: Install shellcheck (pinned)
-        run: |
-          . scripts/ci/tool-versions.conf
-          tarball="$RUNNER_TEMP/shellcheck.tar.gz"
-          curl -fsSLo "$tarball" "https://github.com/koalaman/shellcheck/releases/download/v$SHELLCHECK_VERSION/shellcheck-v$SHELLCHECK_VERSION.linux.x86_64.tar.gz"
-          echo "$SHELLCHECK_SHA256  $tarball" | sha256sum -c -
-          tar -xzf "$tarball" -C "$RUNNER_TEMP"
-          sudo install -m 0755 "$RUNNER_TEMP/shellcheck-v$SHELLCHECK_VERSION/shellcheck" /usr/local/bin/shellcheck
+          sh scripts/ci/install_lint_tools.sh "$RUNNER_TEMP/lint-tools"
+          echo "$RUNNER_TEMP/lint-tools/current/bin" >> "$GITHUB_PATH"
 
       # One script, shared with the unattended builder, so the two can never
       # disagree about what "lint-clean" means (PER-159). It lints the git
