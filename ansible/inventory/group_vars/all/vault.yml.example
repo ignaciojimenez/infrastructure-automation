@@ -35,3 +35,6 @@ vault_curlbin_password: "mypassword"
 # MQTT broker credentials (Mosquitto — used by Home Assistant and shairport-sync)
 vault_mqtt_username: "mqtt"
 vault_mqtt_password: "changeme"
+
+# Dynamic DNS name for the home WAN (checked by opnsense check_ddns.sh)
+vault_ddns_hostname: "home.example.freemyip.com"

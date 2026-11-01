@@ -152,7 +152,7 @@
       hour: "*/6"
       heartbeat: "daily"
       monitoring_name: "opnsense_ddns"
-      script: "check_ddns.sh"
+      script: "check_ddns.sh {{ vault_ddns_hostname }}"
     - name: "OPNsense gateway check"
       minute: "*/10"
       heartbeat: "daily"

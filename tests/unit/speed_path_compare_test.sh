@@ -74,7 +74,7 @@ run_cmp() { "$SCRIPT" --state-dir="$WORK/state" --peer=peer-stub "$@" 2>&1; }
 # ==================================================================
 reset_state
 record 930.58 935.32 193.32.249.134 "31173 Services AB" "$(now_ts)" > "$WORK/state/speed_last.json"
-record 940.94 940.11 87.210.114.214 "Odido Netherlands" "$(now_ts)" > "$PEER_FIXTURE"
+record 940.94 940.11 203.0.113.10 "Example Home ISP" "$(now_ts)" > "$PEER_FIXTURE"
 
 out=$(run_cmp); rc=$?
 if [ "$rc" -eq 0 ]; then
@@ -105,8 +105,8 @@ fi
 # what a dropped tunnel looks like. Anything that reasons about throughput alone
 # calls this healthy.
 reset_state
-record 941.10 940.522 87.210.114.214 "Odido Netherlands" "$(now_ts)" > "$WORK/state/speed_last.json"
-record 940.94 940.110 87.210.114.214 "Odido Netherlands" "$(now_ts)" > "$PEER_FIXTURE"
+record 941.10 940.522 203.0.113.10 "Example Home ISP" "$(now_ts)" > "$WORK/state/speed_last.json"
+record 940.94 940.110 203.0.113.10 "Example Home ISP" "$(now_ts)" > "$PEER_FIXTURE"
 
 out=$(run_cmp); rc=$?
 if [ "$rc" -eq 1 ]; then
@@ -135,7 +135,7 @@ fi
 # ==================================================================
 reset_state
 record 930.58 935.32 193.32.249.134 "31173 Services AB" "$(now_ts)" > "$WORK/state/speed_last.json"
-record 940.94 940.11 87.210.114.214 "Odido Netherlands" "$(old_ts)" > "$PEER_FIXTURE"
+record 940.94 940.11 203.0.113.10 "Example Home ISP" "$(old_ts)" > "$PEER_FIXTURE"
 
 out=$(run_cmp); rc=$?
 if [ "$rc" -eq 2 ]; then
@@ -169,7 +169,7 @@ fi
 # ==================================================================
 reset_state
 record 300.00 310.00 193.32.249.134 "31173 Services AB" "$(now_ts)" > "$WORK/state/speed_last.json"
-record 940.94 940.11 87.210.114.214 "Odido Netherlands" "$(now_ts)" > "$PEER_FIXTURE"
+record 940.94 940.11 203.0.113.10 "Example Home ISP" "$(now_ts)" > "$PEER_FIXTURE"
 
 out=$(run_cmp); rc=$?
 if [ "$rc" -eq 0 ]; then
@@ -190,7 +190,7 @@ fi
 # ==================================================================
 reset_state
 record 300.00 310.00 193.32.249.134 "31173 Services AB" "$(now_ts)" > "$WORK/state/speed_last.json"
-record 940.94 940.11 87.210.114.214 "Odido Netherlands" "$(now_ts)" > "$PEER_FIXTURE"
+record 940.94 940.11 203.0.113.10 "Example Home ISP" "$(now_ts)" > "$PEER_FIXTURE"
 
 out=$(run_cmp --min-ratio=0.75); rc=$?
 if [ "$rc" -eq 1 ]; then
