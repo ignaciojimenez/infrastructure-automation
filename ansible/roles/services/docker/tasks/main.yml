@@ -1,6 +1,15 @@
 ---
 # Docker installation and configuration role
 
+# The one-line docker.list is superseded by docker.sources. Removed before any
+# apt run, or apt sees the repository twice and warns on every update.
+- name: Remove the legacy docker.list superseded by docker.sources
+  become: true
+  ansible.builtin.file:
+    path: /etc/apt/sources.list.d/docker.list
+    state: absent
+  tags: [docker]
+
 - name: Install Docker prerequisites
   become: true
   ansible.builtin.apt:
@@ -36,13 +45,27 @@
   changed_when: false
   tags: [docker]
 
+# deb822_repository needs python3-debian even under --check; it is installed
+# here rather than via install_python_debian so a dry run stays a dry run.
+- name: Ensure python3-debian is present for deb822 repository management
+  become: true
+  ansible.builtin.apt:
+    name: python3-debian
+    state: present
+  tags: [docker, packages]
+
 - name: Add Docker repository
   become: true
-  ansible.builtin.apt_repository:
-    repo: "deb [arch={{ architecture_result.stdout }} signed-by={{ docker_key_file | default('/usr/share/keyrings/docker.asc') }}] {{ docker_distro_url | default('https://download.docker.com/linux/debian') }} {{ ansible_distribution_release }} stable"
-    filename: "docker"
+  ansible.builtin.deb822_repository:
+    name: docker
+    types: [deb]
+    uris: "{{ docker_distro_url | default('https://download.docker.com/linux/debian') }}"
+    suites: "{{ ansible_distribution_release }}"
+    components: [stable]
+    architectures: ["{{ architecture_result.stdout }}"]
+    signed_by: "{{ docker_key_file | default('/usr/share/keyrings/docker.asc') }}"
+    enabled: true
     state: present
-    update_cache: true
   tags: [docker]
 
 - name: Install Docker packages
