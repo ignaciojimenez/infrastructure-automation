@@ -26,9 +26,18 @@
   when: os_family == "debian"
   tags: [workbench, packages]
 
-# shellcheck at the version scripts/ci/tool-versions.conf pins (see defaults).
-# Debian's package is removed rather than shadowed, so there is one shellcheck
-# on the box whatever PATH a process runs with.
+# ============================================================
+# Lint toolchain — scripts/ci/lint.sh, run by the builder (PER-159)
+#
+# Rebuilt daily under a 20-day cooldown by the script CI uses (see defaults).
+# Root runs it and owns the result: the builder runs these tools but cannot
+# swap them. The unit has no wrapper on purpose, like the isolation check: a
+# failed refresh leaves it failed, the agent-lxc sweep reports failed units,
+# and the previous build stays in place meanwhile.
+# ============================================================
+
+# Removed rather than shadowed, so there is one shellcheck on the box whatever
+# PATH a process runs with.
 - name: Remove Debian's shellcheck
   become: true
   ansible.builtin.apt:
@@ -37,33 +46,79 @@
   when: os_family == "debian"
   tags: [workbench, packages]
 
-- name: Download the pinned shellcheck release
-  become: true
-  ansible.builtin.get_url:
-    url: "https://github.com/koalaman/shellcheck/releases/download/v{{ workbench_shellcheck_version }}/shellcheck-v{{ workbench_shellcheck_version }}.linux.x86_64.tar.gz"
-    dest: "{{ workbench_shellcheck_dir }}.tar.gz"
-    checksum: "sha256:{{ workbench_shellcheck_sha256 }}"
-    mode: "0644"
-  tags: [workbench, packages]
-
-- name: Unpack the pinned shellcheck
-  become: true
-  ansible.builtin.unarchive:
-    src: "{{ workbench_shellcheck_dir }}.tar.gz"
-    dest: /opt
-    remote_src: true
-    # Root-owned like the Ansible venv: the builder runs it but cannot swap it.
-    owner: root
-    group: root
-    creates: "{{ workbench_shellcheck_dir }}/shellcheck"
-  tags: [workbench, packages]
-
-- name: Put the pinned shellcheck on PATH
+- name: Remove the pinned toolchain the cooldown replaced
   become: true
   ansible.builtin.file:
-    src: "{{ workbench_shellcheck_dir }}/shellcheck"
-    dest: /usr/local/bin/shellcheck
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /opt/shellcheck-v0.11.0
+    - /opt/shellcheck-v0.11.0.tar.gz
+  tags: [workbench, packages]
+
+- name: Deploy the lint toolchain installer
+  become: true
+  ansible.builtin.copy:
+    src: "{{ inventory_dir }}/../../scripts/ci/install_lint_tools.sh"
+    dest: /usr/local/sbin/install_lint_tools
+    owner: root
+    group: root
+    mode: '0755'
+  register: lint_tools_installer
+  tags: [workbench, packages]
+
+- name: Deploy the lint toolchain refresh units
+  become: true
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    owner: root
+    group: root
+    mode: '0644'
+  loop:
+    - lint-tools-refresh.service
+    - lint-tools-refresh.timer
+  register: lint_tools_units
+  tags: [workbench, packages]
+
+- name: Enable the lint toolchain refresh timer
+  become: true
+  ansible.builtin.systemd_service:
+    name: lint-tools-refresh.timer
+    enabled: true
+    state: started
+    daemon_reload: "{{ lint_tools_units.changed }}"
+  tags: [workbench, packages]
+
+- name: Check for a lint toolchain build
+  become: true
+  ansible.builtin.stat:
+    path: "{{ workbench_lint_tools_dir }}/current/bin/ansible-lint"
+  register: lint_tools_build
+  tags: [workbench, packages]
+
+# Only when there is no build yet or the installer changed; otherwise the
+# daily timer owns it, and a deploy stays changed=0.
+- name: Build the lint toolchain now
+  become: true
+  ansible.builtin.systemd_service:
+    name: lint-tools-refresh.service
+    state: started
+  when: not lint_tools_build.stat.exists or lint_tools_installer.changed
+  tags: [workbench, packages]
+
+# force: the links replace the pinned ones, and their target appears only once
+# a build has run (in check mode, never).
+- name: Put the lint tools on PATH
+  become: true
+  ansible.builtin.file:
+    src: "{{ workbench_lint_tools_dir }}/current/bin/{{ item }}"
+    dest: "/usr/local/bin/{{ item }}"
     state: link
+    force: true
+  loop:
+    - ansible-lint
+    - shellcheck
   tags: [workbench, packages]
 
 # ============================================================
@@ -79,9 +134,17 @@
   ansible.builtin.pip:
     name:
       - "ansible=={{ workbench_ansible_version }}"
-      - "ansible-lint=={{ workbench_ansible_lint_version }}"
     virtualenv: "{{ workbench_ansible_venv }}"
     virtualenv_command: python3 -m venv
+  tags: [workbench, ansible]
+
+# ansible-lint lives in the lint toolchain now, under the cooldown.
+- name: Remove ansible-lint from the Ansible venv
+  become: true
+  ansible.builtin.pip:
+    name: ansible-lint
+    state: absent
+    virtualenv: "{{ workbench_ansible_venv }}"
   tags: [workbench, ansible]
 
 - name: Put the Ansible entry points on PATH
@@ -95,9 +158,8 @@
     - ansible-playbook
     - ansible-inventory
     - ansible-galaxy
-    # scripts/ci/lint.sh encrypts a dummy vault and lints, as CI does (PER-159).
+    # scripts/ci/lint.sh encrypts a dummy vault, as CI does (PER-159).
     - ansible-vault
-    - ansible-lint
   tags: [workbench, ansible]
 
 # ============================================================

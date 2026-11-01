@@ -1,0 +1,17 @@
+# Lint toolchain refresh — PER-159
+# Managed by Ansible (roles/services/workbench). Do not edit on the host.
+#
+# Rebuilds ansible-lint and shellcheck at the newest versions public for 20+
+# days (scripts/ci/install_lint_tools.sh, the script CI runs on every job).
+# Root, oneshot, no wrapper on purpose: a failure leaves this unit failed, the
+# agent-lxc sweep reports failed units fleet-wide, and the previous build stays
+# in use meanwhile.
+
+[Unit]
+Description=Lint toolchain refresh under a 20-day cooldown (PER-159)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/install_lint_tools {{ workbench_lint_tools_dir }}

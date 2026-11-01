@@ -1,0 +1,13 @@
+# Lint toolchain refresh — PER-159
+# Managed by Ansible (roles/services/workbench). Do not edit on the host.
+
+[Unit]
+Description=Lint toolchain refresh, daily (PER-159)
+
+[Timer]
+OnCalendar={{ workbench_lint_tools_oncalendar }}
+# Caught up after downtime: a day missed is a day the builder trails CI.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

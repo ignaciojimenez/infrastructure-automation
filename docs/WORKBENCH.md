@@ -319,12 +319,16 @@ copy of CI's lint (ansible-lint, Jinja and playbook syntax, shellcheck on
 `tests/`, role structure), and the workflow calls it too, so the builder and CI
 cannot disagree about the command list. PR #23 is why: unit tests and the rig
 both passed and CI's shellcheck still failed. `scripts/ci/` is a forbidden
-path, so the lint an attempt is judged by is always main's. The toolchain is
-pinned there too: `scripts/ci/tool-versions.conf` sets the shellcheck and
-ansible-lint versions CI, this box and the laptop install, and lint.sh fails
-first if the tools on PATH differ. Debian's shellcheck 0.10 once failed the
-builder on a main CI had passed, because it names a finding differently from
-0.11. Bump a version in that file, then redeploy with `-t packages,ansible`.
+path, so the lint an attempt is judged by is always main's. The tools come
+from there too: `scripts/ci/install_lint_tools.sh` installs ansible-lint and
+shellcheck at the newest versions public for 20+ days. CI runs it on every
+job; here `lint-tools-refresh.timer` rebuilds `/opt/lint-tools` daily, so both
+float to the same versions with nothing to bump, this box at most a day behind.
+Debian's shellcheck 0.10 once failed the builder on a main CI had passed,
+because it names a finding differently from 0.11; lint.sh now prints the
+versions it ran with, so a disagreement explains itself. A failed refresh
+leaves the unit failed (the agent-lxc sweep reports it) and the last build in
+use. Refresh by hand: `sudo systemctl start lint-tools-refresh.service`.
 
 **Operating it** (as `choco`, with sudo):
 
