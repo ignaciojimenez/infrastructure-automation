@@ -78,8 +78,9 @@ PATH="$WORK/bin:$PATH"
 export PATH
 
 # The variables and stubs below are read by the sourced function, which the
-# linter cannot follow.
-# shellcheck disable=SC2034,SC2329
+# linter cannot follow. The unreachable-stub warning is SC2329 from 0.11 on and
+# SC2317 before it; the workbench runs Debian's 0.10, so both are listed.
+# shellcheck disable=SC2034,SC2329,SC2317
 run() {
     # run <fails-before-success>
     CURL_FAILS=$1
