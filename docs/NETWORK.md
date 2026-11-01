@@ -54,7 +54,7 @@ Sections `1.`–`13.` under *Confirmed drift and defects* are numbered findings 
   - [1. wg9 (Mullvad US3) is dead, and Quad9 is routed through it](#1-wg9-mullvad-us3-is-dead-and-quad9-is-routed-through-it)
   - [2. cwwk bypasses the estate resolver](#2-cwwk-bypasses-the-estate-resolver)
   - [3. The DNS failover script's premise no longer holds](#3-the-dns-failover-scripts-premise-no-longer-holds)
-  - [4. Two wg1 peers have never connected](#4-two-wg1-peers-have-never-connected)
+  - [4. Two wg1 peers have never connected — RESOLVED](#4-two-wg1-peers-have-never-connected--resolved)
   - [5. One Ubiquiti device is a firmware generation behind — RETRACTED](#5-one-ubiquiti-device-is-a-firmware-generation-behind--retracted)
   - [6. Fleet name resolution has no fallback](#6-fleet-name-resolution-has-no-fallback)
   - [7. Pi-hole-era naming outlived Pi-hole by nine months](#7-pi-hole-era-naming-outlived-pi-hole-by-nine-months)
@@ -302,13 +302,14 @@ it: a road-warrior server on `10.30.41.0/24`, firewall at `10.30.41.1`.
 | Peer address | State |
 |--------------|-------|
 | `10.30.41.5` | active — handshaking, ~1 GiB in / 3.2 GiB sent |
-| `10.30.41.7` | configured, never connected (0 B received) |
-| `10.30.41.8` | configured, never connected (0 B received) |
+| `10.30.41.7` | configured, idle by design (0 B received as of 2026-09) |
+| `10.30.41.8` | configured, idle by design (0 B received as of 2026-09) |
 
-All three use preshared keys in addition to the peer key. Two of the three have
-never completed a handshake — most likely provisioned-and-unused device slots
-rather than a fault, but they are indistinguishable from a broken client until
-someone confirms which device each is meant to be.
+All three use preshared keys in addition to the peer key. The two idle peers
+were identified on 2026-11-01 as Ignacio's own devices, kept for occasional
+remote access; which device is which is in `docs/local/`. Idle is not a fault
+here. Lose one of those devices and its peer gets removed — that, not
+inactivity, is when a peer becomes a standing credential.
 
 ---
 
@@ -456,10 +457,11 @@ and whether that would newly *introduce* forwarding. Testing it means taking all
 twelve tunnels down, which is not something to do casually. **Read the script's
 `switch_to_fallback` path before trusting either outcome.**
 
-### 4. Two `wg1` peers have never connected
+### 4. ~~Two `wg1` peers have never connected~~ — RESOLVED
 
-`10.30.41.7` and `10.30.41.8` — see above. Needs a decision: identify or remove.
-Unused peer slots are standing inbound credentials.
+`10.30.41.7` and `10.30.41.8` are Ignacio's own devices, kept on purpose for
+occasional remote access (identified 2026-11-01). See
+[Inbound — wg1_server](#inbound--wg1_server-road-warrior).
 
 ### 5. ~~One Ubiquiti device is a firmware generation behind~~ — RETRACTED
 
