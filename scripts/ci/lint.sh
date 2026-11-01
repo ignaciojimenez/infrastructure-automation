@@ -14,9 +14,10 @@
 # builder's worktree or on the laptop with the real vault present.
 #
 # Needs on PATH: git, ansible-lint, ansible-playbook, ansible-vault, shellcheck,
-# and a python with jinja2. ⚠️ shellcheck versions differ: CI installs Ubuntu's,
-# Debian 13 ships another, the laptop another. CI is the authority; a check that
-# passes here and fails there is a version skew to note, not to argue with.
+# and a python with jinja2. shellcheck and ansible-lint must be the versions
+# scripts/ci/tool-versions.conf pins; the first step fails otherwise, because a
+# linter's verdict does not travel between versions (0.10 and 0.11 name the same
+# shellcheck finding differently).
 
 set -eu
 
@@ -77,6 +78,7 @@ role_structure() {
     return "$rc"
 }
 
+step "Tool versions (scripts/ci/tool-versions.conf)" sh scripts/ci/check_tool_versions.sh
 step "ansible-lint" ansible-lint
 step "Jinja2 syntax — all .j2 templates" "$PY" scripts/ci/check_jinja_syntax.py
 step "Playbook syntax check" syntax_check_playbooks

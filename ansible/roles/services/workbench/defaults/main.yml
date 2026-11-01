@@ -71,10 +71,6 @@ workbench_packages:
   # The Ansible venv below. Already present on CT 104 (verified 2026-10-03),
   # listed so a fresh host does not depend on that.
   - python3-venv
-  # scripts/ci/lint.sh, which the builder runs before opening a PR (PER-159).
-  # Debian's build, not CI's Ubuntu one: a minor-version skew is possible, and
-  # CI is the authority when they disagree.
-  - shellcheck
 
 # Ansible — so the box can prove a change converges on a real host, which is
 # the one thing it has that a cloud session structurally cannot (TODO 3b).
@@ -88,11 +84,20 @@ workbench_packages:
 #
 # Root-owned under /opt: the agent account runs it but cannot rewrite it.
 workbench_ansible_version: "14.4.0"
-# ansible-lint for scripts/ci/lint.sh, in the same venv so it sees the same
-# ansible-core. 26.9.0 is what the laptop runs against 14.4.0; CI installs the
-# latest. Bump with the laptop (`ansible-lint --version`).
-workbench_ansible_lint_version: "26.9.0"
 workbench_ansible_venv: /opt/ansible
+
+# The lint toolchain for scripts/ci/lint.sh, which the builder runs before
+# opening a PR (PER-159). Pinned once, in scripts/ci/tool-versions.conf, for CI,
+# this box and the laptop; lint.sh refuses any other version. Read from that
+# file, never restated here, so there is no second copy to drift. ansible-lint
+# goes in the Ansible venv so it sees the same ansible-core; shellcheck is the
+# upstream release, not Debian's (trixie ships 0.10, which names findings
+# differently from CI's).
+workbench_tool_versions_file: "{{ inventory_dir }}/../../scripts/ci/tool-versions.conf"
+workbench_ansible_lint_version: "{{ lookup('ansible.builtin.ini', 'ANSIBLE_LINT_VERSION', type='properties', file=workbench_tool_versions_file) }}"
+workbench_shellcheck_version: "{{ lookup('ansible.builtin.ini', 'SHELLCHECK_VERSION', type='properties', file=workbench_tool_versions_file) }}"
+workbench_shellcheck_sha256: "{{ lookup('ansible.builtin.ini', 'SHELLCHECK_SHA256', type='properties', file=workbench_tool_versions_file) }}"
+workbench_shellcheck_dir: "/opt/shellcheck-v{{ workbench_shellcheck_version }}"
 
 # Claude Code. The native installer, which is what this laptop runs, rather
 # than npm: it self-updates and needs no node runtime of its own.

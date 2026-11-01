@@ -52,14 +52,26 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install ansible-lint
-        run: pip install ansible-lint
+      # Versions come from scripts/ci/tool-versions.conf, the one pin CI, the
+      # builder and the laptop share; lint.sh refuses to run on any other.
+      - name: Install ansible-lint (pinned)
+        run: |
+          . scripts/ci/tool-versions.conf
+          pip install "ansible-lint==$ANSIBLE_LINT_VERSION"
 
       - name: Install Ansible collections
         run: ansible-galaxy collection install community.general community.docker ansible.posix
 
-      - name: Install shellcheck
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+      # The upstream release, not Ubuntu's apt build: apt's version moves with
+      # the runner image, and a different shellcheck is a different verdict.
+      - name: Install shellcheck (pinned)
+        run: |
+          . scripts/ci/tool-versions.conf
+          tarball="$RUNNER_TEMP/shellcheck.tar.gz"
+          curl -fsSLo "$tarball" "https://github.com/koalaman/shellcheck/releases/download/v$SHELLCHECK_VERSION/shellcheck-v$SHELLCHECK_VERSION.linux.x86_64.tar.gz"
+          echo "$SHELLCHECK_SHA256  $tarball" | sha256sum -c -
+          tar -xzf "$tarball" -C "$RUNNER_TEMP"
+          sudo install -m 0755 "$RUNNER_TEMP/shellcheck-v$SHELLCHECK_VERSION/shellcheck" /usr/local/bin/shellcheck
 
       # One script, shared with the unattended builder, so the two can never
       # disagree about what "lint-clean" means (PER-159). It lints the git
