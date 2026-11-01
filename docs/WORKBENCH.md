@@ -248,7 +248,7 @@ was rejected: ARCHITECTURE_DECISIONS.md § Agent Access.
 agent-lxc   :37 sweep -> :47 Tier 2 plan -> :57 filer: agent/fleet issue + plan comment
 workbench   :17 fleet-builder.timer (root): oldest ready Todo issue, agent/fleet or builder
               -> attempt recorded -> as autobuilder: worktree builder/fleet-<n> from origin/main
-              -> claude -p (file tools only, no MCP) -> diff limits -> unit tests -> rig_loop.sh
+              -> claude -p (file tools only, no MCP) -> diff limits -> unit tests -> CI lint -> rig_loop.sh
               -> draft PR "fix(fleet#<n>): …"   or, after 2 failures / a decline / 2 kills,
                  draft PR "[hand-back] fleet#<n>: …" (an empty commit; reasons + last diff in the body)
 agent-lxc   :57 filer: comments that PR on the issue, once; and once more if the fix
@@ -310,9 +310,17 @@ those becomes readable, **or missing**: a check that a missing file is
 **Limits** (`roles/services/workbench/defaults`, `builder_*`): 2 attempts per
 issue, 2 attempts per UTC day, 100 changed lines outside `tests/` and 400 inside it
 (counted apart since 2026-10-14: a test is the proof, and PER-131's 7-line fix
-came with a 95-line test that the old single limit of 60 refused), no vault, CI, inventory or
-`docs/local/` paths, $3 and 30 min per model run. Nothing merges: the machine
+came with a 95-line test that the old single limit of 60 refused), no vault, CI (`.github/`,
+`scripts/ci/`), inventory or `docs/local/` paths, $3 and 30 min per model run. Nothing merges: the machine
 account cannot push to `main`.
+
+**CI's lint runs before the rig (PER-159).** `scripts/ci/lint.sh` is the one
+copy of CI's lint (ansible-lint, Jinja and playbook syntax, shellcheck on
+`tests/`, role structure), and the workflow calls it too, so the builder and CI
+cannot disagree about the command list. PR #23 is why: unit tests and the rig
+both passed and CI's shellcheck still failed. `scripts/ci/` is a forbidden
+path, so the lint an attempt is judged by is always main's. The shellcheck
+version can still differ (Debian here, Ubuntu in CI); CI is the authority.
 
 **Operating it** (as `choco`, with sudo):
 

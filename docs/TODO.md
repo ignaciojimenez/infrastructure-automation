@@ -457,8 +457,9 @@ One branch, tick them off. Phone-taggable lines marked 📱.
 - Recovery notifications go to `#home-logging` while the failure they clear sat
   in `#home-alerts` — a self-healed check looks permanently broken. One-line
   wrapper change; decide how loud recoveries should be.
-- 📱 Rotate the UniFi read-only password (transmitted in plaintext at setup;
-  Settings → Admins, then `ansible-vault edit`).
+- ❌ Declined 2026-10-31: rotating the UniFi read-only password. It was only
+  ever shared in a local session, the controller is LAN-only, and the account
+  is read-only — a rotation buys nothing. Reopen only if it leaves those bounds.
 - `templates/debian/sshd_config.j2` drops Debian's
   `Include /etc/ssh/sshd_config.d/*.conf` — add it (template wins by ordering)
   or state that drop-ins are unsupported.

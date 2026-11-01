@@ -36,10 +36,6 @@ permissions:
 jobs:
   lint:
     runs-on: ubuntu-latest
-    env:
-      # Override ansible.cfg's vault_password_file (bin/vault_pass.sh reads the
-      # macOS Keychain, which doesn't exist on the Linux runner — exits 127).
-      ANSIBLE_VAULT_PASSWORD_FILE: ${{ github.workspace }}/.ansible-ci-vault-pass
     steps:
       # persist-credentials: false — checkout otherwise writes the token
       # into .git/config, where every later step in the job can read it.
@@ -62,58 +58,15 @@ jobs:
       - name: Install Ansible collections
         run: ansible-galaxy collection install community.general community.docker ansible.posix
 
-      - name: Create vault password file for CI
-        run: echo "ci-dummy" > "$ANSIBLE_VAULT_PASSWORD_FILE"
+      - name: Install shellcheck
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
 
-      - name: Create minimal inventory for syntax check
-        run: |
-          cp ansible/inventory/hosts.yml.example ansible/inventory/hosts.yml
-          cp ansible/inventory/group_vars/all/main.yml.example ansible/inventory/group_vars/all/main.yml
-          cp ansible/inventory/group_vars/all/vault.yml.example ansible/inventory/group_vars/all/vault.yml
-          # Encrypt dummy vault so ansible-vault can parse it
-          ansible-vault encrypt ansible/inventory/group_vars/all/vault.yml
-
-      - name: Run ansible-lint
-        run: ansible-lint
-
-      - name: Jinja2 syntax check — all .j2 templates
-        run: python3 scripts/ci/check_jinja_syntax.py
-
-      - name: Syntax check — main playbooks
-        run: |
-          for pb in ansible/playbooks/*.yml; do
-            echo "Checking: $pb"
-            ansible-playbook "$pb" --syntax-check
-          done
-
-      - name: ShellCheck the test harness
-        run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
-          # Scoped to tests/ deliberately. scripts/ is not clean yet — it has
-          # SC2155s in enhanced_monitoring_wrapper and a Jinja-templated .sh
-          # that shellcheck reads as literal braces — so widening this needs a
-          # cleanup pass first, not a broken pipeline.
-          # SC1091 is excluded: the cases source ../lib/harness.sh at runtime on
-          # the container, a path shellcheck cannot follow from the repo.
-          shellcheck -e SC1091 tests/*.sh tests/lib/*.sh tests/cases/*.sh tests/unit/*.sh
-
-      - name: Validate role structure
-        run: |
-          failed=0
-          for role in ansible/roles/services/*/; do
-            role_name=$(basename "$role")
-            # Skip the skeleton role
-            [ "$role_name" = "_skeleton" ] && continue
-            if [ ! -f "$role/tasks/main.yml" ]; then
-              echo "FAIL: $role missing tasks/main.yml"
-              failed=1
-            fi
-            if [ ! -f "$role/defaults/main.yml" ]; then
-              echo "FAIL: $role missing defaults/main.yml"
-              failed=1
-            fi
-          done
-          exit $failed
+      # One script, shared with the unattended builder, so the two can never
+      # disagree about what "lint-clean" means (PER-159). It lints the git
+      # index in a temporary copy set up like this checkout used to be:
+      # example inventory, dummy vault. Read it for the steps and their whys.
+      - name: Lint (scripts/ci/lint.sh)
+        run: sh scripts/ci/lint.sh
 
       # Last step on purpose: everything above must have had its chance to fail.
       #

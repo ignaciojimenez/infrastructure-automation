@@ -37,7 +37,9 @@
 - name: Install Ansible into its venv
   become: true
   ansible.builtin.pip:
-    name: "ansible=={{ workbench_ansible_version }}"
+    name:
+      - "ansible=={{ workbench_ansible_version }}"
+      - "ansible-lint=={{ workbench_ansible_lint_version }}"
     virtualenv: "{{ workbench_ansible_venv }}"
     virtualenv_command: python3 -m venv
   tags: [workbench, ansible]
@@ -53,6 +55,9 @@
     - ansible-playbook
     - ansible-inventory
     - ansible-galaxy
+    # scripts/ci/lint.sh encrypts a dummy vault and lints, as CI does (PER-159).
+    - ansible-vault
+    - ansible-lint
   tags: [workbench, ansible]
 
 # ============================================================
