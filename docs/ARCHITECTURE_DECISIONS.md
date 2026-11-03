@@ -318,6 +318,25 @@ set — see `docs/BACKUP_AND_RECOVERY.md`.
   - Image pinned to an exact release (`cloudflared_version`), never `:latest` — a
     present tag is never re-pulled, so `:latest` silently froze for five months
     past a vendor security upgrade (PER-134)
+  - **Gated at the edge by a client certificate, with no exceptions (2026-11-02, PER-135)** —
+    mTLS is on for the hostname, and a WAF custom rule blocks any request that does not
+    present a verified, unrevoked certificate from the zone's Cloudflare-managed CA:
+    `not cf.tls_client_auth.cert_verified or cf.tls_client_auth.cert_revoked`. A second
+    rule blocks traffic from outside NL. There is one certificate per phone, imported
+    into the Companion App, so losing a phone means revoking one certificate. The LAN path
+    to `:8123` never touches Cloudflare, so certificates do not apply at home.
+    - **Refused, do not reopen: exempting the app by User-Agent.** That exception was
+      added in February 2026, 22 minutes after the rule, because the iOS app could not
+      present a certificate yet (support landed 2026-02-24). It let anyone in NL who sent
+      `Home Assistant` in the User-Agent past mTLS, which was forced with curl
+      (200 on `/`). Removed 2026-11-02; the same spoof now gets 403 on every path.
+    - **The app's "certificate required" prompt does not show the gate is enforced.** The
+      app asks only during onboarding over the public URL, and only because the TLS
+      handshake requests a certificate, which Cloudflare does whether or not a rule enforces
+      it. Onboarding over the LAN never asks. A phone migration creates a new registration.
+      To verify, force a request without a certificate and read the firewall events.
+    - Certificate, rule and device IDs: [`docs/local/CLOUDFLARE_MTLS.md`](local/CLOUDFLARE_MTLS.md)
+      (untracked tier).
 
 - **Docker deployment** - Not Home Assistant OS
   - Containers: `home-assistant`, `matter-server`, `cloudflared`
