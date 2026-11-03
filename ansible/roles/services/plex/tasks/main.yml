@@ -82,13 +82,44 @@
     group: root
   tags: [plex, repository]
 
+# deb822_repository needs python3-debian even under --check; see
+# ansible/playbooks/tasks/speedtest_cli.yml.
+- name: Ensure python3-debian is present for deb822 repository management
+  become: true
+  ansible.builtin.apt:
+    name: python3-debian
+    state: present
+  tags: [plex, repository]
+
 - name: Add Plex repository
   become: true
-  ansible.builtin.apt_repository:
-    repo: "deb [signed-by=/etc/apt/keyrings/plexmediaserver.v2.gpg] {{ plex_distro_url | default('https://repo.plex.tv/deb/') }} public main"
-    filename: "plex"
+  ansible.builtin.deb822_repository:
+    name: plex
+    types: [deb]
+    uris: "{{ plex_distro_url | default('https://repo.plex.tv/deb/') }}"
+    suites: [public]
+    components: [main]
+    signed_by: /etc/apt/keyrings/plexmediaserver.v2.gpg
+    enabled: true
     state: present
+  register: plex_repo
+  tags: [plex, repository]
+
+# The old repo task wrote plex.list (filename: plex). Left in place, apt would
+# see the repo twice next to the new plex.sources.
+- name: Remove the plex.list superseded by plex.sources
+  become: true
+  ansible.builtin.file:
+    path: /etc/apt/sources.list.d/plex.list
+    state: absent
+  register: plex_legacy_list
+  tags: [plex, repository]
+
+- name: Refresh apt cache when the repository definition changed
+  become: true
+  ansible.builtin.apt:
     update_cache: true
+  when: plex_repo.changed or plex_legacy_list.changed
   tags: [plex, repository]
 
 - name: Install Plex Media Server
