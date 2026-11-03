@@ -33,6 +33,7 @@
     # Shipping a second, unscheduled health check to the firewall is dead
     # weight that reads as coverage — it sat in /usr/local/bin uninvoked until
     # 2026-08-06, when reading the live crontab showed nothing ran it.
+    # `heartbeat_backup.sh` is excluded everywhere: it is a Jinja template, rendered by the roles.
     - name: Deploy all common scripts
       ansible.builtin.copy:
         src: "{{ item.path }}"
@@ -41,8 +42,14 @@
         owner: "{{ infrastructure_user }}"
         group: "{{ infrastructure_group }}"
       loop: "{{ common_scripts.files }}"
-      when: not (os_family == "freebsd" and item.path | basename == "system_health_check.sh")
+      when: not (os_family == "freebsd" and item.path | basename == "system_health_check.sh") and item.path | basename != "heartbeat_backup.sh"
       register: common_scripts_deployed
+      tags: [monitoring, scripts]
+
+    - name: Remove the unrendered heartbeat template from every host
+      ansible.builtin.file:
+        path: "{{ scripts_dir }}/heartbeat_backup.sh"
+        state: absent
       tags: [monitoring, scripts]
 
     - name: Remove the common health check from FreeBSD hosts
