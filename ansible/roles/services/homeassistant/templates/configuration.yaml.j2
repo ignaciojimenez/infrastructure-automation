@@ -130,17 +130,17 @@ template:
             mdi:home-outline
           {{ '{% endif %}' }}
       
-      # Primary user presence (Companion App device tracker)
+      # Follows the person, not a tracker: replacing a phone creates a new
+      # device_tracker entity, and a sensor bound to the old one reads frozen.
       - name: "{{ ha_primary_person_display | default('Primary') }} Presence"
         unique_id: "{{ ha_primary_person_display | default('primary') | lower }}_presence_combined"
         device_class: presence
-        state: '{{ "{{ is_state(\"" }}{{ ha_primary_device_tracker | default("device_tracker.phone") }}{{ "\", \"home\") }}" }}'
+        state: '{{ "{{ is_state(\"" }}{{ ha_primary_person | default("person.primary") }}{{ "\", \"home\") }}" }}'
 
-      # Secondary user presence (Companion App device tracker)
       - name: "{{ ha_secondary_person_display | default('Secondary') }} Presence"
         unique_id: "{{ ha_secondary_person_display | default('secondary') | lower }}_presence_combined"
         device_class: presence
-        state: '{{ "{{ is_state(\"" }}{{ ha_secondary_device_tracker | default("device_tracker.phone_secondary") }}{{ "\", \"home\") }}" }}'
+        state: '{{ "{{ is_state(\"" }}{{ ha_secondary_person | default("person.secondary") }}{{ "\", \"home\") }}" }}'
 
       # Amp power control — is a hifipi source feeding the Pioneer? OR of:
       # AirPlay/Spotify/MPD actively playing, or vinyl detected on the turntable

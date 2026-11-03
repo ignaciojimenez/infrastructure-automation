@@ -17,6 +17,7 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ## Contents
 
+- [2026-11-03 — a replaced phone left the presence sensors reading a dead tracker](#2026-11-03--a-replaced-phone-left-the-presence-sensors-reading-a-dead-tracker)
 - [2026-10-31 — the builder's code was right every time; its tests were not (PER-126 review)](#2026-10-31--the-builders-code-was-right-every-time-its-tests-were-not-per-126-review)
 - [2026-10-14 — every builder attempt failed its unit tests, whatever it changed (PER-131)](#2026-10-14--every-builder-attempt-failed-its-unit-tests-whatever-it-changed-per-131)
 - [2026-10-14 — an alert reached the builder, and the builder rightly refused it (alert intake, PER-130)](#2026-10-14--an-alert-reached-the-builder-and-the-builder-rightly-refused-it-alert-intake-per-130)
@@ -77,6 +78,16 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 ---
 
 
+
+## 2026-11-03 — a replaced phone left the presence sensors reading a dead tracker
+
+**An iPhone migration creates a new `mobile_app` registration and a new `device_tracker`; it does not reuse the old ones.** Both household phones were replaced (2026-10-19, 2026-11-01). `person.*` picked up the new trackers correctly, but `binary_sensor.*_presence` were bound to the old entity ids: the primary read `off` with its owner at home, and the train commute automation, which triggers on its on→off, last fired 2026-10-16. `check_presence_health` also paged on the frozen tracker, because it walks each person's `device_trackers`.
+
+**Decided: the sensors follow `person.*`, and the `ha_*_device_tracker` variables and vault key are deleted.** Repointing them at the new entity ids would have broken again at the next replacement. The retired registrations were removed from HA over its API, since they are registry state and not in this repo.
+
+**The Cloudflare mTLS gate (PER-135) was not the cause.** The old phone's last normal report came about 9 h before the rule went cert-only, and neither new phone has been blocked in the last 24 h. Two same-named registrations also shared one notify service, because `mobile_app/notify.py` keys targets by device name; deleting the old entry resolved that.
+
+Verified: second deploy `changed=0`, both sensors `on`, both phones answered `request_location_update` in about 5 s, presence check reports 2 persons and 2 trackers. **Not yet observed:** a real on→off of the sensors, or the newest phone reporting `not_home`, since its owner has not left home since it was registered.
 
 ## 2026-10-31 — the builder's code was right every time; its tests were not (PER-126 review)
 
