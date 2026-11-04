@@ -43,6 +43,21 @@ Environment=PATH=/home/{{ workbench_agent_user }}/.local/bin:/usr/local/bin:/usr
 # `claude -p` work, which genuinely does want API mode. That belongs on the
 # individual invocation, not on this session's environment.
 
+# A lapsed claude.ai login makes `claude remote-control` exit within a second,
+# taking the tmux server with it, and the restart loop below hides the cause
+# (PER-160). Name it up front: leave a marker in the runtime directory (kept
+# across restarts) for check_remote_control.sh, and say the fix in the journal.
+RuntimeDirectory=claude-remote-control
+RuntimeDirectoryPreserve=yes
+ExecStartPre=/bin/sh -c "\
+    if /home/{{ workbench_agent_user }}/.local/bin/claude auth status 2>/dev/null | grep -q '\"loggedIn\": true'; then \
+      rm -f $$RUNTIME_DIRECTORY/login-missing; \
+    else \
+      touch $$RUNTIME_DIRECTORY/login-missing; \
+      echo 'claude.ai login missing: ssh {{ workbench_agent_user }}@<host>; claude auth login; sudo systemctl restart claude-remote-control' >&2; \
+      exit 1; \
+    fi"
+
 ExecStart=/usr/bin/tmux new-session -d -s {{ workbench_tmux_session }} \
     '/home/{{ workbench_agent_user }}/.local/bin/claude remote-control \
        --name {{ workbench_tmux_session }} \
