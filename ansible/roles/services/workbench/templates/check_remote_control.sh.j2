@@ -28,6 +28,13 @@ fail() {
     exit 1
 }
 
+# The unit's ExecStartPre leaves this when the claude.ai login has lapsed. Say
+# so first: otherwise the only symptom is "no tmux server" (PER-160).
+LOGIN_MARKER="${CLAUDE_RC_LOGIN_MARKER:-/run/claude-remote-control/login-missing}"
+if [ -e "$LOGIN_MARKER" ]; then
+    fail "claude.ai login missing for $AGENT_USER — run: ssh $AGENT_USER@$(hostname) 'claude auth login' then sudo systemctl restart claude-remote-control"
+fi
+
 command -v tmux >/dev/null 2>&1 || fail "tmux is not installed — the workbench cannot host a session at all"
 
 # Asked with pgrep rather than `tmux has-session`, and that is not a stylistic
