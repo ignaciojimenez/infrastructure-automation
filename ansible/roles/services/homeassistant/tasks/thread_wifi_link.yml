@@ -2,11 +2,11 @@
 # Second, IPv6-only Wi-Fi leg onto the VLAN carrying the Thread border router.
 # See templates/thread_wifi_link.nmconnection.j2 for why this exists at all.
 
-# ⚠️ The Wi-Fi radio is load-bearing here, and on dockassist it survives only by
-# accident: config.txt carries `dt_overlay="disable-wifi"`, which is malformed
-# (the directive is `dtoverlay=`, unquoted) and therefore inert — verified
-# 2026-08-22, wlan0 and hci0 both present. Correcting that typo without reading
-# this would take the door sensors offline again, so fail loudly and early
+# ⚠️ The Wi-Fi radio is load-bearing here. dockassist once survived only by
+# accident: config.txt carried a malformed `dt_overlay="disable-wifi"` (the
+# directive is `dtoverlay=`), inert, and since removed by raspberrypi.yml.
+# A real `dtoverlay=disable-wifi` would take the door sensors offline again, so
+# fail loudly and early
 # rather than deploying a profile onto an interface that cannot come up.
 - name: Refuse to deploy if the Wi-Fi radio is disabled in firmware config
   become: true
