@@ -128,6 +128,8 @@ Its sibling sensor (`binary_sensor.eve_door_20ebn9901_door`, "Balcony Door") sho
 
 ✅ **2026-09-19: entrance trigger disabled** in `eve_door_open_while_away` (`ansible/roles/services/homeassistant/templates/automations.yaml.j2`) — the balcony trigger is untouched and still alerts. This is a deliberate, temporary blind spot on the house's most important security sensor, accepted because the alert had become pure noise. 🔴 **Re-enable only after the physical sensor/magnet has been checked** — do not re-enable blind, and do not substitute a debounce for the physical check: the observed `on` cycles already run 3–4+ minutes, longer than a sane debounce window would filter anyway.
 
+**2026-11-06: still live, and now blocks a second consumer.** 10 days of history (26 Oct–5 Nov): 36 phantom opens over 2 min on 31 Oct, a ~1 h one on 4 Nov, and a 10 h stuck-open on 29 Oct right after a real arrival. Fixing it would unlock the door as an *arrival* signal for "Lights on when dark", which today waits for the phone's geofence (up to 4.5 min late) plus a 2-min debounce. Not built: on 28 Oct six phantom opens with the flat empty would have lit it for 3.5 h, and a stuck-open sensor hides the next real arrival. Meanwhile the home zone radius went 100 → 250 m (`homeassistant_home_radius`) to make the geofence report earlier.
+
 *State:* alert disabled, root cause not yet fixed. *Effort:* physical inspection, small; re-enabling is a one-line template revert. *Needs:* someone on site at the entrance door.
 
 ```

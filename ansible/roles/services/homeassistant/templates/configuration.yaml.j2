@@ -5,6 +5,8 @@
 homeassistant:
   external_url: "{{ homeassistant_external_url | default('http://homeassistant.local:8123') }}"
   internal_url: "http://localhost:8123"
+  # Home zone radius. Overrides only this key; latitude/longitude stay in .storage.
+  radius: {{ homeassistant_home_radius }}
   customize:
     climate.tado_smart_thermostat_ru3393984256:
       friendly_name: "Living Room Thermostat"

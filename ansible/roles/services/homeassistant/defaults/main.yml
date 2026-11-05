@@ -37,6 +37,11 @@ mosquitto_port: 1883
 # External URL
 homeassistant_external_url: "http://homeassistant.local:8123"
 
+# Home zone radius in metres (HA default 100). At 100 a walk to the corner
+# counted as leaving: Away Mode turned the lights off mid-errand, and iOS
+# reported the return up to 4.5 min after the entrance door opened.
+homeassistant_home_radius: 250
+
 # Hardware
 disable_modemmanager: true
 
