@@ -591,7 +591,10 @@ check_failed_units() {
         return 0
     fi
 
-    failed_units=$(systemctl list-units --failed --no-legend --plain 2>/dev/null | awk '{print $1}')
+    # NetworkManager-wait-online only gates boot ordering and latches "failed"
+    # when Wi-Fi (vinylstreamer) associates late; connectivity has its own check.
+    failed_units=$(systemctl list-units --failed --no-legend --plain 2>/dev/null \
+        | awk '$1 != "NetworkManager-wait-online.service" {print $1}')
     failed_count=$(printf '%s\n' "$failed_units" | grep -c '[^[:space:]]')
 
     if [ "$failed_count" -gt 0 ]; then
