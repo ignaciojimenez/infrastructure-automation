@@ -38,3 +38,6 @@ vault_mqtt_password: "changeme"
 
 # Dynamic DNS name for the home WAN (checked by opnsense check_ddns.sh)
 vault_ddns_hostname: "home.example.freemyip.com"
+
+# BSSID vinylstreamer's Wi-Fi profile is pinned to (wifi_pinned_bssid)
+vault_vinylstreamer_wifi_bssid: "aa:bb:cc:dd:ee:ff"
