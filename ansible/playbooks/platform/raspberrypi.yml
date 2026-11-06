@@ -337,3 +337,32 @@
         - enable_wifi_lockout_hardening | default(false)
       notify: "wifi_lockout_config_changed"
       tags: [raspberrypi, wifi, w1]
+
+    # Pin the wifi profile to one BSSID, so bgscan cannot roam the client to an
+    # AP that will not carry it. This one property is set on the
+    # Imager-generated profile itself, since NM has no global for it; a
+    # re-image drops it and the next run puts it back.
+    #
+    # Written to the keyfile only. It takes effect at the next activation, and
+    # is deliberately NOT applied with `nmcli con up`: re-activating the only
+    # link from Ansible is how you strand the host.
+    - name: Read the pinned wifi BSSID
+      ansible.builtin.command: nmcli -g 802-11-wireless.bssid con show preconfigured
+      register: wifi_bssid_current
+      changed_when: false
+      check_mode: false
+      when:
+        - platform_type == "raspberrypi"
+        - wifi_pinned_bssid | default('') | length > 0
+      tags: [raspberrypi, wifi]
+
+    # `nmcli -g` escapes the colons (`D8\:B3\:...`) and prints upper case.
+    - name: Pin the wifi profile to one BSSID
+      ansible.builtin.command: >-
+        nmcli con modify preconfigured 802-11-wireless.bssid {{ wifi_pinned_bssid }}
+      changed_when: true
+      when:
+        - platform_type == "raspberrypi"
+        - wifi_pinned_bssid | default('') | length > 0
+        - (wifi_bssid_current.stdout | replace('\\', '') | lower) != (wifi_pinned_bssid | lower)
+      tags: [raspberrypi, wifi]
