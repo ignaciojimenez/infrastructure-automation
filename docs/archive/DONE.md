@@ -17,6 +17,7 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ## Contents
 
+- [2026-11-08 — retired phones registered themselves again, and the presence check paged on them](#2026-11-08--retired-phones-registered-themselves-again-and-the-presence-check-paged-on-them)
 - [2026-11-03 — a replaced phone left the presence sensors reading a dead tracker](#2026-11-03--a-replaced-phone-left-the-presence-sensors-reading-a-dead-tracker)
 - [2026-10-31 — the builder's code was right every time; its tests were not (PER-126 review)](#2026-10-31--the-builders-code-was-right-every-time-its-tests-were-not-per-126-review)
 - [2026-10-14 — every builder attempt failed its unit tests, whatever it changed (PER-131)](#2026-10-14--every-builder-attempt-failed-its-unit-tests-whatever-it-changed-per-131)
@@ -78,6 +79,22 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 ---
 
 
+
+## 2026-11-08 — retired phones registered themselves again, and the presence check paged on them
+
+**Deleting a phone's `mobile_app` registration does not retire the phone while its HA login is valid.** The app registers again the next time it runs. Both retired iPhones did so (Candela's on 11-04, Ignacio's on 11-08), and HA restored the old tracker entity ids. Both persons listed the old trackers again. `check_presence_health` paged "FROZEN on home" on them for days, while the new phones reported hourly and `person.*` was right. The HA restart on 11-05 and the 250 m home zone (PER-170) were coincidences. Candela's old tracker had gone quiet about 27 h before the restart.
+
+**Decided: a person is as live as their freshest tracker** (PER-172). HA's person entity already follows the most recent report. A silent or deleted tracker beside a fresh one is therefore a note, and probing and paging apply only when none is fresh. Pruning trackers by hand would have broken again at the next swap.
+
+**Decided: revoke the old handset's refresh token before deleting its registration.** This reverses the 11-03 decision to leave the retired phones' tokens in place, because those tokens re-created the registrations. `auth/delete_refresh_token` deletes only the caller's own tokens. Another user's token is revoked with `POST /auth/revoke` from inside the container. That endpoint answers 200 even for an unknown token, so each revocation was proven with a refresh grant: 200 before, 400 after.
+
+Verified:
+- On the old code, cases 9a, 9b and 9d failed with the production message. Cases 9c and 9e (every tracker frozen, the only tracker deleted) still page.
+- The suite passes against the deployed file on dockassist under dash.
+- Deploy reported `changed=1`, then `changed=0`.
+- The live check is green with 2 persons and 2 trackers.
+
+**Not yet observed:** whether the cleanup holds for 48 h, meaning exactly two `mobile_app` entries on 2026-11-10.
 
 ## 2026-11-03 — a replaced phone left the presence sensors reading a dead tracker
 
