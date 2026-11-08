@@ -413,6 +413,96 @@ else
 fi
 unset HA_STARTED
 
+# ------------------------------------------------------------------
+# 9. A person is as live as their freshest tracker (PER-172, 2026-11-08).
+#    After a phone swap the retired phone stayed attached to the person, froze,
+#    and paged for days while the new phone reported every hour.
+# ------------------------------------------------------------------
+# people <tracker spec>... — one person, Candela, with these trackers.
+# Spec: <object_id>:<state>:<hours since report>, or <object_id>:missing for a
+# tracker the person names but HA no longer has.
+people() {
+    python3 - "$FIX" "$@" <<'PY'
+import datetime, json, os, sys
+fix, specs = sys.argv[1], sys.argv[2:]
+now = datetime.datetime.now(datetime.timezone.utc)
+ids, states = [], []
+for spec in specs:
+    obj, tstate, *rest = spec.split(":")
+    tid = "device_tracker." + obj
+    ids.append(tid)
+    if tstate == "missing":
+        continue
+    stamp = (now - datetime.timedelta(hours=float(rest[0]))).isoformat()
+    states.append({"entity_id": tid, "state": tstate,
+                   "attributes": {"friendly_name": obj, "source_type": "gps"},
+                   "last_changed": stamp, "last_reported": stamp, "last_updated": stamp})
+states.insert(0, {"entity_id": "person.candela", "state": "home",
+                  "attributes": {"friendly_name": "Candela", "device_trackers": ids}})
+json.dump(states, open(os.path.join(fix, "states.json"), "w"))
+notify = {"mobile_app_" + s.split(":")[0]: {} for s in specs}
+json.dump([{"domain": "notify", "services": notify}],
+          open(os.path.join(fix, "services.json"), "w"))
+PY
+    : > "$FIX/calls"
+}
+
+# asked_all <minutes_ago> <tracker object_id>... — outstanding, unanswered requests.
+asked_all() {
+    python3 - "$FIX" "$STATE" "$@" <<'PY'
+import json, os, sys, time
+fix, state, minutes, objs = sys.argv[1], sys.argv[2], float(sys.argv[3]), sys.argv[4:]
+by_id = {s["entity_id"]: s for s in json.load(open(os.path.join(fix, "states.json")))}
+json.dump({"device_tracker." + o: {"asked_at": time.time() - minutes * 60,
+                                   "reported": by_id["device_tracker." + o]["last_reported"]}
+           for o in objs}, open(state, "w"))
+PY
+}
+
+# The live state of 2026-11-08: new phone 1 h ago, retired phone frozen 97 h
+# at home with a request unanswered for 150 min.
+rm -f "$STATE"; people new_phone:home:1 old_phone:home:97; phone silent
+asked_all 150 old_phone
+run
+if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q "old_phone.*new_phone"; then
+    pass "9a. retired tracker beside a fresh one: no page, named in a note"
+else
+    fail "9a. retired tracker paged although the person is live (rc=$RC): $OUT"
+fi
+if [ "$(pushes)" -eq 0 ] && ! grep -q "old_phone" "$STATE"; then
+    pass "9b. no push to the retired phone, its request dropped"
+else
+    fail "9b. retired phone pushed or kept in state (pushes=$(pushes)): $(cat "$STATE")"
+fi
+
+# Its loud twin: every tracker of the person frozen. Must still page — a fix
+# that skipped any person with two trackers would pass 9a alone.
+rm -f "$STATE"; people new_phone:home:32 old_phone:home:97; phone silent
+asked_all 25 new_phone old_phone
+run
+if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -q "new_phone.*FROZEN"; then
+    pass "9c. every tracker frozen: still pages"
+else
+    fail "9c. a person with no fresh tracker did not page (rc=$RC): $OUT"
+fi
+
+# A tracker deleted from HA but still named by the person.
+rm -f "$STATE"; people new_phone:home:1 old_phone:missing
+run
+if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q "old_phone.*new_phone"; then
+    pass "9d. deleted tracker beside a fresh one: a note, not a page"
+else
+    fail "9d. deleted tracker paged although the person is live (rc=$RC): $OUT"
+fi
+
+rm -f "$STATE"; people old_phone:missing
+run
+if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -q "does not exist"; then
+    pass "9e. the only tracker deleted: still pages"
+else
+    fail "9e. a person with no tracker left did not page (rc=$RC): $OUT"
+fi
+
 printf '\n'
 if [ "$failures" -eq 0 ]; then
     printf '✅ presence health: all cases passed\n'

@@ -271,6 +271,24 @@ probes = load_probes()
 live_probes = {}
 notify_available = None   # GET /api/services only if something needs asking
 
+
+def last_report(tid, st):
+    """(stamp, restored): the tracker's last word, and whether HA's restart
+    overwrote it while a location request was outstanding."""
+    reported = st.get("last_reported") or st.get("last_updated")
+    probe = probes.get(tid)
+    if probe and restored_at_start(reported):
+        return probe.get("reported"), True
+    return reported, False
+
+
+def is_fresh(tid):
+    st = by_id.get(tid)
+    if st is None or st.get("state") == "unavailable":
+        return False
+    age = age_minutes(last_report(tid, st)[0])
+    return age is not None and age <= stale_hours * 60
+
 watched = 0
 for person in sorted(persons, key=lambda s: s["entity_id"]):
     pid = person["entity_id"]
@@ -285,8 +303,21 @@ for person in sorted(persons, key=lambda s: s["entity_id"]):
                      "unconfigured, so nothing here can watch it" % label)
         continue
 
+    # A person is as live as their freshest tracker: HA's person entity follows
+    # the most recent report, so a silent tracker beside a fresh one cannot
+    # mislead presence. The usual case is a retired phone still attached after
+    # a swap (PER-172: it froze and paged for days while the new phone
+    # reported hourly). Only when none is fresh is each tracker judged below.
+    fresh = next((t for t in trackers if is_fresh(t)), None)
+
     for tid in trackers:
         st = by_id.get(tid)
+        if fresh is not None and tid != fresh:
+            if not is_fresh(tid):
+                notes.append("%s: %s is %s, not judged — %s reports for them"
+                             % (label, tid, "missing from HA" if st is None
+                                else "silent", fresh))
+            continue
         if st is None:
             issues.append("%s: tracker %s is attached but does not exist in HA"
                           % (label, tid))
@@ -303,12 +334,11 @@ for person in sorted(persons, key=lambda s: s["entity_id"]):
         # `last_reported`, not `last_changed`: the latter only moves when the
         # value differs, so a phone sitting at `home` all day would look stale
         # within the hour and page constantly.
-        reported = st.get("last_reported") or st.get("last_updated")
+        reported, restored = last_report(tid, st)
         probe = probes.get(tid)
-        if probe and restored_at_start(reported):
+        if restored:
             # HA restarted while the phone owed an answer. The new stamp is
             # HA's own restore; the phone's last word is the one we asked on.
-            reported = probe.get("reported")
             notes.append("%s: stamp is Home Assistant's restart at %s, not a "
                          "report — still waiting on the phone"
                          % (tlabel, ha_started.isoformat(timespec="seconds")))
