@@ -38,6 +38,9 @@ fi
 THRESHOLD_CPU="${THRESHOLD_CPU:-80}"
 THRESHOLD_MEM="${THRESHOLD_MEM:-90}"
 THRESHOLD_DISK="${THRESHOLD_DISK:-85}"
+# Above this a disk alerts even inside an announced maintenance window: a job
+# that fills it this far is about to fail, not passing through a peak.
+THRESHOLD_DISK_CEILING="${THRESHOLD_DISK_CEILING:-95}"
 # Share of the last 5 minutes during which at least one task was stalled
 # waiting for CPU. Calibrated, not picked: unifi-lxc and agent-lxc both read
 # 0.00 across all three windows in normal operation, and cwwk — the busiest
@@ -205,9 +208,10 @@ check_disk_usage() {
         if [ "$usage" -gt "$THRESHOLD_DISK" ]; then
             # update_ha holds old and new image layers plus its backup at once
             # (dockassist hit 86% mid-update on 2026-11-10). It announces a
-            # bounded "disk-usage" window; an expired or corrupt one is ignored.
+            # bounded "disk-usage" window; an expired or corrupt one is ignored,
+            # and so is any window once the disk reaches the ceiling.
             read_maintenance_window "disk-usage"
-            if [ "$MAINTENANCE_STATE" = active ]; then
+            if [ "$MAINTENANCE_STATE" = active ] && [ "$usage" -lt "$THRESHOLD_DISK_CEILING" ]; then
                 print_status "warning" "Disk $mount: ${usage}% (above ${THRESHOLD_DISK}%, announced maintenance window: ${MAINTENANCE_NOTE})"
             else
                 print_status "error" "Disk $mount: ${usage}% (above ${THRESHOLD_DISK}%)"
@@ -337,8 +341,8 @@ read_cpu_pressure() {
 }
 
 read_load_1min() {
-    if [ -r /proc/loadavg ]; then
-        awk '{print $1}' /proc/loadavg
+    if [ -r "${LOADAVG_FILE:-/proc/loadavg}" ]; then
+        awk '{print $1}' "${LOADAVG_FILE:-/proc/loadavg}"
         return
     fi
 
@@ -411,8 +415,16 @@ check_load() {
     esac
 
     if [ "$load_percent" -gt "$THRESHOLD_CPU" ]; then
-        print_status "error" "Load: ${load_avg} on ${cpu_count} CPUs (${load_percent}%)"
-        issues=$((issues + 1))
+        # The monthly HA update backs up and pulls an image for ~17 min and
+        # overlaps the :02 sample (dockassist 2026-11-10: 6.83 on 4 CPUs). It
+        # announces a bounded "load" window, read like the disk one above.
+        read_maintenance_window "load"
+        if [ "$MAINTENANCE_STATE" = active ]; then
+            print_status "warning" "Load: ${load_avg} on ${cpu_count} CPUs (${load_percent}%, announced maintenance window: ${MAINTENANCE_NOTE})"
+        else
+            print_status "error" "Load: ${load_avg} on ${cpu_count} CPUs (${load_percent}%)"
+            issues=$((issues + 1))
+        fi
     elif [ "$load_percent" -gt $((THRESHOLD_CPU - 20)) ]; then
         print_status "warning" "Load: ${load_avg} on ${cpu_count} CPUs (${load_percent}%)"
     else

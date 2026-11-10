@@ -1,6 +1,7 @@
 #!/bin/sh
 # An announced "disk-usage" maintenance window downgrades a full-disk error to a
-# warning; no, expired or corrupt window still alerts.
+# warning; no, expired or corrupt window still alerts, and so does any disk at
+# the ceiling.
 #
 #   tests/unit/disk_maintenance_window_test.sh
 
@@ -20,11 +21,12 @@ BIN="$WORK/bin"
 MW="$WORK/maintenance"
 mkdir -p "$BIN" "$MW"
 
-# df stub: root is always 86% full.
+# df stub: root is $DISK_PCT% full (86 unless a case says otherwise).
 cat > "$BIN/df" <<'STUB'
 #!/bin/sh
+p=${DISK_PCT:-86}
 echo "Filesystem Size Used Avail Use% Mounted on"
-echo "/dev/root 100G 86G 14G 86% /"
+echo "/dev/root 100G ${p}G $((100 - p))G ${p}% /"
 STUB
 chmod +x "$BIN/df"
 PATH="$BIN:$PATH"
@@ -73,6 +75,15 @@ if disk_line | grep -q '❌ Disk /: 86%'; then
     pass "a corrupt marker fails closed"
 else
     fail "corrupt marker suppressed"; disk_line >&2
+fi
+
+export DISK_PCT=96
+run_with "$((now + 300)) update_ha pid=1"
+unset DISK_PCT
+if disk_line | grep -q '❌ Disk /: 96%'; then
+    pass "at the 95% ceiling a window no longer suppresses"
+else
+    fail "window suppressed a disk at 96%"; disk_line >&2
 fi
 
 printf '\n'

@@ -116,12 +116,20 @@ update_ha() {
 main() {
     log_message "🏠 Home Assistant Update Script Started"
 
-    # Announce the transient disk peak (backup + old and new image layers) to
-    # system_health_check.sh for 30 minutes; removed again on exit.
+    # Announce the transient peak (backup, then old and new image layers side by
+    # side) to system_health_check.sh, whose disk and load checks warn instead
+    # of alerting while it lasts. Removed on exit; the 30-minute deadline bounds
+    # a hung update, after which both checks alert again.
     local_maint_dir="${MAINTENANCE_DIR:-$HOME/.maintenance}"
-    if mkdir -p "$local_maint_dir" && chmod 700 "$local_maint_dir" \
-        && echo "$(( $(date +%s) + 1800 )) update_ha pid=$$" > "$local_maint_dir/disk-usage"; then
-        trap 'rm -f "$local_maint_dir/disk-usage"' EXIT
+    local_maint_until=$(( $(date +%s) + 1800 ))
+    if mkdir -p "$local_maint_dir" && chmod 700 "$local_maint_dir"; then
+        trap 'rm -f "$local_maint_dir/disk-usage" "$local_maint_dir/load"' EXIT
+        for check in disk-usage load; do
+            # Moved into place: a torn marker would read as garbage and alert.
+            { echo "$local_maint_until update_ha pid=$$" > "$local_maint_dir/$check.tmp" \
+                && mv "$local_maint_dir/$check.tmp" "$local_maint_dir/$check"; } \
+                || log_message "⚠️  Could not announce the $check window; the health check may alert"
+        done
     fi
     
     # Check if Docker is running
