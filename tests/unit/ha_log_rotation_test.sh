@@ -46,15 +46,21 @@ check_task() {
     driver=$(printf '%s\n' "$block" | grep -E '^ +log_driver:' | sed 's/^ *log_driver: *//')
     size=$(printf '%s\n' "$block" | grep -E '^ +max-size:' | sed 's/^ *max-size: *//')
     files=$(printf '%s\n' "$block" | grep -E '^ +max-file:' | sed 's/^ *max-file: *//')
-    [ "$driver" = 'json-file' ] \
-        && pass "$label: log_driver json-file" \
-        || fail "$label: log_driver is '$driver', want json-file"
-    [ "$size" = '10m' ] \
-        && pass "$label: max-size 10m" \
-        || fail "$label: max-size is '$size', want 10m"
-    [ "$files" = '"3"' ] \
-        && pass "$label: max-file \"3\"" \
-        || fail "$label: max-file is '$files', want \"3\" (quoted)"
+    if [ "$driver" = 'json-file' ]; then
+        pass "$label: log_driver json-file"
+    else
+        fail "$label: log_driver is '$driver', want json-file"
+    fi
+    if [ "$size" = '10m' ]; then
+        pass "$label: max-size 10m"
+    else
+        fail "$label: max-size is '$size', want 10m"
+    fi
+    if [ "$files" = '"3"' ]; then
+        pass "$label: max-file \"3\""
+    else
+        fail "$label: max-file is '$files', want \"3\" (quoted)"
+    fi
 }
 
 check_task 'home-assistant task' 'Create and start Home Assistant container'
@@ -81,9 +87,11 @@ else
     done
     # Any other log flag (a second driver, a different size) is a disagreement.
     extra=$(printf '%s\n' "$run" | grep -oE -- '--log-(driver|opt)[ =][^ ]+( [^ -][^ ]*)?' | wc -l | tr -d ' ')
-    [ "$extra" -eq 3 ] \
-        && pass "update_ha.j2: no additional --log-* flags" \
-        || fail "update_ha.j2: expected exactly 3 --log-* flags, found $extra"
+    if [ "$extra" -eq 3 ]; then
+        pass "update_ha.j2: no additional --log-* flags"
+    else
+        fail "update_ha.j2: expected exactly 3 --log-* flags, found $extra"
+    fi
 fi
 
 printf '\n'
