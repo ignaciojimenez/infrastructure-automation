@@ -329,8 +329,8 @@ read_cpu_pressure() {
 }
 
 read_load_1min() {
-    if [ -r /proc/loadavg ]; then
-        awk '{print $1}' /proc/loadavg
+    if [ -r "${LOADAVG_FILE:-/proc/loadavg}" ]; then
+        awk '{print $1}' "${LOADAVG_FILE:-/proc/loadavg}"
         return
     fi
 
@@ -403,8 +403,15 @@ check_load() {
     esac
 
     if [ "$load_percent" -gt "$THRESHOLD_CPU" ]; then
-        print_status "error" "Load: ${load_avg} on ${cpu_count} CPUs (${load_percent}%)"
-        issues=$((issues + 1))
+        # The monthly HA update (cron, 03:00 on the 10th) backs up and pulls an
+        # image for ~17 min and overlaps the :02 health check. Expected load,
+        # not a fault (dockassist 2026-11-10: 6.83 on 4 CPUs).
+        if pgrep -f '\.scripts/(update_ha|backup_ha)' >/dev/null 2>&1; then
+            print_status "warning" "Load: ${load_avg} on ${cpu_count} CPUs (${load_percent}%) - scheduled HA update in progress"
+        else
+            print_status "error" "Load: ${load_avg} on ${cpu_count} CPUs (${load_percent}%)"
+            issues=$((issues + 1))
+        fi
     elif [ "$load_percent" -gt $((THRESHOLD_CPU - 20)) ]; then
         print_status "warning" "Load: ${load_avg} on ${cpu_count} CPUs (${load_percent}%)"
     else
