@@ -65,6 +65,10 @@ SNAP=pre_unifi_10_6_109         # Proxmox: [a-z][a-z0-9_-]+
 mkdir -p docs/local/unifi-state
 ```
 
+**0. Be on a cable.** The controller is down while the updater runs, and the
+APs re-provision when it comes back. A laptop on Wi-Fi can lose the session,
+and a failed upgrade is then recovered over a cable anyway. Start wired.
+
 **1. Pre-flight** (read-only, no Touch ID)
 
 ```sh
