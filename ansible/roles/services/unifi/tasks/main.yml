@@ -129,6 +129,31 @@
     - /etc/apt/keyrings/unifi-repo.gpg
   tags: [unifi, apt]
 
+# ============================================================
+# Release-line upgrades (PER-128): the procedure is in this role's README.md.
+# ============================================================
+
+# GlennR's updater swaps MongoDB and Java under the controller; it runs in tmux
+# so a dropped SSH session cannot kill it halfway.
+- name: Install tmux for the release-line upgrade
+  become: true
+  ansible.builtin.apt:
+    name: tmux
+    state: present
+  tags: [unifi, upgrade]
+
+# /usr/local/bin and root-owned, not scripts_dir: read_agent runs it, without
+# Touch ID, and cannot enter the primary user's 0700 home.
+- name: Deploy the controller-state capture for the before/after check
+  become: true
+  ansible.builtin.copy:
+    src: "{{ inventory_dir }}/../../scripts/services/network/unifi_state.py"
+    dest: /usr/local/bin/unifi-state
+    owner: root
+    group: root
+    mode: '0755'
+  tags: [unifi, upgrade]
+
 - name: Wait for UniFi service to be created
   ansible.builtin.wait_for:
     path: "{{ unifi_service_file }}"

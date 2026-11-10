@@ -1,0 +1,30 @@
+#!/bin/sh
+# Capture unifi-lxc's controller state from the laptop (PER-128).
+#
+#   bin/unifi-state > docs/local/unifi-state/before.txt
+#   ...
+#   bin/unifi-state > docs/local/unifi-state/after.txt
+#   diff -u docs/local/unifi-state/before.txt docs/local/unifi-state/after.txt
+#
+# Reads the read-only controller account from the vault and hands it to
+# /usr/local/bin/unifi-state on the host over ssh stdin: never in argv, the
+# environment or a file. Connects as read_agent (unifi-agent), so no Touch ID.
+#
+# The snapshot names SSIDs, VLANs and MACs together: keep it in docs/local/
+# (gitignored), never in a tracked file or an issue.
+set -eu
+
+CDPATH=''
+REPO=$(cd -- "$(dirname -- "$0")/.." && pwd)
+# ansible.cfg (and with it the Keychain vault password) is found from the cwd.
+cd "$REPO"
+
+# The interpreter next to ansible-vault has PyYAML; the system python may not.
+PY="$(dirname "$(readlink -f "$(command -v ansible-vault)")")/python"
+
+creds=$(ansible-vault view ansible/inventory/group_vars/all/vault.yml | "$PY" -I -c '
+import json, sys, yaml
+v = yaml.safe_load(sys.stdin)
+print(json.dumps({"username": v["vault_unifi_readonly_user"], "password": v["vault_unifi_readonly_password"]}))
+')
+printf '%s' "$creds" | ssh unifi-agent /usr/local/bin/unifi-state
