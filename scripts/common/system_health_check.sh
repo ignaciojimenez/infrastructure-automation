@@ -203,8 +203,16 @@ check_disk_usage() {
         esac
 
         if [ "$usage" -gt "$THRESHOLD_DISK" ]; then
-            print_status "error" "Disk $mount: ${usage}% (above ${THRESHOLD_DISK}%)"
-            issues=$((issues + 1))
+            # update_ha holds old and new image layers plus its backup at once
+            # (dockassist hit 86% mid-update on 2026-11-10). It announces a
+            # bounded "disk-usage" window; an expired or corrupt one is ignored.
+            read_maintenance_window "disk-usage"
+            if [ "$MAINTENANCE_STATE" = active ]; then
+                print_status "warning" "Disk $mount: ${usage}% (above ${THRESHOLD_DISK}%, announced maintenance window: ${MAINTENANCE_NOTE})"
+            else
+                print_status "error" "Disk $mount: ${usage}% (above ${THRESHOLD_DISK}%)"
+                issues=$((issues + 1))
+            fi
         elif [ "$usage" -gt $((THRESHOLD_DISK - 10)) ]; then
             print_status "warning" "Disk $mount: ${usage}%"
         else

@@ -115,6 +115,14 @@ update_ha() {
 # Main execution
 main() {
     log_message "🏠 Home Assistant Update Script Started"
+
+    # Announce the transient disk peak (backup + old and new image layers) to
+    # system_health_check.sh for 30 minutes; removed again on exit.
+    local_maint_dir="${MAINTENANCE_DIR:-$HOME/.maintenance}"
+    if mkdir -p "$local_maint_dir" && chmod 700 "$local_maint_dir" \
+        && echo "$(( $(date +%s) + 1800 )) update_ha pid=$$" > "$local_maint_dir/disk-usage"; then
+        trap 'rm -f "$local_maint_dir/disk-usage"' EXIT
+    fi
     
     # Check if Docker is running
     if ! docker info >/dev/null 2>&1; then
