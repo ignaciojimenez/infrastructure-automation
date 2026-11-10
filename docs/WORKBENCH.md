@@ -136,6 +136,13 @@ Three separate times this box looked healthy and was not:
    passes while the prompt is still on screen.
 5. **No login.** All gates passed, prompt reached, and Remote Control still
    refused because the account was not signed in.
+6. **The login lapses on its own.** On 2026-10-27 the claude.ai login expired;
+   `claude remote-control` then exited at once, killing tmux, and systemd
+   restarted it 5,871 times in 4 days while the check said only "no tmux
+   server". The unit now runs `claude auth status` before each start and leaves
+   `/run/claude-remote-control/login-missing` when logged out; the check reports
+   "claude.ai login missing" while it exists. Fix: `ssh builder@<host>`,
+   `claude auth login`, `sudo systemctl restart claude-remote-control`.
 
 The config gates are pre-answered by the role. The login cannot be.
 
