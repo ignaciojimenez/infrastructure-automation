@@ -69,7 +69,9 @@ update_ha() {
     # whatever the task spells), while `docker run` stores HostConfig.Binds
     # verbatim. Omit the mode here and every later Ansible run finds a bind it
     # does not recognise and recreates the container — an unexplained Home
-    # Assistant restart per deploy, until the next update re-arms it.
+    # Assistant restart per deploy, until the next update re-arms it. The
+    # --log-* flags are the same trap: they must match log_driver/log_options
+    # in the role, and without them an update drops log rotation.
     log_message "🚀 Starting updated Home Assistant container..."
     if docker run -d \
         --name "$CONTAINER_NAME" \
@@ -78,6 +80,9 @@ update_ha() {
         -v "{{ homeassistant_config_dir }}:/config:rw" \
         -v "/etc/localtime:/etc/localtime:ro" \
         --network=host \
+        --log-driver json-file \
+        --log-opt max-size=10m \
+        --log-opt max-file=3 \
         -e TZ="{{ timezone | default('Europe/Madrid') }}" \
         "$IMAGE_NAME"; then
         log_message "✅ New container started successfully"

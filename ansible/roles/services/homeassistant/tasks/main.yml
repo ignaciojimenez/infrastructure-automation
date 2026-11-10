@@ -161,6 +161,13 @@
       - "{{ homeassistant_config_dir | default('/home/' + ansible_user + '/homeassistant') }}:/config:rw"
       - "/etc/localtime:/etc/localtime:ro"
     network_mode: host
+    # Rotation, like `:rw` above, must be spelled the same in
+    # templates/update_ha.j2's `docker run`, or each writer recreates the
+    # container the other made.
+    log_driver: json-file
+    log_options:
+      max-size: 10m
+      max-file: "3"
     env:
       TZ: "{{ timezone | default('Europe/Madrid') }}"
     state: started
@@ -657,6 +664,10 @@
     image: "ghcr.io/home-assistant-libs/python-matter-server:{{ matter_server_version }}"
     restart_policy: unless-stopped
     network_mode: host
+    log_driver: json-file
+    log_options:
+      max-size: 10m
+      max-file: "3"
     security_opts:
       - "apparmor=unconfined"
     volumes:
