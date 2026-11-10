@@ -203,12 +203,36 @@
         dest: /usr/share/keyrings/raspotify-archive-keyring.asc
         mode: '0644'
 
-    - name: Add Raspotify repository
-      ansible.builtin.apt_repository:
-        repo: "deb [signed-by=/usr/share/keyrings/raspotify-archive-keyring.asc] https://dtcooper.github.io/raspotify raspotify main"
-        filename: raspotify
+    # deb822_repository needs python3-debian even under --check.
+    - name: Ensure python3-debian is present for deb822 repository management
+      ansible.builtin.apt:
+        name: python3-debian
         state: present
+
+    - name: Add Raspotify repository
+      ansible.builtin.deb822_repository:
+        name: raspotify
+        types: [deb]
+        uris: https://dtcooper.github.io/raspotify
+        suites: raspotify
+        components: [main]
+        signed_by: /usr/share/keyrings/raspotify-archive-keyring.asc
+        enabled: true
+        state: present
+      register: raspotify_repo
+
+    # The old module wrote filename: raspotify as raspotify.list; left in place
+    # apt would see the repo twice next to the new raspotify.sources.
+    - name: Remove the legacy Raspotify .list superseded by the .sources
+      ansible.builtin.file:
+        path: /etc/apt/sources.list.d/raspotify.list
+        state: absent
+      register: raspotify_legacy_list
+
+    - name: Refresh apt cache when the repository definition changed
+      ansible.builtin.apt:
         update_cache: true
+      when: raspotify_repo.changed or raspotify_legacy_list.changed
 
     - name: Install Raspotify
       ansible.builtin.apt:
