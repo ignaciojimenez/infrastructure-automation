@@ -54,12 +54,19 @@ else
     fail "no tmux: rc=$rc out=$out"
 fi
 
-printf '\n── The unit gates start on the login and carries no credential\n'
+printf '\n── The unit checks the login without gating the start, and carries no credential\n'
 UNIT="$TPL/claude-remote-control.service.j2"
 if grep -q '^ExecStartPre=.*' "$UNIT" && grep -Fq 'loggedIn\": true' "$UNIT"; then
     pass "ExecStartPre greps \"loggedIn\": true"
 else
     fail "ExecStartPre does not check loggedIn"
+fi
+# The marker reports; it must not stop the start (a changed CLI output would
+# otherwise keep a logged-in session down).
+if sed -n '/^ExecStartPre=/,/^$/p' "$UNIT" | grep -q 'exit [1-9]'; then
+    fail "ExecStartPre can fail the start"
+else
+    pass "ExecStartPre never blocks the start"
 fi
 if grep -q '^RuntimeDirectory=claude-remote-control$' "$UNIT" \
     && grep -q '^RuntimeDirectoryPreserve=yes$' "$UNIT"; then

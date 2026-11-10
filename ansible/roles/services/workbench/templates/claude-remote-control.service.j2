@@ -47,6 +47,8 @@ Environment=PATH=/home/{{ workbench_agent_user }}/.local/bin:/usr/local/bin:/usr
 # taking the tmux server with it, and the restart loop below hides the cause
 # (PER-160). Name it up front: leave a marker in the runtime directory (kept
 # across restarts) for check_remote_control.sh, and say the fix in the journal.
+# It only reports, never blocks the start: if a CLI update changed this output,
+# a blocking check would keep Remote Control down while it was logged in.
 RuntimeDirectory=claude-remote-control
 RuntimeDirectoryPreserve=yes
 ExecStartPre=/bin/sh -c "\
@@ -55,7 +57,6 @@ ExecStartPre=/bin/sh -c "\
     else \
       touch $$RUNTIME_DIRECTORY/login-missing; \
       echo 'claude.ai login missing: ssh {{ workbench_agent_user }}@<host>; claude auth login; sudo systemctl restart claude-remote-control' >&2; \
-      exit 1; \
     fi"
 
 ExecStart=/usr/bin/tmux new-session -d -s {{ workbench_tmux_session }} \
