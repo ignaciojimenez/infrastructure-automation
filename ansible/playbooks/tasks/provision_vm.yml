@@ -95,9 +95,11 @@
     - not ansible_check_mode
   tags: [provision, create]
   block:
+    # vm_extra_ssh_keys (optional, -e only, never committed): a throwaway key
+    # for unattended work on a test VM, removed with the VM.
     - name: Stage authorized keys on the hypervisor
       ansible.builtin.copy:
-        content: "{{ vm_gh_keys.content }}"
+        content: "{{ ([vm_gh_keys.content | trim] + (vm_extra_ssh_keys | default([]))) | join('\n') }}\n"
         dest: /tmp/vm_{{ vm_vmid }}_authorized_keys
         owner: root
         group: root
@@ -184,7 +186,7 @@
 - name: Report provisioning result
   ansible.builtin.debug:
     msg: |
-      ✅ VM {{ vm_vmid }} ({{ vm_name }}) provisioned at {{ vm_ip }}
+      {{ 'Check mode: nothing created' if ansible_check_mode else '✅ VM ' ~ vm_vmid ~ ' (' ~ vm_name ~ ') provisioned at ' ~ vm_ip }}
 
       Next:
         ansible-playbook ansible/playbooks/bootstrap.yml --limit {{ vm_inventory_name }}

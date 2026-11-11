@@ -5,6 +5,33 @@ source (PER-105), the monitoring crons and the nightly `.unf` backup.
 
 Deploy: `ansible-playbook ansible/playbooks/services.yml --limit unifi-lxc --tags unifi`
 
+## UniFi OS Server (PER-178 spike, 2026-11-12)
+
+The replacement controller, built beside this one. Seen on VM 105, not read
+from docs:
+
+| Fact | Value |
+|---|---|
+| Installer | `uos-installer --non-interactive` (also `--web-port`, `--network-mode slirp4nets\|pasta`, `--uninstall`); fetched from Ubiquiti's firmware API and checked against its `sha256_checksum` |
+| Version | UniFi OS Server 5.1.42, bundling **Network 10.5.67** (`dpkg-query` in the container) |
+| Runs as | podman container `uosserver` (pasta networking), `uosserver.service`, CLI `uosserver` |
+| Ports | web **11443** (container 443), inform **8080**, plus 3478/udp, 5514/udp, 6789, 8444, 8880-8882, 9543, 10003/udp |
+| Host | Debian 13 cloud image, podman 5.4.2 from Debian; 2 vCPU, 4 GiB, idle at ~1.7 GiB used before any restore |
+| First run | name → "Restore From Backup" or Next → UI account, or **Proceed Without a UI Account** → console password + **Terms of Service** checkbox → Finish |
+
+**Version rule for the migration.** Network 10.5.67 is *older* than the
+standalone app's 10.6.109, and restoring a newer backup into an older Network
+is the case reported to fail. So an in-place hop on unifi-lxc must stop at or
+below the server's Network version (or wait until the server ships a newer
+one), never "latest".
+
+**Isolation while testing.** A test controller holding a restored backup has
+the APs' keys. On the spike VM, nftables drops everything it sends to private,
+link-local and multicast addresses, except DNS to the gateway, and counts it.
+Forced: 40 parallel connections to cwwk, none reached, all counted. (`limit
+rate` is a match in nftables: a drop on the rate-limited rule lets the excess
+through, so the log and the drop are separate rules.)
+
 ## Release-line upgrades
 
 > **Fallback only (2026-11-11).** The plan is to migrate to UniFi OS Server in

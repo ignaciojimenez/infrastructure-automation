@@ -20,7 +20,12 @@ REPO_ROOT=$(cd -- "$(dirname -- "$0")/../.." && pwd)
 SCRIPT="$REPO_ROOT/scripts/services/network/unifi_state.py"
 WORK=$(mktemp -d)
 pids=''
-trap 'for p in $pids; do kill "$p" 2>/dev/null; done; rm -rf "$WORK"' EXIT
+cleanup() {
+    for pid in $pids; do kill "$pid" 2>/dev/null; done
+    for pid in $pids; do wait "$pid" 2>/dev/null; done
+    rm -rf "$WORK"
+}
+trap cleanup EXIT
 
 failures=0
 pass() { printf '   ✓ %s\n' "$1"; }
@@ -80,13 +85,20 @@ print(srv.server_address[1], flush=True)
 srv.serve_forever()
 EOF
 
-# Starts a fake of one flavor; prints its port once it is listening.
+# Starts a fake of one flavor. Called directly, never inside $(...): a
+# subshell would keep the PID from the trap, and the orphaned server would
+# hold the caller's output pipe open (it hung run_unit_tests.sh once).
+# stderr goes to /dev/null for the same reason.
 start() {
-    python3 -I "$WORK/fake.py" "$1" > "$WORK/port.$1" &
+    python3 -I "$WORK/fake.py" "$1" > "$WORK/port.$1" 2>/dev/null &
     pids="$pids $!"
+}
+
+# Prints a fake's port once it is listening, or nothing after 5 s.
+port() {
     i=0
     while [ ! -s "$WORK/port.$1" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
-    cat "$WORK/port.$1"
+    cat "$WORK/port.$1" 2>/dev/null
 }
 
 capture() {  # capture <out> [--unifi-os] URL
@@ -97,8 +109,10 @@ capture() {  # capture <out> [--unifi-os] URL
 
 printf '\n── unifi-state capture: standalone and UniFi OS (PER-128, PER-178)\n'
 
-standalone=$(start standalone)
-unifi_os=$(start unifi-os)
+start standalone
+start unifi-os
+standalone=$(port standalone)
+unifi_os=$(port unifi-os)
 if [ -z "$standalone" ] || [ -z "$unifi_os" ]; then
     fail "fake controllers did not start"; exit 1
 fi
