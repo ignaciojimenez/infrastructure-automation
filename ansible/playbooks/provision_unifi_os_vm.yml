@@ -11,13 +11,16 @@
 #   * Memory. cwwk had 6.1 GiB available on 2026-11-11 (OPNsense 12 fixed,
 #     ZFS ARC at its 10 GiB cap, CTs 101/103/104 at 4/2/4). 4 GiB here leaves
 #     ~2 GiB while CT 101 still runs, and the host OOM killer's biggest target
-#     is OPNsense's QEMU process, which carries the internet. Decide with
-#     Ignacio first: lower zfs_arc_max_gb (it only applies at boot unless also
-#     written to /sys), or accept the margin for the spike. CT 101's 4 GiB
-#     returns at cutover.
-#   * Sudo. bootstrap.yml connects with `sudo -n` (ansible.cfg). The Debian
-#     cloud image's default user gets passwordless sudo from cloud-init. That
-#     is reasoned, not verified: check `ssh <vm_ip> sudo -n true` first.
+#     is OPNsense's QEMU process, which carries the internet. OPNsense's own
+#     history says it is the place to take it from: in 13 months its active
+#     plus wired memory never passed ~3.3 GiB (daily averages; hourly, 1.6 GiB
+#     over the last 2.5 months) of its 12. Its RAM is pinned whole either way:
+#     PCI passthrough means no ballooning. Resize it first (docs/TODO.md).
+#   * Sudo. bootstrap.yml connects with `sudo -n` (ansible.cfg). Read from
+#     source 2026-11-11: Proxmox's user-data sets `user: <ciuser>` plus
+#     `users: [default]`, and Debian 13's cloud images give the default user
+#     `NOPASSWD:ALL` (debian-cloud-images, 01_debian_cloud.cfg). Not yet seen
+#     on a booted VM: check `ssh <vm_ip> sudo -n true` first.
 #   * Address. .208 was silent with no ARP entry on 2026-11-11. Check it is
 #     outside the firewall's DHCP range before use. It is temporary: the VM
 #     takes 10.30.40.201 at cutover (PER-127), because the APs report to
@@ -55,6 +58,10 @@
     vm_memory: 4096
     vm_disk_size_gb: 32
     vm_storage: local-zfs
+    # Off for the spike, like any test VM on cwwk (docs/TEST_CONTAINER.md): a
+    # host reboot must not bring back a guest nobody is watching. On at
+    # cutover, when this becomes the controller.
+    vm_onboot: false
 
     # Pinned build, not `latest`: a checksum pinned against a moving URL
     # breaks the day Debian publishes. Bump date and sum together.

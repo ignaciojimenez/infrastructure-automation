@@ -12,6 +12,14 @@ Deploy: `ansible-playbook ansible/playbooks/services.yml --limit unifi-lxc --tag
 > [ARCHITECTURE_DECISIONS.md](../../../../docs/ARCHITECTURE_DECISIONS.md#unifi-controller--unifi-os-server-in-a-vm-2026-11-11)).
 > This in-place procedure is used only if a 9.4 backup will not restore there,
 > to reach 10.6 first. The before/after check below serves both paths.
+>
+> **That is likely (2026-11-11).** UniFi OS Server runs Network 11 (11.0.99,
+> 2026-11-02, published only for UniFi OS), and the standalone application
+> ends at 10.6.109. One community report matches our case: a 9.5 backup was
+> refused by UniFi OS Server on 10.4 ("incompatible or corrupted"). The advice
+> there and in migration guides was to bring the old controller to its latest
+> release before exporting. No Ubiquiti statement of the rule was found. The PER-178 spike tries 9.4 directly first,
+> because a failed restore into the new VM costs nothing.
 
 **Patches within a line** arrive through apt and unattended-upgrades
 (`custom_origins: site=www.ui.com` in the inventory). **A jump to a new line**

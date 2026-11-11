@@ -492,6 +492,20 @@ One branch, tick them off. Phone-taggable lines marked 📱.
   later, unattended-upgrades delivers no UniFi patches, and a clean
   `--dry-run` hides that. This is PER-129's territory (a controller on a
   line nothing patches).
+- Found 2026-11-11 (PER-178): **OPNsense holds 12 GiB and uses about a
+  quarter of it.** The 2026-08-19 decision (DONE.md) was to revisit only if
+  cwwk ran short, and the UniFi OS Server VM is that event: 4 GiB beside
+  CT 101 leaves ~2 GiB, with OPNsense's QEMU the biggest OOM target. Its own
+  RRD history, read over the scoped API: active plus wired memory peaked at
+  ~3.3 GiB (daily averages, 13 months) and 1.6 GiB (hourly, last 2.5 months),
+  free never below 59 %. Averages hide minute spikes, such as a firmware
+  upgrade. With PCI passthrough the whole allocation is pinned on cwwk, so
+  ballooning is no help; only a smaller `memory` frees anything. Proposal:
+  6 GiB, set as a pending change (`qm set 100 --memory 6144`; memory is not
+  in VM 100's hotplug set, the default `network,disk,usb`) and applied by
+  `qm reboot 100` (verified in cwwk's man page: it applies pending changes)
+  in place of the next OPNsense upgrade's own reboot, so it costs no extra
+  outage. Wired and present, like any OPNsense change.
 - `INJECT_FACTS_AS_VARS` goes away in ansible-core 2.24; the repo uses bare
   fact names everywhere. Mechanical repo-wide sweep, own branch.
 - ✅ 2026-10-14: the builder's hand-back PR body no longer prints the issue

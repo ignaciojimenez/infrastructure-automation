@@ -27,7 +27,7 @@
 #   vm_inventory_name    its key in hosts.yml, for the handover message
 #   vm_ip / vm_cidr / vm_gateway / vm_nameserver / vm_searchdomain
 #   vm_bridge vm_cpu_type vm_cores vm_cpulimit vm_memory
-#   vm_disk_size_gb vm_storage
+#   vm_disk_size_gb vm_storage vm_onboot
 #   vm_image_url vm_image_sha512 vm_image_path
 
 - name: Check whether the VM already exists
@@ -133,7 +133,7 @@
           --ipconfig0 ip={{ vm_ip }}/{{ vm_cidr }},gw={{ vm_gateway }}
           --nameserver {{ vm_nameserver }}
           --searchdomain {{ vm_searchdomain }}
-          --onboot 1
+          --onboot {{ 1 if vm_onboot else 0 }}
       changed_when: true
 
     - name: Grow the disk to its size
