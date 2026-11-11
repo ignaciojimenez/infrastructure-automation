@@ -16,6 +16,7 @@ Simple log of key technical decisions made in this project.
 - [Disclosure tiering — what goes in a public repo](#disclosure-tiering--what-goes-in-a-public-repo)
 - [LXC Container Management](#lxc-container-management)
 - [Proxmox Host Management](#proxmox-host-management)
+- [UniFi controller — UniFi OS Server in a VM (2026-11-11)](#unifi-controller--unifi-os-server-in-a-vm-2026-11-11)
 - [DNS Architecture (Updated November 2025)](#dns-architecture-updated-november-2025)
 - [Home Assistant Architecture (Updated November 2025)](#home-assistant-architecture-updated-november-2025)
 - [Backup Strategy](#backup-strategy)
@@ -240,6 +241,32 @@ set — see `docs/BACKUP_AND_RECOVERY.md`.
 
 - **Inventory keys must match real hostnames** - bootstrap.yml writes `inventory_hostname` into `/etc/hosts`; a mismatch (e.g., key `proxmox` vs real hostname `cwwk`) corrupts hostname resolution and breaks sudo/PVE API
 - **Skip hostname management for Proxmox** - Proxmox manages its own hostname for cluster/API identity; bootstrap guards hostname tasks with `when: platform_type != 'proxmox'`
+
+## UniFi controller — UniFi OS Server in a VM (2026-11-11)
+
+- **Off the standalone Network Application, not up it.** 9.4 is end of life.
+  10.6 is reportedly the standalone app's last release, and Network 11 ships
+  only on UniFi OS Server (secondary sources; Ubiquiti's help page was not
+  reachable). Ubiquiti's apt suites from `unifi-10.5` on are signed but empty
+  (verified 2026-11-10), so apt no longer patches the standalone app past
+  10.4. An in-place jump to 10.6 is kept only as the fallback (procedure in
+  `roles/services/unifi/README.md`), for the case where a 9.4 backup will not
+  restore into UniFi OS Server (PER-178).
+- **A Debian 13 VM, never an LXC.** The only community LXC recipe needs a
+  **privileged** container on cwwk (the internet single point of failure), plus
+  `/bin/su` replaced by a `runuser` wrapper and `/sbin/sysctl` replaced by one
+  that swallows errors. A VM meets Ubiquiti's stated requirements (Debian 13,
+  Podman ≥ 4.9.3, slirp4netns ≥ 1.2; Debian ships 5.4.2 and 1.2.1) with no
+  workaround. Do not re-propose LXC.
+- **Side by side, cut over by IP.** The APs report to `10.30.40.201` by IP, so
+  the VM takes that address at cutover. CT 101 stays stopped (`onboot=0`) as
+  the rollback until the new controller has a backup off-host.
+- **Release jumps are by hand, with a person present and wired.** The
+  controller going down can take the laptop's Wi-Fi with it, and recovery
+  then needs a cable anyway.
+- **Read-only state check is the pass/fail** for any controller change:
+  `bin/unifi-state`, diffed before and after (PER-128). The vaulted View Only
+  account is enforced server-side: a write returns `api.err.NoPermission`.
 
 ## DNS Architecture (Updated November 2025)
 

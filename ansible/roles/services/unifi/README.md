@@ -7,6 +7,12 @@ Deploy: `ansible-playbook ansible/playbooks/services.yml --limit unifi-lxc --tag
 
 ## Release-line upgrades
 
+> **Fallback only (2026-11-11).** The plan is to migrate to UniFi OS Server in
+> a VM (PER-127, spike PER-178; reasoning in
+> [ARCHITECTURE_DECISIONS.md](../../../../docs/ARCHITECTURE_DECISIONS.md#unifi-controller--unifi-os-server-in-a-vm-2026-11-11)).
+> This in-place procedure is used only if a 9.4 backup will not restore there,
+> to reach 10.6 first. The before/after check below serves both paths.
+
 **Patches within a line** arrive through apt and unattended-upgrades
 (`custom_origins: site=www.ui.com` in the inventory). **A jump to a new line**
 (9.4 → 10.6) follows the procedure below, by hand, with a person present.
