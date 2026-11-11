@@ -8,14 +8,9 @@
 # tasks/provision_vm.yml; this file is the VM's identity and nothing else.
 #
 # ⚠️ Drafted 2026-11-11, NOT yet run. Open before the first real run:
-#   * Memory. cwwk had 6.1 GiB available on 2026-11-11 (OPNsense 12 fixed,
-#     ZFS ARC at its 10 GiB cap, CTs 101/103/104 at 4/2/4). 4 GiB here leaves
-#     ~2 GiB while CT 101 still runs, and the host OOM killer's biggest target
-#     is OPNsense's QEMU process, which carries the internet. OPNsense's own
-#     history says it is the place to take it from: in 13 months its active
-#     plus wired memory never passed ~3.3 GiB (daily averages; hourly, 1.6 GiB
-#     over the last 2.5 months) of its 12. Its RAM is pinned whole either way:
-#     PCI passthrough means no ballooning. Resize it first (docs/TODO.md).
+#   * Memory. Settled 2026-11-12: OPNsense went from 12 GiB to 8 (DONE.md),
+#     and cwwk then had 9.5 GiB available, so 4 GiB here leaves ~5.5 while
+#     CT 101 still runs. CT 101's 4 GiB returns at cutover.
 #   * Sudo. bootstrap.yml connects with `sudo -n` (ansible.cfg). Read from
 #     source 2026-11-11: Proxmox's user-data sets `user: <ciuser>` plus
 #     `users: [default]`, and Debian 13's cloud images give the default user

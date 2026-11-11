@@ -2417,6 +2417,18 @@ default to.
 
 ## Smaller closed items
 
+- **2026-11-12 — OPNsense's VM cut from 12 GiB to 8200 MiB (PER-178).**
+  This reopens the 2026-08-19 "don't trim" entry below on its own trigger: the
+  UniFi OS Server VM made cwwk short (5.8 GiB available, the 4 GiB spike VM
+  would leave ~2 GiB, and OPNsense's QEMU was the largest OOM target). OPNsense's
+  own RRD history, read over the scoped API, put active plus wired at about
+  3.3 GiB at most (daily averages over 13 months), with free never below 59 %.
+  With PCI passthrough the allocation is pinned whole, so only a smaller
+  `memory` frees anything. Ignacio set it in the Proxmox UI and applied it
+  with a Proxmox reboot (an in-guest reboot does not apply a pending change),
+  at home. Checked afterwards: cwwk available went from 5.8 to 9.5 GiB; the
+  firewall reports 8149 MiB total and 1.4 GiB used with swap untouched; the
+  default route, DNS and the Mullvad exit are all up.
 - **2026-10-12 — the wrapper no longer writes every Slack payload to `/tmp` (item 49, PER-116).**
   It wrote `/tmp/slack_payload_debug.json` before every send. On the workbench, where root and
   `autobuilder` both run it, the second account was refused, and the file was script output

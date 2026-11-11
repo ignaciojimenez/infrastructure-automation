@@ -299,8 +299,9 @@ Measured 2026-08-04:
 
 ## ⚠️ Read this before creating anything on cwwk
 
-`free -h` on cwwk reports **31 GiB total, 25 GiB used, 5.9 GiB available** — the
-OPNsense VM alone holds 12 GiB. cwwk is also the internet single point of
+`free -h` on cwwk reported **31 GiB total, 9.5 GiB available** on 2026-11-12,
+after the OPNsense VM went from 12 GiB to 8 (DONE.md); it is still the largest
+guest by far. cwwk is also the internet single point of
 failure and has overheated twice (2026-06-30, 2026-07-31).
 
 - **Containers are nearly free.** An idle Debian LXC costs ~100–200 MB. Adding
