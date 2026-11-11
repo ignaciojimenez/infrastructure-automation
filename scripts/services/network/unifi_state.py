@@ -20,6 +20,14 @@ on their own and would put noise in every diff.
 
 The controller's own version goes to stderr, not the snapshot. It is the one
 thing an upgrade is supposed to change.
+
+    unifi-state                      standalone Network Application (unifi-lxc)
+    unifi-state --unifi-os [URL]     UniFi OS Server (PER-178), default URL below
+
+The same snapshot from both is the migration's pass/fail (PER-127): old
+controller against new. Only the login and the path prefix differ; the paths
+are aiounifi's (Home Assistant's UniFi library), read 2026-11-11. ⚠️ The UniFi
+OS mode has not yet run against a real UniFi OS Server.
 """
 import http.cookiejar
 import json
@@ -28,7 +36,13 @@ import sys
 import urllib.error
 import urllib.request
 
-BASE = "https://127.0.0.1:8443"
+STANDALONE = {"base": "https://127.0.0.1:8443", "login": "/api/login",
+              "logout": "/api/logout", "prefix": ""}
+# UniFi OS logs in at its own layer and proxies the Network application under
+# /proxy/network. 11443 is UniFi OS Server's web port per community guides,
+# not yet seen on ours: pass the URL if it differs.
+UNIFI_OS = {"base": "https://127.0.0.1:11443", "login": "/api/auth/login",
+            "logout": "/api/auth/logout", "prefix": "/proxy/network"}
 
 
 def line(kind, *keys, **fields):
@@ -64,15 +78,16 @@ def render(sites):
     return sorted(lines)
 
 
-def _get(opener, path):
-    with opener.open(BASE + path, timeout=30) as r:
+def _get(opener, api, path):
+    req = urllib.request.Request(api["base"] + api["prefix"] + path, headers=api["headers"])
+    with opener.open(req, timeout=30) as r:
         body = json.load(r)
     if body.get("meta", {}).get("rc") != "ok":
         raise SystemExit("unifi-state: %s: %s" % (path, body.get("meta")))
     return body["data"]
 
 
-def capture(creds):
+def capture(creds, api):
     # Loopback only, and the controller's certificate is self-signed: there is
     # no hostname to verify and no network path to intercept.
     ctx = ssl.create_default_context()
@@ -81,31 +96,45 @@ def capture(creds):
     opener = urllib.request.build_opener(
         urllib.request.HTTPSHandler(context=ctx),
         urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
-    login = urllib.request.Request(BASE + "/api/login", data=json.dumps(creds).encode(),
+    api = dict(api, headers={})
+    login = urllib.request.Request(api["base"] + api["login"], data=json.dumps(creds).encode(),
                                    headers={"Content-Type": "application/json"})
-    opener.open(login, timeout=30).close()
+    with opener.open(login, timeout=30) as r:
+        # UniFi OS hands out a CSRF token at login and wants it back on every
+        # request after; the standalone application sends none.
+        if r.headers.get("x-csrf-token"):
+            api["headers"]["x-csrf-token"] = r.headers["x-csrf-token"]
     try:
         sites = []
-        for s in _get(opener, "/api/self/sites"):
-            api = "/api/s/%s/" % s["name"]
+        for s in _get(opener, api, "/api/self/sites"):
+            site = "/api/s/%s/" % s["name"]
             sites.append({"name": s["name"], "desc": s.get("desc"),
-                          "devices": _get(opener, api + "stat/device"),
-                          "networks": _get(opener, api + "rest/networkconf"),
-                          "wlans": _get(opener, api + "rest/wlanconf")})
-        version = _get(opener, "/api/s/%s/stat/sysinfo" % sites[0]["name"])[0].get("version") if sites else None
+                          "devices": _get(opener, api, site + "stat/device"),
+                          "networks": _get(opener, api, site + "rest/networkconf"),
+                          "wlans": _get(opener, api, site + "rest/wlanconf")})
+        version = _get(opener, api, "/api/s/%s/stat/sysinfo" % sites[0]["name"])[0].get("version") if sites else None
     finally:
         # Best effort: a failed logout must neither mask the real error nor
         # fail a capture that succeeded. The session expires on its own.
         try:
-            opener.open(urllib.request.Request(BASE + "/api/logout", data=b""), timeout=30).close()
+            opener.open(urllib.request.Request(api["base"] + api["logout"], data=b"",
+                                               headers=api["headers"]), timeout=30).close()
         except urllib.error.URLError:
             pass
     return sites, version
 
 
-def main():
+def main(argv):
+    api = dict(STANDALONE)
+    if argv[:1] == ["--unifi-os"]:
+        api = dict(UNIFI_OS)
+        argv = argv[1:]
+    if len(argv) > 1:
+        raise SystemExit("usage: unifi-state [--unifi-os] [URL]  (credentials as JSON on stdin)")
+    if argv:
+        api["base"] = argv[0].rstrip("/")
     try:
-        sites, version = capture(json.load(sys.stdin))
+        sites, version = capture(json.load(sys.stdin), api)
     except urllib.error.HTTPError as e:
         raise SystemExit("unifi-state: %s: HTTP %s" % (e.url, e.code))
     except urllib.error.URLError as e:
@@ -119,4 +148,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv[1:])

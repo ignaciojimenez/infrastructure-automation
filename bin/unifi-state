@@ -10,6 +10,12 @@
 # /usr/local/bin/unifi-state on the host over ssh stdin: never in argv, the
 # environment or a file. Connects as read_agent (unifi-agent), so no Touch ID.
 #
+# Arguments pass through to the host's unifi-state, and UNIFI_STATE_HOST picks
+# the host, so the same capture reads UniFi OS Server for the migration diff
+# (PER-127), once the script is deployed there:
+#
+#   UNIFI_STATE_HOST=unifi-os-vm-agent bin/unifi-state --unifi-os > .../after.txt
+#
 # The snapshot names SSIDs, VLANs and MACs together: keep it in docs/local/
 # (gitignored), never in a tracked file or an issue.
 set -eu
@@ -27,4 +33,7 @@ import json, sys, yaml
 v = yaml.safe_load(sys.stdin)
 print(json.dumps({"username": v["vault_unifi_readonly_user"], "password": v["vault_unifi_readonly_password"]}))
 ')
-printf '%s' "$creds" | ssh unifi-agent /usr/local/bin/unifi-state
+# ssh joins argv into one remote command line: the only arguments are a flag
+# and a URL, never anything secret.
+# shellcheck disable=SC2029
+printf '%s' "$creds" | ssh "${UNIFI_STATE_HOST:-unifi-agent}" /usr/local/bin/unifi-state "$@"
