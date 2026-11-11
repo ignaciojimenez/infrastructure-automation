@@ -293,6 +293,16 @@ for ((i=1; i<=NUM_TESTS; i++)); do
     fi
 done
 
+# The monthly update_ha run (backup + docker pull) saturates the Pi's CPU and
+# network, and Ookla's CLI then fails to fetch its server config
+# (NoServersException) even for a healthy pinned server. A run that cannot get
+# two results while that job is active says nothing about the WAN: skip it
+# rather than page. Outside the update window the failure still exits 2.
+if [ "$successful_tests" -lt 2 ] && pgrep -f 'update_ha' >/dev/null 2>&1; then
+    log_msg "Only ${successful_tests} test(s) succeeded, but update_ha is running - skipping, not alerting"
+    exit 0
+fi
+
 # Check if we have enough successful tests
 if [ "$successful_tests" -eq 0 ]; then
     error_msg "All speed tests failed"
