@@ -17,7 +17,23 @@ from docs:
 | Runs as | podman container `uosserver` (pasta networking), `uosserver.service`, CLI `uosserver` |
 | Ports | web **11443** (container 443), inform **8080**, plus 3478/udp, 5514/udp, 6789, 8444, 8880-8882, 9543, 10003/udp |
 | Host | Debian 13 cloud image, podman 5.4.2 from Debian; 2 vCPU, 4 GiB, idle at ~1.7 GiB used before any restore |
-| First run | name → "Restore From Backup" or Next → UI account, or **Proceed Without a UI Account** → console password + **Terms of Service** checkbox → Finish |
+| First run | name → "Restore From Backup" or Next → UI account, or **Proceed Without a UI Account** → console password (12+ characters, one special) + **Terms of Service** checkbox → Finish. Neither button restores anything: it ends at "Setup Complete!" |
+| Restore | Network → Settings → Control Plane → Backups → **Upload & Restore**, which takes a standalone `.unf` (`POST /api/backup/settings/restore/<id>` → 202, async). The server restarts Network itself |
+| Auto-update | On by default for UniFi OS and Network, and it offered Network 10.6.109 on day one. Decide before cutover whether the controller may update itself |
+| Login rate limit | About six logins in a minute got **HTTP 429**. Each `unifi-state` run is one login: space captures out |
+
+**The 9.4 backup restores (2026-11-12).** Last night's 9.4.19 `.unf` went into
+Network 10.5.67 without an error. The import runs with
+`SKIP_ADMINISTRATOR_USERS_AND_BACKUP_UISETTINGS`, so **no controller account
+carries over**, including the read-only one `bin/unifi-state` uses: re-create
+it in UniFi OS after the restore. `unifi-state --unifi-os` against the
+restored server, diffed with the live controller: identical site, networks,
+WLANs and devices (adopted, model, firmware). The only difference is every AP
+at `state=0`, since they inform to the old controller. On the restored
+controller the PER-128 rename test held: two captures identical, one rename =
+exactly one `-`/`+` pair, renamed back = byte-identical. The restored
+controller opened no LAN connection of its own (the drop counter stayed
+flat): it waits for devices to inform.
 
 **Version rule for the migration.** Network 10.5.67 is *older* than the
 standalone app's 10.6.109, and restoring a newer backup into an older Network
