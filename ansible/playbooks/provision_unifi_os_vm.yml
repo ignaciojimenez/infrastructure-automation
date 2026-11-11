@@ -1,0 +1,67 @@
+# Provision the UniFi OS Server VM (VM 105) on Proxmox — PER-178
+# Usage: ansible-playbook ansible/playbooks/provision_unifi_os_vm.yml --check
+#
+# The replacement for unifi-lxc's standalone Network Application, built beside
+# it (docs/ARCHITECTURE_DECISIONS.md, "UniFi controller"). A VM because UniFi
+# OS Server runs on Podman, and the only LXC recipe needs a privileged
+# container with wrapped su/sysctl binaries. The body lives in
+# tasks/provision_vm.yml; this file is the VM's identity and nothing else.
+#
+# ⚠️ Drafted 2026-11-11, NOT yet run. Open before the first real run:
+#   * Memory. cwwk had 6.1 GiB available on 2026-11-11 (OPNsense 12 fixed,
+#     ZFS ARC at its 10 GiB cap, CTs 101/103/104 at 4/2/4). 4 GiB here leaves
+#     ~2 GiB while CT 101 still runs, and the host OOM killer's biggest target
+#     is OPNsense's QEMU process, which carries the internet. Decide with
+#     Ignacio first: lower zfs_arc_max_gb (it only applies at boot unless also
+#     written to /sys), or accept the margin for the spike. CT 101's 4 GiB
+#     returns at cutover.
+#   * Sudo. bootstrap.yml connects with `sudo -n` (ansible.cfg). The Debian
+#     cloud image's default user gets passwordless sudo from cloud-init. That
+#     is reasoned, not verified: check `ssh <vm_ip> sudo -n true` first.
+#   * Address. .208 was silent with no ARP entry on 2026-11-11. Check it is
+#     outside the firewall's DHCP range before use. It is temporary: the VM
+#     takes 10.30.40.201 at cutover (PER-127), because the APs report to
+#     that IP.
+
+- name: Provision the UniFi OS Server VM on Proxmox
+  hosts: proxmox_hosts
+  become: true
+  gather_facts: false
+  vars_files:
+    - "{{ inventory_dir }}/group_vars/all/vault.yml"
+
+  vars:
+    # 100 is OPNsense, 101-104 the CTs; 105 is the next free id.
+    vm_vmid: 105
+    vm_name: unifi-os-vm
+    vm_inventory_name: unifi-os-vm
+    # .200-.204 are the Proxmox guests and cobra, .205/.206 the test
+    # containers, .207 the workbench. .208 is the next slot in that block.
+    vm_ip: 10.30.40.208
+    vm_cidr: 24
+    vm_gateway: 10.30.40.254
+    vm_nameserver: 10.30.40.254
+    vm_searchdomain: local
+    vm_bridge: vmbr0
+
+    # Ubiquiti's stated minimums are 2 GiB RAM and ~20 GiB free disk; the
+    # community recipes ask for 4 GiB and 32 GiB. Same 4 GiB as CT 101 today,
+    # so the steady state after cutover costs cwwk nothing extra.
+    vm_cpu_type: x86-64-v3
+    vm_cores: 2
+    # Bounded for the same reason as the workbench: cwwk is a 20 W-capped
+    # N355 that runs hot, and OPNsense shares it.
+    vm_cpulimit: 2
+    vm_memory: 4096
+    vm_disk_size_gb: 32
+    vm_storage: local-zfs
+
+    # Pinned build, not `latest`: a checksum pinned against a moving URL
+    # breaks the day Debian publishes. Bump date and sum together.
+    vm_image_url: https://cloud.debian.org/images/cloud/trixie/20261103-2651/debian-13-genericcloud-amd64-20261103-2651.qcow2
+    vm_image_sha512: d25999de0770d4cde1be72c299ba3ad94eac7ea8fd4d18f8cc86c69df69337e2e8a91d64465a9bfd8f2a78c566fcbcb0842eacc91c09efdef72d719d9f13b535
+    vm_image_path: /var/lib/vz/template/debian-13-genericcloud-amd64-20261103-2651.qcow2
+
+  tasks:
+    - name: Provision the VM
+      ansible.builtin.import_tasks: tasks/provision_vm.yml
