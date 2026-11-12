@@ -1,0 +1,225 @@
+---
+# UniFi OS Server — the network controller from PER-127 on, in a Debian 13 VM
+#
+# Installs the server once from Ubiquiti's pinned installer, then owns what
+# every host here owns: the monitoring cron, the nightly off-host backup and
+# its heartbeat, and the read-only state capture. Restoring the controller's
+# configuration is a browser step, not a task: see README.md, the cutover
+# runbook.
+
+# The VM takes 10.30.40.201, which was CT 101's until the cutover. Run against
+# that address while CT 101 still holds it, this role would install podman and
+# a second controller on the live one. CT 101 is an LXC; this must be a VM.
+- name: Refuse to run anywhere but a VM
+  ansible.builtin.assert:
+    that: ansible_virtualization_type == 'kvm'
+    fail_msg: >-
+      {{ inventory_hostname }} ({{ ansible_host }}) is a
+      '{{ ansible_virtualization_type }}' guest, not a VM. Is CT 101 still on
+      this address? Stop it first (README.md, cutover runbook).
+  tags: [unifi_os, always]
+
+# ============================================================
+# Install, once
+# ============================================================
+
+# The installer needs podman; uidmap and slirp4netns for rootless containers.
+# All from Debian, so unattended-upgrades patches them.
+- name: Install UniFi OS Server prerequisites
+  become: true
+  ansible.builtin.apt:
+    name: [podman, uidmap, slirp4netns, curl]
+    state: present
+  tags: [unifi_os, packages]
+
+- name: Check whether UniFi OS Server is installed
+  ansible.builtin.command:
+    cmd: systemctl list-unit-files uosserver.service --no-legend
+  register: unifi_os_unit
+  check_mode: false  # read-only probe; must run under --check
+  changed_when: false
+  failed_when: false
+  tags: [unifi_os, install, service]
+
+- name: Install UniFi OS Server
+  when:
+    - "'uosserver.service' not in unifi_os_unit.stdout"
+    - not ansible_check_mode
+  tags: [unifi_os, install]
+  block:
+    - name: Create the installer directory
+      become: true
+      ansible.builtin.file:
+        path: "{{ unifi_os_install_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+
+    # A checksum mismatch fails here, before anything runs.
+    - name: Download the pinned installer
+      become: true
+      ansible.builtin.get_url:
+        url: "{{ unifi_os_installer_url }}"
+        dest: "{{ unifi_os_install_dir }}/uos-installer-{{ unifi_os_version }}"
+        checksum: "sha256:{{ unifi_os_installer_sha256 }}"
+        owner: root
+        group: root
+        mode: '0700'
+      register: unifi_os_download
+      retries: 3
+      delay: 5
+      until: unifi_os_download is succeeded
+
+    # Creates the uosserver user, its rootless container and uosserver.service.
+    # Took a few minutes in the PER-178 spike; the log stays on the host.
+    - name: Run the installer
+      become: true
+      ansible.builtin.shell:
+        cmd: ./uos-installer-{{ unifi_os_version }} --non-interactive > install.log 2>&1
+        chdir: "{{ unifi_os_install_dir }}"
+      async: 1800
+      poll: 15
+      changed_when: true
+
+    - name: Read the end of the installer log
+      become: true
+      ansible.builtin.command:
+        cmd: tail -n 25 {{ unifi_os_install_dir }}/install.log
+      register: unifi_os_install_log
+      changed_when: false
+
+    - name: Show the end of the installer log
+      ansible.builtin.debug:
+        var: unifi_os_install_log.stdout_lines
+
+- name: Ensure UniFi OS Server is enabled and running
+  become: true
+  ansible.builtin.systemd:
+    name: uosserver
+    enabled: true
+    state: started
+  # On a --check of a fresh VM the unit does not exist yet.
+  when: "'uosserver.service' in unifi_os_unit.stdout or not ansible_check_mode"
+  tags: [unifi_os, service]
+
+# /usr/local/bin and root-owned, not scripts_dir: read_agent runs it, without
+# Touch ID, and cannot enter the primary user's 0700 home. Same as the unifi
+# role; `bin/unifi-state --unifi-os` drives it from the laptop.
+- name: Deploy the controller-state capture
+  become: true
+  ansible.builtin.copy:
+    src: "{{ inventory_dir }}/../../scripts/services/network/unifi_state.py"
+    dest: /usr/local/bin/unifi-state
+    owner: root
+    group: root
+    mode: '0755'
+  tags: [unifi_os, scripts]
+
+# ============================================================
+# Monitoring and backup, as on unifi-lxc
+# ============================================================
+
+# Tagged with every tag that installs a cron writing into these, so no
+# tag-filtered run installs a cron pointing into a directory it skipped.
+- name: Ensure the script and log directories exist
+  become: true
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ primary_user }}"
+    group: "{{ infrastructure_group }}"
+    mode: '0755'
+  loop:
+    - "{{ scripts_dir }}"
+    - "{{ scripts_dir }}/monitoring"
+    - "{{ logs_dir }}"
+  tags: [unifi_os, monitoring, scripts, logs, cron, backup]
+
+- name: Deploy the UniFi OS Server scripts
+  become: true
+  ansible.builtin.copy:
+    src: "{{ inventory_dir }}/../../scripts/{{ item.src }}"
+    dest: "{{ scripts_dir }}/{{ item.dest }}"
+    owner: "{{ primary_user }}"
+    group: "{{ primary_user }}"
+    mode: '0755'
+  loop:
+    - { src: services/network/check_unifi_os.sh, dest: check_unifi_os }
+    # Same name as on unifi-lxc, so the wrapper's state file — and with it the
+    # backup heartbeat — carries over unchanged.
+    - { src: services/network/backup_unifi.sh, dest: backup_unifi }
+    - { src: common/enhanced_monitoring_wrapper, dest: enhanced_monitoring_wrapper }
+    - { src: common/do_backup, dest: do_backup }
+  tags: [unifi_os, monitoring, scripts]
+
+- name: Set up the UniFi OS Server check
+  ansible.builtin.cron:
+    name: "Test UniFi OS Server and restart"
+    minute: "*/13"
+    job: >
+      {{ scripts_dir }}/enhanced_monitoring_wrapper
+      --heartbeat-interval=daily
+      --notify-fixed=true
+      {{ logging_token }}
+      {{ alert_token }}
+      {{ scripts_dir }}/check_unifi_os
+      >> {{ logs_dir }}/check_unifi_os.log 2>&1
+    user: "{{ primary_user }}"
+  tags: [unifi_os, monitoring, cron]
+
+# 03:30, not unifi-lxc's 03:00: the Network application writes its autobackup
+# at 03:00, and a copy taken in the same minute ships the previous night's.
+- name: Set up the nightly off-host backup
+  ansible.builtin.cron:
+    name: "Daily UniFi backup at 3:30 AM"
+    minute: "30"
+    hour: "3"
+    job: >
+      {{ scripts_dir }}/enhanced_monitoring_wrapper
+      --heartbeat-interval=daily
+      --notify-fixed=true
+      {{ logging_token }}
+      {{ alert_token }}
+      {{ scripts_dir }}/backup_unifi --silent --unifi-os --recipient={{ backup_age_pubkey }}
+      >> {{ logs_dir }}/unifi_backup.log 2>&1
+    user: "{{ primary_user }}"
+  tags: [unifi_os, backup, cron]
+
+# The same healthchecks.io check as unifi-lxc's: one controller, one backup.
+- name: Deploy the backup freshness heartbeat
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/../../scripts/common/heartbeat_backup.sh"
+    dest: "{{ scripts_dir }}/monitoring/heartbeat_backup_unifi.sh"
+    owner: "{{ primary_user }}"
+    group: "{{ primary_user }}"
+    mode: '0755'
+  vars:
+    backup_heartbeat_name: "UniFi backup"
+    backup_healthcheck_url: "{{ vault_healthcheck_backup_unifi }}"
+    backup_state_file: "/home/{{ primary_user }}/.log/backup_unifi.json"
+    backup_max_age_minutes: 1560
+  when: vault_healthcheck_backup_unifi is defined
+  tags: [unifi_os, backup, monitoring]
+
+- name: Set up the backup freshness heartbeat cron
+  ansible.builtin.cron:
+    name: "Healthchecks.io - UniFi backup freshness"
+    minute: "30"
+    hour: "*/2"
+    job: "{{ scripts_dir }}/monitoring/heartbeat_backup_unifi.sh"
+    user: "{{ primary_user }}"
+  when: vault_healthcheck_backup_unifi is defined
+  tags: [unifi_os, backup, monitoring, cron]
+
+# System health (critical_services, disk, memory) comes from
+# deploy_monitoring.yml, as on every host.
+
+- name: Report UniFi OS Server deployment status
+  ansible.builtin.debug:
+    msg: |
+      ✅ UniFi OS Server on {{ inventory_hostname }}
+      Console: https://{{ ansible_host }}:11443   Inform: {{ ansible_host }}:8080
+      Crons: server check (*/13), off-host backup (03:30), backup heartbeat
+      First install: finish setup and restore in the browser (README.md)
+  tags: [unifi_os]

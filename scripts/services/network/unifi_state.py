@@ -39,8 +39,8 @@ import urllib.request
 STANDALONE = {"base": "https://127.0.0.1:8443", "login": "/api/login",
               "logout": "/api/logout", "prefix": ""}
 # UniFi OS logs in at its own layer and proxies the Network application under
-# /proxy/network. 11443 is UniFi OS Server's web port per community guides,
-# not yet seen on ours: pass the URL if it differs.
+# /proxy/network. 11443 is UniFi OS Server's web port, seen on the PER-178
+# spike VM (2026-11-12).
 UNIFI_OS = {"base": "https://127.0.0.1:11443", "login": "/api/auth/login",
             "logout": "/api/auth/logout", "prefix": "/proxy/network"}
 

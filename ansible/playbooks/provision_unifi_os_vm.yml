@@ -1,5 +1,8 @@
-# Provision the UniFi OS Server VM (VM 105) on Proxmox — PER-178
+# Provision the UniFi OS Server VM (VM 105) on Proxmox — PER-178, PER-127
 # Usage: ansible-playbook ansible/playbooks/provision_unifi_os_vm.yml --check
+#
+# Run only at the cutover, after CT 101 is stopped: the VM is created at CT
+# 101's address. The runbook is in roles/services/unifi_os/README.md.
 #
 # The replacement for unifi-lxc's standalone Network Application, built beside
 # it (docs/ARCHITECTURE_DECISIONS.md, "UniFi controller"). A VM because UniFi
@@ -7,19 +10,18 @@
 # container with wrapped su/sysctl binaries. The body lives in
 # tasks/provision_vm.yml; this file is the VM's identity and nothing else.
 #
-# ⚠️ Drafted 2026-11-11, NOT yet run. Open before the first real run:
-#   * Memory. Settled 2026-11-12: OPNsense went from 12 GiB to 8 (DONE.md),
-#     and cwwk then had 9.5 GiB available, so 4 GiB here leaves ~5.5 while
-#     CT 101 still runs. CT 101's 4 GiB returns at cutover.
-#   * Sudo. bootstrap.yml connects with `sudo -n` (ansible.cfg). Read from
-#     source 2026-11-11: Proxmox's user-data sets `user: <ciuser>` plus
-#     `users: [default]`, and Debian 13's cloud images give the default user
-#     `NOPASSWD:ALL` (debian-cloud-images, 01_debian_cloud.cfg). Not yet seen
-#     on a booted VM: check `ssh <vm_ip> sudo -n true` first.
-#   * Address. .208 was silent with no ARP entry on 2026-11-11. Check it is
-#     outside the firewall's DHCP range before use. It is temporary: the VM
-#     takes 10.30.40.201 at cutover (PER-127), because the APs report to
-#     that IP.
+# Run for the PER-178 spike on 2026-11-12 (at .208, since deleted). Seen there:
+#   * Memory. OPNsense went from 12 GiB to 8 (DONE.md); cwwk had 9.5 GiB
+#     available with CT 101 running. CT 101's 4 GiB returns at cutover.
+#   * Sudo. `sudo -n true` works for the infrastructure user on the booted
+#     VM: Proxmox's user-data adds the cloud image's default user rights.
+#
+# Address. Straight to 10.30.40.201, CT 101's, not to a temporary one moved
+# later: Proxmox derives cloud-init's instance-id from a hash of the network
+# config (Cloudinit.pm, nocloud_gen_metadata, read on cwwk 2026-11-12), so a
+# changed address makes the next boot a "new instance": new SSH host keys and
+# a second package upgrade, mid-cutover. tasks/provision_vm.yml refuses to
+# create the VM while anything answers on the address.
 
 - name: Provision the UniFi OS Server VM on Proxmox
   hosts: proxmox_hosts
@@ -33,9 +35,8 @@
     vm_vmid: 105
     vm_name: unifi-os-vm
     vm_inventory_name: unifi-os-vm
-    # .200-.204 are the Proxmox guests and cobra, .205/.206 the test
-    # containers, .207 the workbench. .208 is the next slot in that block.
-    vm_ip: 10.30.40.208
+    # CT 101's address: the four APs inform to it (hosts.yml, unifi-os-vm).
+    vm_ip: 10.30.40.201
     vm_cidr: 24
     vm_gateway: 10.30.40.254
     vm_nameserver: 10.30.40.254
@@ -43,8 +44,9 @@
     vm_bridge: vmbr0
 
     # Ubiquiti's stated minimums are 2 GiB RAM and ~20 GiB free disk; the
-    # community recipes ask for 4 GiB and 32 GiB. Same 4 GiB as CT 101 today,
-    # so the steady state after cutover costs cwwk nothing extra.
+    # community recipes ask for 4 GiB and 32 GiB. Same 4 GiB as CT 101, so the
+    # steady state after cutover costs cwwk nothing extra. The spike VM idled
+    # at ~1.7 GiB used before the restore.
     vm_cpu_type: x86-64-v3
     vm_cores: 2
     # Bounded for the same reason as the workbench: cwwk is a 20 W-capped
@@ -53,10 +55,8 @@
     vm_memory: 4096
     vm_disk_size_gb: 32
     vm_storage: local-zfs
-    # Off for the spike, like any test VM on cwwk (docs/TEST_CONTAINER.md): a
-    # host reboot must not bring back a guest nobody is watching. On at
-    # cutover, when this becomes the controller.
-    vm_onboot: false
+    # This is the controller: it comes back with cwwk, like CT 101 did.
+    vm_onboot: true
 
     # Pinned build, not `latest`: a checksum pinned against a moving URL
     # breaks the day Debian publishes. Bump date and sum together.
