@@ -39,7 +39,7 @@ nothing manages them: no stats, no changes, no guest portal.
 
 ```sh
 ssh cwwk 'sudo qm stop 105; sudo pct set 101 --onboot 1 && sudo pct start 101'
-git revert <the "retire unifi-lxc" commit>   # puts CT 101 back in the inventory
+git revert $(git log -1 --format=%h --grep='retire unifi-lxc')   # CT 101 back in the inventory
 ```
 
 The APs inform to the same address either way. Allow a few minutes for ARP
