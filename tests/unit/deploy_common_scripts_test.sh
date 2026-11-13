@@ -1,6 +1,8 @@
 #!/bin/sh
-# Regression test: deploy_monitoring.yml must not raw-copy the heartbeat_backup.sh
-# template (PER-157), and must remove the stray copy earlier runs left behind.
+# Regression test: neither copy of "Deploy all common scripts" may raw-copy the
+# heartbeat_backup.sh template (PER-157), and each must remove the stray copy
+# earlier runs left behind. deploy_monitoring.yml is the standalone playbook;
+# system/baseline.yml is the copy site.yml runs, and was missed the first time.
 #
 #   tests/unit/deploy_common_scripts_test.sh
 #
@@ -13,18 +15,13 @@ set -u
 
 CDPATH=''
 REPO_ROOT=$(cd -- "$(dirname -- "$0")/../.." && pwd)
-PLAYBOOK="$REPO_ROOT/ansible/playbooks/deploy_monitoring.yml"
 COMMON="$REPO_ROOT/scripts/common"
 
 failures=0
 pass() { printf '   ✓ %s\n' "$1"; }
 fail() { printf '   ✗ %s\n' "$1"; failures=$((failures + 1)); }
 
-printf '\n── deploy_monitoring.yml common script selection\n'
-
-[ -r "$PLAYBOOK" ] || { printf '   ✗ cannot read %s\n' "$PLAYBOOK"; exit 1; }
-
-# The lines of one task, from its "- name:" to the next task.
+# The lines of one task in $PLAYBOOK, from its "- name:" to the next task.
 task_block() {
     awk -v n="$1" '
         /^    - name: / { on = (index($0, n) > 0) }
@@ -32,15 +29,7 @@ task_block() {
     ' "$PLAYBOOK"
 }
 
-copy_block=$(task_block "Deploy all common scripts")
-when=$(printf '%s\n' "$copy_block" | sed -n 's/^      when: //p')
-if [ -z "$when" ]; then
-    fail "copy task has no single-line when:"
-    printf '   FAIL (%s)\n' "$failures"
-    exit 1
-fi
-
-# selected <os_family> <file> -> prints "yes" or "no"
+# selected <os_family> <file> -> prints "yes" or "no" under $when
 selected() {
     python3 - "$when" "$1" "$2" <<'PY'
 import sys
@@ -60,48 +49,63 @@ expect() { # <os_family> <file> <yes|no>
     fi
 }
 
-expect debian heartbeat_backup.sh no
-expect freebsd heartbeat_backup.sh no
-expect debian system_health_check.sh yes
-expect freebsd system_health_check.sh no
+check_playbook() { # <playbook> <expected removal path>
+    PLAYBOOK=$1
+    printf '\n── %s\n' "${PLAYBOOK#"$REPO_ROOT"/}"
+    [ -r "$PLAYBOOK" ] || { fail "cannot read $PLAYBOOK"; return; }
 
-for f in "$COMMON"/*; do
-    [ -f "$f" ] || continue
-    name=$(basename "$f")
-    case "$name" in
-        heartbeat_backup.sh) continue ;;
-        system_health_check.sh) expect_os="debian" ;;
-        *) expect_os="debian freebsd" ;;
-    esac
-    for os in $expect_os; do
-        expect "$os" "$name" yes
+    copy_block=$(task_block "Deploy all common scripts")
+    when=$(printf '%s\n' "$copy_block" | sed -n 's/^      when: //p')
+    if [ -z "$when" ]; then
+        fail "copy task has no single-line when:"
+        return
+    fi
+
+    expect debian heartbeat_backup.sh no
+    expect freebsd heartbeat_backup.sh no
+    expect debian system_health_check.sh yes
+    expect freebsd system_health_check.sh no
+
+    for f in "$COMMON"/*; do
+        [ -f "$f" ] || continue
+        name=$(basename "$f")
+        case "$name" in
+            heartbeat_backup.sh) continue ;;
+            system_health_check.sh) expect_os="debian" ;;
+            *) expect_os="debian freebsd" ;;
+        esac
+        for os in $expect_os; do
+            expect "$os" "$name" yes
+        done
     done
-done
 
-printf '\n── removal task\n'
+    rm_block=$(task_block "Remove the unrendered heartbeat template")
+    rm_path=$(printf '%s\n' "$rm_block" | sed -n 's/^        path: //p' | tr -d '"')
+    if [ "$rm_path" = "$2" ]; then
+        pass "removal targets $2 exactly"
+    else
+        fail "removal path is '$rm_path', expected $2"
+    fi
 
-rm_block=$(task_block "Remove the unrendered heartbeat template")
-rm_path=$(printf '%s\n' "$rm_block" | sed -n 's/^        path: //p' | tr -d '"')
-if [ "$rm_path" = '{{ scripts_dir }}/heartbeat_backup.sh' ]; then
-    pass "removal targets {{ scripts_dir }}/heartbeat_backup.sh exactly"
-else
-    fail "removal path is '$rm_path'"
-fi
+    if printf '%s\n' "$rm_block" | grep -q '^        state: absent$'; then
+        pass "removal is state: absent"
+    else
+        fail "removal is not state: absent"
+    fi
 
-if printf '%s\n' "$rm_block" | grep -q '^        state: absent$'; then
-    pass "removal is state: absent"
-else
-    fail "removal is not state: absent"
-fi
+    copy_tags=$(printf '%s\n' "$copy_block" | sed -n 's/^      tags: //p')
+    rm_tags=$(printf '%s\n' "$rm_block" | sed -n 's/^      tags: //p')
+    if [ -n "$rm_tags" ] && [ "$rm_tags" = "$copy_tags" ]; then
+        pass "removal is tagged like the copy task"
+    else
+        fail "removal tags '$rm_tags' differ from copy tags '$copy_tags'"
+    fi
+}
 
-copy_tags=$(printf '%s\n' "$copy_block" | sed -n 's/^      tags: //p')
-rm_tags=$(printf '%s\n' "$rm_block" | sed -n 's/^      tags: //p')
-if [ -n "$rm_tags" ] && [ "$rm_tags" = "$copy_tags" ]; then
-    pass "removal is tagged like the copy task"
-else
-    fail "removal tags '$rm_tags' differ from copy tags '$copy_tags'"
-fi
+check_playbook "$REPO_ROOT/ansible/playbooks/deploy_monitoring.yml" '{{ scripts_dir }}/heartbeat_backup.sh'
+check_playbook "$REPO_ROOT/ansible/playbooks/system/baseline.yml" '{{ _scripts_dir }}/heartbeat_backup.sh'
 
+printf '\n'
 if [ "$failures" -eq 0 ]; then
     printf '   PASS\n'
     exit 0

@@ -38,6 +38,9 @@
       run_once: true
       tags: [baseline, scripts, monitoring]
 
+    # Same selection as ansible/playbooks/deploy_monitoring.yml, which site.yml
+    # does not run: no health check on FreeBSD, and `heartbeat_backup.sh` is a
+    # Jinja template the roles render, never a script to copy (PER-157).
     - name: Deploy all common scripts
       ansible.builtin.copy:
         src: "{{ item.path }}"
@@ -47,6 +50,13 @@
         group: "{{ primary_user }}"
         backup: true
       loop: "{{ common_scripts_baseline.files }}"
+      when: not (os_family == "freebsd" and item.path | basename == "system_health_check.sh") and item.path | basename != "heartbeat_backup.sh"
+      tags: [baseline, scripts, monitoring]
+
+    - name: Remove the unrendered heartbeat template from every host
+      ansible.builtin.file:
+        path: "{{ _scripts_dir }}/heartbeat_backup.sh"
+        state: absent
       tags: [baseline, scripts, monitoring]
 
     - name: Install age encryption tool
