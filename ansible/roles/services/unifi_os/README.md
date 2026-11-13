@@ -103,7 +103,7 @@ ansible-playbook ansible/playbooks/deploy_monitoring.yml --limit cwwk,unifi-os-v
 minutes) and the fleet monitoring crons. It does not write
 `/etc/monitoring/health_check.conf`: only `deploy_monitoring.yml` does, so
 until it runs the VM's health check watches `ssh cron fail2ban` and not
-`uosserver` (seen in the rehearsal, 2026-11-13). The vzdump job and
+`uosserver` (seen in the rehearsal, 2026-11-13; fleet-wide fix is PER-181). The vzdump job and
 `check_vm_status` move from CT 101 to VM 105. `check_vm_status` reports CT 101
 as stopped until the `deploy_monitoring.yml` run.
 
@@ -181,7 +181,8 @@ ansible-playbook ansible/playbooks/site.yml --limit unifi-os-vm    # changed=0 a
 ```
 
 The run after the reboot catches cloud-init and Ansible fighting over the
-hostname or `/etc/hosts`. Turn auto-update back on, then close the masters
+hostname or `/etc/hosts`. The rehearsal caught exactly that, so the role now
+disables cloud-init after the first `site.yml`. Turn auto-update back on, then close the masters
 with `ssh -O exit cwwk; ssh -O exit 10.30.40.201`.
 
 ### After the cutover

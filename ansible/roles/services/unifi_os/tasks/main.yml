@@ -19,6 +19,23 @@
       this address? Stop it first (README.md, cutover runbook).
   tags: [unifi_os, always]
 
+# cloud-init built the VM on its first boot; from here Ansible owns it. Left
+# on, it rewrites /etc/hosts at every boot (Proxmox's user-data sets
+# manage_etc_hosts) and bootstrap rewrites it back: a change on every run
+# after a reboot (rehearsal, 2026-11-13). The network config it wrote stays
+# in /etc/netplan. A Proxmox ipconfig change no longer reaches the VM; it
+# was a rebuild anyway (provision_unifi_os_vm.yml, "Address").
+- name: Disable cloud-init after the first boot
+  become: true
+  ansible.builtin.copy:
+    content: ""
+    dest: /etc/cloud/cloud-init.disabled
+    owner: root
+    group: root
+    mode: '0644'
+    force: false
+  tags: [unifi_os]
+
 # ============================================================
 # Install, once
 # ============================================================
