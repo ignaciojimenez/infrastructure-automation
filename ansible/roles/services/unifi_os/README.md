@@ -96,13 +96,16 @@ ssh -o StrictHostKeyChecking=accept-new -o ControlPersist=8h -MNf 10.30.40.201  
 ```sh
 ansible-playbook ansible/playbooks/site.yml --limit unifi-os-vm
 ssh cwwk 'sudo pvesh set /cluster/backup/backup-34b8bdac-4d3a --vmid 100,105'
-ansible-playbook ansible/playbooks/deploy_monitoring.yml --limit cwwk
+ansible-playbook ansible/playbooks/deploy_monitoring.yml --limit cwwk,unifi-os-vm
 ```
 
 `site.yml` runs bootstrap, the baseline, read_agent, this role (install takes
-minutes) and the fleet monitoring. The vzdump job and `check_vm_status` move
-from CT 101 to VM 105. `check_vm_status` reports CT 101 as stopped until the
-`deploy_monitoring.yml` run.
+minutes) and the fleet monitoring crons. It does not write
+`/etc/monitoring/health_check.conf`: only `deploy_monitoring.yml` does, so
+until it runs the VM's health check watches `ssh cron fail2ban` and not
+`uosserver` (seen in the rehearsal, 2026-11-13). The vzdump job and
+`check_vm_status` move from CT 101 to VM 105. `check_vm_status` reports CT 101
+as stopped until the `deploy_monitoring.yml` run.
 
 ### 6. First run, in the browser: `https://10.30.40.201:11443`
 
