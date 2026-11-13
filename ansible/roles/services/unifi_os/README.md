@@ -49,6 +49,8 @@ caches to learn the MAC that moved.
 
 ```sh
 bin/unifi-cutover-preflight          # every line PASS; stop at a FAIL
+# "APs adopted and connected" also proves CT 101's read-only account has the
+# vault's password: it logs in with it.
 ssh -o ControlPersist=8h -o ServerAliveInterval=60 -MNf cwwk   # Touch ID 1
 ```
 
@@ -127,8 +129,10 @@ The restore skips every controller account. Create a local, view-only admin
 with the vault's `vault_unifi_readonly_user` / `vault_unifi_readonly_password`:
 Admins → Create New → Create New User → tick Admin (local access only is
 forced) → Username and Password → untick Use a Predefined Role → Network
-**View Only**, UniFi OS **None** (least privilege; that it can still log in
-is not yet tested). Without it, step 9 cannot log in.
+**View Only**, UniFi OS **None**. Least privilege, and enough: in the
+rehearsal it logged in and `bin/unifi-state --unifi-os` read every line.
+UniFi OS refuses a password without an uppercase letter; 9.4 did not, so the
+vault's was rotated (2026-11-13). Without this account, step 9 cannot log in.
 
 ### 9. The APs come back (the gap ends)
 
