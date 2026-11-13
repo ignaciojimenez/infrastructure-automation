@@ -111,7 +111,9 @@ as stopped until the `deploy_monitoring.yml` run.
 
 Name → Next → **Proceed Without a UI Account** → console password (12+
 characters, one special; into the password manager) → Terms of Service →
-Finish. Then turn **auto-update off** for UniFi OS and Network.
+Finish. Then turn **auto-update off** for UniFi OS and Network: Network →
+Settings → Control Plane → Updates, open each row, untick Auto-Update, Apply
+Changes. In the rehearsal it stayed off through the restore and restarts.
 
 ### 7. Restore
 
@@ -122,9 +124,11 @@ backup restores into Network 10.5.67 without an error.
 ### 8. The read-only account
 
 The restore skips every controller account. Create a local, view-only admin
-with the vault's `vault_unifi_readonly_user` / `vault_unifi_readonly_password`
-(the exact UI path was not checked in the spike). Without it, step 9 cannot
-log in.
+with the vault's `vault_unifi_readonly_user` / `vault_unifi_readonly_password`:
+Admins → Create New → Create New User → tick Admin (local access only is
+forced) → Username and Password → untick Use a Predefined Role → Network
+**View Only**, UniFi OS **None** (least privilege; that it can still log in
+is not yet tested). Without it, step 9 cannot log in.
 
 ### 9. The APs come back (the gap ends)
 
