@@ -70,6 +70,7 @@ render() {
         agent_fleet_wide_threshold=3 \
         agent_sweep_healthcheck_url="$2" \
         agent_state_dir="$AGENT_DIR" \
+        fleet_dns_domain=internal \
         agent_fleet_hosts=cobra:linux,opnsense:linux || exit 1
 }
 

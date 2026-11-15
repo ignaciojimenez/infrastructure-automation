@@ -243,6 +243,26 @@ set — see `docs/BACKUP_AND_RECOVERY.md`.
 
 ## DNS Architecture (Updated November 2025)
 
+- **Fleet names resolve as `<host>.internal` via Dnsmasq (2026-11).** DHCP
+  moved from ISC to Dnsmasq on OPNsense on 2026-11-13; Dnsmasq is now the
+  single source of local names under `internal`, and Unbound forwards that
+  zone (and the fleet's reverse zones) to it. The repo stopped relying on the
+  hand-kept Unbound `<host>.local` overrides for two reasons: `.local` belongs
+  to mDNS (RFC 6762), so any Debian host that gains libnss-mdns would send
+  those lookups to multicast first and fleet resolution would break silently;
+  and two sources of names drift. One variable, `fleet_dns_domain` in
+  `group_vars/all/main.yml`, feeds every consumer. The agent's ssh_config and
+  resolver pre-check use fully qualified names, so they never depend on a
+  container's search domain. The ssh_config pins host keys with `HostKeyAlias`
+  to the bare fleet name, so a domain change cannot re-open trust-on-first-use
+  under `accept-new`. **Rollback:** set `fleet_dns_domain: local` and redeploy
+  the agent role, while the Unbound overrides still exist.
+  The laptop never used the overrides: macOS sends `.local` to mDNS only, and
+  its DHCP search domain is now `internal`, so bare `cobra` resolves as
+  `cobra.internal` (verified 2026-11-15). That supersedes
+  [NETWORK.md § mDNS](NETWORK.md#name-resolution-runs-on-mdns-not-dns),
+  written before Dnsmasq.
+
 - **Unbound over PiHole** - Chose OPNsense native Unbound with blocklists instead of separate PiHole LXC
   - Simpler: One service instead of two
   - Native HA: Unbound on OPNsense is already highly available

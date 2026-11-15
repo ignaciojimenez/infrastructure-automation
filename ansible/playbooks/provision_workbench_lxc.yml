@@ -21,8 +21,9 @@
 # giving this box a way OUT. That direction is fine and is what the heartbeat
 # uses.
 #
-# The searchdomain stays `local`, same as every other host here. Dropping it
-# was considered and rejected: it resolves names, it does not authorise
+# The searchdomain stays the fleet's (`fleet_dns_domain`), same as every
+# other host here. Dropping it was considered and rejected: it resolves
+# names, it does not authorise
 # anything, so removing it would buy no security while making this the one
 # container on VLAN 40 that cannot resolve its neighbours — a special case
 # that reads as a control without being one. The control is that this box
@@ -52,7 +53,7 @@
     lxc_cidr: 24
     lxc_gateway: 10.30.40.254
     lxc_nameserver: 10.30.40.254
-    lxc_searchdomain: local
+    lxc_searchdomain: "{{ fleet_dns_domain }}"
     lxc_bridge: vmbr0
 
     # Resources. Measured on cwwk 2026-09-20: 8 cores at load 0.37, and

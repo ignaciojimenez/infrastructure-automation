@@ -68,9 +68,9 @@ agent_fleet_hosts:
   # inbound only; the workbench holds no key of its own and cannot reach
   # anything here.
   #
-  # Named `workbench-lxc`, not `workbench`: the ssh_config template resolves
-  # `HostName {{ h.name }}` through `search local`, and only the full hostname
-  # answers mDNS (`workbench` alone is NXDOMAIN from this container).
+  # Named `workbench-lxc`, not `workbench`: the ssh_config template dials
+  # `<name>.{{ fleet_dns_domain }}`, so this must be the name DNS publishes —
+  # the full hostname (`workbench` alone was NXDOMAIN from this container).
   #
   # Swept from outside on purpose. The box already runs its own Remote Control
   # liveness check, but a host cannot credibly report that it has stopped — the

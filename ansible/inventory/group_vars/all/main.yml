@@ -53,6 +53,13 @@ backup_age_pubkey: "age1yeuwd2t78jyxldxeja529djj8zt5et7h9j0fnwzn7r0cqfnww58qjqrt
 agent_lxc_ip: "10.30.40.203"
 agent_lxc_ssh_pubkey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBfzvelHaP6bcMDf21784H3AkY+AvKHN40Veqzh9A9dB agent-lxc fleet observer (read_agent)"
 
+# DNS domain fleet names resolve under: Dnsmasq on OPNsense owns it, Unbound on
+# the gateway forwards it. Not `local` — that is mDNS (RFC 6762). Here, not in
+# group_vars/agent.yml, because the LXC provisioning playbooks and the rig's
+# rig_ct wrapper run against proxmox_hosts and consume it too. See
+# docs/ARCHITECTURE_DECISIONS.md.
+fleet_dns_domain: internal
+
 # Monitoring tokens (from vault)
 logging_token: "{{ vault_logging_token }}"
 alert_token: "{{ vault_alert_token }}"

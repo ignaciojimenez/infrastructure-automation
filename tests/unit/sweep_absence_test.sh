@@ -68,6 +68,7 @@ python3 "$REPO_ROOT/tests/lib/render_j2.py" "$TEMPLATE" "$WORK/sweep.sh" \
     agent_fleet_wide_threshold=3 \
     agent_state_dir="$AGENT_DIR" \
     agent_sweep_healthcheck_url="" \
+    fleet_dns_domain=internal \
     agent_fleet_hosts=cobra:linux,hifipi:linux,dockassist:linux,vinylstreamer:linux,opnsense:linux || exit 1
 # ^ healthcheck URL deliberately empty: that is the sweep's "do not ping" path,
 # which keeps this test off the network. The ping is covered separately by
