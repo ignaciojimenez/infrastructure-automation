@@ -22,10 +22,11 @@
     lxc_cidr: 24
     lxc_gateway: 10.30.40.254
     lxc_nameserver: 10.30.40.254
-    # Fleet hostnames resolve as <host>.local via Unbound on the gateway.
-    # Without this searchdomain, `ssh cobra-agent` cannot resolve from inside
-    # the container and the whole Tier 1 sweep fails.
-    lxc_searchdomain: local
+    # Fleet hostnames resolve as <host>.<fleet_dns_domain> via Unbound on the
+    # gateway. The sweep dials fully qualified names (ssh_config.j2), so this
+    # only serves bare names typed by hand. `pct create` applies it here;
+    # platform/proxmox.yml keeps existing containers in line.
+    lxc_searchdomain: "{{ fleet_dns_domain }}"
     lxc_bridge: vmbr0
 
     # Resources — 1 vCPU / 2GB / 16GB is sized for shell monitoring plus a

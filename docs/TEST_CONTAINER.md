@@ -89,7 +89,7 @@ pct create 199 local:vztmpl/debian-13-standard_13.6-1_amd64.tar.zst \
   --rootfs local-zfs:4 \
   --features nesting=1 \
   --net0 name=eth0,bridge=vmbr0,firewall=1,ip=10.30.40.205/24,gw=10.30.40.254,type=veth \
-  --nameserver 10.30.40.254 --searchdomain local \
+  --nameserver 10.30.40.254 --searchdomain internal \
   --ostype debian --unprivileged 1 --onboot 0
 
 pct start 199

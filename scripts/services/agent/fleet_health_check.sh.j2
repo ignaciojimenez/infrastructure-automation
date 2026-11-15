@@ -67,6 +67,9 @@ HEALTHCHECKS_CHECK_NAME="{{ agent_opnsense_monitoring_check_name }}"
 
 # name:kind pairs, from group_vars/agent.yml
 FLEET="{% for h in agent_fleet_hosts %}{{ h.name }}:{{ h.kind }} {% endfor %}"
+# Domain the names above resolve under (group_vars/all), for the resolver
+# pre-check. The SSH probes get it through ssh_config's HostName instead.
+FLEET_DNS_DOMAIN="{{ fleet_dns_domain }}"
 
 mkdir -p "$AGENT_DIR" "$BACKOFF_DIR"
 
@@ -671,14 +674,16 @@ trap 'rm -f "$FINDINGS" "$PROBE_OUT" "$SSH_ERR" "$API_OUT" "$SNAPSHOT" "$SILENT"
 
 # Resolver pre-check.
 #
-# Every fleet name resolves as <host>.local through Unbound on the gateway.
+# Every fleet name resolves as <host>.$FLEET_DNS_DOMAIN through Unbound on the
+# gateway. The probe asks for exactly that name — the one ssh_config dials —
+# so it cannot pass on a search-domain or mDNS answer the probes never use.
 # If that resolver is down, all seven SSH attempts fail and the sweep would
 # report the entire fleet as unreachable — technically true, useless as a
 # diagnosis, and actively misleading: it blames seven healthy hosts for one
 # broken dependency, at exactly the moment the observer is being relied on.
 # The gateway also runs as a VM on the same hypervisor as this container, so
 # this is a plausible failure, not a theoretical one.
-dns_probe="${FLEET%%:*}"
+dns_probe="${FLEET%%:*}.${FLEET_DNS_DOMAIN}"
 
 if getent hosts "$dns_probe" >/dev/null 2>&1; then
     fleet_to_check="$FLEET"
@@ -697,7 +702,7 @@ else
     for entry in $FLEET; do
         [ "${entry##*:}" = opnsense ] && fleet_to_check="$fleet_to_check $entry"
     done
-    note "resolver" "cannot resolve '${dns_probe}' — fleet names resolve as <host>.local via Unbound on the gateway. SSH-based per-host checks skipped: without DNS they would all report false failures. opnsense is still checked, over its API by IP."
+    note "resolver" "cannot resolve '${dns_probe}' — fleet names resolve as <host>.${FLEET_DNS_DOMAIN} via Unbound on the gateway. SSH-based per-host checks skipped: without DNS they would all report false failures. opnsense is still checked, over its API by IP."
 fi
 
 for entry in $fleet_to_check; do

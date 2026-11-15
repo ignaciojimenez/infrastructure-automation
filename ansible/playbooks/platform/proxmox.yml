@@ -26,3 +26,66 @@
         cmd: update-initramfs -u
       when: zfs_arc_config is changed
       tags: [proxmox, tuning]
+
+    # cwwk resolved through 9.9.9.9, a leftover from the archived Pi-hole role
+    # (docs/NETWORK.md). It bought no resilience: the default route is OPNsense,
+    # so with VM 100 down Quad9 is unreachable too — and it could not resolve a
+    # single fleet name. Same resolver and search domain as every other host.
+    # The node has a static address, no resolvconf and no systemd-resolved, so
+    # this file is the whole configuration; PVE's node DNS panel edits it too,
+    # and the next run puts it back.
+    - name: Point the hypervisor at the estate resolver
+      ansible.builtin.copy:
+        content: |
+          # Managed by Ansible — do not edit manually (including from the PVE DNS panel)
+          search {{ fleet_dns_domain }}
+          nameserver {{ fleet_dns_resolver }}
+        dest: /etc/resolv.conf
+        owner: root
+        group: root
+        mode: '0644'
+      tags: [proxmox, dns]
+
+    # `pct create` is the only thing that ever sets a container's searchdomain,
+    # so containers made before the move to Dnsmasq kept `local`. Reconciled for
+    # every container on the node, not only those with a provision playbook —
+    # unifi-lxc (CT 101) has none.
+    - name: List containers
+      ansible.builtin.command: pct list
+      register: proxmox_ct_list
+      changed_when: false
+      check_mode: false  # read-only probe; must run under --check
+      tags: [proxmox, dns]
+
+    - name: Read container configs
+      ansible.builtin.command: pct config {{ item }}
+      loop: "{{ proxmox_ct_list.stdout_lines[1:] | map('split') | map('first') | list }}"
+      register: proxmox_ct_configs
+      changed_when: false
+      check_mode: false  # read-only probe; must run under --check
+      tags: [proxmox, dns]
+
+    # `command` tasks report "skipping" under --check whatever their `when`, so
+    # a dry run cannot show which containers the next task would touch. This
+    # states it explicitly — same reason as provision_lxc.yml's plan report.
+    - name: Report which containers need their searchdomain set
+      ansible.builtin.debug:
+        msg: >-
+          CT {{ item.item }}:
+          {{ 'ok' if ('searchdomain: ' ~ fleet_dns_domain) in item.stdout_lines
+             else 'WOULD SET searchdomain ' ~ fleet_dns_domain ~ ' (now: '
+                  ~ (item.stdout_lines | select('match', '^searchdomain: ') | map('regex_replace', '^searchdomain: ', '')
+                     | first | default('unset, inherits the host')) ~ ')' }}
+      loop: "{{ proxmox_ct_configs.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      tags: [proxmox, dns]
+
+    - name: Ensure every container searches the fleet domain
+      ansible.builtin.command: pct set {{ item.item }} --searchdomain {{ fleet_dns_domain }}
+      loop: "{{ proxmox_ct_configs.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: "('searchdomain: ' ~ fleet_dns_domain) not in item.stdout_lines"
+      changed_when: true
+      tags: [proxmox, dns]
