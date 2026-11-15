@@ -30,9 +30,15 @@ back on: security fixes are why we left 9.4.
 
 With Ignacio present. The commands run from this repo's root on the branch.
 
-**Wi-Fi during the gap (reasoned, not tested here):** UniFi APs keep serving
-their last configuration while no controller answers. Between steps 3 and 9
-nothing manages them: no stats, no changes, no guest portal.
+**Wi-Fi during the gap (seen at the cutover, 2026-11-15):** the APs kept
+serving their last configuration through 21 minutes with no controller: a
+Wi-Fi host (vinylstreamer) logged no event at all. Between steps 3 and 9
+nothing manages them: no stats, no changes, no guest portal. **The drop comes
+at step 9, not during the gap:** the new controller provisions each AP as it
+reconnects, which restarts its radios. Every client re-associated, about 20 s
+each (vinylstreamer 19:02:03–19:02:24), and the U7 Lite rebooted once. A Mac
+may rejoin a different saved SSID afterwards. Restarting `uosserver` later
+cost no client anything: only provisioning does.
 
 **Wi-Fi is fine, because of a dead-man timer.** This moves the controller that
 runs the Wi-Fi, so a laptop on Wi-Fi could lose its way back to cwwk exactly
@@ -90,8 +96,9 @@ ssh cwwk 'systemctl list-timers unifi-rollback.timer'            # one timer, ~9
 ssh cwwk 'sudo pct set 101 --onboot 0 && sudo pct shutdown 101 --timeout 120; sudo pct status 101'
 ```
 
-90 minutes is a guess at steps 3–10, not a measurement. If a step runs long,
-re-arm before it fires: stop the timer, then run the first line again.
+At the cutover steps 3–10 took 26 minutes of work (18:40–19:06); 90 leaves
+room to check the Wi-Fi before cancelling. If a step runs long, re-arm before
+it fires: stop the timer, then run the first line again.
 
 ### 4. Replace the spike VM with the real one
 
@@ -102,7 +109,7 @@ refuses to create the VM while anything answers on .201.
 ```sh
 ssh cwwk 'sudo qm destroy 105 --purge'
 ansible-playbook ansible/playbooks/provision_unifi_os_vm.yml
-ssh-keygen -R 10.30.40.201; ssh-keygen -R unifi; ssh-keygen -R unifi-agent
+ssh-keygen -R 10.30.40.201; ssh-keygen -R 10.30.40.201-agent; ssh-keygen -R unifi; ssh-keygen -R unifi-agent
 ssh -o StrictHostKeyChecking=accept-new -o ControlPersist=8h -MNf 10.30.40.201   # Touch ID 2
 ```
 
@@ -129,13 +136,17 @@ Name → Next → **Proceed Without a UI Account** → console password (12+
 characters, one special; into the password manager) → Terms of Service →
 Finish. Then turn **auto-update off** for UniFi OS and Network: Network →
 Settings → Control Plane → Updates, open each row, untick Auto-Update, Apply
-Changes. In the rehearsal it stayed off through the restore and restarts.
+Changes. It stayed off through the restore and restarts, in the rehearsal
+and at the cutover. Every server restart ends the console session, so step
+11's backup test needs a fresh owner login.
 
 ### 7. Restore
 
 Network → Settings → Control Plane → Backups → **Upload & Restore** →
-`cutover.unf`. The Network app restarts itself. Seen in the spike: the 9.4.19
-backup restores into Network 10.5.67 without an error.
+`cutover.unf` (the dialog's **browse** link, then **Restore**). The Network app
+restarts itself. The 9.4.19 backup restores into Network 10.5.67 without an
+error: at the cutover it took under a minute, and the APs were back two to
+four minutes later.
 
 **Then put the autobackup back to daily.** CT 101 runs `0 3 * * *` with 30
 days of statistics. Network 10.5 refuses daily with any history
@@ -180,6 +191,8 @@ forced) → Username and Password → untick Use a Predefined Role → Network
 rehearsal it logged in and `bin/unifi-state --unifi-os` read every line.
 UniFi OS refuses a password without an uppercase letter; 9.4 did not, so the
 vault's was rotated (2026-11-13). Without this account, step 9 cannot log in.
+The form defaults to **Super Admin** until the predefined role is unticked,
+and it wants a first or last name: the username will do.
 
 ### 9. The APs come back (the gap ends)
 
