@@ -17,7 +17,12 @@ Host {% for h in agent_fleet_hosts %}{{ h.name }}-agent {% endfor %}
     ConnectTimeout {{ agent_ssh_timeout }}
     StrictHostKeyChecking accept-new
 
+# HostKeyAlias pins each host key to the fleet name, not to whatever HostName
+# is. known_hosts is keyed by HostName, so without it a domain change looks
+# like a never-seen host and accept-new silently trusts whoever answers first
+# — and the domain is fed by DHCP registrations, not hand-set records.
 {% for h in agent_fleet_hosts %}
 Host {{ h.name }}-agent
     HostName {{ h.name }}.{{ fleet_dns_domain }}
+    HostKeyAlias {{ h.name }}
 {% endfor %}
