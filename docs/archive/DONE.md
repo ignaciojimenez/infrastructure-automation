@@ -125,6 +125,16 @@ fleet host's live lookup for the test's duration):
 | Non-key list through Ansible (`-e gh_keys=https://example.com/`) | play fails at the guard, with the reason; nothing written |
 | `site.yml` twice | `changed=0` on the second run; timer then runs quiet against the real gist |
 
+**Rolled out 2026-11-15** with `services.yml --tags keys --limit '!opnsense'` to the eight
+Debian hosts. The dry run found cobra, hifipi, vinylstreamer and cwwk each missing the
+same two of the seven gist keys; the run added them. The second run was `changed=0` on all
+eight. Each host's fallback fingerprints then matched the live gist (7 keys), and a
+manual timer run succeeded everywhere, the four Debian 12 Pis included. Slack delivery
+was proven on workbench-lxc with the deployed webhook: a forced refusal
+(`KEYS_URL=https://example.com/`) posted to #home-alerts at 22:31 and left the file's
+hash unchanged. opnsense was left out: the existing key task would rewrite a file
+OPNsense regenerates from `config.xml`, and its keys belong in its UI.
+
 ## 2026-11-15 — a 250 m home zone reports arrivals before the door opens (PER-170)
 
 **At 100 m, iOS reported half the arrivals after the entrance door had already opened.** On 2026-11-05 Candela came home to a dark flat: Away Mode had turned the lights off during a 17-minute errand, the phone reported the return 2.5 min after the door opened, and "Lights on when dark" waits another 2 min. Over 26 Oct–5 Nov, 3 of 6 arrivals were reported 1.3–1.7 min early and 3 were 2.5–4.5 min late.
