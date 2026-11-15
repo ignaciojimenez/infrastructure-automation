@@ -59,6 +59,9 @@ IP="${TEST_CT_IP:-10.30.40.205}"
 CIDR="${TEST_CT_CIDR:-24}"
 GATEWAY="${TEST_CT_GATEWAY:-10.30.40.254}"
 NAMESERVER="${TEST_CT_NAMESERVER:-10.30.40.254}"
+# Mirrors fleet_dns_domain in group_vars/all/main.yml; this script runs on
+# the hypervisor without Ansible, so it cannot read it.
+SEARCHDOMAIN="${TEST_CT_SEARCHDOMAIN:-internal}"
 BRIDGE="${TEST_CT_BRIDGE:-vmbr0}"
 STORAGE="${TEST_CT_STORAGE:-local-zfs}"
 ROOTFS_GB="${TEST_CT_ROOTFS_GB:-4}"
@@ -149,7 +152,7 @@ else
         --rootfs "${STORAGE}:${ROOTFS_GB}" \
         --features nesting=1 \
         --net0 "name=eth0,bridge=${BRIDGE},firewall=1,ip=${IP}/${CIDR},gw=${GATEWAY},type=veth" \
-        --nameserver "$NAMESERVER" --searchdomain local \
+        --nameserver "$NAMESERVER" --searchdomain "$SEARCHDOMAIN" \
         --ostype debian --unprivileged 1 --onboot 0
 fi
 
