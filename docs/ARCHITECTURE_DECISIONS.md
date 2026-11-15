@@ -261,9 +261,13 @@ set — see `docs/BACKUP_AND_RECOVERY.md`.
 - **Side by side, cut over by IP.** The APs report to `10.30.40.201` by IP, so
   the VM takes that address at cutover. CT 101 stays stopped (`onboot=0`) as
   the rollback until the new controller has a backup off-host.
-- **Release jumps are by hand, with a person present and wired.** The
-  controller going down can take the laptop's Wi-Fi with it, and recovery
-  then needs a cable anyway.
+- **Release jumps are by hand, with a person present, under a dead-man
+  timer.** The controller going down can take the laptop's Wi-Fi with it,
+  exactly when a rollback is needed. A timer on cwwk, armed before the old
+  controller stops and cancelled once the after-state is clean, rolls back
+  on its own (a router's "commit confirmed"). It replaced "wired only"
+  (2026-11-15): the cable protected one thing, the path back, and the timer
+  protects it without one.
 - **Read-only state check is the pass/fail** for any controller change:
   `bin/unifi-state`, diffed before and after (PER-128). The vaulted View Only
   account is enforced server-side: a write returns `api.err.NoPermission`.

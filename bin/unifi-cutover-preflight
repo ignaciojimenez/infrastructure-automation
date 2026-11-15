@@ -25,15 +25,21 @@ info() { printf '  INFO  %s\n' "$1"; }
 
 printf '\n── UniFi cutover preflight (%s)\n' "$(date '+%Y-%m-%d %H:%M')"
 
-# 1. Never from Wi-Fi: the controller being moved is what runs the Wi-Fi.
+# 1. Wi-Fi is allowed: the dead-man timer armed at step 3 rolls back if the
+# laptop loses its way in. A timer left over from an earlier attempt would
+# fire in the middle of this one.
 iface=$(route -n get 10.30.40.201 2>/dev/null | awk '/interface:/ {print $2}')
-wifi=$(networksetup -listallhardwareports 2>/dev/null | awk '/Hardware Port: Wi-Fi/ {getline; print $2}')
-if [ -z "$iface" ]; then
-    fail "laptop: no route to 10.30.40.201"
-elif [ "$iface" = "$wifi" ]; then
-    fail "laptop: reaches the controller LAN over Wi-Fi ($iface). Plug in the cable"
+if [ -n "$iface" ]; then
+    pass "laptop: route to 10.30.40.201 ($iface)"
 else
-    pass "laptop: reaches the controller LAN wired ($iface)"
+    fail "laptop: no route to 10.30.40.201"
+fi
+if ! timers=$(ssh cwwk-agent 'systemctl list-timers --all --no-legend unifi-rollback.timer' 2>/dev/null); then
+    fail "cwwk: cannot list timers"
+elif [ -n "$timers" ]; then
+    fail "cwwk: unifi-rollback.timer is already armed. Stop it first"
+else
+    pass "cwwk: no rollback timer armed"
 fi
 
 # 2. The controller being replaced is up.

@@ -28,20 +28,28 @@ back on: security fixes are why we left 9.4.
 
 ## Cutover runbook
 
-Wired, with Ignacio present. Never from Wi-Fi: this moves the controller that
-runs the Wi-Fi. The commands run from this repo's root on the branch.
+With Ignacio present. The commands run from this repo's root on the branch.
 
 **Wi-Fi during the gap (reasoned, not tested here):** UniFi APs keep serving
 their last configuration while no controller answers. Between steps 3 and 9
 nothing manages them: no stats, no changes, no guest portal.
 
+**Wi-Fi is fine, because of a dead-man timer.** This moves the controller that
+runs the Wi-Fi, so a laptop on Wi-Fi could lose its way back to cwwk exactly
+when a rollback is needed. Step 3 arms a timer on cwwk that rolls back on its
+own after 90 minutes; step 10 cancels it once the after-state is clean. A
+cutover that drops the laptop's Wi-Fi undoes itself, and the Wi-Fi with it.
+Not cancelling it undoes a good cutover, so step 12 checks it is gone.
+
 **Rollback**, at any step after 3, until step 12 passes:
 
 ```sh
-ssh cwwk 'sudo qm stop 105; sudo pct set 101 --onboot 1 && sudo pct start 101'
+ssh cwwk 'sudo systemctl stop unifi-rollback.timer; sudo qm stop 105; sudo pct set 101 --onboot 1 && sudo pct start 101'
 git revert $(git log -1 --format=%h --grep='retire unifi-lxc')   # CT 101 back in the inventory
+ssh cwwk 'sudo pvesh set /cluster/backup/backup-34b8bdac-4d3a --vmid 100,101'   # if step 5 ran
 ```
 
+The timer runs the first line's cwwk half; the other two wait for the laptop.
 The APs inform to the same address either way. Allow a few minutes for ARP
 caches to learn the MAC that moved.
 
@@ -74,11 +82,16 @@ ssh cwwk "sudo pct exec 101 -- sha256sum $F"
 (umask 077; ssh cwwk "sudo pct exec 101 -- cat $F" > $D/cutover.unf); shasum -a 256 $D/cutover.unf
 ```
 
-### 3. Stop CT 101 (the gap starts)
+### 3. Arm the rollback, stop CT 101 (the gap starts)
 
 ```sh
+ssh cwwk 'sudo systemd-run --on-active=90min --unit=unifi-rollback /bin/sh -c "qm stop 105; pct set 101 --onboot 1 && pct start 101"'
+ssh cwwk 'systemctl list-timers unifi-rollback.timer'            # one timer, ~90 min left
 ssh cwwk 'sudo pct set 101 --onboot 0 && sudo pct shutdown 101 --timeout 120; sudo pct status 101'
 ```
+
+90 minutes is a guess at steps 3–10, not a measurement. If a step runs long,
+re-arm before it fires: stop the timer, then run the first line again.
 
 ### 4. Replace the spike VM with the real one
 
@@ -156,6 +169,12 @@ diff $D/before-cutover-1.txt $D/after-cutover-2.txt && echo identical
 Every line that differs is explained by the move, or it's a **rollback**.
 Space the logins out: UniFi OS answers HTTP 429 after about six a minute.
 
+Clean: the cutover holds, so disarm the rollback.
+
+```sh
+ssh cwwk 'sudo systemctl stop unifi-rollback.timer; systemctl list-timers --all unifi-rollback.timer'   # 0 timers
+```
+
 ### 11. Force every check once
 
 On the VM (`ssh 10.30.40.201`), with the wrapper exactly as cron runs it
@@ -186,8 +205,10 @@ ansible-playbook ansible/playbooks/site.yml --limit unifi-os-vm    # changed=0 a
 
 The run after the reboot catches cloud-init and Ansible fighting over the
 hostname or `/etc/hosts`. The rehearsal caught exactly that, so the role now
-disables cloud-init after the first `site.yml`. Turn auto-update back on, then close the masters
-with `ssh -O exit cwwk; ssh -O exit 10.30.40.201`.
+disables cloud-init after the first `site.yml`. Turn auto-update back on.
+`ssh cwwk-agent systemctl list-timers --all unifi-rollback.timer` must show
+0 timers: an armed one would undo the cutover. Then close the masters with
+`ssh -O exit cwwk; ssh -O exit 10.30.40.201`.
 
 ### After the cutover
 
