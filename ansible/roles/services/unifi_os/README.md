@@ -136,6 +136,27 @@ Network → Settings → Control Plane → Backups → **Upload & Restore** →
 `cutover.unf`. The Network app restarts itself. Seen in the spike: the 9.4.19
 backup restores into Network 10.5.67 without an error.
 
+**Then put the autobackup back to daily.** CT 101 runs `0 3 * * *` with 30
+days of statistics. Network 10.5 refuses daily with any history
+(`api.err.InvalidAutoBackupDays`), so the restore fell back to Mondays only
+(`0 3 * * 1`). Daily is allowed only as settings-only (`autobackup_days: 0`):
+the settings are what a restore needs. The console has no control for the
+schedule, so set it through the Network API from the logged-in console tab
+(browser devtools or Playwright):
+
+```js
+const g = await fetch('/proxy/network/api/s/default/get/setting/super_mgmt');
+const csrf = g.headers.get('x-csrf-token'), id = (await g.json()).data[0]._id;
+await fetch('/proxy/network/api/s/default/set/setting/super_mgmt/' + id, { method: 'PUT',
+  headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
+  body: JSON.stringify({ autobackup_cron_expr: '0 3 * * *', autobackup_days: 0 }) });
+```
+
+Read it back: `0 3 * * *`, days `0`. In the rehearsal (2026-11-15) a
+schedule set this way fired on time, survived a reboot, and wrote
+`autobackup_10.5.67_<date>_<UTC time>_<epoch ms>.unf`. Left weekly,
+`backup_unifi` fails at 03:30 on Tuesday: it refuses a backup older than 26 h.
+
 ### 8. The read-only account
 
 The restore skips every controller account. Create a local, view-only admin
@@ -184,12 +205,12 @@ On the VM (`ssh 10.30.40.201`), with the wrapper exactly as cron runs it
   line. Expect a "fixed" message in #home-logging, and the server back. Then
   run it with `UNIFI_OS_INFORM_URL=http://127.0.0.1:1/inform` in front. The
   restart cannot fix that, so expect an alert in #home-alerts.
-- **Backup.** First check where the autobackups are:
-  `cd /tmp && sudo -u uosserver podman exec uosserver ls -l /var/lib/unifi/backup/autobackup`.
-  This path is reasoned from the Debian package's layout, not seen yet. If the
-  directory is empty, run a backup from the UI. Then run the backup's cron line
-  and check the log for `Upload successful`. If the path is wrong, fix it in
-  `backup_unifi.sh` and redeploy.
+- **Backup.** The autobackups are at
+  `cd /tmp && sudo -u uosserver podman exec uosserver ls -l /var/lib/unifi/backup/autobackup`
+  (seen in the rehearsal). Right after the restore it is empty, and
+  `backup_unifi` fails on an empty directory. So set the step 7 schedule to a
+  few minutes ahead, wait for a file, set it back to `0 3 * * *`, then run the
+  backup's cron line and check the log for `Upload successful`.
 - **Heartbeat.** Run `~/.scripts/monitoring/heartbeat_backup_unifi.sh` after
   the backup. healthchecks.io must show a fresh ping.
 - **System health.** `uosserver` is in `critical_services`, so the
