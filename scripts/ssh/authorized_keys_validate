@@ -1,0 +1,45 @@
+#!/bin/sh
+# The one guard on a key list before it may replace authorized_keys (PER-182).
+#
+#   authorized_keys_validate < fetched_list > keys
+#
+# Prints the keys, one per line, trimmed, with blank and comment lines dropped.
+# Exits 1, with the reason on stderr, when there is no key at all or any
+# non-comment line is not a public key. On failure stdout is incomplete:
+# callers must discard it.
+#
+# Two callers, one copy: tasks/github_authorized_keys.yml runs this file's text
+# on the target with `sh -c`, and the sync timer runs the deployed copy. The
+# Ansible guard was a Jinja assert, and the reason this is a shared script
+# rather than a second copy is the one github_authorized_keys.yml records: two
+# copies of the same guard drifted once already.
+#
+# Why it matters: authorized_keys is the fallback when the live lookup cannot
+# reach the gist. A blank or broken download written over it locks the
+# infrastructure user out of every host at once.
+#
+# POSIX sh and awk only: it runs under dash (Debian), BusyBox-free Pis and
+# FreeBSD sh (opnsense, via the Ansible task).
+
+LC_ALL=C
+export LC_ALL
+
+exec awk '
+{
+    sub(/\r$/, "")
+    sub(/^[ \t]+/, "")
+    sub(/[ \t]+$/, "")
+}
+$0 == "" || /^#/ { next }
+/^(ssh-|ecdsa-|sk-)[A-Za-z0-9@.-]+ AAAA[A-Za-z0-9+\/=]+( .*)?$/ { print; keys++; next }
+{
+    # Line numbers only, and the first three: the content is whatever the gist
+    # holds (an HTML error page is hundreds of lines), and this goes to Slack.
+    bad++
+    if (bad <= 3) printf "line %d is not a public key\n", NR > "/dev/stderr"
+}
+END {
+    if (bad > 3) printf "and %d more lines that are not public keys\n", bad - 3 > "/dev/stderr"
+    if (bad) exit 1
+    if (!keys) { print "no keys in the list" > "/dev/stderr"; exit 1 }
+}'

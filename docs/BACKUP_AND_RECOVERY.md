@@ -174,8 +174,17 @@ AuthorizedKeysCommandUser   nobody
 
 This is a **live lookup at authentication time**, not a snapshot written at bootstrap.
 Add a public key to the gist and every host accepts it on the next connection — no
-Ansible run, no physical access, no SD-card surgery. `~/.ssh/authorized_keys`, written
-from the same gist by Ansible, is the fallback when the gist is unreachable.
+Ansible run, no physical access, no SD-card surgery. `~/.ssh/authorized_keys` is the
+fallback when the gist is unreachable. A timer on every Debian host rewrites it from
+the gist every 15 minutes (`authorized_keys_sync`, PER-182), posting each change and
+each refused list to #home-alerts, so the fallback is never more than 15 minutes
+behind the gist in either direction.
+
+> 📌 **Revoking a key = delete it from the gist, then wait ≤15 minutes.** sshd accepts
+> a key from either path, so until 2026-11 a key removed from the gist kept working
+> from the fallback until that host's next Ansible run. The timer's #home-alerts post
+> listing the removed fingerprint is the confirmation, one per host. OPNsense is not
+> covered (it owns its accounts; see below).
 
 > 📌 **A gist, not `github.com/<profile>.keys` (changed 2026-10-04).** GitHub deletes
 > account keys that never authenticate to GitHub itself, so every device key but the
@@ -204,9 +213,9 @@ from the same gist by Ansible, is the fallback when the gist is unreachable.
    ```bash
    security add-generic-password -s ansible-vault-master -a "$USER" -w
    ```
-5. **Re-establish `touchid-agent`** for day-to-day use, and let the next Ansible run
-   reconcile `authorized_keys` (`exclusive: true` from `{{ gh_keys }}`). **OPNsense is
-   the exception** — paste the key into its UI instead; see below.
+5. **Re-establish `touchid-agent`** for day-to-day use. `authorized_keys` reconciles
+   itself from the gist within 15 minutes (the sync timer), so no Ansible run is
+   needed. **OPNsense is the exception** — paste the key into its UI instead; see below.
 6. **Re-issue the laptop's `read_agent` key** — see *Porting `read_agent`* below.
    It is not backed up anywhere, by design.
 
@@ -299,8 +308,10 @@ apply removes it. The discriminator is the UI field, or `grep authorizedkeys` in
 `config.xml`.)
 
 📌 **So the account that matters most is GitHub, not the laptop.**
-`authorized_key` is deployed with `exclusive: true` from `{{ gh_keys }}` (a gist) *and*
-`AuthorizedKeysCommand` reads the same gist live — both paths terminate at the same account.
+`authorized_keys` is rewritten from `{{ gh_keys }}` (a gist) by Ansible and by the sync
+timer, *and* `AuthorizedKeysCommand` reads the same gist live — both paths terminate at
+the same account. The timer's #home-alerts post on every change is the detection
+control for a tampered gist.
 
 ✅ **Confirmed well covered (2026-09-01).** That account carries several independent
 authentication and recovery factors, **at least one of which is a physical token that

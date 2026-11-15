@@ -1,0 +1,114 @@
+# Keep the infrastructure user's fallback authorized_keys in sync with the key
+# gist between Ansible runs (PER-182).
+#
+# sshd accepts a key from either the live lookup (update_keys) or the file, and
+# only Ansible wrote the file, so it lagged the gist both ways: new keys were
+# missing from the fallback, and a key removed from the gist kept working on
+# every host until that host's next run. A timer every 15 minutes closes both.
+#
+# Not a write from update_keys on each lookup: that runs as nobody, pre-auth,
+# on demand of anyone who can reach port 22. Writing from there needs either a
+# root write an attacker can trigger, or a file nobody can write.
+#
+# The service runs as the infrastructure user, not root: the account can
+# always write its own authorized_keys, so root would add privilege and buy
+# nothing. The guardrails are in scripts/ssh/authorized_keys_sync.
+#
+# Debian only. OPNsense owns its accounts and regenerates its own keys
+# (PER-104).
+
+- name: Look up the infrastructure user's home
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ infrastructure_user }}"
+  tags: [ssh, keys]
+
+- name: Install the key-list validator and the sync script
+  become: true
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../scripts/ssh/{{ item }}"
+    dest: "/usr/local/sbin/{{ item }}"
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - authorized_keys_validate
+    - authorized_keys_sync
+  tags: [ssh, keys]
+
+# 0600 root: it holds the #home-alerts webhook. systemd reads it as root before
+# dropping to the infrastructure user. diff off so --diff never prints the
+# webhook.
+#
+# KEEP_KEY is the test-container exception github_authorized_keys.yml has: the
+# rig's key is kept alongside the gist's, or the first timer run would saw off
+# the rig's way in. is_test_environment is set only in inventory_test/.
+- name: Configure the sync
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/authorized_keys_sync.env
+    owner: root
+    group: root
+    mode: "0600"
+    content: |
+      KEYS_URL="{{ gh_keys }}"
+      SLACK_WEBHOOK="https://hooks.slack.com/services/{{ alert_token }}"
+      {% if is_test_environment | default(false) %}
+      KEEP_KEY="{{ test_environment_ssh_key | trim }}"
+      {% endif %}
+  diff: false
+  tags: [ssh, keys]
+
+- name: Install the sync service and timer
+  become: true
+  ansible.builtin.copy:
+    dest: "/etc/systemd/system/{{ item.name }}"
+    owner: root
+    group: root
+    mode: "0644"
+    content: "{{ item.content }}"
+  loop:
+    - name: authorized_keys_sync.service
+      content: |
+        [Unit]
+        Description=Sync the fallback authorized_keys with the key gist (PER-182)
+
+        [Service]
+        Type=oneshot
+        User={{ infrastructure_user }}
+        EnvironmentFile=/etc/authorized_keys_sync.env
+        ExecStart=/usr/local/sbin/authorized_keys_sync
+        StateDirectory=authorized_keys_sync
+        StateDirectoryMode=0700
+        UMask=0077
+        NoNewPrivileges=yes
+        PrivateTmp=yes
+        ProtectSystem=strict
+        ReadWritePaths={{ ansible_facts.getent_passwd[infrastructure_user][4] }}/.ssh
+    - name: authorized_keys_sync.timer
+      content: |
+        [Unit]
+        Description=Sync the fallback authorized_keys every 15 minutes (PER-182)
+
+        [Timer]
+        OnCalendar=*:0/15
+        RandomizedDelaySec=60
+
+        [Install]
+        WantedBy=timers.target
+  loop_control:
+    label: "{{ item.name }}"
+  register: authorized_keys_sync_units
+  tags: [ssh, keys]
+
+- name: Enable the sync timer
+  become: true
+  ansible.builtin.systemd:
+    name: authorized_keys_sync.timer
+    enabled: true
+    state: started
+    daemon_reload: "{{ authorized_keys_sync_units is changed }}"
+  # In check mode on a host that has never had the units, there is nothing to
+  # enable yet; the copy above already reports the change.
+  when: not (ansible_check_mode and authorized_keys_sync_units is changed)
+  tags: [ssh, keys]

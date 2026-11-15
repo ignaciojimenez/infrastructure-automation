@@ -40,17 +40,39 @@
 # replace it: that is the one way to lock the infrastructure user out of every
 # host at once. Every non-comment line must look like a public key, and there
 # must be at least one.
+#
+# The guard is scripts/ssh/authorized_keys_validate, the same file the sync
+# timer runs on every Debian host (tasks/authorized_keys_sync.yml): one guard
+# for both writers, not a Jinja copy of it. Its text is run on the target with
+# `sh -c` rather than from a deployed copy, so it also works in check mode and
+# before the first deploy. Its output, the keys with comments and blank lines
+# dropped, is what gets written.
+- name: Validate the fetched key list
+  ansible.builtin.command:
+    argv:
+      - sh
+      - -c
+      - "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../scripts/ssh/authorized_keys_validate') }}"
+      - authorized_keys_validate
+    stdin: "{{ github_keys_fetched.content | default('') }}"
+  register: github_keys_validated
+  changed_when: false
+  # The verdict is enforced by the assert below, which can say why.
+  failed_when: false
+  # Read-only, like the fetch: check mode must see the real verdict.
+  check_mode: false
+  when: github_keys_fetched is succeeded
+  tags: [ssh, keys]
+
 - name: Refuse an empty or malformed key list
   ansible.builtin.assert:
     that:
-      - fetched_key_lines | length > 0
-      - fetched_key_lines | reject('match', '^(ssh-|ecdsa-|sk-)[A-Za-z0-9@.-]+ AAAA[A-Za-z0-9+/=]+( .*)?$') | list | length == 0
+      - github_keys_validated.rc == 0
     fail_msg: >-
-      {{ gh_keys }} returned no keys or lines that are not public keys. Refusing
-      to replace authorized_keys with it — that file is the fallback when the
-      live lookup fails. Fix the key list, then re-run.
-  vars:
-    fetched_key_lines: "{{ github_keys_fetched.content | default('') | split('\n') | map('trim') | select | reject('match', '^#') | list }}"
+      {{ gh_keys }} returned no keys or lines that are not public keys
+      ({{ github_keys_validated.stderr | replace('\n', '; ') }}). Refusing to
+      replace authorized_keys with it — that file is the fallback when the live
+      lookup fails. Fix the key list, then re-run.
   when: github_keys_fetched is succeeded
   tags: [ssh, keys]
 
@@ -74,7 +96,7 @@
     authorized_key_set: "{{ key_lines | select | join('\n') }}"
   vars:
     key_lines:
-      - "{{ github_keys_fetched.content | default('') | trim }}"
+      - "{{ github_keys_validated.stdout }}"
       - "{{ test_environment_ssh_key | default('')
             if is_test_environment | default(false) else '' }}"
   when: github_keys_fetched is succeeded

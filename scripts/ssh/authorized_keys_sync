@@ -1,0 +1,148 @@
+#!/bin/sh
+# Keep this account's fallback authorized_keys equal to the key gist (PER-182).
+#
+# sshd accepts a key found by either path: the live gist lookup
+# (AuthorizedKeysCommand update_keys) or ~/.ssh/authorized_keys. Only Ansible
+# used to write the file, so it lagged the gist both ways: a new key was
+# missing from the fallback the day the network was down, and a key removed
+# from the gist kept working until that host's next Ansible run.
+#
+# Run by authorized_keys_sync.timer every 15 minutes, as the account whose file
+# it writes: the account can always write its own authorized_keys, so root buys
+# nothing here. Configured by /etc/authorized_keys_sync.env (root, 0600):
+#
+#   KEYS_URL       the key gist (gh_keys)
+#   SLACK_WEBHOOK  #home-alerts
+#   KEEP_KEY       test containers only: the rig's key, kept alongside the gist's
+#
+# Guardrails, each forced on a test container before rollout:
+#   - fetch fails or times out: file untouched, unit fails (the fleet health
+#     check reports failed units, so a gist that stays unreachable is not silent)
+#   - list refused by authorized_keys_validate: file untouched, #home-alerts,
+#     unit fails. One alert per distinct refused list, not one every 15 minutes
+#   - otherwise written atomically (temp file in ~/.ssh, then mv), and only when
+#     the key set differs. Every write posts the added and removed fingerprints
+#     to #home-alerts: a tampered gist must never change access silently
+#
+# "Differs" means the set of key fingerprints differs: not the bytes, and not
+# the comments. Ansible's authorized_key module writes the same keys in its own
+# layout (a key with no comment gets a trailing space, which ssh-keygen -l then
+# reports as a different comment), so comparing either would have the two
+# writers overwrite each other forever.
+
+set -u
+
+# sort and comm must agree on one collation.
+LC_ALL=C
+export LC_ALL
+
+: "${KEYS_URL:?KEYS_URL is not set}"
+: "${SLACK_WEBHOOK:?SLACK_WEBHOOK is not set}"
+KEEP_KEY="${KEEP_KEY:-}"
+VALIDATOR="${VALIDATOR:-/usr/local/sbin/authorized_keys_validate}"
+AUTH_KEYS="${AUTH_KEYS:-$HOME/.ssh/authorized_keys}"
+# StateDirectory= in the unit sets this.
+STATE_DIR="${STATE_DIRECTORY:-/var/lib/authorized_keys_sync}"
+HOST=$(uname -n)
+
+work=$(mktemp -d) || exit 1
+trap 'rm -rf "$work"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# JSON string body: escape \ and ", drop control characters, join lines with \n.
+json_escape() {
+    tr -d '\000-\010\013-\037' \
+        | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' \
+        | awk 'NR > 1 { printf "\\n" } { printf "%s", $0 }'
+}
+
+# Slack answers a good post with the literal body "ok". Anything else is a
+# failure, logged to the journal and returned, so the unit fails with it.
+alert() {
+    text=$(printf '%s\n' "$1" | json_escape)
+    if response=$(curl -sS --max-time 15 -X POST \
+            -H 'Content-type: application/json; charset=utf-8' \
+            --data "{\"text\":\"$text\"}" "$SLACK_WEBHOOK" 2>&1) \
+            && [ "$response" = ok ]; then
+        return 0
+    fi
+    echo "Slack post failed: $response" >&2
+    return 1
+}
+
+# One line per key: "<bits> SHA256:<fp> <comment> (<TYPE>)", whitespace
+# collapsed. A missing or keyless file is the empty set rather than an error.
+fingerprints() {
+    if [ -s "$1" ]; then
+        ssh-keygen -lf "$1" 2>/dev/null | awk '{ $1 = $1; print }'
+    fi
+}
+
+# The identity of each key: its SHA256 fingerprint alone, sorted, unique.
+key_ids() {
+    awk '{ print $2 }' "$1" | sort -u
+}
+
+# The fingerprint lines of $2 whose key is listed in $1, for the alert.
+describe() {
+    if [ -s "$1" ]; then
+        grep -F -f "$1" "$2"
+    fi
+}
+
+if ! curl -sSf --max-time 30 --retry 2 --retry-delay 5 \
+        -o "$work/fetched" "$KEYS_URL" 2>"$work/curl.err"; then
+    echo "fetch failed, authorized_keys left untouched: $(cat "$work/curl.err")" >&2
+    exit 1
+fi
+
+if ! "$VALIDATOR" < "$work/fetched" > "$work/keys" 2> "$work/reason"; then
+    reason=$(cat "$work/reason")
+    echo "refused the fetched list, authorized_keys left untouched: $reason" >&2
+    digest=$(sha256sum < "$work/fetched" | cut -d' ' -f1)
+    if [ "$(cat "$STATE_DIR/refused" 2>/dev/null)" = "$digest" ]; then
+        echo "same list as the last refusal: already alerted" >&2
+        exit 1
+    fi
+    alert ":no_entry: authorized_keys sync REFUSED on $HOST — the key gist returned a list that fails validation, so the fallback was left as it was.
+$reason
+Fix the gist; the next run (within 15 min) picks it up." \
+        && printf '%s\n' "$digest" > "$STATE_DIR/refused"
+    exit 1
+fi
+
+if [ -n "$KEEP_KEY" ]; then
+    printf '%s\n' "$KEEP_KEY" >> "$work/keys"
+fi
+
+fingerprints "$AUTH_KEYS" > "$work/old"
+fingerprints "$work/keys" > "$work/new"
+rm -f "$STATE_DIR/refused"
+
+key_ids "$work/old" > "$work/old.ids"
+key_ids "$work/new" > "$work/new.ids"
+if cmp -s "$work/old.ids" "$work/new.ids"; then
+    exit 0
+fi
+
+# mktemp creates the file 0600 and owned by this account, in the same
+# directory, so the mv is an atomic rename over the original.
+tmp=$(mktemp "$(dirname "$AUTH_KEYS")/.authorized_keys.XXXXXX") || exit 1
+if ! { cat "$work/keys" > "$tmp" && chmod 600 "$tmp" && mv -f "$tmp" "$AUTH_KEYS"; }; then
+    rm -f "$tmp"
+    echo "could not replace $AUTH_KEYS" >&2
+    exit 1
+fi
+
+comm -13 "$work/old.ids" "$work/new.ids" > "$work/added.ids"
+comm -23 "$work/old.ids" "$work/new.ids" > "$work/removed.ids"
+added=$(describe "$work/added.ids" "$work/new")
+removed=$(describe "$work/removed.ids" "$work/old")
+summary="authorized_keys updated from the key gist: +$(grep -c . "$work/added.ids") -$(grep -c . "$work/removed.ids")"
+echo "$summary" >&2
+alert ":key: $summary on $HOST
+Added:
+${added:-(none)}
+Removed:
+${removed:-(none)}"

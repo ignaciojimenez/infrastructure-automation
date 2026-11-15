@@ -236,6 +236,7 @@ possible:
 | Task | Fleet host | Test container |
 |---|---|---|
 | authorized_keys, `exclusive: true` | GitHub key set only | GitHub key set **+ `test_environment_ssh_key`** |
+| `authorized_keys_sync` timer (every 15 min) | gist only | gist **+ `KEEP_KEY`** (the same key, in `/etc/authorized_keys_sync.env`) |
 | Disable root login | root shell → nologin | **same** (exemption removed 2026-10-03) |
 | Lock the user password | locked | skipped |
 | `sshd_config` | `PermitRootLogin no` | **same** (exemption removed 2026-10-03) |
