@@ -59,6 +59,9 @@ agent_lxc_ssh_pubkey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBfzvelHaP6bcMDf21784
 # rig_ct wrapper run against proxmox_hosts and consume it too. See
 # docs/ARCHITECTURE_DECISIONS.md.
 fleet_dns_domain: internal
+# The estate resolver: Unbound on OPNsense. Hosts that are not configured by
+# DHCP (cwwk) are pointed here explicitly.
+fleet_dns_resolver: 10.30.40.254
 
 # Monitoring tokens (from vault)
 logging_token: "{{ vault_logging_token }}"

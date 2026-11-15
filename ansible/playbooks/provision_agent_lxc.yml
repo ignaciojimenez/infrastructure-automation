@@ -24,8 +24,8 @@
     lxc_nameserver: 10.30.40.254
     # Fleet hostnames resolve as <host>.<fleet_dns_domain> via Unbound on the
     # gateway. The sweep dials fully qualified names (ssh_config.j2), so this
-    # only serves bare names typed by hand. Applied by `pct create` alone: an
-    # existing container keeps the value it was created with.
+    # only serves bare names typed by hand. `pct create` applies it here;
+    # platform/proxmox.yml keeps existing containers in line.
     lxc_searchdomain: "{{ fleet_dns_domain }}"
     lxc_bridge: vmbr0
 

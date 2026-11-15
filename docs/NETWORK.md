@@ -48,15 +48,16 @@ Sections `1.`–`13.` under *Confirmed drift and defects* are numbered findings 
   - [Replacing a Mullvad peer (runbook)](#replacing-a-mullvad-peer-runbook)
   - [Inbound — wg1_server (road warrior)](#inbound--wg1_server-road-warrior)
 - [DNS](#dns)
+  - [Resolver chain, DHCP and local names (since 2026-11-13)](#resolver-chain-dhcp-and-local-names-since-2026-11-13)
   - [Unbound is fully recursive](#unbound-is-fully-recursive)
   - [Port 53 redirect](#port-53-redirect)
 - [⚠️ Confirmed drift and defects](#-confirmed-drift-and-defects)
   - [1. wg9 (Mullvad US3) is dead, and Quad9 is routed through it](#1-wg9-mullvad-us3-is-dead-and-quad9-is-routed-through-it)
-  - [2. cwwk bypasses the estate resolver](#2-cwwk-bypasses-the-estate-resolver)
+  - [2. cwwk bypasses the estate resolver — RESOLVED](#2-cwwk-bypasses-the-estate-resolver--resolved)
   - [3. The DNS failover script's premise no longer holds](#3-the-dns-failover-scripts-premise-no-longer-holds)
   - [4. Two wg1 peers have never connected — RESOLVED](#4-two-wg1-peers-have-never-connected--resolved)
   - [5. One Ubiquiti device is a firmware generation behind — RETRACTED](#5-one-ubiquiti-device-is-a-firmware-generation-behind--retracted)
-  - [6. Fleet name resolution has no fallback](#6-fleet-name-resolution-has-no-fallback)
+  - [6. Fleet name resolution has no fallback — RESOLVED](#6-fleet-name-resolution-has-no-fallback--resolved)
   - [7. Pi-hole-era naming outlived Pi-hole by nine months](#7-pi-hole-era-naming-outlived-pi-hole-by-nine-months)
   - [8. Two guest SSIDs share one VLAN with different isolation — 🔒 detail redacted](#8-two-guest-ssids-share-one-vlan-with-different-isolation---detail-redacted)
   - [9. One SSID has protected management frames disabled — 🔒 detail redacted](#9-one-ssid-has-protected-management-frames-disabled---detail-redacted)
@@ -71,7 +72,7 @@ Sections `1.`–`13.` under *Confirmed drift and defects* are numbered findings 
   - [Compute](#compute)
 - [Where the fleet actually lives](#where-the-fleet-actually-lives)
   - [IoT devices (VLAN 100)](#iot-devices-vlan-100)
-- [Name resolution runs on mDNS, not DNS](#name-resolution-runs-on-mdns-not-dns)
+- [Name resolution: Dnsmasq names under `internal`](#name-resolution-dnsmasq-names-under-internal)
 - [Reading the UniFi controller](#reading-the-unifi-controller)
 - [Getting at the switch](#getting-at-the-switch)
 - [The EdgeRouter X — a known unknown](#the-edgerouter-x--a-known-unknown)
@@ -331,7 +332,41 @@ and one is explicitly labelled `TEST`. The rules are almost certainly doing
 something useful — but what they are *called* no longer describes the estate,
 which is exactly the trap this document exists to prevent.
 
+### Resolver chain, DHCP and local names (since 2026-11-13)
+
+```
+client ──DHCP──▶ Dnsmasq (OPNsense)   lease: address, router, DNS 10.30.40.254, domain `internal`
+client ──DNS───▶ Unbound 10.30.40.254
+                   ├─ `internal` + 10.30.{20,40,80,100,200} reverse zones ──▶ Dnsmasq 127.0.0.1:53053
+                   └─ everything else ──▶ recursive from the root servers
+```
+
+- **DHCP is Dnsmasq** on VLANs 20/40/80/100/200, migrated from ISC on 2026-11-13.
+  Pools, 24 h leases and the DNS option (Unbound only) were carried over
+  unchanged; the old `local` search domain was dropped for `internal`. Why
+  Dnsmasq and not Kea: [decision](ARCHITECTURE_DECISIONS.md#dns-architecture-updated-november-2025).
+- **Local names live only in Dnsmasq**, under `internal`, with PTRs. Dynamic
+  clients are registered from their DHCP hostname; the static-address hosts
+  (cwwk, the LXCs, the switch, the firewall) resolve too. `opnsense.internal`
+  answers with its VLAN 40 address only.
+- **Unbound stays the resolver for every client** and forwards the local zones
+  to Dnsmasq, which listens on loopback only.
+- **The legacy Unbound host overrides** (`<host>.local`, A only, no PTR) are
+  being retired. Nothing in this repo uses them since `fleet_dns_domain:
+  internal`; the Pis never reached them anyway, because libnss-mdns answers
+  `.local` from multicast with `[NOTFOUND=return]`.
+
+Verified 2026-11-15: a VLAN 80 lease carries `domain_name internal`, DNS
+`10.30.40.254` and a 86400 s lease; all fleet names resolve as `<host>.internal`
+via 10.30.40.254, with PTRs on VLAN 40 and VLAN 100. The Dnsmasq side (port,
+loopback bind, per-VLAN ranges) was read by the OPNsense session, not re-read here.
+
 ### Unbound is fully recursive
+
+> ✏️ **Corrected 2026-11-13:** still true for the internet, but no longer for
+> the local zones — Unbound now forwards `internal` and the fleet's reverse
+> zones to Dnsmasq ([above](#resolver-chain-dhcp-and-local-names-since-2026-11-13)).
+> The rest of this section is the 2026-08-07 reading.
 
 Verified on the live box: `/var/unbound/` contains **no `forward-zone` and no
 `forward-addr` anywhere**. `etc/dot.conf` and `etc/domainoverrides.conf` are both
@@ -417,7 +452,16 @@ checked `/etc/resolv.conf` across five hosts. It is dead config, not a live trap
 would degrade failover for other traffic. That needs `config.xml`, which
 `read_agent` cannot read.
 
-### 2. `cwwk` bypasses the estate resolver
+### 2. ~~`cwwk` bypasses the estate resolver~~ — RESOLVED
+
+✅ **Fixed 2026-11-15.** `ansible/playbooks/platform/proxmox.yml` now owns
+cwwk's `/etc/resolv.conf`: `search internal`, `nameserver 10.30.40.254`. Kept as
+a single resolver on purpose: the default route is OPNsense, so with VM 100 down
+Quad9 was unreachable too — the bypass never bought resilience, and it could not
+resolve a single fleet name. Before switching, Unbound was queried from cwwk for
+fleet names and the Debian/Proxmox repositories; all answered.
+
+The original finding, as read on 2026-08-07:
 
 The hypervisor's `/etc/resolv.conf` is `nameserver 9.9.9.9` — every other host
 checked (`cobra`, `hifipi`, `dockassist`, `unifi`) points at `10.30.40.254`.
@@ -471,9 +515,14 @@ three at `6.7.54`. The older dropbear banner reflects the model's own release
 train, not a missed update. See the correction note under
 [Access points](#access-points).
 
-### 6. Fleet name resolution has no fallback
+### 6. ~~Fleet name resolution has no fallback~~ — RESOLVED
 
-Covered in [Name resolution runs on mDNS, not DNS](#name-resolution-runs-on-mdns-not-dns).
+✅ **Resolved 2026-11-13** by Dnsmasq: every fleet host has an `internal` name
+and PTR in DNS, so resolution no longer rests on mDNS crossing VLANs. See
+[Name resolution](#name-resolution-dnsmasq-names-under-internal). The original
+finding:
+
+Covered in the 2026-08-07 reading of name resolution, kept below.
 Unbound serves the estate's recursive DNS but holds no records for the estate's
 own hosts, so Ansible reachability rests entirely on mDNS crossing VLAN 40↔100.
 Adding host overrides in Unbound for the seven fleet hosts would cost minutes and
@@ -899,7 +948,27 @@ private WiFi addressing on.
 
 ---
 
-## Name resolution runs on mDNS, not DNS
+## Name resolution: Dnsmasq names under `internal`
+
+**Since 2026-11-13 fleet names are DNS names.** Dnsmasq registers them under
+`internal` and Unbound serves them to everyone
+([chain](#resolver-chain-dhcp-and-local-names-since-2026-11-13)). How each kind
+of host gets there, measured 2026-11-15:
+
+| Hosts | Search domain | `.local` goes to | Bare `cobra` resolves as |
+|---|---|---|---|
+| Laptop (macOS, DHCP) | `internal` | mDNS only | `cobra.internal` |
+| Pis — cobra, hifipi, vinylstreamer, dockassist | `internal` | mDNS (`mdns4_minimal [NOTFOUND=return]`) | `cobra.internal` |
+| cwwk (static, Ansible-managed `resolv.conf`) | `internal` | DNS | `cobra.internal` |
+| LXCs — CT 101/103/104 (`pct` `searchdomain`, reconciled by `platform/proxmox.yml`; applied at container start) | `internal` | DNS | `cobra.internal` |
+| Docker containers on dockassist | stale `local` until restarted | DNS | `cobra.local` (nothing uses bare names there) |
+
+The agent on agent-lxc dials fully qualified `<host>.internal` names and pins
+host keys with `HostKeyAlias`, so it depends on neither search domains nor mDNS.
+The firewall rule *"Allow mDNS/Bonjour between all VLANs"* is no longer
+load-bearing for Ansible; it still is for AirPlay and HomeKit discovery.
+
+The 2026-08-07 reading, superseded but kept:
 
 Unbound has **no A records and no PTR records for any fleet host**. Verified:
 
@@ -1143,6 +1212,9 @@ what fed CrowdSec into banning `agent-lxc` on 2026-08-03.
 | APs: model, firmware, mesh uplinks | UniFi controller API, live | 2026-08-07 |
 | SSID→VLAN, WLAN security settings | UniFi controller API, live | 2026-08-07 |
 | mDNS dependency | `dig` vs `dscacheutil`, live | 2026-08-07 |
+| Dnsmasq names, PTRs, lease options | `dig` via 10.30.40.254, `ipconfig getpacket`, live | 2026-11-15 |
+| Per-host search domain + nsswitch | `/etc/resolv.conf`, `/etc/nsswitch.conf` on every host, live | 2026-11-15 |
+| Dnsmasq port, bind, ranges | OPNsense session (not re-read here) | 2026-11-15 |
 | Guest-SSID isolation gap (finding 8) | **reasoned from config, not tested** | — |
 | Switch port state, link speeds, counters | Zyxel web UI, operator screenshots | 2026-08-07 |
 | Switch VLAN/PVID map, accounts, no-SNMP | decoded `startupconfig.cfg` | 2026-08-07 |

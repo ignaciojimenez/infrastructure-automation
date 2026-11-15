@@ -243,6 +243,20 @@ set — see `docs/BACKUP_AND_RECOVERY.md`.
 
 ## DNS Architecture (Updated November 2025)
 
+- **DHCP: ISC → Dnsmasq (2026-11-13).** ISC DHCP is end-of-life upstream and
+  in OPNsense ([docs](https://docs.opnsense.org/manual/isc.html)); per the
+  26.1 series it left core for a plugin, which only defers the migration.
+  **Dnsmasq over Kea** because it registers dynamic clients' names in DNS
+  itself, and the estate has no internal IPv6/prefix-delegation or DHCP
+  high-availability need that would favour Kea. **Design:** Unbound stays the
+  resolver for every client; Dnsmasq owns DHCP and the local names under
+  `internal`, listening on 127.0.0.1:53053, and Unbound forwards `internal`
+  plus the 10.30.{20,40,80,100,200} reverse zones to it. Pools, 24 h leases
+  and the DNS option (Unbound only) were carried over unchanged; the `local`
+  search domain was dropped. **Local names live only in Dnsmasq.** The legacy
+  Unbound `<host>.local` overrides are being retired — no second source of
+  names. See [NETWORK.md](NETWORK.md#resolver-chain-dhcp-and-local-names-since-2026-11-13).
+
 - **Fleet names resolve as `<host>.internal` via Dnsmasq (2026-11).** DHCP
   moved from ISC to Dnsmasq on OPNsense on 2026-11-13; Dnsmasq is now the
   single source of local names under `internal`, and Unbound forwards that
@@ -259,9 +273,10 @@ set — see `docs/BACKUP_AND_RECOVERY.md`.
   the agent role, while the Unbound overrides still exist.
   The laptop never used the overrides: macOS sends `.local` to mDNS only, and
   its DHCP search domain is now `internal`, so bare `cobra` resolves as
-  `cobra.internal` (verified 2026-11-15). That supersedes
-  [NETWORK.md § mDNS](NETWORK.md#name-resolution-runs-on-mdns-not-dns),
-  written before Dnsmasq.
+  `cobra.internal` (verified 2026-11-15). Per-host detail:
+  [NETWORK.md § Name resolution](NETWORK.md#name-resolution-dnsmasq-names-under-internal).
+  cwwk's `resolv.conf` and every container's `searchdomain` are kept on
+  `internal` by `platform/proxmox.yml`.
 
 - **Unbound over PiHole** - Chose OPNsense native Unbound with blocklists instead of separate PiHole LXC
   - Simpler: One service instead of two
