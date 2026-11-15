@@ -143,6 +143,23 @@ fi
 
 log_msg "${GREEN}Found latest backup: $(basename "${LATEST_BACKUP}")${NC}"
 
+# The newest backup must be from the last day. A controller that stopped
+# writing them still has an old one, and shipping it every night keeps the
+# heartbeat green over a stale backup: the PER-127 restore left the schedule
+# at Mondays only. The controller names each file after the moment it wrote
+# it: autobackup_<version>_<YYYYMMDD>_<HHMM>_<epoch ms>.unf.
+MAX_AGE_HOURS=26
+written_ms=$(basename "${LATEST_BACKUP}" .unf | sed -n 's/^autobackup_.*_\([0-9]\{13\}\)$/\1/p')
+if [ -z "${written_ms}" ]; then
+  log_msg "${RED}Error: Cannot tell when $(basename "${LATEST_BACKUP}") was written from its name${NC}"
+  exit 1
+fi
+age_hours=$(( ($(date +%s) - written_ms / 1000) / 3600 ))
+if [ "${age_hours}" -ge "${MAX_AGE_HOURS}" ]; then
+  log_msg "${RED}Error: Newest backup is ${age_hours} h old: is the controller's autobackup schedule daily?${NC}"
+  exit 1
+fi
+
 # Copied with cat, so the same line works in the container and here.
 at_backups cat "${LATEST_BACKUP}" > "${TEMP_DIR}/$(basename "${LATEST_BACKUP}")" || {
   log_msg "${RED}Error: Failed to copy backup file to temp directory${NC}"
