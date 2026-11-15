@@ -1,0 +1,215 @@
+---
+# Provision one VM on Proxmox from a Debian cloud image — shared body.
+#
+# The VM sibling of tasks/provision_lxc.yml (PER-178), with the same contract:
+# `qm` over the SSH path the repo already uses (not the Proxmox API module, for
+# the reasons in that file), every mutating step guarded on live state, and it
+# stops as soon as SSH with a key works:
+#
+#   provision_*_vm.yml  ->  bootstrap.yml  ->  site.yml
+#
+# A VM rather than an LXC only where the guest needs kernel features a
+# container cannot give without becoming privileged (UniFi OS Server's Podman
+# stack; see docs/ARCHITECTURE_DECISIONS.md, "UniFi controller").
+#
+# First run 2026-11-12 (PER-178 spike, VM 105 at .208): created, booted, SSH
+# and `sudo -n` worked; a second run on the running VM is the idempotency
+# check still owed.
+#
+# Imported with `import_tasks`, not `include_tasks`, so `--tags` and
+# `--list-tasks` see every task (see provision_lxc.yml).
+#
+# Required vars (no defaults on purpose — a guest's identity should never be
+# inherited by accident):
+#
+#   vm_vmid              VM number
+#   vm_name              VM name, matching the inventory key
+#   vm_inventory_name    its key in hosts.yml, for the handover message
+#   vm_ip / vm_cidr / vm_gateway / vm_nameserver / vm_searchdomain
+#   vm_bridge vm_cpu_type vm_cores vm_cpulimit vm_memory
+#   vm_disk_size_gb vm_storage vm_onboot
+#   vm_image_url vm_image_sha512 vm_image_path
+
+- name: Check whether the VM already exists
+  ansible.builtin.command:
+    cmd: qm config {{ vm_vmid }}
+  register: vm_config
+  check_mode: false  # read-only probe; must run under --check
+  failed_when: false
+  changed_when: false
+  tags: [provision, create]
+
+- name: Report what provisioning would change
+  ansible.builtin.debug:
+    msg: "VM {{ vm_vmid }}: {{ 'exists' if vm_config.rc == 0 else 'WOULD CREATE' }}"
+  tags: [provision, create]
+
+# ============================================================
+# Image — pinned by build date and sha512, never `latest`
+# ============================================================
+
+# Only needed to create the disk; an existing VM never reads it again. A
+# checksum mismatch fails here, before anything is created from it.
+- name: Download the pinned cloud image
+  ansible.builtin.get_url:
+    url: "{{ vm_image_url }}"
+    dest: "{{ vm_image_path }}"
+    checksum: "sha512:{{ vm_image_sha512 }}"
+    owner: root
+    group: root
+    mode: '0644'
+  when: vm_config.rc != 0
+  tags: [provision, image]
+
+# ============================================================
+# Creation
+# ============================================================
+
+- name: Validate gh_keys uses HTTPS
+  ansible.builtin.assert:
+    that:
+      - "gh_keys is match('^https://')"
+    fail_msg: "gh_keys must use https:// — got: {{ gh_keys }}"
+  when: vm_config.rc != 0
+  tags: [provision, create]
+
+# A static address with a live owner is a silent outage for one of the two.
+# For the UniFi controller it is the expected mistake: the VM takes CT 101's
+# address, and CT 101 must be stopped first. Checked from the hypervisor, on
+# the same bridge.
+- name: Check that nothing answers on the VM's address
+  ansible.builtin.command:
+    cmd: ping -c 2 -W 1 {{ vm_ip }}
+  register: vm_ip_probe
+  check_mode: false  # read-only probe; must run under --check
+  changed_when: false
+  failed_when: false
+  when: vm_config.rc != 0
+  tags: [provision, create]
+
+- name: Refuse to create the VM on an address in use
+  ansible.builtin.assert:
+    that: vm_ip_probe.rc != 0
+    fail_msg: "{{ vm_ip }} answers ping: something still holds it. Stop it before creating VM {{ vm_vmid }}."
+  when: vm_config.rc != 0
+  tags: [provision, create]
+
+# cloud-init takes the keys from a file on the hypervisor; the same GitHub
+# source as every other host, so the VM is key-reachable before bootstrap.yml.
+- name: Fetch authorized keys from GitHub
+  ansible.builtin.uri:
+    url: "{{ gh_keys }}"
+    return_content: true
+    timeout: 30
+    status_code: 200
+  register: vm_gh_keys
+  delegate_to: localhost
+  become: false
+  check_mode: false
+  changed_when: false
+  when: vm_config.rc != 0
+  tags: [provision, create]
+
+- name: Create the VM
+  when:
+    - vm_config.rc != 0
+    - not ansible_check_mode
+  tags: [provision, create]
+  block:
+    # vm_extra_ssh_keys (optional, -e only, never committed): a throwaway key
+    # for unattended work on a test VM, removed with the VM.
+    - name: Stage authorized keys on the hypervisor
+      ansible.builtin.copy:
+        content: "{{ ([vm_gh_keys.content | trim] + (vm_extra_ssh_keys | default([]))) | join('\n') }}\n"
+        dest: /tmp/vm_{{ vm_vmid }}_authorized_keys
+        owner: root
+        group: root
+        mode: '0600'
+
+    # x86-64-v3, not the x86-64-v2-AES OPNsense uses: v2 hides AVX, and the
+    # MongoDB a controller runs needs it. Every v3 flag was checked present on
+    # cwwk's N355 (2026-11-11).
+    #
+    # The disk is imported straight from the image (`STORAGE:0,import-from=`,
+    # an absolute path is accepted per PVE's Drive.pm) and grown below. The
+    # cloud-init drive carries the user, key and static address; the serial
+    # console is what the Debian cloud image expects.
+    - name: Create the VM from the cloud image
+      ansible.builtin.command:
+        cmd: >
+          qm create {{ vm_vmid }}
+          --name {{ vm_name }}
+          --ostype l26
+          --cpu {{ vm_cpu_type }}
+          --cores {{ vm_cores }}
+          --cpulimit {{ vm_cpulimit }}
+          --memory {{ vm_memory }}
+          --scsihw virtio-scsi-single
+          --scsi0 {{ vm_storage }}:0,import-from={{ vm_image_path }},iothread=1,discard=on
+          --ide2 {{ vm_storage }}:cloudinit
+          --boot order=scsi0
+          --serial0 socket
+          --vga serial0
+          --net0 virtio,bridge={{ vm_bridge }},firewall=1
+          --ciuser {{ infrastructure_user }}
+          --sshkeys /tmp/vm_{{ vm_vmid }}_authorized_keys
+          --ipconfig0 ip={{ vm_ip }}/{{ vm_cidr }},gw={{ vm_gateway }}
+          --nameserver {{ vm_nameserver }}
+          --searchdomain {{ vm_searchdomain }}
+          --onboot {{ 1 if vm_onboot else 0 }}
+      changed_when: true
+
+    - name: Grow the disk to its size
+      ansible.builtin.command:
+        cmd: qm disk resize {{ vm_vmid }} scsi0 {{ vm_disk_size_gb }}G
+      changed_when: true
+
+  always:
+    - name: Remove the staged key file
+      ansible.builtin.file:
+        path: /tmp/vm_{{ vm_vmid }}_authorized_keys
+        state: absent
+
+# ============================================================
+# Start and hand over
+# ============================================================
+
+- name: Check VM run state
+  ansible.builtin.command:
+    cmd: qm status {{ vm_vmid }}
+  register: vm_status
+  check_mode: false  # read-only probe; must run under --check
+  # Non-zero means the VM does not exist yet (a --check run); empty stdout
+  # then reads as "not running", which is the right conclusion either way.
+  failed_when: false
+  changed_when: false
+  tags: [provision, start]
+
+- name: Start the VM
+  ansible.builtin.command:
+    cmd: qm start {{ vm_vmid }}
+  when: "'status: running' not in vm_status.stdout"
+  changed_when: true
+  tags: [provision, start]
+
+# First boot runs cloud-init (user, key, address, growing the filesystem), so
+# SSH answering is the end of provisioning, not just of booting.
+- name: Wait for SSH to answer on the VM
+  ansible.builtin.wait_for:
+    host: "{{ vm_ip }}"
+    port: 22
+    timeout: 300
+  delegate_to: localhost
+  become: false
+  when: not ansible_check_mode
+  tags: [provision, verify]
+
+- name: Report provisioning result
+  ansible.builtin.debug:
+    msg: |
+      {{ 'Check mode: nothing created' if ansible_check_mode else '✅ VM ' ~ vm_vmid ~ ' (' ~ vm_name ~ ') provisioned at ' ~ vm_ip }}
+
+      Next:
+        ansible-playbook ansible/playbooks/bootstrap.yml --limit {{ vm_inventory_name }}
+        ansible-playbook ansible/playbooks/site.yml --limit {{ vm_inventory_name }}
+  tags: [provision]

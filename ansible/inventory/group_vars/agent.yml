@@ -54,10 +54,11 @@ agent_fleet_hosts:
     kind: linux
     platform: RPi
     runs: Icecast, Liquidsoap, detect_audio
+  # unifi-os-vm (VM 105) since PER-127: `unifi` still resolves to .201.
   - name: unifi
     kind: linux
-    platform: LXC
-    runs: UniFi Network controller
+    platform: VM
+    runs: UniFi OS Server (Network controller)
   - name: cwwk
     kind: proxmox
   - name: opnsense

@@ -1,0 +1,17 @@
+---
+# UniFi OS Server role defaults (PER-127)
+
+# The installer is pinned by version and checksum, never "latest": both come
+# from Ubiquiti's firmware API (product unifi-os-server, platform linux-x64),
+# read 2026-11-12. 5.1.42 was published 2026-09-10, past the 20-day cooldown,
+# and bundles Network 10.5.67. Bump all three together.
+#
+# This pin only decides what a NEW install gets. Once installed, the server
+# updates itself unless auto-update is off in its settings (see README.md).
+unifi_os_version: "5.1.42"
+unifi_os_installer_url: "https://fw-download.ubnt.com/data/unifi-os-server/5172-linux-x64-5.1.42-12e9e3cf-8f8b-4e54-928c-76b80a10c8a4.42-x64"
+unifi_os_installer_sha256: "f6111e9396a42c74016f5dde9b01fbef486a6fe69efe137935e6e38b7c22f94d"
+unifi_os_install_dir: /var/tmp/uos-install
+
+# Firewall: OPNsense handles the perimeter, as for unifi-lxc.
+enable_ufw: false

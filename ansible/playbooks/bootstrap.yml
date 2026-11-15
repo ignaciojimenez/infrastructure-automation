@@ -288,6 +288,10 @@
           - python3-pip
           - python3-venv
           - fail2ban
+          # The baseline's first crontab entry runs before the Debian
+          # platform phase installs cron; Debian's cloud image ships without
+          # it (VM 105, 2026-11-13).
+          - cron
         state: present
       when: ansible_os_family == "Debian"
       tags: [bootstrap, packages]

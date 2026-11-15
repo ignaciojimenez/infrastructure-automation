@@ -1026,11 +1026,19 @@ The account's View Only role is enforced server-side: the session cookie carries
 those permissions, so `POST`s that would change configuration are rejected by the
 controller rather than by convention.
 
-🔑 **The password is not in this repo and must not be.** It currently exists only
-outside version control. **It should be moved into `vault.yml` as
-`vault_unifi_readonly_password` and rotated**, since it was transmitted in
-plaintext when it was set up. Until then, pass it via environment variable as
-above — never inline in a script, a cron entry or a committed file.
+🔑 **The credential is in the vault** as `vault_unifi_readonly_user` /
+`vault_unifi_readonly_password` (`3132f9a`). Rotating it was declined on
+2026-10-31 (read-only, LAN-only, only ever shared in a local session; see
+TODO.md), then done on 2026-11-13 anyway: UniFi OS Server refuses a password
+without an uppercase letter (PER-127). Its only consumer is `bin/unifi-state`
+on the laptop, the preflight included; no host or cron holds it. Pass it on stdin or via an environment variable, never inline in a
+script, a cron entry or a committed file. `bin/unifi-state` is the worked
+example: it reads the vault and hands the login to the host over ssh stdin
+(PER-128; the before/after check in
+[the unifi role's README](../ansible/roles/services/unifi/README.md)).
+
+*Corrected 2026-11-10: this paragraph still said the password was outside the
+repo and due for rotation after both had been settled.*
 
 ---
 

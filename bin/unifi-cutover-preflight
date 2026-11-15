@@ -1,0 +1,122 @@
+#!/bin/sh
+# Is everything in place for the UniFi OS Server cutover? (PER-127)
+#
+#   bin/unifi-cutover-preflight
+#
+# Read-only and Touch-ID-free: every host is reached as read_agent (the
+# `-agent` aliases), the vault is read from the Keychain. Run it before
+# starting the runbook in ansible/roles/services/unifi_os/README.md, and stop
+# at the first FAIL. INFO lines describe the state the runbook starts from.
+#
+# Exits 1 if any check fails.
+set -u
+
+CDPATH=''
+REPO=$(cd -- "$(dirname -- "$0")/.." && pwd)
+DEFAULTS="$REPO/ansible/roles/services/unifi_os/defaults/main.yml"
+VM_MIB=4096          # provision_unifi_os_vm.yml, vm_memory
+APS=4                # every AP adopted and connected
+BACKUP_MAX_AGE_H=26  # the nightly backup, with the heartbeat's slack
+
+failures=0
+pass() { printf '  PASS  %s\n' "$1"; }
+fail() { printf '  FAIL  %s\n' "$1"; failures=$((failures + 1)); }
+info() { printf '  INFO  %s\n' "$1"; }
+
+printf '\n── UniFi cutover preflight (%s)\n' "$(date '+%Y-%m-%d %H:%M')"
+
+# 1. Wi-Fi is allowed: the dead-man timer armed at step 3 rolls back if the
+# laptop loses its way in. A timer left over from an earlier attempt would
+# fire in the middle of this one.
+iface=$(route -n get 10.30.40.201 2>/dev/null | awk '/interface:/ {print $2}')
+if [ -n "$iface" ]; then
+    pass "laptop: route to 10.30.40.201 ($iface)"
+else
+    fail "laptop: no route to 10.30.40.201"
+fi
+if ! timers=$(ssh cwwk-agent 'systemctl list-timers --all --no-legend unifi-rollback.timer' 2>/dev/null); then
+    fail "cwwk: cannot list timers"
+elif [ -n "$timers" ]; then
+    fail "cwwk: unifi-rollback.timer is already armed. Stop it first"
+else
+    pass "cwwk: no rollback timer armed"
+fi
+
+# 2. The controller being replaced is up.
+if [ "$(ssh unifi-agent systemctl is-active unifi 2>/dev/null)" = active ]; then
+    pass "CT 101: unifi is active"
+else
+    fail "CT 101: unifi is not active"
+fi
+
+# 3. Last night's backup made it off-host: the fallback if the restore fails.
+last=$(ssh unifi-agent 'sudo -n /usr/local/bin/agent_read log unifi_backup.log' 2>/dev/null \
+    | grep 'Unifi configuration backup completed successfully' | tail -n 1 | cut -c2-20)
+if [ -z "$last" ]; then
+    fail "CT 101: no successful off-host backup in the log"
+else
+    age_h=$(( ($(date +%s) - $(date -j -f '%Y-%m-%d %H:%M:%S' "$last" +%s)) / 3600 ))
+    if [ "$age_h" -le "$BACKUP_MAX_AGE_H" ]; then
+        pass "CT 101: last off-host backup $last (${age_h} h ago)"
+    else
+        fail "CT 101: last off-host backup $last is ${age_h} h old"
+    fi
+fi
+
+# 4. Every AP adopted and connected: what the after-check must find again.
+snap=$("$REPO/bin/unifi-state" 2>/dev/null)
+up=$(printf '%s\n' "$snap" | grep -c '^device .* adopted=true state=1 ')
+if [ "$up" -eq "$APS" ]; then
+    pass "controller: $up of $APS APs adopted and connected"
+else
+    fail "controller: $up of $APS APs adopted and connected"
+fi
+
+# 5. Room on cwwk for the VM, without counting on CT 101's memory.
+avail=$(ssh cwwk-agent "awk '/MemAvailable/ {print int(\$2 / 1024)}' /proc/meminfo" 2>/dev/null)
+if [ -n "$avail" ] && [ "$avail" -ge $((VM_MIB + 512)) ]; then
+    pass "cwwk: ${avail} MiB available for a ${VM_MIB} MiB VM"
+else
+    fail "cwwk: ${avail:-?} MiB available, need $((VM_MIB + 512))"
+fi
+
+# 6. The cloud image is already on cwwk, so provisioning downloads nothing.
+image=$(sed -n 's/^ *vm_image_path: *//p' "$REPO/ansible/playbooks/provision_unifi_os_vm.yml")
+# Expanded here on purpose: the path comes from the playbook, not the host.
+# shellcheck disable=SC2029
+if ssh cwwk-agent "test -s '$image'" 2>/dev/null; then
+    pass "cwwk: cloud image present ($(basename "$image"))"
+else
+    info "cwwk: cloud image not cached; provisioning downloads it"
+fi
+
+# 7. Ubiquiti still publishes the pinned installer with the pinned checksum.
+version=$(sed -n 's/^unifi_os_version: *"\(.*\)"/\1/p' "$DEFAULTS")
+sum=$(sed -n 's/^unifi_os_installer_sha256: *"\(.*\)"/\1/p' "$DEFAULTS")
+url=$(sed -n 's/^unifi_os_installer_url: *"\(.*\)"/\1/p' "$DEFAULTS")
+published=$(curl -s --max-time 20 "https://fw-update.ui.com/api/firmware?filter=eq~~product~~unifi-os-server&filter=eq~~platform~~linux-x64&limit=50" \
+    | python3 -I -c 'import json,sys; [print(f["version"], f["sha256_checksum"], f["_links"]["data"]["href"]) for f in json.load(sys.stdin)["_embedded"]["firmware"]]' 2>/dev/null)
+if printf '%s\n' "$published" | grep -qx "v$version $sum $url"; then
+    pass "installer: $version listed with the pinned checksum and URL"
+else
+    fail "installer: $version not listed as pinned (Ubiquiti changed it?)"
+fi
+code=$(curl -s -o /dev/null -I --max-time 20 -w '%{http_code}' "$url")
+if [ "$code" = 200 ]; then
+    pass "installer: download URL answers 200"
+else
+    fail "installer: download URL answers $code"
+fi
+
+# The state the runbook starts from.
+info "VM 105: $(ssh cwwk-agent 'sudo -n /usr/sbin/qm status 105' 2>/dev/null || echo 'does not exist')"
+if ssh cwwk-agent 'ping -c 2 -W 1 10.30.40.201 >/dev/null 2>&1'; then
+    info "10.30.40.201 answers: still CT 101's until the cutover stops it"
+else
+    info "10.30.40.201 is silent"
+fi
+
+printf '\n'
+[ "$failures" -eq 0 ] && { printf 'Ready.\n'; exit 0; }
+printf '%s check(s) failed: fix before starting.\n' "$failures"
+exit 1

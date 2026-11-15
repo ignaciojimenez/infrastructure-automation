@@ -18,6 +18,7 @@ log_msg() {
 
 # Parse command line arguments
 silent_mode=false
+unifi_os=false
 logging_token=""
 alert_token=""
 recipient=""
@@ -29,6 +30,7 @@ usage() {
   echo "  --alert=TOKEN     Slack webhook token for failure notifications"
   echo "  --recipient=KEY   age public key for encryption (REQUIRED)"
   echo "  --silent          Run in silent mode (no notifications, for use with monitoring wrapper)"
+  echo "  --unifi-os        Read the backup from UniFi OS Server's container, not this host"
   echo "  --help            Show this help message"
   echo ""
   echo "For backward compatibility: $0 <logging_token> <alert_token> <upload_service> <recipient>"
@@ -59,6 +61,10 @@ else
         ;;
       --silent)
         silent_mode=true
+        shift
+        ;;
+      --unifi-os)
+        unifi_os=true
         shift
         ;;
       --help)
@@ -94,12 +100,28 @@ elif [ "$silent_mode" == "true" ] && [ -z "$recipient" ]; then
   exit 1
 fi
 
-UNIFI_BACKUP_DIR="/var/lib/unifi/backup/autobackup"
+# The Network application writes the same autobackups on both kinds of
+# controller. On UniFi OS Server (PER-127) they live inside the rootless podman
+# container of user uosserver, at the path the Debian package uses, so they are
+# read through `podman exec` rather than from this host's filesystem.
+# Overridable for tests/unit/backup_unifi_test.sh only.
+UNIFI_BACKUP_DIR="${UNIFI_BACKUP_DIR:-/var/lib/unifi/backup/autobackup}"
 TEMP_DIR="/tmp/unifi_backup_$(date +%Y%m%d_%H%M%S)"
 BACKUP_FILE="/tmp/unifi_backup_$(date +%Y%m%d_%H%M%S).tar.gz"
+META_FILE="${UNIFI_BACKUP_DIR}/autobackup_meta.json"
+
+# Runs a command where the backups are: in the container, or here as root.
+# Rootless podman needs a working directory the uosserver user can read.
+at_backups() {
+  if [ "$unifi_os" = "true" ]; then
+    (cd /tmp && sudo -u uosserver podman exec uosserver "$@")
+  else
+    sudo "$@"
+  fi
+}
 
 # Check if backup directory exists and is accessible (may need sudo)
-if ! sudo test -d "${UNIFI_BACKUP_DIR}"; then
+if ! at_backups test -d "${UNIFI_BACKUP_DIR}"; then
   log_msg "${RED}Error: Unifi backup directory not found or not accessible: ${UNIFI_BACKUP_DIR}${NC}"
   exit 1
 fi
@@ -110,29 +132,44 @@ mkdir -p "${TEMP_DIR}" || {
   exit 1
 }
 
-# Find the most recent backup file (using sudo since files are owned by unifi user)
-LATEST_BACKUP=$(sudo find "${UNIFI_BACKUP_DIR}" -name "*.unf" -type f -printf '%T@ %p\n' | sort -n | tail -n 1 | awk '{print $2}')
+# Find the most recent backup file. `ls -t` rather than find's -printf: the
+# container's userland is not guaranteed to be GNU.
+LATEST_BACKUP=$(at_backups sh -c "ls -1t ${UNIFI_BACKUP_DIR}/*.unf 2>/dev/null | head -n 1")
 
 if [ -z "${LATEST_BACKUP}" ]; then
   log_msg "${RED}Error: No backup files found in ${UNIFI_BACKUP_DIR}${NC}"
   exit 1
 fi
 
-# Also copy the meta file which contains information about all backups
-META_FILE="${UNIFI_BACKUP_DIR}/autobackup_meta.json"
-
 log_msg "${GREEN}Found latest backup: $(basename "${LATEST_BACKUP}")${NC}"
 
-# Copy files to temp directory (using sudo since files are owned by unifi user)
-sudo cp "${LATEST_BACKUP}" "${TEMP_DIR}/" || {
+# The newest backup must be from the last day. A controller that stopped
+# writing them still has an old one, and shipping it every night keeps the
+# heartbeat green over a stale backup: the PER-127 restore left the schedule
+# at Mondays only. The controller names each file after the moment it wrote
+# it: autobackup_<version>_<YYYYMMDD>_<HHMM>_<epoch ms>.unf.
+MAX_AGE_HOURS=26
+written_ms=$(basename "${LATEST_BACKUP}" .unf | sed -n 's/^autobackup_.*_\([0-9]\{13\}\)$/\1/p')
+if [ -z "${written_ms}" ]; then
+  log_msg "${RED}Error: Cannot tell when $(basename "${LATEST_BACKUP}") was written from its name${NC}"
+  exit 1
+fi
+age_hours=$(( ($(date +%s) - written_ms / 1000) / 3600 ))
+if [ "${age_hours}" -ge "${MAX_AGE_HOURS}" ]; then
+  log_msg "${RED}Error: Newest backup is ${age_hours} h old: is the controller's autobackup schedule daily?${NC}"
+  exit 1
+fi
+
+# Copied with cat, so the same line works in the container and here.
+at_backups cat "${LATEST_BACKUP}" > "${TEMP_DIR}/$(basename "${LATEST_BACKUP}")" || {
   log_msg "${RED}Error: Failed to copy backup file to temp directory${NC}"
   exit 1
 }
 
-if sudo test -f "${META_FILE}"; then
-  sudo cp "${META_FILE}" "${TEMP_DIR}/" || {
+# The meta file holds information about all backups; not critical.
+if at_backups test -f "${META_FILE}"; then
+  at_backups cat "${META_FILE}" > "${TEMP_DIR}/$(basename "${META_FILE}")" || {
     log_msg "${YELLOW}Warning: Failed to copy meta file to temp directory${NC}"
-    # Continue anyway as this is not critical
   }
 fi
 
