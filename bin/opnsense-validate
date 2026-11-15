@@ -1,0 +1,850 @@
+#!/usr/bin/env python3
+"""Network behaviour baseline around an OPNsense upgrade.
+
+    bin/opnsense-validate pre      # before: baseline, plus a /conf/config.xml backup
+    bin/opnsense-validate post     # after: same checks, diffed against the latest pre
+
+Read-only: nothing is configured, restarted or renewed. Reaches the firewall as
+`ssh opnsense` (one Touch ID; ControlMaster reuses it), the fleet as read_agent
+(`<host>-agent`, which posts its usual ssh_alert), and queries DNS from the laptop.
+
+Each check records id, command, observed, expected and PASS/FAIL/INFO. The
+diff compares status plus a normalised value, so the answer is "what behaved
+differently", not a judgement. Never in the diff value (they move between runs
+on their own): uptime, WireGuard handshake ages, lease counts and DHCPACK
+counts, gateway delay/loss and the dpinger
+loss/delay alarms derived from them (only "down" counts), ping RTTs, external A records, the DNSBL test
+domain, the sweep's timestamp, the bouncer's last pull, AP firmware. The
+OPNsense version is expected to change; `post` instead FAILs if it did not.
+
+Results go to ~/validation (mode 700, files 600; OPNSENSE_VALIDATE_DIR to
+override), never the repo: they hold MACs and the backup holds secrets. Egress
+lines drop the public address, so no WAN address is recorded.
+
+The sweep is read, not triggered: it runs hourly at :37. `post` refuses a sweep
+older than both the pre run and the firewall's boot; --wait-sweep waits for one.
+"""
+import argparse
+import datetime as dt
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+OUT_DIR = Path(os.environ.get("OPNSENSE_VALIDATE_DIR", Path.home() / "validation"))
+FW = "opnsense"
+RESOLVER = "10.30.40.254"
+
+# Every name must answer with exactly this one A record and its PTR.
+HOSTS = {
+    "cobra": "10.30.40.204",
+    "hifipi": "10.30.40.100",
+    "dockassist": "10.30.100.100",
+    "vinylstreamer": "10.30.100.110",
+    "unifi": "10.30.40.201",
+    "cwwk": "10.30.40.51",
+    "zyxel": "10.30.40.50",
+    "agent-lxc": "10.30.40.203",
+    "workbench-lxc": "10.30.40.207",
+    "opnsense": "10.30.40.254",
+    "Bano": "10.30.20.52",
+    "U6-Plus-Salon-TV": "10.30.40.1",
+    "U6-Lite-Office": "10.30.40.2",
+    "UAP-AC-Lite-Habitacion": "10.30.40.3",
+    "U6-Lite-Salon-Relay": "10.30.40.4",
+}
+APS = ("U6-Plus-Salon-TV", "U6-Lite-Office", "UAP-AC-Lite-Habitacion", "U6-Lite-Salon-Relay")
+FLEET = ("cobra", "hifipi", "dockassist", "vinylstreamer", "unifi", "cwwk", "agent-lxc", "workbench-lxc")
+VLANS = (20, 40, 80, 100, 200)
+SERVICES = ("dnsmasq", "unbound", "hostwatch", "mdns-repeater", "wireguard", "crowdsec", "ntpd", "ddclient")
+
+# Dnsmasq static reservations, name -> address. MACs are Tier 1 (docs/local/),
+# so they are not listed here: each run records them and the diff shows a change.
+RESERVATIONS = {
+    "Bano": "10.30.20.52",
+    "U6-Plus-Salon-TV": "10.30.40.1",
+    "U6-Lite-Office": "10.30.40.2",
+    "UAP-AC-Lite-Habitacion": "10.30.40.3",
+    "U6-Lite-Salon-Relay": "10.30.40.4",
+    "hifipi": "10.30.40.100",
+    "cobra": "10.30.40.204",
+    "vinylstreamer-vpn": "10.30.80.101",
+    "conga": "10.30.100.50",
+    "dockassist": "10.30.100.100",
+    "bano-iot": "10.30.100.101",
+    "tcl-tv": "10.30.100.102",
+    "vinylstreamer": "10.30.100.110",
+    "BroadLink-Remote-27-34-d3": "10.30.100.242",
+}
+
+# Down before this script existed: INFO, not FAIL. Still diffed.
+EXPECTED_DOWN = {"WG_MULLVAD_GW_US3": "dead tunnel, docs/NETWORK.md finding 1"}
+
+# Egress via Mullvad per VLAN, from docs/NETWORK.md § Segmentation. None: the
+# document does not say, so the run records it and does not judge it.
+VLAN_MULLVAD = {20: False, 40: True, 80: True, 100: None, 200: None}
+EGRESS_HOSTS = {"cobra": 40, "hifipi": 40, "dockassist": 100, "vinylstreamer": 100}
+# hifipi leaves via WAN on purpose: Spotify refuses Mullvad exits (TODO 38).
+EGRESS_EXCEPTIONS = {"hifipi": False}
+
+HANDSHAKE_MAX_AGE = 180     # an active tunnel re-handshakes every 120 s
+BOUNCER_MAX_AGE = 600       # the firewall bouncer pulls decisions every few seconds
+SWEEP_MAX_AGE = 65 * 60     # the sweep runs hourly at :37
+SWEEP_LOG = "fleet_health_check.log"
+LOCAL_ZONES = ["internal"] + [f"{v}.30.10.in-addr.arpa" for v in VLANS]
+# Not behaviour: the version is meant to change, the other two are about the
+# evidence itself. A FAIL in any of them still blocks the verdict.
+NOT_IN_DIFF = {"A.version", "A.version.changed", "E.sweep.fresh"}
+
+
+# ── Plumbing ────────────────────────────────────────────────────────────────
+
+def sh(argv, stdin=None, timeout=60, binary=False):
+    """(returncode, stdout, stderr); a timeout or missing binary is a result, not a crash."""
+    try:
+        p = subprocess.run(argv, input=stdin, capture_output=True, text=not binary, timeout=timeout)
+        return p.returncode, p.stdout, p.stderr
+    except subprocess.TimeoutExpired:
+        return 124, b"" if binary else "", "timeout"
+    except FileNotFoundError as e:
+        return 127, b"" if binary else "", str(e)
+
+
+def fw(command, timeout=60):
+    """Runs a /bin/sh snippet on the firewall. stdin carries it, so nothing is re-quoted."""
+    return sh(["ssh", "-o", "ConnectTimeout=10", FW, "/bin/sh", "-s"], stdin=command, timeout=timeout)
+
+
+def fw_out(command, timeout=60):
+    rc, out, err = fw(command, timeout)
+    if rc != 0 and not out:
+        raise RuntimeError(f"rc={rc}: {err.strip()[:200]}")
+    return out
+
+
+class Run:
+    def __init__(self, label):
+        self.label = label
+        self.checks = []
+        self.facts = {}
+
+    def add(self, cid, command, observed, expected, status, diff=Ellipsis):
+        """diff is the value compared between runs: observed unless given; None means status only.
+
+        Stored as it will read back from JSON, so a tuple and its list are equal."""
+        value = observed if diff is Ellipsis else diff
+        self.checks.append({
+            "id": cid, "command": command, "observed": observed, "expected": expected,
+            "status": status, "diff_value": json.loads(json.dumps(value)),
+        })
+
+    def check(self, cid, command, observed, expected, ok, diff=Ellipsis):
+        self.add(cid, command, observed, expected, "PASS" if ok else "FAIL", diff)
+
+    def error(self, cid, command, expected, exc):
+        self.add(cid, command, f"could not read: {exc}", expected, "FAIL", "unreadable")
+
+    def totals(self):
+        t = {"PASS": 0, "FAIL": 0, "INFO": 0}
+        for c in self.checks:
+            t[c["status"]] += 1
+        return t
+
+
+def section(run, prefix, command, expected, fn):
+    """Runs one group of checks; an unreachable source FAILs its group instead of aborting."""
+    try:
+        fn()
+    except Exception as e:  # noqa: BLE001 — every failure is reported as a check
+        run.error(f"{prefix}.error", command, expected, e)
+
+
+# ── Parsers (pure; tests/unit/opnsense_validate_test.sh feeds them captured output) ──
+
+def parse_ifconfig(text):
+    ifs, cur = {}, None
+    for line in text.splitlines():
+        m = re.match(r"^(\S+): flags=\w+<([^>]*)>", line)
+        if m:
+            cur = ifs.setdefault(m.group(1), {"flags": m.group(2).split(","), "descr": "", "inet": [], "status": ""})
+            continue
+        if cur is None:
+            continue
+        s = line.strip()
+        if s.startswith("description: "):
+            cur["descr"] = re.sub(r" \(\w+\)$", "", s[len("description: "):])
+        elif s.startswith("inet "):
+            f = s.split()
+            prefix = bin(int(f[3], 16)).count("1") if len(f) > 3 and f[2] == "netmask" else None
+            cur["inet"].append(f"{f[1]}/{prefix}")
+        elif s.startswith("status: "):
+            cur["status"] = s[len("status: "):]
+    return ifs
+
+
+def parse_dns(text):
+    """drill or dig output -> (rcode, flags, [(type, data)]) from the answer lines."""
+    rcode = re.search(r"(?:status|rcode): (\w+)", text)
+    flags = re.search(r";; flags: ([a-z ]+);", text)
+    answers = []
+    for line in text.splitlines():
+        f = line.split()
+        if line.startswith(";") or len(f) < 5 or f[2] != "IN":
+            continue
+        answers.append((f[3], f[4]))
+    return (rcode.group(1) if rcode else "NO-ANSWER", flags.group(1).split() if flags else [], answers)
+
+
+def parse_mullvad(text):
+    """am.i.mullvad.net/connected -> (connected, server). The address is dropped."""
+    text = text.strip()
+    m = re.match(r"You are connected to Mullvad \(server ([^)]+)\)", text)
+    if m:
+        return True, m.group(1)
+    if text.startswith("You are not connected to Mullvad"):
+        return False, None
+    return None, text[:80] or "no answer"
+
+
+def parse_sweep(log):
+    """The last completed run in fleet_health_check.log -> (started, output lines) or None."""
+    blocks = re.split(r"^.*Starting execution of: .*$", log, flags=re.M)[1:]
+    for block in reversed(blocks):
+        m = re.search(r"Started: (\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)", block)
+        if m:
+            return dt.datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S"), block.splitlines()
+    return None
+
+
+def parse_dnsmasq_conf(text):
+    conf = {"hosts": {}, "dns": {}, "router": {}, "domain": [], "ranges": {}}
+    for line in text.splitlines():
+        key, _, val = line.strip().partition("=")
+        f = val.split(",")
+        if key == "dhcp-host" and len(f) >= 3:
+            conf["hosts"][f[2]] = {"ip": f[1], "mac": f[0]}
+        elif key == "dhcp-option" and len(f) >= 3 and f[0].startswith("tag:"):
+            if f[1] == "6":
+                conf["dns"][f[0][4:]] = ",".join(f[2:])
+            elif f[1] == "3":
+                conf["router"][f[0][4:]] = ",".join(f[2:])
+        elif key == "dhcp-range" and f[0].startswith("tag:"):
+            conf["ranges"][f[0][4:]] = ",".join(f[1:])
+        elif key == "domain" and len(f) >= 3:
+            conf["domain"].append((f[0], f[1], f[2]))
+    return conf
+
+
+def parse_forward_zones(text):
+    zones, cur = {}, None
+    for line in text.splitlines():
+        s = line.strip()
+        if s.startswith("name:"):
+            cur = s.split(":", 1)[1].strip().strip('"')
+            zones[cur] = []
+        elif s.startswith("forward-addr:") and cur is not None:
+            zones[cur].append(s.split(":", 1)[1].strip())
+    return zones
+
+
+def gateway_state(status):
+    """dpinger status -> (PASS/INFO/FAIL, diff value). 'loss' and 'delay' are
+    thresholds on volatile numbers, so they read as up: only down is behaviour."""
+    if status == "none":
+        return "PASS", "up"
+    if status in ("loss", "delay", "delay+loss"):
+        return "INFO", "up"
+    return "FAIL", status or "missing"
+
+
+def diff_runs(pre, post):
+    """[(id, before, after)] for every check whose status or normalised value changed."""
+    a = {c["id"]: c for c in pre}
+    b = {c["id"]: c for c in post}
+
+    def show(c):
+        if c is None:
+            return "absent"
+        v = c["diff_value"]
+        return c["status"] if v is None else f"{c['status']} {json.dumps(v, ensure_ascii=False)}"
+
+    changes = []
+    for cid in sorted(set(a) | set(b)):
+        if cid in NOT_IN_DIFF or cid.startswith("PRE."):
+            continue
+        x, y = a.get(cid), b.get(cid)
+        if x is None or y is None or (x["status"], x["diff_value"]) != (y["status"], y["diff_value"]):
+            changes.append((cid, show(x), show(y)))
+    return changes
+
+
+def verdict(label, pre, checks, changes):
+    fails = [c["id"] for c in checks if c["status"] == "FAIL"]
+    if label == "pre":
+        return "SAFE TO UPGRADE" if not fails else f"INVESTIGATE: {len(fails)} FAIL(s) before upgrading"
+    was = {c["id"] for c in pre if c["status"] == "FAIL"}
+    new = [i for i in fails if i not in was]
+    if changes or new:
+        why = [f"{len(changes)} behavioural change(s) vs pre"] if changes else []
+        why += [f"new FAIL: {', '.join(i for i in new if i in NOT_IN_DIFF)}"] if set(new) & NOT_IN_DIFF else []
+        return "INVESTIGATE: " + "; ".join(why)
+    return "UPGRADE OK" + (f" ({len(fails)} FAIL(s), all unchanged from pre)" if fails else "")
+
+
+# ── A. Platform ─────────────────────────────────────────────────────────────
+
+def platform(run):
+    out = fw_out("opnsense-version; date +%s; sysctl -n kern.boottime")
+    lines = out.splitlines()
+    version = re.search(r"OPNsense (\S+)", lines[0]).group(1)
+    now, boot = int(lines[1]), int(re.search(r"sec = (\d+)", lines[2]).group(1))
+    run.facts.update(version=version, fw_now=now, fw_boot=boot)
+    run.add("A.version", "opnsense-version", version, "INFO", "INFO")
+    run.add("A.uptime", "sysctl -n kern.boottime", f"{(now - boot) / 86400:.1f} days", "INFO", "INFO", None)
+
+    cmd = "sudo -n configctl service list"
+    services = json.loads(fw_out(cmd))
+    running = {}
+    for s in services:
+        running.setdefault(s["name"], []).append("is running" in (s.get("status") or ""))
+    for name in SERVICES:
+        st = running.get(name, [])
+        run.check(f"A.service.{name}", cmd, f"{sum(st)}/{len(st)} running", "all instances running",
+                  bool(st) and all(st))
+    run.add("A.service.set", cmd, sorted(n for n, st in running.items() if any(st)), "INFO", "INFO")
+
+    cmd = "sudo -n ps -axww -o command"
+    procs = [p for p in fw_out(cmd).splitlines()[1:] if p.split()]
+    dhcpd = [p for p in procs if os.path.basename(p.split()[0]) == "dhcpd"]
+    run.check("A.service.no_isc_dhcpd", f"{cmd}; configctl service list", f"{len(dhcpd)} dhcpd process(es); "
+              f"service entry: {'dhcpd' in running}", "none", not dhcpd and "dhcpd" not in running)
+    # A second, stock unbound has run from rc.conf since 2025-11 next to OPNsense's
+    # own. Recorded so an upgrade that changes it shows up.
+    unbound = sorted(re.search(r"-c (\S+)", p).group(1) if "-c " in p else p
+                     for p in procs if p.split()[0].endswith("/unbound"))
+    run.add("A.unbound.instances", cmd, unbound, "INFO", "INFO")
+
+    cmd = "ifconfig"
+    ifs = parse_ifconfig(fw_out(cmd))
+    by_descr = {i["descr"]: (n, i) for n, i in ifs.items() if i["descr"]}
+    for descr in ("SFP1_LAN", "ETH2_WAN"):
+        name, i = by_descr.get(descr, (None, None))
+        obs = f"{name}: {'UP' if i and 'UP' in i['flags'] else 'not up'}, {i['status'] if i else 'missing'}"
+        run.check(f"A.if.{descr}", cmd, obs, "UP, active", bool(i) and "UP" in i["flags"] and i["status"] == "active")
+    for v in VLANS:
+        i = ifs.get(f"vlan0.{v}")
+        want = f"10.30.{v}.254/24"
+        obs = f"{i['descr']}: {'UP' if 'UP' in i['flags'] else 'not up'}, {i['status']}, {' '.join(i['inet'])}" \
+            if i else "missing"
+        run.check(f"A.if.vlan{v}", cmd, obs, f"UP, active, {want}",
+                  bool(i) and "UP" in i["flags"] and i["status"] == "active" and i["inet"] == [want])
+    tunnels = {i["descr"]: n for n, i in ifs.items() if i["descr"].startswith("wg0_mullvad_") or i["descr"] == "wg1_server"}
+    for descr, name in sorted(tunnels.items()):
+        up = "UP" in ifs[name]["flags"]
+        run.check(f"A.if.{descr}", cmd, f"{name}: {'UP' if up else 'not up'}", "UP", up)
+    run.add("A.if.wg_set", cmd, sorted(tunnels), "INFO", "INFO")
+    run.facts["tunnels"] = tunnels
+
+    cmd = "sudo -n pluginctl -r return_gateways_status"
+    gws = json.loads(fw_out(cmd))["dpinger"]
+    for name, g in sorted(gws.items()):
+        if not name.startswith("WG_MULLVAD_"):
+            continue
+        status, value = gateway_state(g["status"])
+        obs = f"{'online' if g['status'] == 'none' else g['status']} (loss {g['loss']}, delay {g['delay']})"
+        if status == "FAIL" and name in EXPECTED_DOWN:
+            run.add(f"A.gw.{name}", cmd, obs, f"online; known down: {EXPECTED_DOWN[name]}", "INFO", value)
+        else:
+            run.add(f"A.gw.{name}", cmd, obs, "online (loss/delay alarm: INFO)", status, value)
+    # WAN: dpinger does not monitor it ('~'), so prove it: not down, default
+    # route on vlan0.300, and the firewall reaches 1.1.1.1 out of it.
+    wan = gws.get("ETH2_WAN_DHCP", {}).get("status", "missing")
+    route = fw_out("route -n get default")
+    iface = re.search(r"interface: (\S+)", route)
+    iface = iface.group(1) if iface else "none"
+    ping = fw("ping -c 3 -t 5 -q 1.1.1.1")[1]
+    recv = re.search(r"(\d+) packets received", ping)
+    recv = int(recv.group(1)) if recv else 0
+    run.check("A.gw.ETH2_WAN_DHCP", "pluginctl -r return_gateways_status; route -n get default; ping 1.1.1.1",
+              f"status {wan}; default via {iface}; 1.1.1.1 {recv}/3", "not down; default via vlan0.300; 1.1.1.1 answers",
+              wan not in ("down", "missing") and iface == "vlan0.300" and recv > 0,
+              [wan, iface, recv > 0])
+
+    # Public keys are Tier 2: only interface and timestamp are kept.
+    cmd = "sudo -n wg show all latest-handshakes"
+    out = fw_out(f"date +%s; {cmd}").splitlines()
+    now, peers = int(out[0]), {}
+    for line in out[1:]:
+        f = line.split()
+        if len(f) == 3:
+            peers.setdefault(f[0], []).append(int(f[2]))
+    descr_of = {n: d for d, n in tunnels.items()}
+    live = run.facts.setdefault("live_tunnels", [])
+    for name in sorted(descr_of, key=lambda n: descr_of[n]):
+        ts = peers.get(name, [])
+        newest = max(ts) if ts else 0
+        age = now - newest if newest else None
+        obs = f"{name}: {len(ts)} peer(s), newest handshake {f'{age} s ago' if age is not None else 'never'}"
+        if descr_of[name] == "wg1_server":
+            run.add("A.wg.wg1_server", cmd, obs, "INFO: road warrior, idle by design", "INFO", len(ts))
+            continue
+        recent = age is not None and age <= HANDSHAKE_MAX_AGE
+        if ts and recent:
+            live.append(name)
+        if not recent and f"WG_MULLVAD_GW_{descr_of[name].split('_')[-1].upper()}" in EXPECTED_DOWN:
+            run.add(f"A.wg.{descr_of[name]}", cmd, obs, "INFO: known down", "INFO", [len(ts), recent])
+        else:
+            run.check(f"A.wg.{descr_of[name]}", cmd, obs, f">=1 peer, handshake <= {HANDSHAKE_MAX_AGE} s",
+                      len(ts) >= 1 and recent, [len(ts), recent])
+
+    for cid, cmd in (("A.count.rules", "sudo -n pfctl -sr | wc -l"), ("A.count.nat", "sudo -n pfctl -sn | wc -l"),
+                     ("A.count.tables", "sudo -n pfctl -sT | wc -l")):
+        run.add(cid, cmd, int(fw_out(cmd).strip()), "INFO (diffed)", "INFO")
+    cmd = "sudo -n pfctl -sT"
+    run.add("A.aliases", cmd, sorted(t for t in fw_out(cmd).split() if not t.startswith("__")), "INFO (diffed)", "INFO")
+
+    cmd = "sudo -n cscli bouncers list -o json"
+    now, _, out = fw_out(f"date +%s; {cmd}").partition("\n")
+    now, active = int(now), []
+    for b in json.loads(out) or []:
+        pulled = dt.datetime.strptime(b["last_pull"][:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=dt.timezone.utc)
+        age = now - int(pulled.timestamp())
+        if not b["revoked"] and age <= BOUNCER_MAX_AGE:
+            active.append(f"{b['type']} {b['version']}, pulled {age} s ago")
+    run.check("A.crowdsec.bouncer", cmd, active or "none active", f"a bouncer pulled within {BOUNCER_MAX_AGE} s",
+              bool(active), bool(active))
+
+
+# ── B. DHCP ─────────────────────────────────────────────────────────────────
+
+def dhcp(run):
+    cmd = "sudo -n sockstat -4 -6 -l"
+    rows = [l.split() for l in fw_out(cmd).splitlines()[1:]]
+    on67 = sorted({r[1] for r in rows if len(r) > 5 and r[5].endswith(":67")})
+    run.check("B.listen.67", cmd, on67, "['dnsmasq'] only", on67 == ["dnsmasq"])
+    on53053 = sorted({f"{r[1]} {r[4]} {r[5]}" for r in rows if len(r) > 5 and r[5].endswith(":53053")})
+    run.check("B.listen.53053", cmd, on53053, "dnsmasq listening",
+              bool(on53053) and all(s.startswith("dnsmasq ") for s in on53053))
+
+    cmd = "sudo -n awk '{print $3}' /var/db/dnsmasq.leases"
+    leases = {v: 0 for v in VLANS}
+    for ip in fw_out(cmd).split():
+        o = ip.split(".")
+        if len(o) == 4 and int(o[2]) in leases:
+            leases[int(o[2])] += 1
+    run.facts["leases"] = leases
+
+    # Only timestamp and interface leave the firewall; MACs stay in its log.
+    cmd = ("sudo -n sh -c 'cat $(ls -t /var/log/dnsmasq/dnsmasq_*.log | head -n 2)'"
+           r" | sed -n 's/^<[0-9]*>1 \([^ ]*\) .* DHCPACK(\([^)]*\)).*/\1 \2/p'")
+    since = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=24)
+    acks = {v: 0 for v in VLANS}
+    for line in fw_out(cmd).splitlines():
+        ts, _, iface = line.partition(" ")
+        v = iface.rpartition(".")[2]
+        if v.isdigit() and int(v) in acks and dt.datetime.fromisoformat(ts) >= since:
+            acks[int(v)] += 1
+    for v in VLANS:
+        run.add(f"B.leases.vlan{v}", "sudo -n awk '{print $3}' /var/db/dnsmasq.leases", leases[v], "INFO", "INFO", None)
+        obs = f"{acks[v]} DHCPACK in 24 h, {leases[v]} lease(s)"
+        if acks[v] == 0 and leases[v] == 0:
+            run.add(f"B.ack.vlan{v}", cmd, obs, ">=1 DHCPACK in 24 h", "INFO", "no clients")
+        else:
+            run.check(f"B.ack.vlan{v}", cmd, obs, ">=1 DHCPACK in 24 h", acks[v] > 0, None)
+
+    cmd = "sudo -n cat /usr/local/etc/dnsmasq.conf"
+    conf = parse_dnsmasq_conf(fw_out(cmd))
+    for name, ip in RESERVATIONS.items():
+        h = conf["hosts"].get(name)
+        obs = f"{h['ip']} {h['mac']}" if h else "missing"
+        run.check(f"B.reservation.{name}", cmd, obs, f"{ip} <mac recorded>", bool(h) and h["ip"] == ip)
+    run.add("B.reservation.set", cmd, sorted(f"{n} {h['ip']} {h['mac']}" for n, h in conf["hosts"].items()),
+            "INFO (diffed)", "INFO")
+    for v in VLANS:
+        tag = f"vlan0.{v}"
+        run.check(f"B.option.dns.vlan{v}", cmd, conf["dns"].get(tag, "unset"), RESOLVER,
+                  conf["dns"].get(tag) == RESOLVER)
+        lo, _, _ = conf["ranges"].get(tag, ",").partition(",")
+        domain = next((d for d, start, _ in conf["domain"] if start == lo), "unset")
+        run.check(f"B.option.domain.vlan{v}", cmd, domain, "internal", domain == "internal")
+        # No option 3 means dnsmasq sends its own address on that interface.
+        run.add(f"B.option.router.vlan{v}", cmd, conf["router"].get(tag, "not set: interface address"),
+                f"10.30.{v}.254 (verified on the wire for the laptop's VLAN only)", "INFO")
+        run.add(f"B.range.vlan{v}", cmd, conf["ranges"].get(tag, "missing"), "INFO (diffed)", "INFO")
+
+    iface = re.search(r"interface: (\S+)", sh(["route", "-n", "get", "default"])[1])
+    iface = iface.group(1) if iface else "en0"
+    cmd = f"ipconfig getpacket {iface}"
+    pkt = sh(["ipconfig", "getpacket", iface])[1]
+
+    def opt(key):
+        m = re.search(rf"^{key} \([^)]*\): (.*)$", pkt, re.M)
+        return m.group(1).strip("{}") if m else None
+    yiaddr = re.search(r"^yiaddr = (\S+)", pkt, re.M)
+    vlan = int(yiaddr.group(1).split(".")[2]) if yiaddr else None
+    run.facts["laptop_vlan"] = vlan
+    run.add("B.laptop.vlan", cmd, f"VLAN {vlan} via {iface}", "INFO", "INFO")
+    run.check("B.laptop.router", cmd, opt("router"), f"10.30.{vlan}.254", opt("router") == f"10.30.{vlan}.254")
+    run.check("B.laptop.dns", cmd, opt("domain_name_server"), RESOLVER, opt("domain_name_server") == RESOLVER)
+    run.check("B.laptop.domain", cmd, opt("domain_name"), "internal", opt("domain_name") == "internal")
+    lease = opt("lease_time")
+    lease = int(lease, 16) if lease and lease.startswith("0x") else lease
+    run.check("B.laptop.lease_time", cmd, lease, 86400, lease == 86400)
+
+    # Dnsmasq binds *:53053, not loopback: record what it tells a client
+    # directly. It holds only local names; REFUSED for the rest means no way
+    # around Unbound and its blocklist.
+    gw = f"10.30.{run.facts.get('laptop_vlan', 40)}.254"
+    local = parse_dns(sh(["dig", "+time=2", "+tries=1", "-p", "53053", f"@{gw}", "cobra.internal", "A"], timeout=15)[1])[0]
+    remote = parse_dns(sh(["dig", "+time=2", "+tries=1", "-p", "53053", f"@{gw}", "debian.org", "A"], timeout=15)[1])[0]
+    run.check("B.dnsmasq.from_client", f"dig -p 53053 @{gw} cobra.internal; ... debian.org",
+              f"local name {local}; external {remote}", "external REFUSED (no path around Unbound)",
+              remote == "REFUSED", [local, remote])
+
+
+# ── C. DNS ──────────────────────────────────────────────────────────────────
+
+def dig(*query, extra=()):
+    argv = ["dig", "+time=3", "+tries=2", f"@{RESOLVER}", *query, "+noall", "+comments", "+answer", *extra]
+    return " ".join(argv), parse_dns(sh(argv, timeout=20)[1])
+
+
+def dns(run):
+    queries = []
+    for name, ip in HOSTS.items():
+        queries += [("fwd", name, ip), ("ptr", name, ip)]
+    script = "".join(
+        f"echo '### {kind} {name}'; drill {'-x ' + ip if kind == 'ptr' else name + '.internal'} @127.0.0.1"
+        f"{'' if kind == 'ptr' else ' A'}\n" for kind, name, ip in queries)
+    fw_answers = {}
+    for chunk in fw_out(script, timeout=120).split("### ")[1:]:
+        head, _, body = chunk.partition("\n")
+        fw_answers[tuple(head.split())] = parse_dns(body)
+
+    for kind, name, ip in queries:
+        want = [ip] if kind == "fwd" else [f"{name}.internal.".lower()]
+        rtype = "A" if kind == "fwd" else "PTR"
+        cmd, (rcode, _, ans) = dig(*(["-x", ip] if kind == "ptr" else [f"{name}.internal", "A"]))
+        got = [d.lower() if kind == "ptr" else d for t, d in ans if t == rtype]
+        run.check(f"C.{kind}.{name}.laptop", cmd, f"{rcode} {got}", f"NOERROR {want}", rcode == "NOERROR" and got == want)
+        rcode, _, ans = fw_answers.get((kind, name), ("NOT-RUN", [], []))
+        got = [d.lower() if kind == "ptr" else d for t, d in ans if t == rtype]
+        fcmd = f"ssh {FW} drill {'-x ' + ip if kind == 'ptr' else name + '.internal'} @127.0.0.1"
+        run.check(f"C.{kind}.{name}.fw", fcmd, f"{rcode} {got}", f"NOERROR {want}", rcode == "NOERROR" and got == want)
+
+    for name in ("cwwk.local", "hifipi.local"):
+        cmd, (rcode, _, ans) = dig(name, "A")
+        run.check(f"C.legacy.{name}", cmd, f"{rcode} {[d for _, d in ans]}", "NXDOMAIN", rcode == "NXDOMAIN")
+
+    cmd, (rcode, _, ans) = dig("debian.org", "A")
+    a = [d for t, d in ans if t == "A"]
+    run.check("C.external", cmd, f"{rcode}, {len(a)} A record(s)", "NOERROR, >=1 A", rcode == "NOERROR" and bool(a), None)
+    cmd, (rcode, flags, _) = dig("isc.org", "A", extra=("+dnssec",))
+    run.check("C.dnssec.signed", cmd, f"{rcode} flags={' '.join(flags)}", "NOERROR with ad", rcode == "NOERROR" and "ad" in flags)
+    # SERVFAIL alone also means "domain gone". +cd (no validation) must still
+    # answer, so the SERVFAIL is the validator's.
+    cmd, (rcode, _, _) = dig("dnssec-failed.org", "A")
+    cd_cmd, (cd_rcode, _, cd_ans) = dig("dnssec-failed.org", "A", extra=("+cd",))
+    run.check("C.dnssec.broken", f"{cmd}; {cd_cmd}", f"{rcode}; with +cd {cd_rcode}, {len(cd_ans)} answer(s)",
+              "SERVFAIL; with +cd NOERROR", rcode == "SERVFAIL" and cd_rcode == "NOERROR" and bool(cd_ans))
+
+    # First list-sourced entry of the compiled blocklist, in file order: the
+    # same domain each run unless the list changed. Custom entries are skipped,
+    # since they test the override, not the list. A wildcard entry blocks the
+    # name itself too.
+    pick = r'''import re
+text = open("/var/unbound/data/dnsbl.json").read()
+for m in re.finditer(r'"([^"]+)":\[\{"bl":"([^"]+)","wildcard":(true|false)', text):
+    if m.group(2) != "Custom":
+        print(m.group(1), m.group(2) + ("/wildcard" if m.group(3) == "true" else ""))
+        break
+'''
+    pcmd = "sudo -n /usr/local/bin/python3 -I - < pick.py  # first non-Custom entry of /var/unbound/data/dnsbl.json"
+    rc, out, err = sh(["ssh", FW, "sudo", "-n", "/usr/local/bin/python3", "-I", "-"], stdin=pick, timeout=60)
+    if rc != 0 or not out.split():
+        run.add("C.dnsbl", pcmd, f"could not pick a domain: {err.strip()[:120] or 'no match'}",
+                "a listed domain is blocked", "FAIL", "unreadable")
+    else:
+        domain, blocklist = out.split()[:2]
+        run.facts["dnsbl"] = f"{domain} ({blocklist})"
+        cmd, (rcode, _, ans) = dig(domain, "A")
+        a = [d for t, d in ans if t == "A"]
+        blocked = rcode == "NXDOMAIN" or (rcode == "NOERROR" and a == ["0.0.0.0"])
+        run.check("C.dnsbl", f"{pcmd}; {cmd}", f"{domain} from {blocklist}: {rcode} {a}",
+                  "NXDOMAIN or 0.0.0.0", blocked, None)
+
+    cmd = "sudo -n cat /var/unbound/etc/dot.conf"
+    zones = parse_forward_zones(fw_out(cmd))
+    run.add("C.forward.zones", cmd, zones, "INFO (diffed)", "INFO")
+    local = {z: zones.get(z) for z in LOCAL_ZONES}
+    run.check("C.forward.local", cmd, local, "each -> ['127.0.0.1@53053']",
+              all(v == ["127.0.0.1@53053"] for v in local.values()))
+    upstream = [a.split("@")[0] for a in zones.get(".", [])]
+    if upstream:
+        script = "".join(f"echo \"{a} $(route -n get {a} | awk '/interface:/ {{print $2}}')\"\n" for a in upstream)
+        routes = dict(l.split() if len(l.split()) == 2 else (l, "none") for l in fw_out(script).splitlines())
+        # A route into a tunnel with no peer is a route to nowhere: each
+        # upstream needs a tunnel that handshook (A.wg.*).
+        live = set(run.facts.get("live_tunnels", []))
+        obs = {a: f"{i} ({'live' if i in live else 'no live peer'})" for a, i in routes.items()}
+        run.check("C.upstream.via_mullvad", "route -n get <each '.' forward-addr>; A.wg.* handshakes", obs,
+                  "every upstream on a live wg tunnel", all(i in live for i in routes.values()), sorted(obs.items()))
+    else:
+        run.add("C.upstream.via_mullvad", cmd, "no '.' forward-zone: Unbound recurses itself",
+                "INFO: egress shown by D.egress.*", "INFO")
+
+
+# ── D. Routing and egress ───────────────────────────────────────────────────
+
+def egress_check(run, cid, command, text, expect):
+    connected, server = parse_mullvad(text)
+    obs = "Mullvad " + server if connected else ("not Mullvad" if connected is False else f"unknown: {server}")
+    if expect is None:
+        run.add(cid, command, obs, "not documented in NETWORK.md: recorded only", "INFO", connected)
+    else:
+        run.check(cid, command, obs, "Mullvad" if expect else "not Mullvad (WAN)", connected is expect, connected)
+    return server
+
+
+def routing(run):
+    cmd = "curl -s --max-time 15 https://am.i.mullvad.net/connected"
+    vlan = run.facts.get("laptop_vlan")
+    server = egress_check(run, "D.egress.laptop", cmd, sh(cmd.split(), timeout=30)[1], VLAN_MULLVAD.get(vlan))
+    run.add("D.egress.laptop.server", cmd, server or "-", "INFO", "INFO")
+
+    for host, vlan in EGRESS_HOSTS.items():
+        cmd = f"ssh {host}-agent 'getent hosts cobra.internal; echo ---; curl -s --max-time 15 https://am.i.mullvad.net/connected'"
+        rc, out, err = sh(["ssh", "-o", "ConnectTimeout=10", f"{host}-agent",
+                           "getent hosts cobra.internal; echo ---; curl -s --max-time 15 https://am.i.mullvad.net/connected"],
+                          timeout=45)
+        resolved, _, mullvad = out.partition("---\n")
+        got = resolved.split()[0] if resolved.split() else (f"ssh rc={rc} {err.strip()[:80]}" if rc else "no answer")
+        run.check(f"D.resolve.{host}", cmd, got, HOSTS["cobra"], got == HOSTS["cobra"])
+        expect = EGRESS_EXCEPTIONS.get(host, VLAN_MULLVAD[vlan])
+        egress_check(run, f"D.egress.{host}.vlan{vlan}", cmd, mullvad, expect)
+
+    targets = list(APS) + list(FLEET)
+    script = "".join(f"echo \"{n} $(ping -c 3 -t 5 -q {HOSTS[n]} | sed -n 's/.* \\([0-9]*\\) packets received.*/\\1/p')\"\n"
+                     for n in targets)
+    got = dict(l.split() if len(l.split()) == 2 else (l.strip(), "0") for l in fw_out(script, timeout=120).splitlines())
+    for n in targets:
+        recv = int(got.get(n, "0") or 0)
+        run.check(f"D.ping.{n}", f"ssh {FW} ping -c 3 -t 5 {HOSTS[n]}", f"{recv}/3", ">=1/3", recv > 0, None)
+
+
+# ── E. Fleet and services ───────────────────────────────────────────────────
+
+def read_sweep():
+    rc, out, err = sh(["ssh", "10.30.40.203-agent", f"sudo -n agent_read log {SWEEP_LOG} | tail -n 300"], timeout=45)
+    if rc != 0:
+        raise RuntimeError(f"rc={rc}: {err.strip()[:120]}")
+    return parse_sweep(out)
+
+
+def sweep(run, not_before, wait):
+    cmd = f"ssh 10.30.40.203-agent 'sudo -n agent_read log {SWEEP_LOG} | tail -n 300'"
+    deadline = time.time() + (SWEEP_MAX_AGE if wait else 0)
+    while True:
+        sweep = read_sweep()
+        fresh = sweep is not None and sweep[0] > not_before
+        if fresh or time.time() >= deadline:
+            break
+        print(f"  … waiting for a sweep after {not_before:%H:%M} (hourly at :37)", file=sys.stderr)
+        time.sleep(60)
+    if sweep is None:
+        run.add("E.sweep", cmd, "no completed run in the log", "Fleet OK — 8/8, no resolver: line", "FAIL", "no run")
+    else:
+        started, lines = sweep
+        ok_line = next((l.strip() for l in lines if "Fleet OK — 8/8" in l), None)
+        resolver = [l.strip() for l in lines if "resolver:" in l]
+        run.check("E.sweep", cmd, f"{ok_line or 'no Fleet OK — 8/8 line'}; resolver lines: {len(resolver)}",
+                  "Fleet OK — 8/8, no resolver: line", bool(ok_line) and not resolver, [bool(ok_line), len(resolver)])
+        run.check("E.sweep.fresh", cmd, f"started {started:%Y-%m-%d %H:%M:%S}", f"after {not_before:%Y-%m-%d %H:%M:%S}",
+                  started > not_before, None)
+
+
+def services(run):
+
+    url = "https://unifi.internal:11443"
+    cmd = f"curl -sk -o /dev/null -w '%{{http_code}}' --max-time 10 {url}"
+    code = sh(["curl", "-sk", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "10", url], timeout=20)[1]
+    run.check("E.unifi.console", cmd, code, "200", code == "200")
+    # The task named :8443 -> 302; that was CT 101. UniFi OS Server (cutover
+    # 2026-11-15) serves its console on 11443 and nothing on 8443.
+    rc = sh(["nc", "-z", "-G", "3", "unifi.internal", "8443"], timeout=10)[0]
+    run.add("E.unifi.8443", "nc -z -G 3 unifi.internal 8443", "open" if rc == 0 else "closed",
+            "INFO: closed since the UniFi OS cutover; console is 11443", "INFO")
+
+    cmd = "bin/unifi-state --unifi-os  # vault read-only account, no new credential"
+    rc, out, err = sh([str(REPO / "bin" / "unifi-state"), "--unifi-os"], timeout=90)
+    devices = sorted(re.findall(r'^device "[^"]*" "[^"]*" name="([^"]*)" .*? adopted=(\w+) state=(\d+)', out, re.M))
+    if rc != 0 or not devices:
+        run.add("E.unifi.aps", cmd, f"unreadable (rc={rc}): {err.strip()[:120]}", "4 adopted, state=1", "INFO", "unreadable")
+    else:
+        up = [d for d in devices if d[1] == "true" and d[2] == "1"]
+        run.check("E.unifi.aps", cmd, f"{len(up)}/{len(devices)} adopted and connected",
+                  f"{len(APS)} adopted, state=1", len(up) == len(APS), [" ".join(d) for d in devices])
+
+    me = sh(["scutil", "--get", "LocalHostName"])[1].strip()
+    for svc in ("_airplay._tcp", "_raop._tcp"):
+        cmd = f"dns-sd -B {svc} local.  # 5 s, laptop's own entries dropped"
+        p = subprocess.Popen(["dns-sd", "-B", svc, "local."], stdout=subprocess.PIPE, text=True)
+        try:
+            out, _ = p.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            p.terminate()
+            out, _ = p.communicate()
+        names = sorted({m.group(1).strip() for m in re.finditer(r"^\S+\s+Add\s+\d+\s+\d+\s+\S+\s+\S+\s+(.+)$", out, re.M)
+                        if not me or not m.group(1).strip().endswith(me)})
+        run.add(f"E.mdns.{svc.strip('_').split('.')[0]}", cmd, names, "INFO (diffed as a set)", "INFO")
+        run.facts.setdefault("mdns", []).extend(names)
+
+    url = "http://dockassist.internal:8123/"
+    code = sh(["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "10", url], timeout=20)[1]
+    run.check("E.ha.internal", f"curl -s -w '%{{http_code}}' {url}", code, "200", code == "200")
+    main_yml = REPO / "ansible/inventory/group_vars/all/main.yml"
+    m = re.search(r'^homeassistant_external_url: "([^"]+)"', main_yml.read_text(), re.M) if main_yml.exists() else None
+    if m:
+        code = sh(["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "10", m.group(1)], timeout=20)[1]
+        run.add("E.ha.external", f"curl -s -w '%{{http_code}}' {m.group(1)}", code,
+                "INFO: the mTLS gate answers 403 without a client certificate", "INFO")
+
+
+# ── Backup, output, diff ────────────────────────────────────────────────────
+
+def private_file(path, data):
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "wb" if isinstance(data, bytes) else "w") as f:
+        f.write(data)
+
+
+def backup(run, stamp):
+    version = run.facts.get("version", "unknown")
+    path = OUT_DIR / f"opnsense-config-{version}-{stamp}.xml"
+    cmd = f"ssh {FW} sudo -n cat /conf/config.xml > {path}"
+    rc, data, err = sh(["ssh", FW, "sudo", "-n", "cat", "/conf/config.xml"], timeout=60, binary=True)
+    try:
+        root = ET.fromstring(data).tag if rc == 0 else None
+    except ET.ParseError:
+        root = None
+    if root != "opnsense":
+        run.add("PRE.backup", cmd, f"not saved: rc={rc}, root={root}, {err.decode()[:120]}", "parsed <opnsense>", "FAIL", None)
+        return None
+    private_file(path, data)
+    run.add("PRE.backup", cmd, f"{path} ({len(data)} bytes, sha256 {hashlib.sha256(data).hexdigest()[:16]})",
+            "parsed <opnsense>, mode 600", "PASS", None)
+    return str(path)
+
+
+def commit():
+    rc, out, _ = sh(["git", "-C", str(REPO), "log", "-1", "--format=%h", "--", "bin/opnsense-validate"])
+    dirty = sh(["git", "-C", str(REPO), "status", "--porcelain", "--", "bin/opnsense-validate"])[1].strip()
+    return (out.strip() or "uncommitted") + ("-dirty" if dirty else "")
+
+
+def latest_pre():
+    pres = sorted(OUT_DIR.glob("opnsense-pre-*.json"))
+    return pres[-1] if pres else None
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("label", choices=("pre", "post"))
+    ap.add_argument("--wait-sweep", action="store_true", help="wait up to 65 min for a sweep newer than the cutoff")
+    args = ap.parse_args()
+
+    if REPO in OUT_DIR.resolve().parents or OUT_DIR.resolve() == REPO:
+        sys.exit(f"refusing to write results inside the repo: {OUT_DIR}")
+    OUT_DIR.mkdir(mode=0o700, exist_ok=True)
+    os.chmod(OUT_DIR, 0o700)
+
+    started = dt.datetime.now()
+    stamp = started.strftime("%Y%m%dT%H%M%S")
+    pre_path = latest_pre() if args.label == "post" else None
+    if args.label == "post" and pre_path is None:
+        sys.exit(f"no opnsense-pre-*.json in {OUT_DIR}: run 'pre' first")
+    pre = json.loads(pre_path.read_text()) if pre_path else None
+
+    run = Run(args.label)
+    print(f"\n── OPNsense validation: {args.label} ({started:%Y-%m-%d %H:%M})", file=sys.stderr)
+    section(run, "A", f"ssh {FW}", "platform readable", lambda: platform(run))
+    section(run, "B", f"ssh {FW}", "dhcp readable", lambda: dhcp(run))
+    section(run, "C", "dig / drill", "dns readable", lambda: dns(run))
+    section(run, "D", "curl / ssh / ping", "egress readable", lambda: routing(run))
+
+    # The sweep must postdate the evidence it is compared with: in post, both
+    # the pre run and the firewall's (re)boot; in pre, simply be recent.
+    if pre:
+        boot = dt.datetime.fromtimestamp(run.facts.get("fw_boot", 0))
+        not_before = max(dt.datetime.fromisoformat(pre["finished"]), boot)
+    else:
+        not_before = started - dt.timedelta(seconds=SWEEP_MAX_AGE)
+    section(run, "E.sweep", "agent log", "sweep log readable", lambda: sweep(run, not_before, args.wait_sweep))
+    section(run, "E", "curl / unifi-state / dns-sd", "services readable", lambda: services(run))
+
+    backup_path = backup(run, stamp) if args.label == "pre" else None
+    changes = []
+    if pre:
+        before, after = pre.get("opnsense_version"), run.facts.get("version")
+        run.check("A.version.changed", "opnsense-version", f"{before} -> {after}", "a different version than pre",
+                  before != after, None)
+        changes = diff_runs(pre["checks"], run.checks)
+
+    totals = run.totals()
+    fails = [c for c in run.checks if c["status"] == "FAIL"]
+    result_verdict = verdict(args.label, pre["checks"] if pre else [], run.checks, changes)
+
+    finished = dt.datetime.now()
+    result = {
+        "label": args.label, "started": started.isoformat(timespec="seconds"),
+        "finished": finished.isoformat(timespec="seconds"), "script": "bin/opnsense-validate", "commit": commit(),
+        "opnsense_version": run.facts.get("version"), "totals": totals, "verdict": result_verdict,
+        "backup": backup_path, "pre_file": str(pre_path) if pre_path else None,
+        "diff": [{"id": i, "before": b, "after": a} for i, b, a in changes], "checks": run.checks,
+    }
+    out = OUT_DIR / f"opnsense-{args.label}-{stamp}.json"
+    private_file(out, json.dumps(result, indent=2, ensure_ascii=False) + "\n")
+
+    lines = []
+    for c in run.checks:
+        exp = "" if c["status"] == "PASS" else f"   (expected {c['expected']})"
+        lines.append(f"  {c['status']:<4}  {c['id']:<36} {json.dumps(c['observed'], ensure_ascii=False)[:110]}{exp}")
+    if pre:
+        lines += ["", f"── Diff vs {pre_path.name}"] + ([f"  {i}: {b} → {a}" for i, b, a in changes] or ["  no behavioural changes"])
+
+    leases = run.facts.get("leases", {})
+    wg = [c for c in run.checks if c["id"].startswith("A.wg.wg0_mullvad_")]
+    handover = [
+        "", "```", f"HANDOVER VALIDATION {args.label} — {finished:%Y-%m-%d %H:%M}",
+        f"OPNsense: {run.facts.get('version', 'unreadable')} | script: bin/opnsense-validate @ {result['commit']}",
+        f"Totals: PASS={totals['PASS']} FAIL={totals['FAIL']} INFO={totals['INFO']}",
+        "FAILs: " + ("; ".join(f"{c['id']}: {json.dumps(c['observed'], ensure_ascii=False)[:90]} vs {c['expected']}"
+                              for c in fails) or "none"),
+    ]
+    if pre:
+        handover.append(f"Diff vs pre ({pre_path.name}): " + ("; ".join(f"{i}: {b} → {a}" for i, b, a in changes)
+                                                             or "no behavioural changes"))
+    handover += [
+        "Notable INFO: leases " + " ".join(f"v{v}={n}" for v, n in leases.items())
+        + f" | mDNS {sorted(set(run.facts.get('mdns', [])))}"
+        + f" | WG handshakes ok {sum(c['status'] == 'PASS' for c in wg)}/{len(wg)}"
+        + f" | DNSBL test {run.facts.get('dnsbl', 'none')}",
+    ]
+    if args.label == "pre":
+        handover.append(f"Backup: {backup_path or 'FAILED'}")
+    handover += [f"Verdict: {result_verdict}", "```", f"Results: {out}"]
+
+    summary = "\n".join(lines + handover) + "\n"
+    private_file(OUT_DIR / f"opnsense-{args.label}-{stamp}.txt", summary)
+    print(summary)
+    return 0 if result_verdict.startswith(("SAFE", "UPGRADE OK")) else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

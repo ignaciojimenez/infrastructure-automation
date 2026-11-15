@@ -274,6 +274,15 @@ set — see `docs/BACKUP_AND_RECOVERY.md`.
 
 ## DNS Architecture (Updated November 2025)
 
+- **Firewall upgrades are judged by a behaviour diff, not a checklist
+  (2026-11-15).** `bin/opnsense-validate pre|post` records ~220 read-only
+  checks and `post` lists every one whose status or normalised value changed.
+  "Is this OK?" becomes "what behaved differently?", which needs no judgement
+  per check. Expected values only gate PASS/FAIL. A FAIL present in `pre` and
+  unchanged in `post` does not block the upgrade, and a new one does. The
+  agent sweep is read, not triggered: `post` refuses a sweep older than both
+  the `pre` run and the firewall's boot.
+
 - **cwwk: one resolver, no public fallback (2026-11-15).** The hypervisor's
   guard against depending on the firewall it hosts is `/etc/hosts` for its own
   name, not a public nameserver: its default route is OPNsense, and a resolver
@@ -288,7 +297,8 @@ set — see `docs/BACKUP_AND_RECOVERY.md`.
   itself, and the estate has no internal IPv6/prefix-delegation or DHCP
   high-availability need that would favour Kea. **Design:** Unbound stays the
   resolver for every client; Dnsmasq owns DHCP and the local names under
-  `internal`, listening on 127.0.0.1:53053, and Unbound forwards `internal`
+  `internal`, on port 53053 (bound to all interfaces, not loopback only: corrected
+  2026-11-15, see NETWORK.md), and Unbound forwards `internal`
   plus the 10.30.{20,40,80,100,200} reverse zones to it. Pools, 24 h leases
   and the DNS option (Unbound only) were carried over unchanged; the `local`
   search domain was dropped. **Local names live only in Dnsmasq.** The legacy

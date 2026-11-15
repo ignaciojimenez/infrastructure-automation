@@ -50,6 +50,7 @@ Sections `1.`–`13.` under *Confirmed drift and defects* are numbered findings 
 - [DNS](#dns)
   - [Resolver chain, DHCP and local names (since 2026-11-13)](#resolver-chain-dhcp-and-local-names-since-2026-11-13)
   - [Unbound is fully recursive](#unbound-is-fully-recursive)
+  - [A second Unbound on loopback](#a-second-unbound-on-loopback)
   - [Port 53 redirect](#port-53-redirect)
 - [⚠️ Confirmed drift and defects](#-confirmed-drift-and-defects)
   - [1. wg9 (Mullvad US3) is dead, and Quad9 is routed through it](#1-wg9-mullvad-us3-is-dead-and-quad9-is-routed-through-it)
@@ -78,6 +79,7 @@ Sections `1.`–`13.` under *Confirmed drift and defects* are numbered findings 
 - [The EdgeRouter X — a known unknown](#the-edgerouter-x--a-known-unknown)
   - [Four ways it was hunted, on 2026-08-07 — all negative](#four-ways-it-was-hunted-on-2026-08-07--all-negative)
   - [An unexplained observation](#an-unexplained-observation)
+- [Validating a firewall upgrade](#validating-a-firewall-upgrade)
 - [Re-deriving this document](#re-deriving-this-document)
 - [Sources](#sources)
 
@@ -196,8 +198,8 @@ single always-on tunnel.
 | Interface | OPNsense descr | Region | State |
 |-----------|----------------|--------|-------|
 | `wg0` | `wg0_mullvad_nl1` | NL | up — peer moved to `nl-ams-wg-301` on 2026-09-14 after its old relay went inactive ~2026-09-10 ([worked example](#replacing-a-mullvad-peer-runbook)) |
-| `wg2` | `wg0_mullvad_nl2` | NL | ⚠️ **down since ~2026-09-10** — relay inactive in Mullvad's list (maintenance or retirement is not stated); left as is by decision |
-| `wg3` | `wg0_mullvad_nl3` | NL | up — but its relay is no longer in Mullvad's relay list (2026-09-14) |
+| `wg2` | `wg0_mullvad_nl2` | NL | up — handshaking, gateway online (read 2026-11-15; was down ~2026-09-10 to at least 09-14) |
+| `wg3` | `wg0_mullvad_nl3` | NL | ⚠️ **no peer configured, gateway down** (read 2026-11-15). Its relay had left Mullvad's list by 2026-09-14; when the peer went is not known |
 | `wg4` | `wg0_mullvad_es1` | ES | up |
 | `wg5` | `wg0_mullvad_es2` | ES | up |
 | `wg6` | `wg0_mullvad_es3` | ES | up |
@@ -306,6 +308,10 @@ it: a road-warrior server on `10.30.41.0/24`, firewall at `10.30.41.1`.
 | `10.30.41.7` | configured, idle by design (0 B received as of 2026-09) |
 | `10.30.41.8` | configured, idle by design (0 B received as of 2026-09) |
 
+✏️ *2026-11-15:* `wg show wg1` lists **four** peers, not three; none had
+handshaken since the firewall's last boot (2026-11-12). Which device the fourth
+is was not established.
+
 All three use preshared keys in addition to the peer key. The two idle peers
 were identified on 2026-11-01 as Ignacio's own devices, kept for occasional
 remote access; which device is which is in `docs/local/`. Idle is not a fault
@@ -350,7 +356,11 @@ client ──DNS───▶ Unbound 10.30.40.254
   (cwwk, the LXCs, the switch, the firewall) resolve too. `opnsense.internal`
   answers with its VLAN 40 address only.
 - **Unbound stays the resolver for every client** and forwards the local zones
-  to Dnsmasq, which listens on loopback only.
+  to Dnsmasq on `127.0.0.1:53053`. ✏️ *Corrected 2026-11-15: this said Dnsmasq
+  listens on loopback only.* It binds `*:53053`, and a client querying a VLAN
+  gateway on 53053 gets local names back; external names are `REFUSED`
+  (`no-resolv`, no `server=`), so there is no path around Unbound or its
+  blocklist. `bin/opnsense-validate` records both answers (`B.dnsmasq.from_client`).
 - **The legacy Unbound host overrides** (`<host>.local`, A only, no PTR) are
   being retired. Nothing in this repo uses them since `fleet_dns_domain:
   internal`; the Pis never reached them anyway, because libnss-mdns answers
@@ -367,6 +377,14 @@ loopback bind, per-VLAN ranges) was read by the OPNsense session, not re-read he
 > the local zones — Unbound now forwards `internal` and the fleet's reverse
 > zones to Dnsmasq ([above](#resolver-chain-dhcp-and-local-names-since-2026-11-13)).
 > The rest of this section is the 2026-08-07 reading.
+>
+> ✏️ **Corrected again 2026-11-15: no longer true for the internet either.**
+> `/var/unbound/etc/dot.conf` forwards `.` to the in-tunnel Mullvad resolvers
+> `10.64.0.1`, `.3`, `.7` and `.11`, which route over `wg0`, `wg3`, `wg7` and
+> `wg11`. **`10.64.0.3` routes into `wg3`, which has no peer**, so one upstream
+> in four is a dead end. When the forward was configured is not known. The
+> 2026-09-20 decision entry ("VPN-first DNS — superseded, was never live")
+> describes the box before this change.
 
 Verified on the live box: `/var/unbound/` contains **no `forward-zone` and no
 `forward-addr` anywhere**. `etc/dot.conf` and `etc/domainoverrides.conf` are both
@@ -384,6 +402,22 @@ describing a different architecture:
 
 Layer 1 is not what is running. See
 [the failover script's premise](#3-the-dns-failover-scripts-premise-no-longer-holds).
+
+### A second Unbound on loopback
+
+`/etc/rc.conf` carries `unbound_enable="YES"` (file dated 2025-11-16), so
+FreeBSD's stock Unbound starts at boot with the package's sample config
+(`/usr/local/etc/unbound/unbound.conf`) next to OPNsense's own
+(`/var/unbound/unbound.conf`), and holds `127.0.0.1:53` and `[::1]:53`. Found
+2026-11-15.
+
+Measured the same day: 30 of 30 queries to `127.0.0.1` were counted by
+OPNsense's instance (`unbound-control -c /var/unbound/unbound.conf
+stats_noreset`), so `heartbeat_dns.sh` and `check_dns_health.sh`, which probe
+`@127.0.0.1`, reach the resolver they mean to. *Not verified:* that the kernel
+keeps routing loopback queries that way across a reboot or an upgrade.
+`bin/opnsense-validate` records both instances (`A.unbound.instances`), so a
+change shows up in the diff. Nothing was changed.
 
 ### Port 53 redirect
 
@@ -1194,6 +1228,22 @@ authoritative for adopted state, and it shows both APs healthy and serving SSIDs
 Noted only so it is not rediscovered as a surprise.
 
 ---
+
+## Validating a firewall upgrade
+
+```bash
+bin/opnsense-validate pre     # before: baseline + /conf/config.xml backup
+bin/opnsense-validate post    # after: same checks, diffed against the latest pre
+```
+
+Read-only, run from the laptop (one Touch ID for `ssh opnsense`). About 220
+checks across platform, DHCP, DNS, egress and fleet. Each records command,
+observed, expected and PASS/FAIL/INFO. The verdict is a **behaviour diff**:
+`post` lists every check whose status or normalised value changed. Volatile
+values are excluded (the list is in the script's header). Results and the
+config backup go to `~/validation/`, mode 600, never to the repo: they hold
+MACs, and the backup holds keys. The diff and parsers are forced both ways in
+`tests/unit/opnsense_validate_test.sh`.
 
 ## Re-deriving this document
 
