@@ -110,6 +110,7 @@ ssh -o StrictHostKeyChecking=accept-new -o ControlPersist=8h -MNf 10.30.40.201  
 
 ```sh
 ansible-playbook ansible/playbooks/site.yml --limit unifi-os-vm
+ssh 10.30.40.201 'getent hosts cwwk'          # 10.30.40.51: search domain is internal
 ssh cwwk 'sudo pvesh set /cluster/backup/backup-34b8bdac-4d3a --vmid 100,105'
 ansible-playbook ansible/playbooks/deploy_monitoring.yml --limit cwwk,unifi-os-vm
 ```
@@ -144,18 +145,30 @@ the settings are what a restore needs. The console has no control for the
 schedule, so set it through the Network API from the logged-in console tab
 (browser devtools or Playwright):
 
+**And turn device auto-upgrade off.** CT 101 upgrades AP firmware at 03:00,
+and the restore carries that over. Network 10.5 knows newer firmware than 9.4,
+so the first night would reboot every AP onto it: a second change stacked on
+the migration. Off now, back on once the cutover has run quietly for a few
+days (below).
+
 ```js
-const g = await fetch('/proxy/network/api/s/default/get/setting/super_mgmt');
-const csrf = g.headers.get('x-csrf-token'), id = (await g.json()).data[0]._id;
-await fetch('/proxy/network/api/s/default/set/setting/super_mgmt/' + id, { method: 'PUT',
-  headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
-  body: JSON.stringify({ autobackup_cron_expr: '0 3 * * *', autobackup_days: 0 }) });
+const set = async (key, body) => {
+  const g = await fetch('/proxy/network/api/s/default/get/setting/' + key);
+  const csrf = g.headers.get('x-csrf-token'), id = (await g.json()).data[0]._id;
+  const r = await fetch('/proxy/network/api/s/default/set/setting/' + key + '/' + id, { method: 'PUT',
+    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf }, body: JSON.stringify(body) });
+  return r.status;
+};
+await set('super_mgmt', { autobackup_cron_expr: '0 3 * * *', autobackup_days: 0 });   // 200
+await set('mgmt', { auto_upgrade: false });                                          // 200
 ```
 
-Read it back: `0 3 * * *`, days `0`. In the rehearsal (2026-11-15) a
-schedule set this way fired on time, survived a reboot, and wrote
-`autobackup_10.5.67_<date>_<UTC time>_<epoch ms>.unf`. Left weekly,
-`backup_unifi` fails at 03:30 on Tuesday: it refuses a backup older than 26 h.
+Read both back with the same GETs: `0 3 * * *`, days `0`, `auto_upgrade`
+false. In the rehearsal (2026-11-15) a schedule set this way fired on time,
+survived a reboot, and wrote
+`autobackup_10.5.67_<date>_<UTC time>_<epoch ms>.unf`; `auto_upgrade` turned
+off and on. Left weekly, `backup_unifi` fails at 03:30 on Tuesday: it refuses
+a backup older than 26 h.
 
 ### 8. The read-only account
 
@@ -241,5 +254,8 @@ disables cloud-init after the first `site.yml`. Turn auto-update back on.
   `unifi` role, `group_vars/network_controller.yml`, its `services.yml`
   include, and the docs that name unifi-lxc (NETWORK.md,
   BACKUP_AND_RECOVERY.md, COVERAGE.md).
+- **Device auto-upgrade back on**, after a few quiet days:
+  `set('mgmt', { auto_upgrade: true })` from step 7. Expect each AP to
+  reboot onto new firmware at 03:00 that night.
 - Delete `cutover.unf` from `docs/local/`. It holds the whole configuration,
   PSKs included.

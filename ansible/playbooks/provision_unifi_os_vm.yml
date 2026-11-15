@@ -39,8 +39,11 @@
     vm_ip: 10.30.40.201
     vm_cidr: 24
     vm_gateway: 10.30.40.254
-    vm_nameserver: 10.30.40.254
-    vm_searchdomain: local
+    vm_nameserver: "{{ fleet_dns_resolver }}"
+    # Fleet hostnames resolve as <host>.<fleet_dns_domain>. cloud-init applies
+    # it once, at first boot; the role then disables cloud-init, so a change
+    # here reaches the VM only through a rebuild.
+    vm_searchdomain: "{{ fleet_dns_domain }}"
     vm_bridge: vmbr0
 
     # Ubiquiti's stated minimums are 2 GiB RAM and ~20 GiB free disk; the
