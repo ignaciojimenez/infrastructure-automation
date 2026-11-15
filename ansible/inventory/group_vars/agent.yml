@@ -203,7 +203,9 @@ speed_comparison_min_ratio: "0.90"
 # ============================================================
 # The relays OPNsense's WireGuard peers point at, read from the firewall on
 # 2026-09-13; NL1's peer was moved from nl-ams-wg-001 to nl-ams-wg-301 on
-# 2026-09-14. When one changes state in Mullvad's own relay list the change goes
+# 2026-09-14. NL2 (nl-ams-wg-002, inactive) and NL3 (nl-ams-wg-101, no longer
+# listed) were found re-peered on the firewall on 2026-11-15, NL2 earlier and
+# unrecorded, NL3 that day; this list was re-synced from config.xml then. When one changes state in Mullvad's own relay list the change goes
 # to #home-alerts and the weekly reminders to #home-logging — never a failing
 # check. Around 2026-09-10 two of the three NL relays went inactive and nothing
 # noticed for three days.
@@ -220,9 +222,9 @@ enable_mullvad_relay_signal: true
 agent_mullvad_relays:
   - hostname: nl-ams-wg-301
     label: "NL1, wg0"
-  - hostname: nl-ams-wg-002
+  - hostname: nl-ams-wg-303
     label: "NL2, wg2"
-  - hostname: nl-ams-wg-101
+  - hostname: nl-ams-wg-004
     label: "NL3, wg3"
   - hostname: es-bcn-wg-001
     label: "ES1, wg4"
