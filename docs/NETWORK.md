@@ -1029,7 +1029,9 @@ controller rather than by convention.
 🔑 **The credential is in the vault** as `vault_unifi_readonly_user` /
 `vault_unifi_readonly_password` (`3132f9a`). Rotating it was declined on
 2026-10-31 (read-only, LAN-only, only ever shared in a local session; see
-TODO.md). Pass it on stdin or via an environment variable, never inline in a
+TODO.md), then done on 2026-11-13 anyway: UniFi OS Server refuses a password
+without an uppercase letter (PER-127). Its only consumer is `bin/unifi-state`
+on the laptop, the preflight included; no host or cron holds it. Pass it on stdin or via an environment variable, never inline in a
 script, a cron entry or a committed file. `bin/unifi-state` is the worked
 example: it reads the vault and hands the login to the host over ssh stdin
 (PER-128; the before/after check in
