@@ -5,8 +5,9 @@ the live fleet; trust it over your assumptions.
 
 ## Hosts
 
-Reached as `ssh <name>-agent "<command>"`. Names resolve as `<name>.local`
-through Unbound on the gateway (10.30.40.254).
+Reached as `ssh <name>-agent "<command>"`. Names resolve as
+`<name>.{{ fleet_dns_domain }}` through Unbound on the gateway (10.30.40.254),
+which forwards that domain to Dnsmasq on the same box.
 
 | Host | Platform | Runs | Notes |
 |---|---|---|---|

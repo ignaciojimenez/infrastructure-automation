@@ -2,8 +2,9 @@
 #
 # Fleet access for the Tier 1 sweep. Mirrors the laptop's `*-agent` pattern,
 # but with explicit per-host blocks rather than the laptop's ProxyCommand
-# trick: HostName resolves through the container's `search local` domain to
-# <host>.local via Unbound on the gateway, so no netcat hop is needed.
+# trick: HostName is the fully qualified <host>.{{ fleet_dns_domain }}, resolved
+# by Unbound on the gateway, so no netcat hop is needed and nothing depends on
+# the container's search domain.
 
 Host {% for h in agent_fleet_hosts %}{{ h.name }}-agent {% endfor %}
 
@@ -18,5 +19,5 @@ Host {% for h in agent_fleet_hosts %}{{ h.name }}-agent {% endfor %}
 
 {% for h in agent_fleet_hosts %}
 Host {{ h.name }}-agent
-    HostName {{ h.name }}
+    HostName {{ h.name }}.{{ fleet_dns_domain }}
 {% endfor %}
