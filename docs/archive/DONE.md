@@ -17,6 +17,7 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ## Contents
 
+- [2026-11-15 — a 250 m home zone reports arrivals before the door opens (PER-170)](#2026-11-15--a-250-m-home-zone-reports-arrivals-before-the-door-opens-per-170)
 - [2026-11-08 — retired phones registered themselves again, and the presence check paged on them](#2026-11-08--retired-phones-registered-themselves-again-and-the-presence-check-paged-on-them)
 - [2026-11-03 — a replaced phone left the presence sensors reading a dead tracker](#2026-11-03--a-replaced-phone-left-the-presence-sensors-reading-a-dead-tracker)
 - [2026-10-31 — the builder's code was right every time; its tests were not (PER-126 review)](#2026-10-31--the-builders-code-was-right-every-time-its-tests-were-not-per-126-review)
@@ -79,6 +80,20 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 ---
 
 
+
+## 2026-11-15 — a 250 m home zone reports arrivals before the door opens (PER-170)
+
+**At 100 m, iOS reported half the arrivals after the entrance door had already opened.** On 2026-11-05 Candela came home to a dark flat: Away Mode had turned the lights off during a 17-minute errand, the phone reported the return 2.5 min after the door opened, and "Lights on when dark" waits another 2 min. Over 26 Oct–5 Nov, 3 of 6 arrivals were reported 1.3–1.7 min early and 3 were 2.5–4.5 min late.
+
+**Decided: keep the home zone at 250 m** (`homeassistant_home_radius`, `3a5dcf7`). From 6 to 15 Nov, every arrival with a usable door reading (9 person-arrivals) was reported before the door opened, 1.7 to 14 min early. Entry now usually fires at the boundary: four of the five first `home` fixes I checked were 240–264 m out, and the fifth was at 157 m. Both dark arrivals lit the flat with nobody switching lights on by hand.
+
+**The price, as observed:**
+- On 12 Nov the phones read `home` at 240 m and 157 m and stayed nearby. The arrival lights came on 12 min before anyone came in, and Tado went to Home with them.
+- Departures are now reported 3.3–12 min after the door, against 4.2 min in the single 100 m sample. Away Mode therefore runs 13–22 min after the last person leaves.
+
+**Not tested:** short errands. No absence that week lasted under 188 min, so whether a short walk now skips Away Mode is still unknown.
+
+**Rejected for now: the entrance door as the arrival trigger.** Its sensor (TODO 42) is unreliable both ways. Phantom opens would light an empty flat, and a stuck-open reading hides the next real arrival. It was stuck open again on 7–8 Nov (9.8 h) and unavailable for 5 h on 11 Nov.
 
 ## 2026-11-08 — retired phones registered themselves again, and the presence check paged on them
 
