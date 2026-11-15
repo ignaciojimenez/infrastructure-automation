@@ -198,8 +198,8 @@ single always-on tunnel.
 | Interface | OPNsense descr | Region | State |
 |-----------|----------------|--------|-------|
 | `wg0` | `wg0_mullvad_nl1` | NL | up — peer moved to `nl-ams-wg-301` on 2026-09-14 after its old relay went inactive ~2026-09-10 ([worked example](#replacing-a-mullvad-peer-runbook)) |
-| `wg2` | `wg0_mullvad_nl2` | NL | up — handshaking, gateway online (read 2026-11-15; was down ~2026-09-10 to at least 09-14) |
-| `wg3` | `wg0_mullvad_nl3` | NL | ⚠️ **no peer configured, gateway down** (read 2026-11-15). Its relay had left Mullvad's list by 2026-09-14; when the peer went is not known |
+| `wg2` | `wg0_mullvad_nl2` | NL | up — peer `nl-ams-wg-303` (xtom), replacing the inactive `nl-ams-wg-002`; when it was swapped was not recorded (found 2026-11-15) |
+| `wg3` | `wg0_mullvad_nl3` | NL | up — peer `nl-ams-wg-004` (31173) since 2026-11-15, after it was found with no peer and its gateway down; the old relay `nl-ams-wg-101` had left Mullvad's list by 2026-09-14 |
 | `wg4` | `wg0_mullvad_es1` | ES | up |
 | `wg5` | `wg0_mullvad_es2` | ES | up |
 | `wg6` | `wg0_mullvad_es3` | ES | up |
@@ -381,8 +381,8 @@ loopback bind, per-VLAN ranges) was read by the OPNsense session, not re-read he
 > ✏️ **Corrected again 2026-11-15: no longer true for the internet either.**
 > `/var/unbound/etc/dot.conf` forwards `.` to the in-tunnel Mullvad resolvers
 > `10.64.0.1`, `.3`, `.7` and `.11`, which route over `wg0`, `wg3`, `wg7` and
-> `wg11`. **`10.64.0.3` routes into `wg3`, which has no peer**, so one upstream
-> in four is a dead end. When the forward was configured is not known. The
+> `wg11`. **`10.64.0.3` routed into `wg3`, which had no peer**, so one upstream
+> in four was a dead end, until NL3 was re-peered later that day. When the forward was configured is not known. The
 > 2026-09-20 decision entry ("VPN-first DNS — superseded, was never live")
 > describes the box before this change.
 
