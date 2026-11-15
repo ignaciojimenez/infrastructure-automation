@@ -455,13 +455,36 @@ would degrade failover for other traffic. That needs `config.xml`, which
 ### 2. ~~`cwwk` bypasses the estate resolver~~ — RESOLVED
 
 ✅ **Fixed 2026-11-15.** `ansible/playbooks/platform/proxmox.yml` now owns
-cwwk's `/etc/resolv.conf`: `search internal`, `nameserver 10.30.40.254`. Kept as
-a single resolver on purpose: the default route is OPNsense, so with VM 100 down
-Quad9 was unreachable too — the bypass never bought resilience, and it could not
-resolve a single fleet name. Before switching, Unbound was queried from cwwk for
-fleet names and the Debian/Proxmox repositories; all answered.
+cwwk's `/etc/resolv.conf`: `search internal`, `nameserver 10.30.40.254`. Before
+switching, Unbound was queried from cwwk for fleet names and the Debian/Proxmox
+repositories; all answered.
 
-The original finding, as read on 2026-08-07:
+**Why the public resolver went, and why no fallback replaced it.** Quad9 was put
+there deliberately, to keep the hypervisor out of a circular dependency on the
+firewall it hosts. Checked on cwwk 2026-11-15, that circle does not run through
+`resolv.conf`:
+
+- **The circle that matters is the node's own name.** pve-cluster will not start
+  if the hostname does not resolve, and then no guest autostarts — VM 100
+  included. cwwk resolves its own name from `/etc/hosts` (`getent hosts cwwk` →
+  `10.30.40.51`), so starting the firewall needs no DNS at all. Nothing else
+  checked in the boot path names a host: no `.internal` in
+  `/etc/pve/storage.cfg`, `/etc/fstab` or the chrony config.
+- **With OPNsense down, Quad9 is unreachable anyway.** The default route is
+  `10.30.40.254`. DNS errors on cwwk while the firewall is down or booting are a
+  symptom of having no internet, not of a loop, and clear when it comes up.
+- **The one case a public second resolver covers** — OPNsense routing but
+  Unbound broken — is already paged: `heartbeat_dns.sh` pings healthchecks.io only
+  when `drill @127.0.0.1` answers, so a dead Unbound alerts from outside. Adding
+  Quad9 as a fallback would instead break that incident further: glibc moves on
+  only after a timeout (5 s per lookup), and `internal` names would come back
+  NXDOMAIN from a third party.
+
+Every `resolv.conf` entry must give the same answers; a public resolver cannot
+answer `internal`, so it is not a fallback for this one.
+
+The original finding, as read on 2026-08-07 (its "oversight" reading was wrong —
+corrected above):
 
 The hypervisor's `/etc/resolv.conf` is `nameserver 9.9.9.9` — every other host
 checked (`cobra`, `hifipi`, `dockassist`, `unifi`) points at `10.30.40.254`.

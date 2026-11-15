@@ -274,6 +274,13 @@ set — see `docs/BACKUP_AND_RECOVERY.md`.
 
 ## DNS Architecture (Updated November 2025)
 
+- **cwwk: one resolver, no public fallback (2026-11-15).** The hypervisor's
+  guard against depending on the firewall it hosts is `/etc/hosts` for its own
+  name, not a public nameserver: its default route is OPNsense, and a resolver
+  that cannot answer `internal` is not a fallback. Unbound failure is paged by
+  `heartbeat_dns.sh`. See
+  [NETWORK.md finding 2](NETWORK.md#2-cwwk-bypasses-the-estate-resolver--resolved).
+
 - **DHCP: ISC → Dnsmasq (2026-11-13).** ISC DHCP is end-of-life upstream and
   in OPNsense ([docs](https://docs.opnsense.org/manual/isc.html)); per the
   26.1 series it left core for a plugin, which only defers the migration.
