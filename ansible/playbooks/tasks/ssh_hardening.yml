@@ -26,6 +26,15 @@
   when: gh_keys is defined
   tags: [ssh, keys]
 
+# After the write above, so a first deploy finds the file already in sync and
+# the timer's first run posts nothing.
+- name: Keep authorized_keys in sync with the gist between runs
+  ansible.builtin.import_tasks: authorized_keys_sync.yml
+  when:
+    - os_family == "debian"
+    - gh_keys is defined
+    - alert_token is defined
+
 - name: Deploy hardened sshd config
   become: true
   ansible.builtin.template:

@@ -17,6 +17,7 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ## Contents
 
+- [2026-11-15 — a key removed from the gist kept working from the fallback file (PER-182)](#2026-11-15--a-key-removed-from-the-gist-kept-working-from-the-fallback-file-per-182)
 - [2026-11-15 — a 250 m home zone reports arrivals before the door opens (PER-170)](#2026-11-15--a-250-m-home-zone-reports-arrivals-before-the-door-opens-per-170)
 - [2026-11-08 — retired phones registered themselves again, and the presence check paged on them](#2026-11-08--retired-phones-registered-themselves-again-and-the-presence-check-paged-on-them)
 - [2026-11-03 — a replaced phone left the presence sensors reading a dead tracker](#2026-11-03--a-replaced-phone-left-the-presence-sensors-reading-a-dead-tracker)
@@ -80,6 +81,59 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 ---
 
 
+
+## 2026-11-15 — a key removed from the gist kept working from the fallback file (PER-182)
+
+sshd takes a key from the live gist lookup **or** `~/.ssh/authorized_keys`, and only
+Ansible wrote the file. So it lagged the gist both ways: on 11-11 cwwk's copy was five
+weeks old and missing two of seven keys, and "remove it from the gist" did not revoke
+a key anywhere until that host's next run.
+
+**Now:** `authorized_keys_sync.timer`, every 15 min on every Debian host, rewrites the
+file from the gist. One guard for both writers: `scripts/ssh/authorized_keys_validate`
+is what the timer runs and what `github_authorized_keys.yml` runs (its text, via
+`sh -c`, so check mode works on a fresh host). Every change posts the added and
+removed fingerprints to #home-alerts; a refused list posts once per distinct list; a
+failed fetch leaves the file alone and fails the unit, which the health check's
+failed-unit check reports. Revoking a key is now "edit the gist, wait ≤15 min"
+([ARCHITECTURE_DECISIONS.md](../ARCHITECTURE_DECISIONS.md)).
+
+Decisions worth not re-deriving:
+
+- **"Changed" means the fingerprint set changed, not the bytes or comments.** The
+  unit test caught the fight before it shipped: `authorized_key` writes a comment-less
+  key as `type blob ` (trailing space), `ssh-keygen -l` reports that as a different
+  comment, and a byte or comment comparison would have had the timer and Ansible
+  rewriting each other forever. The module itself rewrites only on a set change.
+- **The service runs as the infrastructure user, not root,** though the issue said
+  root: the account can write its own file, so root added privilege and nothing else.
+  `ProtectSystem=strict` with only `~/.ssh` writable; works in LXC with `nesting=1`.
+- **Not a write from `update_keys`:** it runs pre-auth as `nobody`, on demand of anyone
+  who can reach port 22.
+
+**Forced on CT 199 (2026-11-15), against a stand-in gist file and a local Slack
+capture** (the real gist was not edited: a throwaway key there would have opened every
+fleet host's live lookup for the test's duration):
+
+| Condition | Result |
+|---|---|
+| Throwaway key added | timer fired on schedule (21:45:25), key written, its fingerprint posted |
+| Live lookup blocked (`/etc/hosts`), key in the file | throwaway login **succeeds** (positive control) |
+| Key removed, lookup still blocked | throwaway login **refused**; rig key still in; removal posted |
+| Empty list / same list again / malformed list | file sha unchanged each time; posts 1 / 0 / 1 |
+| Fetch fails | file unchanged, no post, unit `failed` in `systemctl --failed` |
+| Non-key list through Ansible (`-e gh_keys=https://example.com/`) | play fails at the guard, with the reason; nothing written |
+| `site.yml` twice | `changed=0` on the second run; timer then runs quiet against the real gist |
+
+**Rolled out 2026-11-15** with `services.yml --tags keys --limit '!opnsense'` to the eight
+Debian hosts. The dry run found cobra, hifipi, vinylstreamer and cwwk each missing the
+same two of the seven gist keys; the run added them. The second run was `changed=0` on all
+eight. Each host's fallback fingerprints then matched the live gist (7 keys), and a
+manual timer run succeeded everywhere, the four Debian 12 Pis included. Slack delivery
+was proven on workbench-lxc with the deployed webhook: a forced refusal
+(`KEYS_URL=https://example.com/`) posted to #home-alerts at 22:31 and left the file's
+hash unchanged. opnsense was left out: the existing key task would rewrite a file
+OPNsense regenerates from `config.xml`, and its keys belong in its UI.
 
 ## 2026-11-15 — a 250 m home zone reports arrivals before the door opens (PER-170)
 
