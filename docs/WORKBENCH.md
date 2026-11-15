@@ -42,7 +42,7 @@ their surfaces overlap: `~/.scripts` (monitoring vs dotfiles' user-bin dir),
 be discovered on a host, after deploy. Separate accounts remove the shared
 namespace instead.
 
-⚠️ **You will land as `choco` when you `ssh workbench`.** The agent runs as
+⚠️ **You will land as `choco` when you `ssh workbench-lxc`.** The agent runs as
 `builder`, so anything about the session — auth, its config, its repos — needs
 `sudo -u builder -H` or a direct `ssh builder@10.30.40.207`. This trips people
 up once; it is the single most common source of confusion on this box.
@@ -78,7 +78,7 @@ So Remote Control needs one browser round trip, **once per box** — not per
 session, and it survives restarts and reboots:
 
 ```sh
-ssh builder@workbench            # NOT choco — the session belongs to builder
+ssh builder@workbench-lxc        # NOT choco — the session belongs to builder
 claude auth login                # prints a URL, waits for a code
 # open the URL in any browser, approve, paste the code back
 sudo systemctl restart claude-remote-control
@@ -97,14 +97,14 @@ claude auth status               # expect loggedIn: true, authMethod: claude.ai
 Then check the session is actually connected — **not just running**:
 
 ```sh
-tmux capture-pane -p -t workbench | tail -5
+tmux capture-pane -p -t workbench | grep -v "^[[:space:]]*$" | tail -5
 ```
 
 A healthy pane shows:
 
 ```
 ·✔︎· Connected · Workspaces · HEAD
-    Capacity: 1/32 · New sessions will be created in the current directory
+    Capacity: 1/16 · New sessions will be created in the current directory
 ```
 
 `Connected` plus a capacity line is the server running. `/rc failed`, *"Remote
@@ -146,9 +146,10 @@ Three separate times this box looked healthy and was not:
 
 The config gates are pre-answered by the role. The login cannot be.
 
-**A healthy pane reads `/rc active` and `Claude Pro`.** `Claude API` means the
-token is leaking into the session's environment; anything else on that line
-means it is not usable from the phone, whatever systemd says.
+**A healthy pane reads `Connected` plus a `Capacity: n/16` line** (above).
+`Claude API` anywhere means the token is leaking into the session's
+environment; any prompt or `/rc failed` means it is not usable from the phone,
+whatever systemd says.
 
 📌 **The health check proves the process exists, not that the session is
 usable.** `check_remote_control.sh` looks for a `claude` process owned by
@@ -160,7 +161,7 @@ reach it".
 
 ## Login noise you can ignore
 
-Two cosmetic things on `ssh builder@workbench`, both stock Debian rather than
+Two cosmetic things on `ssh builder@workbench-lxc`, both stock Debian rather than
 anything this repo does — checked against `cobra`, which behaves identically:
 
 - **The Debian banner prints twice.** `/etc/pam.d/sshd` has two `pam_motd`
@@ -190,16 +191,16 @@ anything this repo does — checked against `cobra`, which behaves identically:
 
 ```sh
 # health, as the check itself sees it
-ssh workbench '~/.scripts/check_remote_control.sh'
+ssh workbench-lxc '~/.scripts/check_remote_control.sh'
 
 # what the session is doing
-ssh workbench 'sudo -u builder -H env HOME=/home/builder tmux capture-pane -p -t workbench | tail -20'
+ssh workbench-lxc 'sudo -u builder -H env HOME=/home/builder tmux capture-pane -p -t workbench | grep -v "^[[:space:]]*$" | tail -20'
 
 # attach to the very session the phone drives (as builder)
-ssh builder@workbench -t 'tmux attach -t workbench'
+ssh builder@workbench-lxc -t 'tmux attach -t workbench'
 
 # restart it
-ssh builder@workbench 'sudo systemctl restart claude-remote-control'
+ssh builder@workbench-lxc 'sudo systemctl restart claude-remote-control'
 ```
 
 Repos live in `/home/builder/Workspaces`, which is also the session's working
