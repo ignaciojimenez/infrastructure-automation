@@ -91,7 +91,9 @@ jq -n --arg t "$TEAM_ID" --arg f "$FLEET_LABEL_ID" --arg k "$TASK_LABEL_ID" --ar
 
 # The key reaches curl as a header FILE, never an argument: argv is
 # world-readable through /proc, and RUN_USER is on this box.
-curl -sS --max-time 30 -H @"$AUTH_FILE" -H 'Content-Type: application/json' \
+# A single timeout or blip failed the whole unit (PER-188); retry a few times
+# before giving up, so only a real outage reaches the failed-unit monitor.
+curl -sS --max-time 30 --retry 3 --retry-delay 5 --retry-all-errors -H @"$AUTH_FILE" -H 'Content-Type: application/json' \
     --data-binary @"$WORK/req" "$ENDPOINT" > "$WORK/resp" 2> "$WORK/curl_err" ||
     die "Linear unreachable: $(head -c 300 "$WORK/curl_err")"
 jq -e '(.errors | not) and (.data.issues.nodes != null)' "$WORK/resp" > /dev/null 2>&1 ||

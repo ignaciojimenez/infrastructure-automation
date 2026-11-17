@@ -382,6 +382,15 @@ else
     fail "header-file argument missing: $(head -1 "$FAKE_LINEAR_ARGV")"
 fi
 
+printf '\n── A transient Linear failure is retried, not fatal on the first blip\n'
+
+if grep -q -e '--retry 3' -e '--retry-all-errors' "$FAKE_LINEAR_ARGV" &&
+   grep -q -- '--retry-all-errors' "$FAKE_LINEAR_ARGV"; then
+    pass "the Linear call retries timeouts and connection errors"
+else
+    fail "curl was not asked to retry: $(head -1 "$FAKE_LINEAR_ARGV")"
+fi
+
 printf '\n'
 if [ "$failures" -eq 0 ]; then
     printf '✅ fleet_builder_poll: all checks passed\n'
