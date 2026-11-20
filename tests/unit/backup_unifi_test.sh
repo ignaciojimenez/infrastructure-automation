@@ -64,7 +64,7 @@ touch -t 202611110300 "$WORK/backups/$OLD"
 touch -t 202611120300 "$WORK/backups/$NEW"
 printf '{}' > "$WORK/backups/autobackup_meta.json"
 
-run() { : > "$CALLS"; rm -f "$WORK/archived"; bash "$WORK/net/backup_unifi.sh" --silent --recipient=age1test "$@" > "$WORK/out" 2>&1; }
+run() { : > "$CALLS"; rm -f "$WORK/archived"; bash "$WORK/net/backup_unifi.sh" --silent --recipient=age1test > "$WORK/out" 2>&1; }
 archived() { [ "$(tr '\n' ' ' < "$WORK/archived" 2>/dev/null)" = "$1" ]; }
 all_reads_via_podman() { ! grep -v '^sudo -u uosserver podman exec uosserver ' "$CALLS" | grep -v '^sudo chown\|^sudo rm' | grep -q .; }
 
