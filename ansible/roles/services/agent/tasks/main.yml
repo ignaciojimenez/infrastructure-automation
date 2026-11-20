@@ -259,7 +259,7 @@
   become: true
   ansible.builtin.copy:
     dest: "{{ agent_mullvad_relays_file }}"
-    content: "# Managed by Ansible (agent_mullvad_relays): <hostname> <label>\n{% for r in agent_mullvad_relays %}{{ r.hostname }} {{ r.label | default('') }}\n{% endfor %}"
+    content: "# Managed by Ansible (agent_mullvad_relays): <hostname> <public key> <label>\n{% for r in agent_mullvad_relays %}{{ r.hostname }} {{ r.pubkey | default('') }} {{ r.label | default('') }}\n{% endfor %}"
     owner: "{{ primary_user }}"
     group: "{{ infrastructure_group }}"
     mode: '0644'
