@@ -62,6 +62,11 @@ if [ -f "$WORK/fetch_fail" ]; then
     echo "curl: (28) Operation timed out" >&2
     exit 28
 fi
+if [ -f "$WORK/dns_blip" ]; then
+    rm -f "$WORK/dns_blip"
+    echo "curl: (6) Could not resolve host: gist.invalid" >&2
+    exit 6
+fi
 cp "$WORK/gist" "\$out"
 EOF
 chmod +x "$WORK/bin/curl"
@@ -71,7 +76,7 @@ run() {
     : > "$WORK/slack.log"
     PATH="$WORK/bin:$PATH" HOME="$WORK/home" STATE_DIRECTORY="$WORK/state" \
         KEYS_URL="https://gist.invalid/keys" SLACK_WEBHOOK="https://slack.invalid/hook" \
-        VALIDATOR="$VALIDATOR" KEEP_KEY="${KEEP_KEY:-}" \
+        VALIDATOR="$VALIDATOR" KEEP_KEY="${KEEP_KEY:-}" FETCH_RETRY_DELAY=0 \
         "$SH" "$SYNC" > "$WORK/out" 2> "$WORK/err"
     RC=$?
 }
@@ -119,6 +124,17 @@ if [ "$RC" -eq 0 ] && untouched && [ "$(posts)" -eq 0 ]; then
     pass "the same key set in another layout is not a change (no fight with Ansible)"
 else
     fail "layout: rc=$RC slack=$(cat "$WORK/slack.log")"
+fi
+
+# One DNS failure (a resolver blip) is absorbed by the retry inside the run.
+printf '%s\n' "$A" > "$AK"
+printf '%s\n%s\n' "$A" "$B" > "$WORK/gist"
+: > "$WORK/dns_blip"
+run
+if [ "$RC" -eq 0 ] && grep -qF "$B" "$AK" && [ ! -f "$WORK/dns_blip" ]; then
+    pass "a single DNS failure on the fetch is retried and the run succeeds"
+else
+    fail "dns blip: rc=$RC err=$(cat "$WORK/err")"
 fi
 
 # A key removed from the gist.

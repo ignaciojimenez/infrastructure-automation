@@ -91,8 +91,17 @@ describe() {
     fi
 }
 
-if ! curl -sSf --max-time 30 --retry 2 --retry-delay 5 \
-        -o "$work/fetched" "$KEYS_URL" 2>"$work/curl.err"; then
+# curl's own --retry skips a DNS failure (exit 6), which is what a resolver
+# blip looks like, so retry here.
+fetched=0
+for attempt in 1 2 3; do
+    if curl -sSf --max-time 30 -o "$work/fetched" "$KEYS_URL" 2>"$work/curl.err"; then
+        fetched=1
+        break
+    fi
+    [ "$attempt" -lt 3 ] && sleep "${FETCH_RETRY_DELAY:-20}"
+done
+if [ "$fetched" -ne 1 ]; then
     echo "fetch failed, authorized_keys left untouched: $(cat "$work/curl.err")" >&2
     exit 1
 fi
