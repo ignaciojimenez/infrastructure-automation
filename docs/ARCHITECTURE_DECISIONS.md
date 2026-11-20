@@ -274,6 +274,14 @@ set — see `docs/BACKUP_AND_RECOVERY.md`.
 
 ## DNS Architecture (Updated November 2025)
 
+- **An exhausted Mullvad group may fall back to the WAN, unencrypted — but it
+  must page (2026-11-20).** No kill switch. `check_wg.sh` judges each gateway
+  group by gateway status, as failover does, and goes CRITICAL when a group has
+  no usable member. Two related calls, settled the same day: speed beats
+  provider diversity in a group (NL1 and NL2 both xtom on purpose), and `wg1`,
+  the road-warrior server, is in use and stays. See
+  [NETWORK.md, Failover](NETWORK.md#failover--and-what-happens-when-a-group-runs-out).
+
 - **Firewall upgrades are judged by a behaviour diff, not a checklist
   (2026-11-15).** `bin/opnsense-validate pre|post` records ~220 read-only
   checks and `post` lists every one whose status or normalised value changed.
