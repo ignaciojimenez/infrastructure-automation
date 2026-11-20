@@ -202,10 +202,10 @@ single always-on tunnel.
 | `wg3` | `wg0_mullvad_nl3` | NL | up — peer `nl-ams-wg-004` (31173) since 2026-11-15, after it was found with no peer and its gateway down; the old relay `nl-ams-wg-101` had left Mullvad's list by 2026-09-14 |
 | `wg4` | `wg0_mullvad_es1` | ES | up |
 | `wg5` | `wg0_mullvad_es2` | ES | up |
-| `wg6` | `wg0_mullvad_es3` | ES | up |
-| `wg7` | `wg0_mullvad_us1` | US | up |
-| `wg8` | `wg0_mullvad_us2` | US | up |
-| `wg9` | `wg0_mullvad_us3` | US | ⚠️ **dead — see below** |
+| `wg6` | `wg0_mullvad_es3` | ES | down from ~2026-11-17 until re-keyed 2026-11-20: Mullvad rotated `es-bcn-wg-101`'s public key and the peer kept the old one (found by the 26.7.9 upgrade diff) |
+| `wg7` | `wg0_mullvad_us1` | US | up — peer `us-nyc-wg-001` |
+| `wg8` | `wg0_mullvad_us2` | US | up — peer `us-nyc-wg-002` |
+| `wg9` | `wg0_mullvad_us3` | US | ⚠️ **dead — see below** (peer `us-nyc-wg-301`, active and on its published key 2026-11-20) |
 | `wg10` | `wg0_mullvad_uk1` | UK | up |
 | `wg11` | `wg0_mullvad_uk2` | UK | up |
 | `wg12` | `wg0_mullvad_uk3` | UK | up |
@@ -234,7 +234,8 @@ documented default is that *"when a rule has a specific gateway set, and this
 gateway is down, rule is created and traffic is sent to default gateway."* The
 documentation describes a single gateway; that a fully-down group behaves the same
 is inferred, not tested. Nothing alerts on that state: healthchecks sees a working
-internet, and the relay signal watches Mullvad's relay list, not the tunnels. Only
+internet, and the relay signal watches Mullvad's relay list (state and public
+key), not the tunnels. Only
 agent-lxc's VPN-vs-direct comparison (twice a day) reports the egress address.
 
 **Cheapest mitigation, if wanted:** add `WG_MULLVAD_GW_UK1` to `Mullvad_failover_nl`
@@ -247,7 +248,13 @@ UK rather than in the clear. Not done as of 2026-09-14.
 failure, and an automated swap that picks wrong takes two VLANs offline. What tells
 you to run it is agent-lxc's relay signal (`mullvad_relay_signal.sh`): it alerts
 `#home-alerts` when a relay a peer uses goes inactive, drops out of Mullvad's list,
-or comes back, and posts weekly reminders to `#home-logging` while it stays down.
+publishes a public key other than the one pinned for its peer, or comes back, and
+posts weekly reminders to `#home-logging` while it stays that way.
+
+**A new public key is a one-field fix, not a swap.** Mullvad rotated
+`es-bcn-wg-101`'s key around 2026-11-17 while the relay stayed active, and ES3 never
+handshook again (0 B received). Set the peer's public key to the one in the alert,
+then run steps 3–4 and 6; skip choosing a relay.
 
 **Decide before touching anything.** Mullvad marks relays inactive for maintenance
 as well as before retirement, and neither its relay API nor its servers page says
@@ -280,10 +287,13 @@ peer when its group is short of healthy members, not on the first alert.
 5. **Verify from the estate:** agent-lxc's exit
    (`curl -s https://am.i.mullvad.net/json` names the new relay), and Spotify from
    hifipi if its exception rule was touched.
-6. **Update the repo:** `agent_mullvad_relays` in `ansible/inventory/group_vars/agent.yml`,
-   then deploy the agent role (`services.yml --limit agent-lxc --tags agent`, with
+6. **Update the repo:** regenerate `agent_mullvad_relays` in
+   `ansible/inventory/group_vars/agent.yml` from the firewall's config, never by hand:
+   `ssh opnsense 'sudo -n cat /conf/config.xml' | bin/mullvad-relays -` (or a backup
+   `bin/opnsense-validate pre` wrote). It prints hostnames, public keys and labels
+   only. Then deploy the agent role (`services.yml --limit agent-lxc --tags agent`,
    `--check` first). A relay changed on the firewall but not here is one the signal
-   silently stops watching; swapping in an active relay posts nothing.
+   silently stops watching; a key changed without its pin keeps the alert standing.
 7. **Update the table above.**
 
 🔴 When reading `/conf/config.xml` from a shell, **whitelist the fields you print.** A
@@ -414,8 +424,9 @@ FreeBSD's stock Unbound starts at boot with the package's sample config
 Measured the same day: 30 of 30 queries to `127.0.0.1` were counted by
 OPNsense's instance (`unbound-control -c /var/unbound/unbound.conf
 stats_noreset`), so `heartbeat_dns.sh` and `check_dns_health.sh`, which probe
-`@127.0.0.1`, reach the resolver they mean to. *Not verified:* that the kernel
-keeps routing loopback queries that way across a reboot or an upgrade.
+`@127.0.0.1`, reach the resolver they mean to. Re-measured 2026-11-20, after the
+26.7.9 upgrade and its reboot: the stock instance came back, and 30 queries to
+`127.0.0.1` were again all counted by OPNsense's (32, with background traffic).
 `bin/opnsense-validate` records both instances (`A.unbound.instances`), so a
 change shows up in the diff. Nothing was changed.
 

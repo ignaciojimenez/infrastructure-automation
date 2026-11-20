@@ -1,0 +1,58 @@
+#!/usr/bin/env python3
+"""Print agent_mullvad_relays from an OPNsense config.xml.
+
+    bin/mullvad-relays ~/validation/opnsense-config-<version>-<stamp>.xml
+    ssh opnsense 'sudo -n cat /conf/config.xml' | bin/mullvad-relays -
+
+The relay signal watches the relays and public keys listed in
+ansible/inventory/group_vars/agent.yml. Copying them by hand drifted twice: in
+2026-11 three of the twelve relays named relays no peer used, and NL2/NL3 lagged
+a swap. This reads them from the firewall's own config instead: each WireGuard
+instance named `*_mullvad_<region><n>`, its peer's relay hostname and public key.
+Paste the output over the list, then deploy the agent role.
+
+config.xml holds private keys and preshared keys. Only whitelisted fields are
+read (instance name, number and peers; peer uuid, endpoint and public key), so
+nothing secret can reach the output.
+"""
+
+import re
+import sys
+import xml.etree.ElementTree as ET
+
+INSTANCE = re.compile(r"_mullvad_([a-z]+)(\d+)$")
+RELAY = re.compile(r"^([a-z]{2}-[a-z]{3}-wg-\d+)\.relays\.mullvad\.net$")
+
+
+def relays(root):
+    peers = {}
+    for c in root.iter("client"):
+        m = RELAY.match(c.findtext("serveraddress") or "")
+        if m and c.get("uuid"):
+            peers[c.get("uuid")] = (m.group(1), c.findtext("pubkey") or "")
+    out = []
+    for s in root.iter("server"):
+        m = INSTANCE.search(s.findtext("name") or "")
+        if not m or s.findtext("enabled") != "1":
+            continue
+        num = int(s.findtext("instance"))
+        for uuid in filter(None, (s.findtext("peers") or "").split(",")):
+            if uuid in peers:
+                host, key = peers[uuid]
+                out.append((num, host, key, f"{m.group(1).upper()}{m.group(2)}, wg{num}"))
+    return sorted(out)
+
+
+def main(argv):
+    if len(argv) != 2:
+        sys.exit(__doc__.strip().splitlines()[0] + "\nusage: mullvad-relays <config.xml|->")
+    found = relays(ET.parse(sys.stdin if argv[1] == "-" else argv[1]).getroot())
+    if not found:
+        sys.exit("no enabled *_mullvad_* WireGuard instance with a Mullvad relay peer found")
+    print("agent_mullvad_relays:")
+    for _, host, key, label in found:
+        print(f"  - hostname: {host}\n    pubkey: \"{key}\"\n    label: \"{label}\"")
+
+
+if __name__ == "__main__":
+    main(sys.argv)

@@ -4,7 +4,9 @@
 #
 #   mullvad_relay_signal.sh <logging_webhook> <relay_list_file> [state_dir] [alert_webhook]
 #
-# relay_list_file: one relay per line, "<hostname> <label>", label optional.
+# relay_list_file: one relay per line, "<hostname> [<public key>] [<label>]",
+# written by Ansible from agent_mullvad_relays (bin/mullvad-relays reads that
+# from the firewall's config.xml). The key is the one the firewall's peer uses.
 # alert_webhook: where state changes go. Without it they fall back to the
 # logging webhook, so a cron line written before the alert channel existed keeps
 # working through a deploy instead of failing on a usage error.
@@ -13,6 +15,13 @@
 # Around 2026-09-10 two of the three NL relays behind VLAN 40/80's failover
 # group went inactive. The group quietly fell over to the last one — whose exit
 # Spotify refuses — and nothing anywhere said so for three days.
+#
+# Around 2026-11-17 Mullvad rotated es-bcn-wg-101's public key. The relay stayed
+# active, so this signal said nothing, while ES3's peer — still on the old key —
+# never handshook again; it was found two days later by an upgrade diff. So a
+# relay whose published key no longer matches the pinned one is a state of its
+# own ("on a new public key"), alerted like going inactive. A stale pin is loud,
+# not silent: fixing the peer without updating the pin keeps the alert standing.
 #
 # ── Two channels, and still not a check ───────────────────────────────────────
 # A relay changing state is something to act on: a peer may need swapping, by
@@ -94,6 +103,7 @@ describe() {
     case "$1" in
         inactive) echo "INACTIVE" ;;
         unlisted) echo "not in Mullvad's relay list" ;;
+        rekeyed)  echo "on a new public key" ;;
         broken)   echo "unreadable" ;;
         *)        echo "active" ;;
     esac
@@ -140,7 +150,7 @@ reason=""
 if ! "$CURL" -sS -f -m 30 -o "$WORK/relays.json" "$API" 2>"$WORK/curl.err"; then
     api_ok=0
     reason="request failed: $(head -c 160 "$WORK/curl.err" | tr '\n' ' ')"
-elif ! jq -e 'type == "array" and length > 0 and (.[0] | has("hostname") and has("active"))' \
+elif ! jq -e 'type == "array" and length > 0 and (.[0] | has("hostname") and has("active") and has("pubkey"))' \
         "$WORK/relays.json" >/dev/null 2>&1; then
     api_ok=0
     reason="the response is not Mullvad's relay list"
@@ -177,11 +187,23 @@ unhealthy=0
 while read -r host label; do
     case "$host" in ''|'#'*) continue ;; esac
     total=$((total + 1))
+    # A WireGuard public key is 44 base64 characters ending in "="; without one
+    # the relay is watched for its state only.
+    pin=""
+    word=${label%% *}
+    case "$word" in
+        *[!A-Za-z0-9+/=]*) ;;
+        *=) if [ "${#word}" -eq 44 ]; then
+                pin=$word; label=${label#"$word"}; label=${label# }
+            fi ;;
+    esac
     name="$host"
     [ -n "$label" ] && name="$host ($label)"
 
-    state=$(jq -r --arg h "$host" \
-        'map(select(.hostname == $h)) | if length == 0 then "unlisted" elif .[0].active then "active" else "inactive" end' \
+    # unlisted > inactive > rekeyed: a relay that is down needs replacing, not re-keying.
+    state=$(jq -r --arg h "$host" --arg pin "$pin" \
+        'map(select(.hostname == $h)) | if length == 0 then "unlisted" elif (.[0].active | not) then "inactive"
+         elif $pin != "" and .[0].pubkey != $pin then "rekeyed" else "active" end' \
         "$WORK/relays.json")
     msgs=$(jq -r --arg h "$host" \
         '[.[] | select(.hostname == $h) | (.status_messages // [])[] | "\"\(.message)\" (\(.timestamp))"] | join("; ")' \
@@ -192,6 +214,8 @@ while read -r host label; do
             if [ -n "$msgs" ]; then says=" Mullvad says: ${msgs}."; else says=" Mullvad gives no status message."; fi ;;
         unlisted)
             says=" With no entry, Mullvad gives no status message for it." ;;
+        rekeyed)
+            says=" Mullvad now publishes $(jq -r --arg h "$host" 'map(select(.hostname == $h))[0].pubkey' "$WORK/relays.json"); the pinned key is ${pin}. A peer still on the pinned key cannot handshake: set the peer's key, then the pin in agent_mullvad_relays." ;;
         *)
             says="" ;;
     esac
@@ -223,7 +247,7 @@ while read -r host label; do
     elif [ "$state" != active ] && [ $((NOW - _lp)) -ge $((REMIND_DAYS * 86400)) ]; then
         days=$(( (NOW - _since) / 86400 ))
         line="🛈 Still: Mullvad relay ${name} is $(describe "$state") — $(ago "$_since") since first seen ($(iso "$_since")).${says}"
-        if [ "$days" -ge "$RETIRE_DAYS" ]; then
+        if [ "$days" -ge "$RETIRE_DAYS" ] && [ "$state" != rekeyed ]; then
             line="${line} After ${days} days this may mean the relay has been retired — an inference from how long it has lasted, not something Mullvad states."
         fi
         add_log "$line"

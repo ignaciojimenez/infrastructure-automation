@@ -18,7 +18,7 @@ REPO_ROOT=$(cd -- "$(dirname -- "$0")/../.." && pwd)
 
 printf '\n── opnsense-validate diff + parsers\n'
 
-python3 -I - "$REPO_ROOT/bin/opnsense-validate" <<'EOF'
+python3 -I -B - "$REPO_ROOT/bin/opnsense-validate" <<'EOF'
 import copy, importlib.machinery, importlib.util, sys
 
 loader = importlib.machinery.SourceFileLoader("ov", sys.argv[1])

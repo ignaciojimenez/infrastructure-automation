@@ -81,16 +81,21 @@ reset_state() {
     printf '%s\n' "nl-ams-wg-001 NL1, wg0" "nl-ams-wg-002 NL2, wg2" "nl-ams-wg-101 NL3, wg3" "# comment" "" "gb-lon-wg-001" > "$S/relays.list"
 }
 
+KA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=
+KB=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb=
+
 # api <host=state[=message]>... — anything "unlisted" is left out of the list.
+# Every relay publishes key $KA unless "$S/keys" has a "<host> <key>" line.
 api() {
-    printf '[{"hostname":"se-got-wg-001","active":true,"status_messages":[]}]' > "$S/api.json"
+    printf '[{"hostname":"se-got-wg-001","active":true,"pubkey":"%s","status_messages":[]}]' "$KA" > "$S/api.json"
     for spec in "$@"; do
         h=${spec%%=*}; rest=${spec#*=}; st=${rest%%=*}; msg=""
         case "$rest" in *=*) msg=${rest#*=} ;; esac
         [ "$st" = unlisted ] && continue
         act=false; [ "$st" = active ] && act=true
-        jq --arg h "$h" --argjson a "$act" --arg m "$msg" \
-            '. + [{hostname: $h, active: $a, status_messages: (if $m == "" then [] else [{message: $m, timestamp: "2026-09-13T09:28:08+00:00"}] end)}]' \
+        key=$(sed -n "s/^$h //p" "$S/keys" 2>/dev/null); [ -n "$key" ] || key=$KA
+        jq --arg h "$h" --argjson a "$act" --arg m "$msg" --arg k "$key" \
+            '. + [{hostname: $h, active: $a, pubkey: $k, status_messages: (if $m == "" then [] else [{message: $m, timestamp: "2026-09-13T09:28:08+00:00"}] end)}]' \
             "$S/api.json" > "$S/api.tmp" && mv "$S/api.tmp" "$S/api.json"
     done
     echo ok > "$S/api_mode"
@@ -300,6 +305,55 @@ run_without_alert_hook $((T0 + 3600))
 expect_rc 0 "old three-argument cron line"
 expect_posts 1 "a change is still posted without an alert webhook"
 expect_chan log "with no alert webhook it falls back to #home-logging"
+
+# ── H. A rotated public key is a state change, the pin decides ─────────────
+# 2026-11-17: es-bcn-wg-101 stayed active while Mullvad rotated its key, and
+# ES3's peer, on the old key, never handshook again. Nothing said so.
+reset_state
+printf '%s\n' "nl-ams-wg-001 $KA NL1, wg0" "nl-ams-wg-002 $KA" "gb-lon-wg-001" > "$S/relays.list"
+api nl-ams-wg-001=active nl-ams-wg-002=active gb-lon-wg-001=active
+run $T0
+expect_posts 0 "pinned keys that match: nothing to say"
+
+echo "nl-ams-wg-001 $KB" > "$S/keys"
+echo "gb-lon-wg-001 $KB" >> "$S/keys"
+api nl-ams-wg-001=active nl-ams-wg-002=active gb-lon-wg-001=active
+run $((T0 + 3600))
+expect_rc 0 "a rotated key does not fail the run"
+expect_posts 1 "a rotated key posts once"
+expect_chan alert "a rotated key goes to #home-alerts"
+expect_last "Mullvad relay nl-ams-wg-001 (NL1, wg0) is on a new public key — needs attention" "names the relay with its label, not its key"
+expect_last "Mullvad now publishes $KB; the pinned key is $KA" "gives the new key and the pinned one"
+expect_last "cannot handshake" "says what a stale peer key does"
+expect_last_not "gb-lon-wg-001" "a relay without a pin is not judged on its key"
+expect_last_not "nl-ams-wg-002" "a relay whose key still matches is not named"
+
+run $((T0 + 7200))
+expect_posts 1 "a rotated key is not re-posted every run"
+
+run $((T0 + 3600 + 14 * DAY))
+expect_posts 2 "a standing rotation gets the weekly reminder"
+expect_chan log "the reminder goes to #home-logging"
+expect_last "Still: Mullvad relay nl-ams-wg-001 (NL1, wg0) is on a new public key" "the reminder names the state"
+expect_last_not "retired" "a rotated key is never called a retirement"
+
+api nl-ams-wg-001=inactive nl-ams-wg-002=active gb-lon-wg-001=active
+run $((T0 + 3600 + 15 * DAY))
+expect_posts 3 "rotated -> inactive posts"
+expect_last "nl-ams-wg-001 (NL1, wg0) is INACTIVE" "an inactive relay is reported as inactive, whatever its key"
+
+api nl-ams-wg-001=active nl-ams-wg-002=active gb-lon-wg-001=active
+printf '%s\n' "nl-ams-wg-001 $KB NL1, wg0" "nl-ams-wg-002 $KA" "gb-lon-wg-001" > "$S/relays.list"
+run $((T0 + 3600 + 16 * DAY))
+expect_posts 4 "re-pinned to the published key: recovery posts"
+expect_chan alert "the recovery goes to #home-alerts"
+expect_last "Mullvad relay nl-ams-wg-001 (NL1, wg0) is back: active again" "the recovery says the relay is back"
+
+printf '%s\n' "nl-ams-wg-002 $KA" > "$S/relays.list"
+echo "nl-ams-wg-002 $KB" > "$S/keys"
+api nl-ams-wg-002=active
+run $((T0 + 3600 + 17 * DAY))
+expect_last "Mullvad relay nl-ams-wg-002 is on a new public key" "a pin with no label: the name is the hostname alone"
 
 # ── G. Usage errors are the only non-zero exit ───────────────────────────────
 OUT=$(MULLVAD_SIGNAL_CURL="$WORK/bin/curl" "$SH" "$SCRIPT" "" 2>&1); RC=$?
