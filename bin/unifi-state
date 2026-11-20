@@ -1,5 +1,5 @@
 #!/bin/sh
-# Capture unifi-lxc's controller state from the laptop (PER-128).
+# Capture the UniFi controller's state from the laptop (PER-128).
 #
 #   bin/unifi-state > docs/local/unifi-state/before.txt
 #   ...
@@ -7,16 +7,10 @@
 #   diff -u docs/local/unifi-state/before.txt docs/local/unifi-state/after.txt
 #
 # Reads the read-only controller account from the vault and hands it to
-# /usr/local/bin/unifi-state on the host over ssh stdin: never in argv, the
-# environment or a file. Connects as read_agent (unifi-agent), so no Touch ID.
-#
-# Arguments pass through to the host's unifi-state, and UNIFI_STATE_HOST picks
-# the host, so the same capture reads UniFi OS Server for the migration diff
-# (PER-127), once the script is deployed there:
-#
-#   bin/unifi-state --unifi-os > .../after.txt
-#
-# After the cutover `unifi` (and so unifi-agent) is the VM: same address.
+# /usr/local/bin/unifi-state on unifi-os-vm over ssh stdin: never in argv, the
+# environment or a file. Connects as read_agent (unifi-agent: `unifi` resolves
+# to the VM's 10.30.40.201), so no Touch ID. An argument passes through as the
+# controller URL; UNIFI_STATE_HOST picks another host.
 #
 # The snapshot names SSIDs, VLANs and MACs together: keep it in docs/local/
 # (gitignored), never in a tracked file or an issue.
@@ -35,7 +29,7 @@ import json, sys, yaml
 v = yaml.safe_load(sys.stdin)
 print(json.dumps({"username": v["vault_unifi_readonly_user"], "password": v["vault_unifi_readonly_password"]}))
 ')
-# ssh joins argv into one remote command line: the only arguments are a flag
-# and a URL, never anything secret.
+# ssh joins argv into one remote command line: the only argument is a URL,
+# never anything secret.
 # shellcheck disable=SC2029
 printf '%s' "$creds" | ssh "${UNIFI_STATE_HOST:-unifi-agent}" /usr/local/bin/unifi-state "$@"

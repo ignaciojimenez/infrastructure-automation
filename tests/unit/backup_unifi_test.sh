@@ -1,6 +1,6 @@
 #!/bin/sh
-# backup_unifi.sh hands do_backup the newest .unf, from the host (standalone)
-# or from UniFi OS Server's container (--unifi-os), and fails when it cannot.
+# backup_unifi.sh hands do_backup the newest .unf from UniFi OS Server's
+# container, and fails when it cannot.
 #
 #   tests/unit/backup_unifi_test.sh
 #
@@ -67,32 +67,26 @@ printf '{}' > "$WORK/backups/autobackup_meta.json"
 run() { : > "$CALLS"; rm -f "$WORK/archived"; bash "$WORK/net/backup_unifi.sh" --silent --recipient=age1test "$@" > "$WORK/out" 2>&1; }
 archived() { [ "$(tr '\n' ' ' < "$WORK/archived" 2>/dev/null)" = "$1" ]; }
 all_reads_via_podman() { ! grep -v '^sudo -u uosserver podman exec uosserver ' "$CALLS" | grep -v '^sudo chown\|^sudo rm' | grep -q .; }
-no_podman() { ! grep -q podman "$CALLS"; }
 
-printf '\n── backup_unifi.sh: standalone and UniFi OS Server (PER-127)\n'
+printf '\n── backup_unifi.sh: UniFi OS Server (PER-127)\n'
 
 run
-check "standalone: succeeds" grep -q 'backup completed successfully' "$WORK/out"
-check "standalone: archives the newest .unf and the meta file" archived "$NEW autobackup_meta.json "
-check "standalone: reads the host directory, no podman" no_podman
+check "succeeds" grep -q 'backup completed successfully' "$WORK/out"
+check "archives the newest .unf and the meta file" archived "$NEW autobackup_meta.json "
+check "every read goes through podman exec as uosserver" all_reads_via_podman
 check "the age recipient reaches do_backup" grep -qx age1test "$WORK/recipient"
 
-run --unifi-os
-check "UniFi OS: succeeds" grep -q 'backup completed successfully' "$WORK/out"
-check "UniFi OS: archives the newest .unf and the meta file" archived "$NEW autobackup_meta.json "
-check "UniFi OS: every read goes through podman exec as uosserver" all_reads_via_podman
-
 touch "$WORK/container-down"
-run --unifi-os; rc=$?
-check "UniFi OS, container down: exits non-zero" [ "$rc" -ne 0 ]
-check "UniFi OS, container down: nothing handed to do_backup" [ ! -f "$WORK/archived" ]
+run; rc=$?
+check "container down: exits non-zero" [ "$rc" -ne 0 ]
+check "container down: nothing handed to do_backup" [ ! -f "$WORK/archived" ]
 rm -f "$WORK/container-down"
 
 # A weekly schedule: the newest backup is days old. Still the newest by mtime.
 rm -f "$WORK/backups/$NEW"
 STALE=$(unf 27)
 touch -t 202611120300 "$WORK/backups/$STALE"
-run --unifi-os; rc=$?
+run; rc=$?
 check "newest backup 27 h old: exits non-zero" [ "$rc" -ne 0 ]
 check "newest backup 27 h old: nothing handed to do_backup" [ ! -f "$WORK/archived" ]
 check "newest backup 27 h old: says how old" grep -q 'Newest backup is 27 h old' "$WORK/out"
@@ -105,7 +99,7 @@ check "unreadable name: exits non-zero" [ "$rc" -ne 0 ]
 check "unreadable name: says so" grep -q 'Cannot tell when autobackup_manual.unf was written' "$WORK/out"
 
 rm -f "$WORK/backups"/*.unf
-run --unifi-os; rc=$?
+run; rc=$?
 check "no .unf: exits non-zero" [ "$rc" -ne 0 ]
 check "no .unf: says so" grep -q 'No backup files found' "$WORK/out"
 

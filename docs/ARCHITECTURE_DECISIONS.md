@@ -232,9 +232,9 @@ set — see `docs/BACKUP_AND_RECOVERY.md`.
 - **Hostname resolution fix** - Early fix in bootstrap.yml adds hostname to /etc/hosts
   - Prevents sudo timeout issues caused by DNS lookup failures
   - Runs before any become operations to ensure success
-  - Required for containers where hostname differs from DNS name (e.g., `unifi-lxc` vs `unifi`)
+  - Required for containers where hostname differs from DNS name (e.g., `unifi-lxc` vs `unifi`, retired 2026-11-20)
 - **Container naming** - Proxmox adds `-lxc` suffix, DNS uses friendly names
-  - Container: `unifi-lxc` (actual hostname), DNS: `unifi` (user-friendly network name)
+  - Container: `unifi-lxc` (actual hostname), DNS: `unifi` (user-friendly network name), until its retirement
   - Handled automatically in inventory (`ansible_host` override)
 
 ## Proxmox Host Management
@@ -249,9 +249,10 @@ set — see `docs/BACKUP_AND_RECOVERY.md`.
   only on UniFi OS Server (secondary sources; Ubiquiti's help page was not
   reachable). Ubiquiti's apt suites from `unifi-10.5` on are signed but empty
   (verified 2026-11-10), so apt no longer patches the standalone app past
-  10.4. An in-place jump to 10.6 is kept only as the fallback (procedure in
-  `roles/services/unifi/README.md`), for the case where a 9.4 backup will not
-  restore into UniFi OS Server (PER-178).
+  10.4. An in-place jump to 10.6 was the fallback in case a 9.4 backup would
+  not restore into UniFi OS Server. It was never needed: the 9.4.19 `.unf`
+  restored straight into Network 10.5.67 (PER-178). The procedure is in git
+  history with the `unifi` role, removed 2026-11-20.
 - **A Debian 13 VM, never an LXC.** The only community LXC recipe needs a
   **privileged** container on cwwk (the internet single point of failure), plus
   `/bin/su` replaced by a `runuser` wrapper and `/sbin/sysctl` replaced by one
@@ -259,18 +260,25 @@ set — see `docs/BACKUP_AND_RECOVERY.md`.
   Podman ≥ 4.9.3, slirp4netns ≥ 1.2; Debian ships 5.4.2 and 1.2.1) with no
   workaround. Do not re-propose LXC.
 - **Side by side, cut over by IP.** The APs report to `10.30.40.201` by IP, so
-  the VM takes that address at cutover. CT 101 stays stopped (`onboot=0`) as
-  the rollback until the new controller has a backup off-host.
-- **Release jumps are by hand, with a person present, under a dead-man
-  timer.** The controller going down can take the laptop's Wi-Fi with it,
-  exactly when a rollback is needed. A timer on cwwk, armed before the old
-  controller stops and cancelled once the after-state is clean, rolls back
-  on its own (a router's "commit confirmed"). It replaced "wired only"
-  (2026-11-15): the cable protected one thing, the path back, and the timer
-  protects it without one.
-- **Read-only state check is the pass/fail** for any controller change:
-  `bin/unifi-state`, diffed before and after (PER-128). The vaulted View Only
-  account is enforced server-side: a write returns `api.err.NoPermission`.
+  the VM took that address at the cutover (2026-11-15) and no device needed a
+  set-inform. CT 101 stayed stopped (`onboot=0`) as the rollback until the new
+  controller had a backup off-host, then was destroyed (2026-11-20).
+- **Updates are automatic (2026-11-20).** UniFi OS, Network and the APs'
+  firmware update themselves: Ignacio's call, once the new controller had run
+  quietly for days with daily off-host backups. The security fixes are why we
+  left 9.4. The pinned installer only decides what a new install starts from.
+- **A rebuild or move is by hand, with a person present, under a dead-man
+  timer when there is something to roll back to.** The controller going down
+  can take the laptop's Wi-Fi with it, exactly when a rollback is needed. A
+  timer on cwwk, armed before the old controller stops and cancelled once the
+  after-state is clean, rolls back on its own (a router's "commit confirmed").
+  It replaced "wired only" (2026-11-15): the cable protected one thing, the
+  path back, and the timer protects it without one. Runbook:
+  `roles/services/unifi_os/README.md`.
+- **Read-only state check is the pass/fail** for a controller change made by
+  hand: `bin/unifi-state`, diffed before and after (PER-128). Automatic
+  updates are not checked this way. The vaulted View Only account is enforced
+  server-side: a write returns `api.err.NoPermission`.
 
 ## DNS Architecture (Updated November 2025)
 

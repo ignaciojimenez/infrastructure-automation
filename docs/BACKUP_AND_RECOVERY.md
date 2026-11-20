@@ -30,9 +30,9 @@ Complete reference for what is backed up, where backups live, and how to recover
 |------|------|-----------|--------|--------------------------|-----------|
 | dockassist | HA native `.tar.gz` | Daily 04:00 | `backup_ha` | `ansible/roles/services/homeassistant/templates/backup_ha.j2` | 7 (weekly cleanup) |
 | cobra | Plex config | 04:00, days 1/8/15/22/29 | `backup_plex_config` | `ansible/roles/services/plex/files/backup_plex_config` | Latest per upload |
-| unifi-lxc | UniFi `.unf` | Daily 03:00 | `backup_unifi` | `scripts/services/network/backup_unifi.sh` | Latest per upload |
+| unifi-os-vm | UniFi `.unf` (the 03:00 autobackup, from the container) | Daily 03:30 | `backup_unifi` | `scripts/services/network/backup_unifi.sh` | Latest per upload |
 | proxmox | `/etc/pve/` + host configs | 04:00, days 1/8/15/22/29 | `backup_proxmox_config.sh` | `scripts/services/proxmox/` | Latest per upload |
-| proxmox | vzdump (VM 100, LXC 101) → local `/var/lib/vz/dump` | Daily 03:00 | Proxmox job (`pvesh get /cluster/backup`) | `ansible/roles/platform/proxmox` → `proxmox_vzdump_keep_daily` | 3 daily + 2 weekly |
+| proxmox | vzdump (VM 100, VM 105) → local `/var/lib/vz/dump` | Daily 03:00 | Proxmox job (`pvesh get /cluster/backup`) | `ansible/roles/platform/proxmox` → `proxmox_vzdump_keep_daily` | 3 daily + 2 weekly |
 | proxmox | vzdump (VM 100, LXC 101) → USB | Sun 05:00 | `sync_usb_recovery.sh` | `scripts/services/proxmox/` | 2 generations |
 | opnsense | `/conf/config.xml` | Daily 04:15 | `backup_opnsense.sh` | `scripts/services/opnsense/` | Latest per upload |
 | hifipi · vinylstreamer | — | — | — | Pure IaC, no unique state | — |
@@ -469,24 +469,22 @@ Ordered by rebuild complexity (highest risk first).
 - Check `group.persons` shows correct tracking
 - Verify Slack notifications fire on next presence change
 
-### UniFi (unifi-lxc)
+### UniFi (unifi-os-vm)
 
-**What's in the backup:** UniFi `.unf` backup file — contains network site config, device adoption records, client data, and network settings.
+**What's in the backup:** the Network application's settings-only autobackup
+(`.unf`: sites, networks, WLANs, device adoption records) plus
+`autobackup_meta.json`. No statistics history, and no controller accounts: a
+restore skips them.
 
-**Recovery steps:**
+**Recovery:** the rebuild runbook in
+[`ansible/roles/services/unifi_os/README.md`](../ansible/roles/services/unifi_os/README.md).
+First choice is restoring VM 105's newest vzdump on cwwk; the off-host `.unf`
+is for when that is gone. The APs keep serving with no controller, and need no
+re-adoption as long as the controller comes back at `10.30.40.201`.
 
-1. Create a new LXC on Proxmox (or restore from Proxmox backup)
-2. Ensure SSH is accessible, then deploy:
-   ```bash
-   ansible-playbook ansible/playbooks/site.yml --limit unifi-lxc
-   ```
-3. Access UniFi at `https://unifi:8443`
-4. During setup wizard, choose **Restore from Backup** and upload the decrypted `.unf` file
-5. Devices should auto-adopt if the controller IP hasn't changed
-
-**Post-recovery checks:**
-- Verify all APs and switches show as "Connected" in UniFi UI
-- If controller IP changed, devices need manual re-adoption (set-inform via SSH to each device)
+**Finding the off-host copy:** the uploads run `--silent`, so no URL reaches
+Slack. The URLs are in the VM's `~/.logs/unifi_backup.log` (`Backup URL:`).
+With the VM and cwwk both lost, that is Scenario 10.
 
 ### Plex (cobra)
 
@@ -599,7 +597,7 @@ Results are logged in `docs/RESTORE_TEST_LOG.md`.
 
 ```
 03:00  proxmox      vzdump VM/LXC snapshots (daily, Proxmox-managed)
-03:00  unifi-lxc    UniFi backup (daily)
+03:30  unifi-os-vm  UniFi backup (daily, the controller's 03:00 autobackup)
 04:00  dockassist   Home Assistant backup (daily)
 04:00  cobra        Plex config backup (every 7 days)
 04:00  proxmox      Proxmox config backup (every 7 days)

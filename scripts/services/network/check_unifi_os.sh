@@ -2,8 +2,8 @@
 # Is UniFi OS Server up, and does it answer its devices? (PER-127)
 # Designed to work with enhanced_monitoring_wrapper for Slack notifications.
 #
-# The UniFi OS sibling of check_unifi.sh + check_unifi_web.sh, in one script
-# because one unit runs everything: uosserver.service starts a rootless podman
+# It replaced the old controller's check_unifi.sh + check_unifi_web.sh, in one
+# script because one unit runs everything: uosserver.service starts a rootless podman
 # container (user uosserver) that holds UniFi OS, the Network application and
 # its MongoDB. Four checks, outermost first:
 #
@@ -14,7 +14,8 @@
 #      the TCP connection on the host either way, so only an HTTP status
 #      proves the Network application behind it is there.
 #
-# Self-healing like its siblings: one restart of the unit, then a recheck.
+# Self-healing like the fleet's other service checks: one restart of the unit,
+# then a recheck.
 #
 # Env overrides (tests): UNIFI_OS_WEB_URL, UNIFI_OS_INFORM_URL,
 # UNIFI_OS_RESTART_WAIT.

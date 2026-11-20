@@ -285,7 +285,8 @@ pveam download local debian-13-standard_13.6-1_amd64.tar.zst
 
 # Covering the rest of the fleet
 
-CT 199 is an exact match for `agent-lxc` and `unifi-lxc`, and close to `cwwk`.
+CT 199 is an exact match for `agent-lxc`, and close to `cwwk` and
+`unifi-os-vm` (the same Debian 13 userland; each runs its own kernel).
 It represents **three of seven hosts**. What follows closes most of the rest.
 
 Measured 2026-08-04:
@@ -293,7 +294,7 @@ Measured 2026-08-04:
 | Host | OS | Arch | systemd | Python |
 |---|---|---|---|---|
 | CT 199 `testlxc` | Debian 13 | x86_64 | 257 | 3.13.5 |
-| `agent-lxc`, `unifi-lxc` | Debian 13 | x86_64 | 257 | 3.13.5 |
+| `agent-lxc`, `unifi-os-vm` | Debian 13 | x86_64 | 257 | 3.13.5 |
 | `cwwk` | Debian 13 | x86_64 | 257 | 3.13.5 |
 | 4× RPis | Debian 12 | aarch64 | 252 | 3.11.2 |
 | `opnsense` | FreeBSD 14.3 | x86_64 | — | — |

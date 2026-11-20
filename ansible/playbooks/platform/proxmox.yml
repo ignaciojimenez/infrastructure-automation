@@ -48,8 +48,8 @@
 
     # `pct create` is the only thing that ever sets a container's searchdomain,
     # so containers made before the move to Dnsmasq kept `local`. Reconciled for
-    # every container on the node, not only those with a provision playbook —
-    # unifi-lxc (CT 101) has none.
+    # every container on the node, not only those with a provision playbook
+    # (unifi-lxc, CT 101, had none).
     - name: List containers
       ansible.builtin.command: pct list
       register: proxmox_ct_list

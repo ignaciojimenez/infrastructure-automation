@@ -118,13 +118,17 @@ Every "healthchecks.io" in the tables means "you are told".
 | Wifi lockout | `wifi_reconnect.sh` recovers */2; HA plug watchdog power-cycles after 15 min **continuous** offline, which a flapping link defeats (PER-61, held) | minutes / ⚠️ | ⚠️ |
 | Root disk full | quota check hourly | ≤1 h | ✅ |
 
-### unifi-lxc — the network controller
+### unifi-os-vm — the network controller
+
+UniFi OS Server, since the 2026-11-15 cutover from unifi-lxc (CT 101,
+destroyed 2026-11-20).
 
 | Failure mode | What tells you | How fast | |
 |---|---|---|---|
-| Controller service / web UI down | checks */13, */15 with restart | 15 min | ✅ |
-| An apt source starts failing (as Ubiquiti's key did until PER-105, 2026-10-13) | nothing, until a `site.yml` run stops at the cache task | — | ❌ (blank 7) |
-| Backup unrestorable | vzdump restore tested 2026-03-30; the `.unf` backup never | quarterly / never | ⚠️ (blank 1) |
+| Server down: unit, container, console or inform port | `check_unifi_os` */13 with one restart; `uosserver` in the health check. Both forced 2026-11-15 | 13–15 min | ✅ |
+| A self-update leaves it running but changed | nothing: `bin/unifi-state` is run by hand | — | ❌ |
+| Nightly backup missing or stale | `backup_unifi` refuses a file 26 h old or more, and the wrapper alerts; the healthchecks.io heartbeat stops | next 03:30 | ⚠️ heartbeat failure not yet forced (PER-127) |
+| Backup unrestorable | a `.unf` restored at the cutover (from the old controller); VM 105's vzdump never | — | ⚠️ (blank 1) |
 | An AP or switch down | nothing reads the controller | — | ❌ (blank 6) |
 
 ### agent-lxc — the monitoring brain

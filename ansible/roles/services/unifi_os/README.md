@@ -1,11 +1,10 @@
 # unifi_os — UniFi OS Server, the network controller (PER-127)
 
 UniFi OS Server in a Debian 13 VM (VM 105, `unifi-os-vm`, 10.30.40.201). It
-replaces the standalone Network Application on unifi-lxc (CT 101), whose
-release line has ended. The reasoning is in
+replaced the standalone Network Application on unifi-lxc (CT 101), whose
+release line had ended, at the cutover on 2026-11-15. CT 101 was destroyed on
+2026-11-20. The reasoning is in
 [ARCHITECTURE_DECISIONS.md](../../../../docs/ARCHITECTURE_DECISIONS.md#unifi-controller--unifi-os-server-in-a-vm-2026-11-11).
-Facts seen during the PER-178 spike are in the
-[unifi role's README](../unifi/README.md#unifi-os-server-per-178-spike-2026-11-12).
 
 The role installs the server once, from Ubiquiti's installer pinned by version
 and checksum (`defaults/main.yml`). It then owns what every host here owns:
@@ -13,107 +12,130 @@ and checksum (`defaults/main.yml`). It then owns what every host here owns:
 | What | How |
 |---|---|
 | Server check, self-healing | `check_unifi_os`, every 13 min: unit, container, console on 11443, inform port 8080 |
-| Nightly off-host backup | `backup_unifi --unifi-os` at 03:30, after the Network app's 03:00 autobackup |
-| Backup heartbeat | the same healthchecks.io check unifi-lxc used |
-| Read-only state capture | `/usr/local/bin/unifi-state`, driven by `bin/unifi-state --unifi-os` |
+| Nightly off-host backup | `backup_unifi` at 03:30, after the Network app's 03:00 autobackup |
+| Backup heartbeat | healthchecks.io check "UniFi backup", pinged every 2 h while the last backup succeeded less than 26 h ago |
+| Read-only state capture | `/usr/local/bin/unifi-state`, driven by `bin/unifi-state` |
 | System health, read_agent, SSH | the fleet baseline, via `site.yml` |
 
 Deploy: `ansible-playbook ansible/playbooks/site.yml --limit unifi-os-vm`
 
 **Not in Ansible:** the console's first run, the configuration restore, the
-read-only account and auto-update. They are browser steps (below).
-**Auto-update** is on by default for both UniFi OS and Network. It is off
-during the cutover so the before/after comparison compares one change, then
-back on: security fixes are why we left 9.4.
+read-only account and the update settings. They are browser steps (below).
 
-## Cutover runbook
+**Updates are automatic** (2026-11-20, Ignacio's call). UniFi OS, Network and
+the APs' firmware update themselves; the pin above only decides what a new
+install starts from. A rebuild turns them off until its after-state is clean,
+so the comparison compares one change.
 
-With Ignacio present. The commands run from this repo's root on the branch.
+## What the server is
 
-**Wi-Fi during the gap (seen at the cutover, 2026-11-15):** the APs kept
-serving their last configuration through 21 minutes with no controller: a
-Wi-Fi host (vinylstreamer) logged no event at all. Between steps 3 and 9
-nothing manages them: no stats, no changes, no guest portal. **The drop comes
-at step 9, not during the gap:** the new controller provisions each AP as it
-reconnects, which restarts its radios. Every client re-associated, about 20 s
-each (vinylstreamer 19:02:03–19:02:24), and the U7 Lite rebooted once. A Mac
-may rejoin a different saved SSID afterwards. Restarting `uosserver` later
-cost no client anything: only provisioning does.
+Seen on the PER-178 spike VM and at the cutover, not read from docs:
 
-**Wi-Fi is fine, because of a dead-man timer.** This moves the controller that
-runs the Wi-Fi, so a laptop on Wi-Fi could lose its way back to cwwk exactly
-when a rollback is needed. Step 3 arms a timer on cwwk that rolls back on its
-own after 90 minutes; step 10 cancels it once the after-state is clean. A
-cutover that drops the laptop's Wi-Fi undoes itself, and the Wi-Fi with it.
-Not cancelling it undoes a good cutover, so step 12 checks it is gone.
+| Fact | Value |
+|---|---|
+| Installer | `uos-installer --non-interactive` (also `--web-port`, `--network-mode slirp4nets\|pasta`, `--uninstall`); fetched from Ubiquiti's firmware API and checked against its `sha256_checksum` |
+| Runs as | podman container `uosserver` (pasta networking), `uosserver.service`, CLI `uosserver`. The Network app's files are inside the container, autobackups at `/var/lib/unifi/backup/autobackup`: `cd /tmp && sudo -u uosserver podman exec uosserver ls -l /var/lib/unifi/backup/autobackup` |
+| Ports | web **11443** (container 443), inform **8080**, plus 3478/udp, 5514/udp, 6789, 8444, 8880-8882, 9543, 10003/udp |
+| First run | name → Next → **Proceed Without a UI Account** → console password (12+ characters, one special) + **Terms of Service** → Finish. It ends at "Setup Complete!" and restores nothing |
+| Restore | Network → Settings → Control Plane → Backups → **Upload & Restore** takes a `.unf`. The import skips every controller account (`SKIP_ADMINISTRATOR_USERS_AND_BACKUP_UISETTINGS`) |
+| Console session | ends at every server restart and VM reboot: log in again |
+| Login rate limit | about six logins a minute get **HTTP 429**. Each `unifi-state` run is one login: space captures out |
 
-**Rollback**, at any step after 3, until step 12 passes:
+**A test controller holding a restored backup has the APs' keys.** On the
+spike VM, nftables dropped everything it sent to private, link-local and
+multicast addresses, except DNS to the gateway, and counted it: of 40
+parallel connections to cwwk, none got through. (`limit rate` is a match in
+nftables: a drop on the rate-limited rule lets the excess through, so the log
+and the drop are separate rules.) A restored controller opens no LAN
+connection of its own; it waits for devices to inform.
+
+## Rebuild runbook
+
+For when VM 105 is broken beyond a restart. With Ignacio present; the commands
+run from this repo's root.
+
+**Restore the VM before rebuilding the controller.** cwwk keeps VM 105's
+nightly vzdumps (03:00 on `local`, 3 daily + 2 weekly). If cwwk is healthy,
+the newest one brings back the whole VM, keys and configuration, with no
+browser step. Not exercised yet:
 
 ```sh
-ssh cwwk 'sudo systemctl stop unifi-rollback.timer; sudo qm stop 105; sudo pct set 101 --onboot 1 && sudo pct start 101'
-git revert $(git log -1 --format=%h --grep='retire unifi-lxc')   # CT 101 back in the inventory
-ssh cwwk 'sudo pvesh set /cluster/backup/backup-34b8bdac-4d3a --vmid 100,101'   # if step 5 ran
+ssh cwwk-agent 'sudo pvesh get /nodes/cwwk/storage/local/content --content backup --vmid 105'
+ssh cwwk 'sudo qm stop 105; sudo qmrestore /var/lib/vz/dump/<newest vzdump-qemu-105-…vma.zst> 105 --force 1 && sudo qm start 105'
 ```
 
-The timer runs the first line's cwwk half; the other two wait for the laptop.
-The APs inform to the same address either way. Allow a few minutes for ARP
-caches to learn the MAC that moved.
+Steps 7 and 8 are then the check. The rest builds a new VM and restores the
+newest `.unf` into it. It is how the cutover from unifi-lxc ran on 2026-11-15,
+and the times and observations below are from that run: steps 2–8 took 26
+minutes of work.
 
-### 0. Preflight
+**Wi-Fi during the gap:** the APs kept serving their last configuration
+through 21 minutes with no controller: a Wi-Fi host (vinylstreamer) logged no
+event at all. Between steps 2 and 7 nothing manages them: no stats, no
+changes, no guest portal. **The drop comes at step 7, not during the gap:**
+the new controller provisions each AP as it reconnects, which restarts its
+radios. Every client re-associated, about 20 s each (vinylstreamer
+19:02:03–19:02:24), and the U7 Lite rebooted once. A Mac may rejoin a
+different saved SSID afterwards. Restarting `uosserver` later cost no client
+anything: only provisioning does.
+
+**A dead-man timer, when there is something to roll back to.** At the cutover
+the old controller stayed intact and stopped. A timer on cwwk would have
+restarted it after 90 minutes unless cancelled, so a cutover that cut the
+laptop's Wi-Fi would have undone itself; it ran over Wi-Fi for that reason.
+Arm the same before any move that keeps the old controller:
+`ssh cwwk 'sudo systemd-run --on-active=90min --unit=unifi-rollback /bin/sh -c "<stop the new one>; <start the old one>"'`.
+Cancel it at step 8 with `sudo systemctl stop unifi-rollback.timer`, and
+`systemctl list-timers --all unifi-rollback.timer` must then show 0 timers. A
+rebuild in place has nothing to roll back to: the APs serve meanwhile.
+
+### 0. Before-state
 
 ```sh
-bin/unifi-cutover-preflight          # every line PASS; stop at a FAIL
-# "APs adopted and connected" also proves CT 101's read-only account has the
-# vault's password: it logs in with it.
-ssh -o ControlPersist=8h -o ServerAliveInterval=60 -MNf cwwk   # Touch ID 1
+ssh -o ControlPersist=8h -o ServerAliveInterval=60 -MNf cwwk   # Touch ID
+D=docs/local/unifi-state   # gitignored; from a worktree, use the main tree's
+bin/unifi-state > $D/before-1.txt
+sleep 30; bin/unifi-state > $D/before-2.txt
+diff $D/before-1.txt $D/before-2.txt && echo stable
 ```
 
-### 1. Before-state, twice
+If the controller no longer answers, the newest capture in `$D` is the
+baseline.
+
+### 1. The backup to restore
+
+The newest autobackup, unless the controller changed since. From the old VM,
+if it still boots; checksum both ends:
 
 ```sh
-D=../infrastructure-automation/docs/local/unifi-state   # gitignored
-bin/unifi-state > $D/before-cutover-1.txt
-sleep 30; bin/unifi-state > $D/before-cutover-2.txt
-diff $D/before-cutover-1.txt $D/before-cutover-2.txt && echo stable
+F=$(ssh unifi "cd /tmp && sudo -u uosserver podman exec uosserver sh -c 'ls -1t /var/lib/unifi/backup/autobackup/*.unf | head -n 1'")
+ssh unifi "cd /tmp && sudo -u uosserver podman exec uosserver sha256sum $F"
+(umask 077; ssh unifi "cd /tmp && sudo -u uosserver podman exec uosserver cat $F" > $D/restore.unf); shasum -a 256 $D/restore.unf
 ```
 
-### 2. The backup to restore
+Otherwise, the newest off-host upload. Its download URL is in the VM's
+`~/.logs/unifi_backup.log` (`Backup URL:`). The uploads run `--silent`, so no
+URL reaches Slack: with the VM and its vzdumps gone, finding one is
+[Scenario 10](../../../../docs/BACKUP_AND_RECOVERY.md#-scenario-10--decryption-is-solved-discovery-is-not).
+Decrypt as in
+[How to Decrypt a Backup](../../../../docs/BACKUP_AND_RECOVERY.md#how-to-decrypt-a-backup);
+the archive holds the `.unf` and `autobackup_meta.json`.
 
-Last night's 03:00 autobackup, unless the controller was changed since. If it
-was, run a manual backup in the old UI first. Copy it, checksum both ends:
-
-```sh
-F=$(ssh cwwk "sudo pct exec 101 -- sh -c 'ls -1t /var/lib/unifi/backup/autobackup/*.unf | head -n 1'")
-ssh cwwk "sudo pct exec 101 -- sha256sum $F"
-(umask 077; ssh cwwk "sudo pct exec 101 -- cat $F" > $D/cutover.unf); shasum -a 256 $D/cutover.unf
-```
-
-### 3. Arm the rollback, stop CT 101 (the gap starts)
+### 2. Replace the VM (the gap starts)
 
 ```sh
-ssh cwwk 'sudo systemd-run --on-active=90min --unit=unifi-rollback /bin/sh -c "qm stop 105; pct set 101 --onboot 1 && pct start 101"'
-ssh cwwk 'systemctl list-timers unifi-rollback.timer'            # one timer, ~90 min left
-ssh cwwk 'sudo pct set 101 --onboot 0 && sudo pct shutdown 101 --timeout 120; sudo pct status 101'
-```
-
-At the cutover steps 3–10 took 26 minutes of work (18:40–19:06); 90 leaves
-room to check the Wi-Fi before cancelling. If a step runs long, re-arm before
-it fires: stop the timer, then run the first line again.
-
-### 4. Replace the spike VM with the real one
-
-The spike's VM 105 holds a restored copy of the configuration and a test
-console password. It goes; the real one is built fresh at .201. Provisioning
-refuses to create the VM while anything answers on .201.
-
-```sh
-ssh cwwk 'sudo qm destroy 105 --purge'
+ssh cwwk 'sudo qm stop 105 && sudo qm destroy 105 --purge'
 ansible-playbook ansible/playbooks/provision_unifi_os_vm.yml
 ssh-keygen -R 10.30.40.201; ssh-keygen -R 10.30.40.201-agent; ssh-keygen -R unifi; ssh-keygen -R unifi-agent
-ssh -o StrictHostKeyChecking=accept-new -o ControlPersist=8h -MNf 10.30.40.201   # Touch ID 2
+ssh -o StrictHostKeyChecking=accept-new -o ControlPersist=8h -MNf 10.30.40.201   # Touch ID
 ```
 
-### 5. Build it like every host, and back it up
+`--purge` also takes VM 105 out of the vzdump job (step 3 puts it back); its
+vzdump archives stay. Provisioning refuses to create the VM while anything
+answers on .201. A stale `-agent` host key stalls every read-only probe of the
+new VM, so clear all four names.
+
+### 3. Build it like every host, and back it up
 
 ```sh
 ansible-playbook ansible/playbooks/site.yml --limit unifi-os-vm
@@ -126,11 +148,12 @@ ansible-playbook ansible/playbooks/deploy_monitoring.yml --limit cwwk,unifi-os-v
 minutes) and the fleet monitoring crons. It does not write
 `/etc/monitoring/health_check.conf`: only `deploy_monitoring.yml` does, so
 until it runs the VM's health check watches `ssh cron fail2ban` and not
-`uosserver` (seen in the rehearsal, 2026-11-13; fleet-wide fix is PER-181). The vzdump job and
-`check_vm_status` move from CT 101 to VM 105. `check_vm_status` reports CT 101
-as stopped until the `deploy_monitoring.yml` run.
+`uosserver` (seen in the rehearsal, 2026-11-13; fleet-wide fix is PER-181).
+A fresh VM's health check fails on "Upgrade log not found" until
+unattended-upgrades first runs, the next morning (2026-11-15: 48 runs, five
+pages).
 
-### 6. First run, in the browser: `https://10.30.40.201:11443`
+### 4. First run, in the browser: `https://10.30.40.201:11443`
 
 Name → Next → **Proceed Without a UI Account** → console password (12+
 characters, one special; into the password manager) → Terms of Service →
@@ -138,29 +161,28 @@ Finish. Then turn **auto-update off** for UniFi OS and Network: Network →
 Settings → Control Plane → Updates, open each row, untick Auto-Update, Apply
 Changes. It stayed off through the restore and restarts, in the rehearsal
 and at the cutover. Every server restart ends the console session, so step
-11's backup test needs a fresh owner login.
+9's backup test needs a fresh owner login.
 
-### 7. Restore
+### 5. Restore
 
 Network → Settings → Control Plane → Backups → **Upload & Restore** →
-`cutover.unf` (the dialog's **browse** link, then **Restore**). The Network app
-restarts itself. The 9.4.19 backup restores into Network 10.5.67 without an
-error: at the cutover it took under a minute, and the APs were back two to
-four minutes later.
+`restore.unf` (the dialog's **browse** link, then **Restore**). The Network
+app restarts itself. At the cutover, a 9.4.19 backup restored into Network
+10.5.67 without an error in under a minute, and the APs were back two to four
+minutes later.
 
-**Then put the autobackup back to daily.** CT 101 runs `0 3 * * *` with 30
-days of statistics. Network 10.5 refuses daily with any history
-(`api.err.InvalidAutoBackupDays`), so the restore fell back to Mondays only
-(`0 3 * * 1`). Daily is allowed only as settings-only (`autobackup_days: 0`):
-the settings are what a restore needs. The console has no control for the
-schedule, so set it through the Network API from the logged-in console tab
-(browser devtools or Playwright):
+**Then make sure the autobackup is daily.** Network 10.5 refuses a daily
+schedule with any history (`api.err.InvalidAutoBackupDays`). The cutover's
+9.4 backup carried `0 3 * * *` with 30 days of statistics, so the restore fell
+back to Mondays only (`0 3 * * 1`). Daily is allowed only as settings-only
+(`autobackup_days: 0`): the settings are what a restore needs. A backup from
+this server should already carry that; read it back either way. The console
+has no control for the schedule, so set it through the Network API from the
+logged-in console tab (browser devtools or Playwright).
 
-**And turn device auto-upgrade off.** CT 101 upgrades AP firmware at 03:00,
-and the restore carries that over. Network 10.5 knows newer firmware than 9.4,
-so the first night would reboot every AP onto it: a second change stacked on
-the migration. Off now, back on once the cutover has run quietly for a few
-days (below).
+**And turn device auto-upgrade off.** The restore carries the old setting,
+which is on. Firmware newer than the APs run would reboot every AP the first
+night: a second change stacked on the rebuild.
 
 ```js
 const set = async (key, body) => {
@@ -175,54 +197,48 @@ await set('mgmt', { auto_upgrade: false });                                     
 ```
 
 Read both back with the same GETs: `0 3 * * *`, days `0`, `auto_upgrade`
-false. In the rehearsal (2026-11-15) a schedule set this way fired on time,
-survived a reboot, and wrote
-`autobackup_10.5.67_<date>_<UTC time>_<epoch ms>.unf`; `auto_upgrade` turned
-off and on. Left weekly, `backup_unifi` fails at 03:30 on Tuesday: it refuses
-a backup older than 26 h.
+false. A schedule set this way fired on time, survived a reboot, and wrote
+`autobackup_10.5.67_<date>_<UTC time>_<epoch ms>.unf` (rehearsal,
+2026-11-15). Left weekly, `backup_unifi` first fails on Wednesday at 03:30: it
+refuses a backup 26 h old or more, and Tuesday's run still sees Monday's file
+at 24.5 h.
 
-### 8. The read-only account
+### 6. The read-only account
 
 The restore skips every controller account. Create a local, view-only admin
 with the vault's `vault_unifi_readonly_user` / `vault_unifi_readonly_password`:
 Admins → Create New → Create New User → tick Admin (local access only is
 forced) → Username and Password → untick Use a Predefined Role → Network
-**View Only**, UniFi OS **None**. Least privilege, and enough: in the
-rehearsal it logged in and `bin/unifi-state --unifi-os` read every line.
-UniFi OS refuses a password without an uppercase letter; 9.4 did not, so the
-vault's was rotated (2026-11-13). Without this account, step 9 cannot log in.
-The form defaults to **Super Admin** until the predefined role is unticked,
-and it wants a first or last name: the username will do.
+**View Only**, UniFi OS **None**. Least privilege, and enough: `bin/unifi-state`
+reads every line with it. UniFi OS refuses a password without an uppercase
+letter. The form defaults to **Super Admin** until the predefined role is
+unticked, and it wants a first or last name: the username will do. Without
+this account, step 7 cannot log in.
 
-### 9. The APs come back (the gap ends)
-
-```sh
-UNIFI_STATE_HOST=unifi-agent bin/unifi-state --unifi-os > $D/after-cutover-1.txt
-grep -c '^device .* adopted=true state=1 ' $D/after-cutover-1.txt   # 4, give it minutes
-```
-
-`unifi-agent` reaches the VM now: `unifi` resolves to .201. Two signs the
-restore did not carry the devices' keys: an AP stuck as disconnected, or one
-asking to be adopted. Either one means **rollback**. Do not adopt by hand.
-
-### 10. After-state
+### 7. The APs come back (the gap ends)
 
 ```sh
-sleep 60; UNIFI_STATE_HOST=unifi-agent bin/unifi-state --unifi-os > $D/after-cutover-2.txt
-diff $D/after-cutover-1.txt $D/after-cutover-2.txt && echo stable
-diff $D/before-cutover-1.txt $D/after-cutover-2.txt && echo identical
+bin/unifi-state > $D/after-1.txt
+grep -c '^device .* adopted=true state=1 ' $D/after-1.txt   # 4, give it minutes
 ```
 
-Every line that differs is explained by the move, or it's a **rollback**.
-Space the logins out: UniFi OS answers HTTP 429 after about six a minute.
+Two signs the restore did not carry the devices' keys: an AP stuck as
+disconnected, or one asking to be adopted. Either one means the restore did
+not take: restore again, or an older backup. Do not adopt by hand.
 
-Clean: the cutover holds, so disarm the rollback.
+### 8. After-state
 
 ```sh
-ssh cwwk 'sudo systemctl stop unifi-rollback.timer; systemctl list-timers --all unifi-rollback.timer'   # 0 timers
+sleep 60; bin/unifi-state > $D/after-2.txt
+diff $D/after-1.txt $D/after-2.txt && echo stable
+diff $D/before-2.txt $D/after-2.txt && echo identical   # or step 0's baseline
 ```
 
-### 11. Force every check once
+Every line that differs is explained by the rebuild, or it is not done. Space
+the logins out: UniFi OS answers HTTP 429 after about six a minute. If a
+dead-man timer is armed, cancel it now.
+
+### 9. Force every check once
 
 On the VM (`ssh 10.30.40.201`), with the wrapper exactly as cron runs it
 (`crontab -l` shows the lines):
@@ -231,18 +247,17 @@ On the VM (`ssh 10.30.40.201`), with the wrapper exactly as cron runs it
   line. Expect a "fixed" message in #home-logging, and the server back. Then
   run it with `UNIFI_OS_INFORM_URL=http://127.0.0.1:1/inform` in front. The
   restart cannot fix that, so expect an alert in #home-alerts.
-- **Backup.** The autobackups are at
-  `cd /tmp && sudo -u uosserver podman exec uosserver ls -l /var/lib/unifi/backup/autobackup`
-  (seen in the rehearsal). Right after the restore it is empty, and
-  `backup_unifi` fails on an empty directory. So set the step 7 schedule to a
+- **Backup.** Right after the restore the autobackup directory is empty, and
+  `backup_unifi` fails on an empty directory. So set the step 5 schedule to a
   few minutes ahead, wait for a file, set it back to `0 3 * * *`, then run the
   backup's cron line and check the log for `Upload successful`.
 - **Heartbeat.** Run `~/.scripts/monitoring/heartbeat_backup_unifi.sh` after
-  the backup. healthchecks.io must show a fresh ping.
+  the backup. healthchecks.io must show a fresh ping: the script exits 0
+  silently whether it pinged or not.
 - **System health.** `uosserver` is in `critical_services`, so the
   `systemctl stop` above must also show up in the next health check.
 
-### 12. Settle
+### 10. Settle
 
 ```sh
 ansible-playbook ansible/playbooks/site.yml --limit unifi-os-vm    # changed=0
@@ -252,23 +267,15 @@ ansible-playbook ansible/playbooks/site.yml --limit unifi-os-vm    # changed=0 a
 
 The run after the reboot catches cloud-init and Ansible fighting over the
 hostname or `/etc/hosts`. The rehearsal caught exactly that, so the role now
-disables cloud-init after the first `site.yml`. Turn auto-update back on.
-`ssh cwwk-agent systemctl list-timers --all unifi-rollback.timer` must show
-0 timers: an armed one would undo the cutover. Then close the masters with
-`ssh -O exit cwwk; ssh -O exit 10.30.40.201`.
+disables cloud-init after the first `site.yml`. Then:
 
-### After the cutover
-
-- **agent-lxc's sweep** knows CT 101's host key for `unifi`. Clear it with
-  `ssh 10.30.40.203 ssh-keygen -R unifi` (Touch ID), then deploy the sweep
-  label: `ansible-playbook ansible/playbooks/services.yml --limit agent-lxc`.
-- **CT 101** stays stopped, `onboot=0`, until the VM's first nightly off-host
-  backup exists (03:30 the next morning). Then destroy it. Then retire the
-  `unifi` role, `group_vars/network_controller.yml`, its `services.yml`
-  include, and the docs that name unifi-lxc (NETWORK.md,
-  BACKUP_AND_RECOVERY.md, COVERAGE.md).
-- **Device auto-upgrade back on**, after a few quiet days:
-  `set('mgmt', { auto_upgrade: true })` from step 7. Expect each AP to
+- **Updates back on:** auto-update for UniFi OS and Network in the console,
+  and `set('mgmt', { auto_upgrade: true })` from step 5. Expect each AP to
   reboot onto new firmware at 03:00 that night.
-- Delete `cutover.unf` from `docs/local/`. It holds the whole configuration,
+- **agent-lxc's sweep** still knows the old host key for `unifi`. Clear it with
+  `ssh 10.30.40.203 ssh-keygen -R unifi` (Touch ID), then deploy the sweep:
+  `ansible-playbook ansible/playbooks/services.yml --limit agent-lxc`. Until
+  then the sweep reports the VM as "UNREACHABLE — no response at all".
+- Close the masters: `ssh -O exit cwwk; ssh -O exit 10.30.40.201`.
+- Delete `restore.unf` from `docs/local/`. It holds the whole configuration,
   PSKs included.

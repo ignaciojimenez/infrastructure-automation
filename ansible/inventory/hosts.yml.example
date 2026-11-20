@@ -30,7 +30,7 @@ all:
             # mylxc:
             #   ansible_host: mylxc-dns-name  # if different from inventory key
             #   container_id: 101
-            #   primary_function: network_controller
+            #   primary_function: workbench
 
         # Proxmox host
         proxmox_hosts:

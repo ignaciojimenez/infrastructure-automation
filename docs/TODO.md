@@ -477,23 +477,6 @@ One branch, tick them off. Phone-taggable lines marked 📱.
   uncalled before deleting anything on the firewall.
 - cwwk postfix defers all mail to icloud on blocked :25 (~41h queue ages) —
   route via an authenticated :587 smarthost or stop generating mail.
-- unifi-lxc is the last host with drift the SSH pass didn't cover — run
-  `site.yml --limit unifi-lxc --check --diff` and align per-item.
-- 🔑 Found 2026-11-10 (PER-128): `do_backup` writes the upload's **management
-  URL**, which carries the token that can delete or replace the backup, into
-  the cron log on every host it runs on (`~/.logs/*_backup.log`), and
-  `agent_read log` hands that log to read_agent. Log the download URL only, or
-  move the management URL to a 0600 file outside the readable logs.
-- Found 2026-11-10 (PER-128): unifi-lxc's backup cron fires at 03:00, the same
-  minute as the controller's own autobackup, so it ships the **previous**
-  night's `.unf` (11-10's run shipped `autobackup_9.4.19_20261109_…`). The
-  off-host copy is always ~24 h stale. Move the cron to 03:30.
-- Found 2026-11-10 (PER-128): Ubiquiti's apt suites `unifi-10.5` and
-  `unifi-10.6` are signed but **empty**. `stable` points at 10.5, and every
-  suite's `Release` is dated 2026-07-27. Once the controller is on 10.5 or
-  later, unattended-upgrades delivers no UniFi patches, and a clean
-  `--dry-run` hides that. This is PER-129's territory (a controller on a
-  line nothing patches).
 - `INJECT_FACTS_AS_VARS` goes away in ansible-core 2.24; the repo uses bare
   fact names everywhere. Mechanical repo-wide sweep, own branch.
 - ✅ 2026-10-14: the builder's hand-back PR body no longer prints the issue

@@ -1,22 +1,22 @@
 ---
-# UniFi OS Server — the network controller from PER-127 on, in a Debian 13 VM
+# UniFi OS Server — the network controller (PER-127), in a Debian 13 VM
 #
 # Installs the server once from Ubiquiti's pinned installer, then owns what
 # every host here owns: the monitoring cron, the nightly off-host backup and
 # its heartbeat, and the read-only state capture. Restoring the controller's
-# configuration is a browser step, not a task: see README.md, the cutover
+# configuration is a browser step, not a task: see README.md, the rebuild
 # runbook.
 
-# The VM takes 10.30.40.201, which was CT 101's until the cutover. Run against
-# that address while CT 101 still holds it, this role would install podman and
-# a second controller on the live one. CT 101 is an LXC; this must be a VM.
+# UniFi OS Server runs only in a VM here, never an LXC (ARCHITECTURE_DECISIONS,
+# "UniFi controller"). Until the 2026-11-15 cutover, .201 was an LXC holding
+# the old controller, and this kept the role off it.
 - name: Refuse to run anywhere but a VM
   ansible.builtin.assert:
     that: ansible_virtualization_type == 'kvm'
     fail_msg: >-
       {{ inventory_hostname }} ({{ ansible_host }}) is a
-      '{{ ansible_virtualization_type }}' guest, not a VM. Is CT 101 still on
-      this address? Stop it first (README.md, cutover runbook).
+      '{{ ansible_virtualization_type }}' guest, not a VM. UniFi OS Server
+      runs only in a VM (README.md).
   tags: [unifi_os, always]
 
 # cloud-init built the VM on its first boot; from here Ansible owns it. Left
@@ -121,8 +121,8 @@
   tags: [unifi_os, service]
 
 # /usr/local/bin and root-owned, not scripts_dir: read_agent runs it, without
-# Touch ID, and cannot enter the primary user's 0700 home. Same as the unifi
-# role; `bin/unifi-state --unifi-os` drives it from the laptop.
+# Touch ID, and cannot enter the primary user's 0700 home. `bin/unifi-state`
+# drives it from the laptop.
 - name: Deploy the controller-state capture
   become: true
   ansible.builtin.copy:
@@ -134,7 +134,7 @@
   tags: [unifi_os, scripts]
 
 # ============================================================
-# Monitoring and backup, as on unifi-lxc
+# Monitoring and backup
 # ============================================================
 
 # Tagged with every tag that installs a cron writing into these, so no
@@ -163,8 +163,8 @@
     mode: '0755'
   loop:
     - { src: services/network/check_unifi_os.sh, dest: check_unifi_os }
-    # Same name as on unifi-lxc, so the wrapper's state file — and with it the
-    # backup heartbeat — carries over unchanged.
+    # The name decides the wrapper's state file, which the backup heartbeat
+    # reads (~/.log/backup_unifi.json): rename both or neither.
     - { src: services/network/backup_unifi.sh, dest: backup_unifi }
     - { src: common/enhanced_monitoring_wrapper, dest: enhanced_monitoring_wrapper }
     - { src: common/do_backup, dest: do_backup }
@@ -185,8 +185,9 @@
     user: "{{ primary_user }}"
   tags: [unifi_os, monitoring, cron]
 
-# 03:30, not unifi-lxc's 03:00: the Network application writes its autobackup
-# at 03:00, and a copy taken in the same minute ships the previous night's.
+# 03:30, not 03:00: the Network application writes its autobackup at 03:00,
+# and a copy taken in the same minute ships the previous night's (seen on the
+# old controller, 2026-11-10).
 - name: Set up the nightly off-host backup
   ansible.builtin.cron:
     name: "Daily UniFi backup at 3:30 AM"
@@ -198,12 +199,12 @@
       --notify-fixed=true
       {{ logging_token }}
       {{ alert_token }}
-      {{ scripts_dir }}/backup_unifi --silent --unifi-os --recipient={{ backup_age_pubkey }}
+      {{ scripts_dir }}/backup_unifi --silent --recipient={{ backup_age_pubkey }}
       >> {{ logs_dir }}/unifi_backup.log 2>&1
     user: "{{ primary_user }}"
   tags: [unifi_os, backup, cron]
 
-# The same healthchecks.io check as unifi-lxc's: one controller, one backup.
+# healthchecks.io check "UniFi backup": the one the old controller pinged too.
 - name: Deploy the backup freshness heartbeat
   ansible.builtin.template:
     src: "{{ playbook_dir }}/../../scripts/common/heartbeat_backup.sh"

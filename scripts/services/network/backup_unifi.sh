@@ -1,6 +1,7 @@
 #!/bin/bash
 # 
-# Script to backup Unifi Controller configuration
+# Ships the UniFi controller's newest autobackup off-host (UniFi OS Server,
+# unifi-os-vm). The nightly cron runs it at 03:30, after the 03:00 autobackup.
 
 set -e          # stop on errors
 set -u          # stop on unset variables
@@ -18,7 +19,6 @@ log_msg() {
 
 # Parse command line arguments
 silent_mode=false
-unifi_os=false
 logging_token=""
 alert_token=""
 recipient=""
@@ -30,7 +30,6 @@ usage() {
   echo "  --alert=TOKEN     Slack webhook token for failure notifications"
   echo "  --recipient=KEY   age public key for encryption (REQUIRED)"
   echo "  --silent          Run in silent mode (no notifications, for use with monitoring wrapper)"
-  echo "  --unifi-os        Read the backup from UniFi OS Server's container, not this host"
   echo "  --help            Show this help message"
   echo ""
   echo "For backward compatibility: $0 <logging_token> <alert_token> <upload_service> <recipient>"
@@ -61,10 +60,6 @@ else
         ;;
       --silent)
         silent_mode=true
-        shift
-        ;;
-      --unifi-os)
-        unifi_os=true
         shift
         ;;
       --help)
@@ -100,24 +95,19 @@ elif [ "$silent_mode" == "true" ] && [ -z "$recipient" ]; then
   exit 1
 fi
 
-# The Network application writes the same autobackups on both kinds of
-# controller. On UniFi OS Server (PER-127) they live inside the rootless podman
-# container of user uosserver, at the path the Debian package uses, so they are
-# read through `podman exec` rather than from this host's filesystem.
+# The Network application's autobackups live inside UniFi OS Server's rootless
+# podman container (user uosserver), at the path the Debian package uses, so
+# they are read through `podman exec`, not from this host's filesystem.
 # Overridable for tests/unit/backup_unifi_test.sh only.
 UNIFI_BACKUP_DIR="${UNIFI_BACKUP_DIR:-/var/lib/unifi/backup/autobackup}"
 TEMP_DIR="/tmp/unifi_backup_$(date +%Y%m%d_%H%M%S)"
 BACKUP_FILE="/tmp/unifi_backup_$(date +%Y%m%d_%H%M%S).tar.gz"
 META_FILE="${UNIFI_BACKUP_DIR}/autobackup_meta.json"
 
-# Runs a command where the backups are: in the container, or here as root.
-# Rootless podman needs a working directory the uosserver user can read.
+# Runs a command in the container, where the backups are. Rootless podman
+# needs a working directory the uosserver user can read.
 at_backups() {
-  if [ "$unifi_os" = "true" ]; then
-    (cd /tmp && sudo -u uosserver podman exec uosserver "$@")
-  else
-    sudo "$@"
-  fi
+  (cd /tmp && sudo -u uosserver podman exec uosserver "$@")
 }
 
 # Check if backup directory exists and is accessible (may need sudo)

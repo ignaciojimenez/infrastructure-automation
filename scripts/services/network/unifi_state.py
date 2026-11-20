@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """unifi-state — the UniFi controller's state as sorted lines, for a before/after diff.
 
-The check half of the upgrade procedure (PER-128, ansible/roles/services/unifi/
-README.md). Deployed to unifi-lxc as /usr/local/bin/unifi-state and run there
-against the loopback API, by any user, read_agent included. It reads the
-read-only controller account as JSON on stdin,
+The before/after check for any controller change (PER-128). Deployed to
+unifi-os-vm as /usr/local/bin/unifi-state and run there against the loopback
+API, by any user, read_agent included. It reads the read-only controller
+account as JSON on stdin,
 
     {"username": "...", "password": "..."}
 
@@ -21,13 +21,12 @@ on their own and would put noise in every diff.
 The controller's own version goes to stderr, not the snapshot. It is the one
 thing an upgrade is supposed to change.
 
-    unifi-state                      standalone Network Application (unifi-lxc)
-    unifi-state --unifi-os [URL]     UniFi OS Server (PER-178), default URL below
+    unifi-state [URL]     UniFi OS Server, default URL below
 
-The same snapshot from both is the migration's pass/fail (PER-127): old
-controller against new. Only the login and the path prefix differ; the paths
-are aiounifi's (Home Assistant's UniFi library), read 2026-11-11. ⚠️ The UniFi
-OS mode has not yet run against a real UniFi OS Server.
+The API paths are aiounifi's (Home Assistant's UniFi library), read
+2026-11-11, and held against UniFi OS Server 5.1.42 at the PER-127 cutover.
+It also read the standalone Network Application until that controller was
+retired (2026-11-20); the same lines from both were the migration's pass/fail.
 """
 import http.cookiejar
 import json
@@ -36,8 +35,6 @@ import sys
 import urllib.error
 import urllib.request
 
-STANDALONE = {"base": "https://127.0.0.1:8443", "login": "/api/login",
-              "logout": "/api/logout", "prefix": ""}
 # UniFi OS logs in at its own layer and proxies the Network application under
 # /proxy/network. 11443 is UniFi OS Server's web port, seen on the PER-178
 # spike VM (2026-11-12).
@@ -101,7 +98,7 @@ def capture(creds, api):
                                    headers={"Content-Type": "application/json"})
     with opener.open(login, timeout=30) as r:
         # UniFi OS hands out a CSRF token at login and wants it back on every
-        # request after; the standalone application sends none.
+        # request after.
         if r.headers.get("x-csrf-token"):
             api["headers"]["x-csrf-token"] = r.headers["x-csrf-token"]
     try:
@@ -125,12 +122,9 @@ def capture(creds, api):
 
 
 def main(argv):
-    api = dict(STANDALONE)
-    if argv[:1] == ["--unifi-os"]:
-        api = dict(UNIFI_OS)
-        argv = argv[1:]
-    if len(argv) > 1:
-        raise SystemExit("usage: unifi-state [--unifi-os] [URL]  (credentials as JSON on stdin)")
+    api = dict(UNIFI_OS)
+    if len(argv) > 1 or argv[:1] and argv[0].startswith("-"):
+        raise SystemExit("usage: unifi-state [URL]  (credentials as JSON on stdin)")
     if argv:
         api["base"] = argv[0].rstrip("/")
     try:

@@ -1,17 +1,16 @@
 #!/bin/sh
-# unifi_state.py's capture() against a fake controller of each kind.
+# unifi_state.py's capture() against a fake UniFi OS Server.
 #
 #   tests/unit/unifi_state_api_test.sh
 #
-# The migration's pass/fail (PER-127) diffs the standalone controller against
-# UniFi OS Server, so the two modes must render the same state identically and
-# differ only in how they reach it. The fake is strict where the real one is
-# believed to be: UniFi OS answers only under /proxy/network, and only to a
-# request carrying the session cookie and the CSRF token it issued at login.
-# Pointing a mode at the other kind must fail, not return an empty snapshot.
+# The fake is strict where the real one is: UniFi OS answers only under
+# /proxy/network, and only to a request carrying the session cookie and the
+# CSRF token it issued at login. A server that does not (the fake's
+# "standalone" flavor, the API of the retired Network Application) must make
+# the capture fail, not return an empty or partial snapshot.
 #
-# It proves the client against what aiounifi says UniFi OS does, not against
-# UniFi OS itself. That runs in the PER-178 spike.
+# It proves the client against what aiounifi says UniFi OS does. The real
+# server was read the same way at the PER-127 cutover (2026-11-15).
 
 set -u
 
@@ -101,13 +100,13 @@ port() {
     cat "$WORK/port.$1" 2>/dev/null
 }
 
-capture() {  # capture <out> [--unifi-os] URL
+capture() {  # capture <out> [ARG...]
     out=$1; shift
     printf '{"username": "ro", "password": "fixture-pw"}' \
         | python3 -I "$SCRIPT" "$@" > "$WORK/$out" 2> "$WORK/$out.err"
 }
 
-printf '\n── unifi-state capture: standalone and UniFi OS (PER-128, PER-178)\n'
+printf '\n── unifi-state capture: UniFi OS Server (PER-128)\n'
 
 start standalone
 start unifi-os
@@ -117,41 +116,44 @@ if [ -z "$standalone" ] || [ -z "$unifi_os" ]; then
     fail "fake controllers did not start"; exit 1
 fi
 
-if capture old "http://127.0.0.1:$standalone" && capture new --unifi-os "http://127.0.0.1:$unifi_os"; then
-    pass "both modes capture their own kind of controller"
+# The fake refuses a request without the cookie or the CSRF token, or outside
+# /proxy/network, so a capture only succeeds if the client sends all three.
+if capture new "http://127.0.0.1:$unifi_os"; then
+    pass "captures UniFi OS: login, cookie, CSRF token, /proxy/network"
 else
-    fail "a capture failed:"; cat "$WORK/old.err" "$WORK/new.err" | sed 's/^/       /'
+    fail "the capture failed:"; sed 's/^/       /' "$WORK/new.err"
 fi
 
-if [ -s "$WORK/old" ] && cmp -s "$WORK/old" "$WORK/new"; then
-    pass "the same state renders identically from both: a clean migration diffs empty"
+if grep -q '^device "default" "02:00:00:00:00:01" .*adopted=true state=1 ' "$WORK/new" \
+    && grep -q '^wlan "default" "Home Net" ' "$WORK/new"; then
+    pass "the snapshot holds the controller's devices and WLANs"
 else
-    fail "same state, different snapshot:"; diff -u "$WORK/old" "$WORK/new" | sed 's/^/       /'
+    fail "the snapshot is missing state:"; sed 's/^/       /' "$WORK/new"
 fi
 
-if grep -q '^controller 9.4.19$' "$WORK/old.err" && grep -q '^controller 11.0.99$' "$WORK/new.err"; then
-    pass "each controller's version goes to stderr, not the snapshot"
+if grep -q '^controller 11.0.99$' "$WORK/new.err" && ! grep -q '11.0.99' "$WORK/new"; then
+    pass "the controller's version goes to stderr, not the snapshot"
 else
-    fail "controller version not reported on stderr"
+    fail "controller version not reported on stderr only"
 fi
 
-# The fake UniFi OS refuses a request without the CSRF token or outside
-# /proxy/network, so these two only pass if the client fails loudly.
-if capture wrong1 "http://127.0.0.1:$unifi_os"; then
-    fail "standalone mode against UniFi OS succeeded"
-elif [ -s "$WORK/wrong1" ]; then
-    fail "standalone mode against UniFi OS wrote a partial snapshot"
+if capture wrong "http://127.0.0.1:$standalone"; then
+    fail "a server without UniFi OS's API was captured"
+elif [ -s "$WORK/wrong" ]; then
+    fail "a server without UniFi OS's API left a partial snapshot"
 else
-    pass "standalone mode against UniFi OS fails, with no snapshot"
+    pass "a server without UniFi OS's API fails, with no snapshot"
 fi
 
-if capture wrong2 --unifi-os "http://127.0.0.1:$standalone"; then
-    fail "UniFi OS mode against a standalone controller succeeded"
+if capture flag --unifi-os; then
+    fail "the retired --unifi-os flag was accepted"
+elif grep -q '^usage:' "$WORK/flag.err"; then
+    pass "the retired --unifi-os flag gets the usage line, not a traceback"
 else
-    pass "UniFi OS mode against a standalone controller fails"
+    fail "the retired --unifi-os flag:"; sed 's/^/       /' "$WORK/flag.err"
 fi
 
-if grep -q 'fixture-pw' "$WORK/old" "$WORK/new" "$WORK"/*.err; then
+if grep -q 'fixture-pw' "$WORK/new" "$WORK"/*.err; then
     fail "the password reached the output"
 else
     pass "no password in snapshot or errors"
