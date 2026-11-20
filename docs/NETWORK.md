@@ -50,10 +50,11 @@ Sections `1.`–`13.` under *Confirmed drift and defects* are numbered findings 
 - [DNS](#dns)
   - [Resolver chain, DHCP and local names (since 2026-11-13)](#resolver-chain-dhcp-and-local-names-since-2026-11-13)
   - [Unbound is fully recursive](#unbound-is-fully-recursive)
-  - [A second Unbound on loopback](#a-second-unbound-on-loopback)
+  - [A second Unbound on loopback — REMOVED 2026-11-20](#a-second-unbound-on-loopback--removed-2026-11-20)
+  - [The firewall's own lookups go to 1.1.1.1](#the-firewalls-own-lookups-go-to-1111)
   - [Port 53 redirect](#port-53-redirect)
 - [⚠️ Confirmed drift and defects](#-confirmed-drift-and-defects)
-  - [1. wg9 (Mullvad US3) is dead, and Quad9 is routed through it](#1-wg9-mullvad-us3-is-dead-and-quad9-is-routed-through-it)
+  - [1. wg9 (Mullvad US3) is dead, and Quad9 is routed through it — RESOLVED](#1-wg9-mullvad-us3-is-dead-and-quad9-is-routed-through-it--resolved)
   - [2. cwwk bypasses the estate resolver — RESOLVED](#2-cwwk-bypasses-the-estate-resolver--resolved)
   - [3. The DNS failover script's premise no longer holds](#3-the-dns-failover-scripts-premise-no-longer-holds)
   - [4. Two wg1 peers have never connected — RESOLVED](#4-two-wg1-peers-have-never-connected--resolved)
@@ -205,7 +206,7 @@ single always-on tunnel.
 | `wg6` | `wg0_mullvad_es3` | ES | down from ~2026-11-17 until re-keyed 2026-11-20: Mullvad rotated `es-bcn-wg-101`'s public key and the peer kept the old one (found by the 26.7.9 upgrade diff) |
 | `wg7` | `wg0_mullvad_us1` | US | up — peer `us-nyc-wg-001` |
 | `wg8` | `wg0_mullvad_us2` | US | up — peer `us-nyc-wg-002` |
-| `wg9` | `wg0_mullvad_us3` | US | ⚠️ **dead — see below** (peer `us-nyc-wg-301`, active and on its published key 2026-11-20) |
+| `wg9` | `wg0_mullvad_us3` | US | up since 2026-11-20 — the tunnel handshook; its gateway was down because the monitor, Quad9 (`9.9.9.9`), stopped answering ICMP through the US exit. Monitor moved to h-root `198.97.190.53` ([finding 1](#1-wg9-mullvad-us3-is-dead-and-quad9-is-routed-through-it--resolved)) |
 | `wg10` | `wg0_mullvad_uk1` | UK | up |
 | `wg11` | `wg0_mullvad_uk2` | UK | up |
 | `wg12` | `wg0_mullvad_uk3` | UK | up |
@@ -220,27 +221,37 @@ it makes them impossible to tell apart at a glance in the UI.
 ### Failover — and what happens when a group runs out
 
 VLAN 40 and VLAN 80 are routed by one rule (*Route ext traffic through Mullvad NL
-Failover*) to the gateway group `Mullvad_failover_nl`: **tier 1 NL1 (`wg0`), tier 2
-NL2 (`wg2`), tier 3 NL3 (`wg3`)**, trigger `downlosslatency`. ES, US and UK have
-groups of their own; their tiers were not read.
+Failover*) to the gateway group `Mullvad_failover_nl`. Every group's tiers, read
+from `config.xml` on 2026-11-20 (all trigger `downlosslatency`; the tier fields
+are `item`, `item2` … `item5`):
+
+| Group | Tier 1 | Tier 2 | Tier 3 | Tier 4 | Tier 5 |
+|-------|--------|--------|--------|--------|--------|
+| `Mullvad_failover_nl` | NL1 | NL2 | NL3 | UK3 | ES1 |
+| `Mullvad_failover_es` | ES1 | ES2 | ES3 | NL1 | UK3 |
+| `Mullvad_failover_us` | US1 | US2 | US3 | — | — |
+| `Mullvad_failover_uk` | UK3 | UK1 | UK2 | — | — |
 
 hifipi is the one exception: a floating rule, `from 10.30.40.100 to ! USED_LAN_NETS`
 via the WAN gateway, loaded ahead of the group rule because Spotify refuses Mullvad
 exits.
 
 🔴 **If every member of the group is down, VLAN 40 and 80 go out the WAN,
-unencrypted.** `skip_rules_gw_down` is not set (read 2026-09-14), and OPNsense's
+unencrypted** — all five tiers, across three regions. `skip_rules_gw_down` is not set (read 2026-09-14), and OPNsense's
 documented default is that *"when a rule has a specific gateway set, and this
 gateway is down, rule is created and traffic is sent to default gateway."* The
 documentation describes a single gateway; that a fully-down group behaves the same
-is inferred, not tested. Nothing alerts on that state: healthchecks sees a working
-internet, and the relay signal watches Mullvad's relay list (state and public
-key), not the tunnels. Only
-agent-lxc's VPN-vs-direct comparison (twice a day) reports the egress address.
+is inferred, not tested.
 
-**Cheapest mitigation, if wanted:** add `WG_MULLVAD_GW_UK1` to `Mullvad_failover_nl`
-as tier 4 — the group has empty tier slots — so an exhausted NL group exits in the
-UK rather than in the clear. Not done as of 2026-09-14.
+**Decided 2026-11-20: that fallback is accepted, on condition that it pages** — no
+kill switch. `check_wg.sh` on the firewall (every 10 min) judges each group the
+way failover does, by gateway status: CRITICAL when a group has no usable member
+("leaves via the WAN gateway, unencrypted"), WARNING for any single Mullvad
+gateway down, saying whether its tunnel still handshakes (monitor fault) or not
+(tunnel dead). Forced on the live firewall with the real status doctored, before
+it was deployed. Until that date it counted handshaking tunnels against
+thresholds written for four tunnels, so it stayed green until ten of twelve were
+dead: ES3 was down three days unseen.
 
 ### Replacing a Mullvad peer (runbook)
 
@@ -266,8 +277,9 @@ peer when its group is short of healthy members, not on the first alert.
    ```
    curl -s https://api.mullvad.net/app/v1/relays | python3 -c 'import json,sys; [print(r["hostname"], r["provider"], r["public_key"]) for r in json.load(sys.stdin)["wireguard"]["relays"] if r["hostname"].startswith("nl-ams-") and r["active"]]'
    ```
-   Prefer a different provider from the group's surviving members, so one provider
-   outage cannot take the whole group.
+   Pick the fastest active relay. Provider diversity is **not** a goal here
+   (decided 2026-11-20: NL1 and NL2 both on xtom is deliberate, for speed), and a
+   working peer is never swapped just to mix providers.
 2. **Replace the peer, not the tunnel.** *VPN → WireGuard → Peers*, edit the existing
    peer: endpoint `<hostname>.relays.mullvad.net`, port `51820`, the public key from
    step 1. Leave the instance, interface assignment, gateway, outbound-NAT rule and
@@ -310,7 +322,9 @@ building a new tunnel instead (step 2).
 ### Inbound — `wg1_server` (road warrior)
 
 `wg1` is the only tunnel that terminates *on* the firewall rather than leaving
-it: a road-warrior server on `10.30.41.0/24`, firewall at `10.30.41.1`.
+it: a road-warrior server on `10.30.41.0/24`, firewall at `10.30.41.1`. In use
+(confirmed 2026-11-20): an empty `latest-handshakes` across a few days is not a
+reason to disable it.
 
 | Peer address | State |
 |--------------|-------|
@@ -413,7 +427,16 @@ describing a different architecture:
 Layer 1 is not what is running. See
 [the failover script's premise](#3-the-dns-failover-scripts-premise-no-longer-holds).
 
-### A second Unbound on loopback
+### ~~A second Unbound on loopback~~ — REMOVED 2026-11-20
+
+> Removed with `sysrc -x unbound_enable` and a `TERM` to the stock instance's pid
+> (its own pidfile, `/usr/local/etc/unbound/unbound.pid`; OPNsense's is
+> `/var/run/unbound.pid` and it never reads the rc variable). Afterwards only
+> OPNsense's instance listens on `:53`, and `127.0.0.1` and `cobra.internal`
+> resolve. The previous `rc.conf` was left at `/tmp/rc.conf.before-20261120`.
+> Not yet seen across a reboot: the next `bin/opnsense-validate` run shows
+> `A.unbound.instances` with one entry. The original finding follows.
+
 
 `/etc/rc.conf` carries `unbound_enable="YES"` (file dated 2025-11-16), so
 FreeBSD's stock Unbound starts at boot with the package's sample config
@@ -429,6 +452,14 @@ stats_noreset`), so `heartbeat_dns.sh` and `check_dns_health.sh`, which probe
 `127.0.0.1` were again all counted by OPNsense's (32, with background traffic).
 `bin/opnsense-validate` records both instances (`A.unbound.instances`), so a
 change shows up in the diff. Nothing was changed.
+
+### The firewall's own lookups go to `1.1.1.1`
+
+`/etc/resolv.conf` on the firewall is `nameserver 1.1.1.1` (read 2026-11-20): the
+firewall's own lookups (packages, ddclient, CrowdSec, the peers' relay hostnames)
+go to Cloudflare out the WAN, not through Unbound or Mullvad. Plausibly
+deliberate — the peer endpoints are hostnames that must resolve before any
+tunnel is up — but not recorded as a decision anywhere.
 
 ### Port 53 redirect
 
@@ -446,7 +477,21 @@ to the same address, which is what made the Quad9 finding below need care.
 Found while deriving this document, on **2026-08-07**. None of these were known
 before; none are fixed. Each was verified on the live firewall, not inferred.
 
-### 1. `wg9` (Mullvad US3) is dead, and Quad9 is routed through it
+### 1. ~~`wg9` (Mullvad US3) is dead, and Quad9 is routed through it~~ — RESOLVED
+
+> **Resolved 2026-11-20.** By then the tunnel itself was fine: `wg9` handshook
+> every two minutes and received traffic, and a DNS query to `9.9.9.9` *through
+> `wg9`* answered in 78 ms. Only ICMP to Quad9 failed, so dpinger, which pings
+> its monitor, held the gateway down. The `9.9.9.9` host route below was that
+> monitor's route. The monitor is now h-root, `198.97.190.53` (10/10 replies;
+> g-root `192.112.36.4` dropped every ping), completing the set: the other
+> eleven gateways monitor root servers a–f and i–m. Monitors must be unique per
+> gateway, and each gets a host route through its tunnel, so a root server is
+> the right kind: nothing here queries one directly, since Unbound forwards
+> everything to Mullvad. The old `9.9.9.9 → wg9` route outlived the change in
+> the routing table (no static route in `config.xml`); it clears at the next
+> reboot or routing reconfigure. `wg9` is tier 3 of `Mullvad_failover_us`.
+> The text below is the 2026-08-07 finding as written.
 
 `wg9` has a peer configured and is sending — **15.42 MiB out, 0 B in, no
 handshake ever recorded**. The tunnel has never come up.

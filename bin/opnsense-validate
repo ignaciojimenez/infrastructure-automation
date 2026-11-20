@@ -83,8 +83,10 @@ RESERVATIONS = {
     "BroadLink-Remote-27-34-d3": "10.30.100.242",
 }
 
-# Down before this script existed: INFO, not FAIL. Still diffed.
-EXPECTED_DOWN = {"WG_MULLVAD_GW_US3": "dead tunnel, docs/NETWORK.md finding 1"}
+# Gateways known down before a run: INFO, not FAIL, still diffed. Name each with
+# its reason, e.g. {"WG_MULLVAD_GW_US3": "..."}. Empty since 2026-11-20, when
+# US3's monitor moved off Quad9 and the gateway came up.
+EXPECTED_DOWN = {}
 
 # Egress via Mullvad per VLAN, from docs/NETWORK.md § Segmentation. None: the
 # document does not say, so the run records it and does not judge it.
