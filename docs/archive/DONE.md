@@ -17,6 +17,7 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ## Contents
 
+- [2026-11-20 — the UniFi controller moved to UniFi OS Server, and the old one is gone (PER-127, PER-128)](#2026-11-20--the-unifi-controller-moved-to-unifi-os-server-and-the-old-one-is-gone-per-127-per-128)
 - [2026-11-15 — a key removed from the gist kept working from the fallback file (PER-182)](#2026-11-15--a-key-removed-from-the-gist-kept-working-from-the-fallback-file-per-182)
 - [2026-11-15 — a 250 m home zone reports arrivals before the door opens (PER-170)](#2026-11-15--a-250-m-home-zone-reports-arrivals-before-the-door-opens-per-170)
 - [2026-11-08 — retired phones registered themselves again, and the presence check paged on them](#2026-11-08--retired-phones-registered-themselves-again-and-the-presence-check-paged-on-them)
@@ -81,6 +82,43 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 ---
 
 
+
+## 2026-11-20 — the UniFi controller moved to UniFi OS Server, and the old one is gone (PER-127, PER-128)
+
+The standalone Network Application's line had ended: 9.4 got no fixes, and
+Ubiquiti's apt suites past 10.4 are empty. The controller moved to UniFi OS
+Server 5.1.42 (Network 10.5.67) in a Debian 13 VM, VM 105, at the old address,
+10.30.40.201. The cutover on 2026-11-15 took 26 minutes of work. The
+before/after `unifi-state` captures were identical, and all four APs came back
+adopted with no set-inform. Daily off-host backups ran from 11-16. CT 101 was
+destroyed on 11-20, and with it went the `unifi` role, its group vars, its two
+check scripts, the cutover preflight and the standalone code paths in
+`backup_unifi.sh` and `unifi-state`. The runbook is now a rebuild procedure
+([unifi_os README](../../ansible/roles/services/unifi_os/README.md); standing
+rules in [ARCHITECTURE_DECISIONS.md](../ARCHITECTURE_DECISIONS.md#unifi-controller--unifi-os-server-in-a-vm-2026-11-11)).
+
+Decisions worth not re-deriving:
+
+- **The 9.4 backup restored straight into Network 10.5.67** (PER-178), so the
+  in-place hop to 10.6 was never needed. The restore skips every controller
+  account: the read-only one is re-created by hand.
+- **Daily autobackup only as settings-only** (`autobackup_days: 0`). Network
+  10.5 refuses daily with history and quietly fell back to Mondays.
+  `backup_unifi` now refuses a file 26 h old or more, which catches a weekly
+  schedule on its second night.
+- **Provisioning drops the Wi-Fi; the gap does not.** The APs served 21
+  minutes with no controller and logged no event. The ~20 s drop per client
+  came when the new controller provisioned them.
+- **Updates are automatic** (Ignacio, 2026-11-20): UniFi OS, Network and AP
+  firmware, once the controller had run quietly with daily backups. The hand
+  procedure under a dead-man timer is for rebuilds and moves.
+- **Ubiquiti's empty apt suites no longer matter:** nothing installs from them,
+  and UniFi OS updates itself.
+- **The curlbin management URL stays in the backup logs** (declined by
+  Ignacio, 2026-11-20; it was a TODO item since 11-10). He uses it. Known
+  trade-off: it can delete or replace that upload without basic auth, and
+  read_agent can read it through `agent_read` and in `/tmp/backup_url_*.txt`
+  (mode 0664). Reopen on an event, not a threshold.
 
 ## 2026-11-15 — a key removed from the gist kept working from the fallback file (PER-182)
 

@@ -17,7 +17,7 @@ Personal infrastructure-as-code repository managing a home network of Raspberry 
 | `vinylstreamer` | `vinylstreamer` | RPi | audio_streaming | Icecast, Liquidsoap |
 | `opnsense` | `opnsense` | FreeBSD VM | firewall | Unbound DNS, Mullvad WireGuard, CrowdSec |
 | `cwwk` | `cwwk` | Debian | hypervisor | CWWK host for VMs and LXCs |
-| `unifi-lxc` | `unifi` | LXC | network_controller | UniFi Network Application |
+| `unifi-os-vm` | `unifi` | Debian VM | unifi_os | VM 105 — UniFi OS Server, the network controller; see [its README](ansible/roles/services/unifi_os/README.md) |
 | `agent-lxc` | `10.30.40.203` | LXC | agent | CT 103 — fleet sweep + investigation; see [AGENT_LXC.md](docs/AGENT_LXC.md) |
 | `workbench-lxc` | `10.30.40.207` | LXC | workbench | CT 104 — interactive Claude Code from the phone, **no fleet access**. Agent runs as `builder`, not `choco`; see [WORKBENCH.md](docs/WORKBENCH.md) |
 
@@ -95,7 +95,7 @@ ansible-playbook ansible/playbooks/deploy_monitoring.yml
 ## SSH Access
 
 All hosts are reachable via SSH (key-based auth). Use the **SSH Hostname** from the table above (not the inventory key). Names resolve by mDNS — there are no per-host aliases in `~/.ssh/config`. Two hosts differ from their inventory key:
-- `unifi-lxc` → `ssh unifi` (set as `ansible_host` in the inventory)
+- `unifi-os-vm` → `ssh unifi` (DNS; the inventory pins `ansible_host: 10.30.40.201`)
 - `agent-lxc` → `ssh 10.30.40.203` (IP-pinned; no mDNS name)
 
 **Autonomous / unattended SSH** (Claude Code, scripts, agents): always use the `-agent` hostname suffix. This uses the passphrase-free `read_agent_ed25519` key as the `read_agent` user — no `touchid-agent` biometric prompt required.

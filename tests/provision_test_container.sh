@@ -21,9 +21,9 @@
 #
 # TARGETS
 #
-#   CT 199 (default) — Debian 13. Exact match for agent-lxc and unifi-lxc,
-#   close match for cwwk (same OS/arch/systemd/python; bare metal rather than
-#   LXC).
+#   CT 199 (default) — Debian 13. Exact match for agent-lxc, close match for
+#   cwwk and unifi-os-vm (same OS/arch/systemd/python; bare metal or a VM
+#   rather than LXC).
 #
 #   CT 198 — Debian 12, for the four Raspberry Pis. They report as Debian 12
 #   bookworm with systemd 252 and Python 3.11, two major versions behind

@@ -157,7 +157,7 @@
 # single-host setups (e.g., original pihole Raspberry Pi).
 # For new deployments, use separate roles:
 #   - services/pihole for DNS (pihole-lxc)
-#   - services/unifi for Network Controller (unifi-lxc)
+#   - services/unifi_os for the network controller (unifi-os-vm)
 # ============================================================
 # - name: Install Unifi Controller (optional - LEGACY)
 #   when: install_unifi | default(false)

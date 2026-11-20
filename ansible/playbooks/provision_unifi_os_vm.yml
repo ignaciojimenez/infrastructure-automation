@@ -1,26 +1,26 @@
 # Provision the UniFi OS Server VM (VM 105) on Proxmox — PER-178, PER-127
 # Usage: ansible-playbook ansible/playbooks/provision_unifi_os_vm.yml --check
 #
-# Run only at the cutover, after CT 101 is stopped: the VM is created at CT
-# 101's address. The runbook is in roles/services/unifi_os/README.md.
+# Run only to rebuild the controller, after the old VM 105 is stopped and
+# destroyed: the new one takes the same address. The runbook is in
+# roles/services/unifi_os/README.md.
 #
-# The replacement for unifi-lxc's standalone Network Application, built beside
-# it (docs/ARCHITECTURE_DECISIONS.md, "UniFi controller"). A VM because UniFi
+# It replaced unifi-lxc's standalone Network Application at the 2026-11-15
+# cutover (docs/ARCHITECTURE_DECISIONS.md, "UniFi controller"). A VM because UniFi
 # OS Server runs on Podman, and the only LXC recipe needs a privileged
 # container with wrapped su/sysctl binaries. The body lives in
 # tasks/provision_vm.yml; this file is the VM's identity and nothing else.
 #
 # Run for the PER-178 spike on 2026-11-12 (at .208, since deleted). Seen there:
 #   * Memory. OPNsense went from 12 GiB to 8 (DONE.md); cwwk had 9.5 GiB
-#     available with CT 101 running. CT 101's 4 GiB returns at cutover.
+#     available with the old controller's LXC still running.
 #   * Sudo. `sudo -n true` works for the infrastructure user on the booted
 #     VM: Proxmox's user-data adds the cloud image's default user rights.
 #
-# Address. Straight to 10.30.40.201, CT 101's, not to a temporary one moved
-# later: Proxmox derives cloud-init's instance-id from a hash of the network
+# Address. Straight to 10.30.40.201, not to a temporary one moved later: Proxmox derives cloud-init's instance-id from a hash of the network
 # config (Cloudinit.pm, nocloud_gen_metadata, read on cwwk 2026-11-12), so a
 # changed address makes the next boot a "new instance": new SSH host keys and
-# a second package upgrade, mid-cutover. tasks/provision_vm.yml refuses to
+# a second package upgrade, mid-rebuild. tasks/provision_vm.yml refuses to
 # create the VM while anything answers on the address.
 
 - name: Provision the UniFi OS Server VM on Proxmox
@@ -31,11 +31,11 @@
     - "{{ inventory_dir }}/group_vars/all/vault.yml"
 
   vars:
-    # 100 is OPNsense, 101-104 the CTs; 105 is the next free id.
+    # 100 is OPNsense, 102-104 the CTs; 105 was the next free id in 2026-11.
     vm_vmid: 105
     vm_name: unifi-os-vm
     vm_inventory_name: unifi-os-vm
-    # CT 101's address: the four APs inform to it (hosts.yml, unifi-os-vm).
+    # The four APs inform to this address (hosts.yml, unifi-os-vm).
     vm_ip: 10.30.40.201
     vm_cidr: 24
     vm_gateway: 10.30.40.254
@@ -47,9 +47,9 @@
     vm_bridge: vmbr0
 
     # Ubiquiti's stated minimums are 2 GiB RAM and ~20 GiB free disk; the
-    # community recipes ask for 4 GiB and 32 GiB. Same 4 GiB as CT 101, so the
-    # steady state after cutover costs cwwk nothing extra. The spike VM idled
-    # at ~1.7 GiB used before the restore.
+    # community recipes ask for 4 GiB and 32 GiB. The same 4 GiB as the LXC it
+    # replaced, so the move cost cwwk nothing extra. The spike VM idled at
+    # ~1.7 GiB used before the restore.
     vm_cpu_type: x86-64-v3
     vm_cores: 2
     # Bounded for the same reason as the workbench: cwwk is a 20 W-capped
@@ -58,7 +58,7 @@
     vm_memory: 4096
     vm_disk_size_gb: 32
     vm_storage: local-zfs
-    # This is the controller: it comes back with cwwk, like CT 101 did.
+    # This is the controller: it comes back with cwwk.
     vm_onboot: true
 
     # Pinned build, not `latest`: a checksum pinned against a moving URL

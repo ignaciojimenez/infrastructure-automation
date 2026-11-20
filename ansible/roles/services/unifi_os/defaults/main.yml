@@ -13,5 +13,5 @@ unifi_os_installer_url: "https://fw-download.ubnt.com/data/unifi-os-server/5172-
 unifi_os_installer_sha256: "f6111e9396a42c74016f5dde9b01fbef486a6fe69efe137935e6e38b7c22f94d"
 unifi_os_install_dir: /var/tmp/uos-install
 
-# Firewall: OPNsense handles the perimeter, as for unifi-lxc.
+# Firewall: OPNsense handles the perimeter.
 enable_ufw: false

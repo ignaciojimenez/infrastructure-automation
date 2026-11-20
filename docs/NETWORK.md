@@ -789,8 +789,10 @@ Full detail, and three ways in, under
 
 ## Physical layer
 
-Read from the UniFi controller API (`unifi-lxc`, CT 101, `10.30.40.201:8443`)
-using a read-only account, and cross-checked against the firewall's ARP table.
+Read from the UniFi controller API (then `unifi-lxc`, CT 101,
+`10.30.40.201:8443`; since 2026-11-15 UniFi OS Server on `unifi-os-vm`, same
+address, port 11443) using a read-only account, and cross-checked against the
+firewall's ARP table.
 
 ### The backbone switch — Zyxel XGS1250-12
 
@@ -990,7 +992,7 @@ straddle two VLANs:
 | `cwwk` / `proxmox` | `10.30.40.51` | 40 | Changwang |
 | `hifipi` | `10.30.40.100` | 40 | Raspberry Pi |
 | `cobra` | `10.30.40.204` | 40 | Raspberry Pi |
-| `unifi-lxc` | `10.30.40.201` | 40 | Proxmox virtual |
+| `unifi-os-vm` | `10.30.40.201` | 40 | Proxmox virtual |
 | `agent-lxc` | `10.30.40.203` | 40 | Proxmox virtual |
 | **`dockassist`** | **`10.30.100.100`** | **100 — IoT** | Raspberry Pi |
 | **`vinylstreamer`** | **`10.30.100.110`** | **100 — IoT** | Raspberry Pi |
@@ -1073,7 +1075,8 @@ of host gets there, measured 2026-11-15:
 | Laptop (macOS, DHCP) | `internal` | mDNS only | `cobra.internal` |
 | Pis — cobra, hifipi, vinylstreamer, dockassist | `internal` | mDNS (`mdns4_minimal [NOTFOUND=return]`) | `cobra.internal` |
 | cwwk (static, Ansible-managed `resolv.conf`) | `internal` | DNS | `cobra.internal` |
-| LXCs — CT 101/103/104 (`pct` `searchdomain`, reconciled by `platform/proxmox.yml`; applied at container start) | `internal` | DNS | `cobra.internal` |
+| LXCs — CT 103/104 (`pct` `searchdomain`, reconciled by `platform/proxmox.yml`; applied at container start) | `internal` | DNS | `cobra.internal` |
+| unifi-os-vm (cloud-init at first boot, `provision_unifi_os_vm.yml`; systemd-resolved) | `internal` | DNS | `cobra.internal` |
 | Docker containers on dockassist | stale `local` until restarted | DNS | `cobra.local` (nothing uses bare names there) |
 
 The agent on agent-lxc dials fully qualified `<host>.internal` names and pins
@@ -1144,11 +1147,11 @@ controller rather than by convention.
 2026-10-31 (read-only, LAN-only, only ever shared in a local session; see
 TODO.md), then done on 2026-11-13 anyway: UniFi OS Server refuses a password
 without an uppercase letter (PER-127). Its only consumer is `bin/unifi-state`
-on the laptop, the preflight included; no host or cron holds it. Pass it on stdin or via an environment variable, never inline in a
+on the laptop, `bin/opnsense-validate` included; no host or cron holds it. Pass it on stdin or via an environment variable, never inline in a
 script, a cron entry or a committed file. `bin/unifi-state` is the worked
 example: it reads the vault and hands the login to the host over ssh stdin
 (PER-128; the before/after check in
-[the unifi role's README](../ansible/roles/services/unifi/README.md)).
+[the unifi_os role's README](../ansible/roles/services/unifi_os/README.md)).
 
 *Corrected 2026-11-10: this paragraph still said the password was outside the
 repo and due for rotation after both had been settled.*

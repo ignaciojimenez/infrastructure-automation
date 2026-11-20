@@ -683,8 +683,8 @@ def services(run):
     run.add("E.unifi.8443", "nc -z -G 3 unifi.internal 8443", "open" if rc == 0 else "closed",
             "INFO: closed since the UniFi OS cutover; console is 11443", "INFO")
 
-    cmd = "bin/unifi-state --unifi-os  # vault read-only account, no new credential"
-    rc, out, err = sh([str(REPO / "bin" / "unifi-state"), "--unifi-os"], timeout=90)
+    cmd = "bin/unifi-state  # vault read-only account, no new credential"
+    rc, out, err = sh([str(REPO / "bin" / "unifi-state")], timeout=90)
     devices = sorted(re.findall(r'^device "[^"]*" "[^"]*" name="([^"]*)" .*? adopted=(\w+) state=(\d+)', out, re.M))
     if rc != 0 or not devices:
         run.add("E.unifi.aps", cmd, f"unreadable (rc={rc}): {err.strip()[:120]}", "4 adopted, state=1", "INFO", "unreadable")

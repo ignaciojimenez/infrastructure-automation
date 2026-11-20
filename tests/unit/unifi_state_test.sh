@@ -8,7 +8,7 @@
 # one change renders as exactly the lines it touched — no more, no fewer. A
 # check that always reports "no difference" passes the first half alone, so
 # the second half is the one that matters. The same two cases run against the
-# live controller in the procedure (ansible/roles/services/unifi/README.md).
+# live controller in the procedure (ansible/roles/services/unifi_os/README.md).
 
 set -u
 

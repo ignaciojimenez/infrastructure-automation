@@ -116,12 +116,6 @@
       when: primary_function | default("") == "dns" or install_pihole | default(false)
       tags: [pihole, dns, services]
 
-    - name: Deploy UniFi Network Controller
-      ansible.builtin.include_role:
-        name: services/unifi
-      when: primary_function | default("") == "network_controller" or install_unifi | default(false)
-      tags: [unifi, network, services]
-
     - name: Deploy Plex Media Server
       ansible.builtin.include_role:
         name: services/plex
