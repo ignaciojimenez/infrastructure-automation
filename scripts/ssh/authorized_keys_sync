@@ -91,7 +91,9 @@ describe() {
     fi
 }
 
-if ! curl -sSf --max-time 30 --retry 2 --retry-delay 5 \
+# --retry alone skips "could not resolve host" (exit 6); a resolver blip of
+# under a minute took the whole fleet's unit down at once (PER-193).
+if ! curl -sSf --max-time 30 --retry 4 --retry-delay 15 --retry-all-errors \
         -o "$work/fetched" "$KEYS_URL" 2>"$work/curl.err"; then
     echo "fetch failed, authorized_keys left untouched: $(cat "$work/curl.err")" >&2
     exit 1
