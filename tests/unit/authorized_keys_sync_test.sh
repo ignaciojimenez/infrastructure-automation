@@ -50,9 +50,14 @@ while [ \$# -gt 0 ]; do
     case "\$1" in
         -o) out=\$2; shift ;;
         --data) data=\$2; shift ;;
+        --retry-all-errors) retry_all=1 ;;
     esac
     shift
 done
+if [ -z "\$data" ] && [ -z "\${retry_all:-}" ]; then
+    echo "curl: (6) Could not resolve host: gist.invalid" >&2
+    exit 6
+fi
 if [ -n "\$data" ]; then
     printf '%s\n' "\$data" >> "$WORK/slack.log"
     if [ -f "$WORK/slack_fail" ]; then printf 'invalid_token'; else printf 'ok'; fi
@@ -140,6 +145,15 @@ if [ "$RC" -ne 0 ] && untouched && [ "$(posts)" -eq 0 ] && grep -q "fetch failed
     pass "a failed fetch leaves the file untouched and fails the unit"
 else
     fail "fetch fail: rc=$RC err=$(cat "$WORK/err")"
+fi
+
+# The stub fails a fetch that lacks --retry-all-errors the way a DNS blip does
+# (exit 6, which plain --retry never retries), so every fetch above also proves
+# the flag is passed.
+if grep -q -- '--retry-all-errors' "$SYNC"; then
+    pass "the fetch retries every error, including a failed DNS lookup"
+else
+    fail "fetch lacks --retry-all-errors"
 fi
 
 # Empty list: refused and alerted, once.
