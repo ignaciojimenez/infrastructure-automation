@@ -13,7 +13,7 @@ and checksum (`defaults/main.yml`). It then owns what every host here owns:
 |---|---|
 | Server check, self-healing | `check_unifi_os`, every 13 min: unit, container, console on 11443, inform port 8080 |
 | Nightly off-host backup | `backup_unifi` at 03:30, after the Network app's 03:00 autobackup |
-| Backup heartbeat | healthchecks.io check "UniFi backup", pinged every 2 h while the last backup succeeded less than 26 h ago |
+| Backup heartbeat | healthchecks.io check `backup_unifi` (project Backups, period 1 day), pinged every 2 h while the last backup succeeded less than 26 h ago |
 | Read-only state capture | `/usr/local/bin/unifi-state`, driven by `bin/unifi-state` |
 | System health, read_agent, SSH | the fleet baseline, via `site.yml` |
 
