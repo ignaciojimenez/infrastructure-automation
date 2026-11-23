@@ -204,7 +204,8 @@
     user: "{{ primary_user }}"
   tags: [unifi_os, backup, cron]
 
-# healthchecks.io check "UniFi backup": the one the old controller pinged too.
+# healthchecks.io check "backup_unifi" (project Backups): the one the old
+# controller pinged too.
 - name: Deploy the backup freshness heartbeat
   ansible.builtin.template:
     src: "{{ playbook_dir }}/../../scripts/common/heartbeat_backup.sh"

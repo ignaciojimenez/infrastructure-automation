@@ -127,7 +127,7 @@ destroyed 2026-11-20).
 |---|---|---|---|
 | Server down: unit, container, console or inform port | `check_unifi_os` */13 with one restart; `uosserver` in the health check. Both forced 2026-11-15 | 13–15 min | ✅ |
 | A self-update leaves it running but changed | nothing: `bin/unifi-state` is run by hand | — | ❌ |
-| Nightly backup missing or stale | `backup_unifi` refuses a file 26 h old or more, and the wrapper alerts; the healthchecks.io heartbeat stops | next 03:30 | ⚠️ heartbeat failure not yet forced (PER-127) |
+| Nightly backup missing or stale | `backup_unifi` refuses a file 26 h old or more, and the wrapper alerts; the healthchecks.io heartbeat stops | next 03:30; if the cron stops altogether, about 2 days (26 h freshness, then the check's 1-day period and its grace) | ✅ heartbeat forced 2026-11-23: a stale or failed state withholds the ping on the VM, and the check's failure signal posted DOWN, then UP, to #home-alerts (PER-127) |
 | Backup unrestorable | a `.unf` restored at the cutover (from the old controller); VM 105's vzdump never | — | ⚠️ (blank 1) |
 | An AP or switch down | nothing reads the controller | — | ❌ (blank 6) |
 
