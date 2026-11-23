@@ -32,22 +32,35 @@
 # 16 Sep, PER-57) on gaps of 18–32 h while her phone was perfectly healthy.
 #
 # No threshold fixes that: someone home for a weekend is a 48 h gap. So the
-# rule is **stale AND home AND does not answer when asked**:
+# check ASKS: `request_location_update`, a push the Companion App answers with
+# a fresh location. `last_reported` moved = stationary, healthy.
 #
-#   stale + not_home -> someone is out with their phone off. Benign.
-#   stale + home     -> ASK. Send `request_location_update`, a silent push the
-#                       Companion App answers with a fresh location. The next
-#                       run looks: `last_reported` moved = stationary, healthy.
-#   ...no answer     -> presence is frozen claiming someone is in. This is the
-#                       one that costs money and comfort, and it pages.
+# ⚠️ An unanswered request is NOT evidence of a frozen app (2026-11-24). This
+# check used to page on it, and paged on Candela at home on 11-20 and 11-23.
+# The recorder showed why: at rest her phone reports almost only on a charging
+# transition (4–13 h apart over four days at home), on 11-22 she did not charge
+# it, and on 11-20 the app was demonstrably alive — a sensor update at 13:33, a
+# normal report at 22:12 — yet left the 20:30 request unanswered. The Companion
+# docs say as much: the command "only works when the app is running or in the
+# background", is "a little bit hit or miss", and "Do not rely on this
+# functionality". So:
+#
+#   stale + not_home -> someone is out with their phone off. Benign, a note.
+#   stale + home     -> ask; answered or not, a note. Best effort, never a page.
+#   tracker unavailable / person unknown / cannot ask at all -> page.
+#
+# ⚠️ Gap left on purpose: a phone frozen on `home` while its owner is out (seen
+# 2026-09-19) no longer pages. Silence and an ignored push cannot tell that from
+# a quiet evening in; a second, independent signal can (home Wi-Fi association,
+# PER-198). Until then this check cannot see that failure, and says
+# so rather than paging on a coin flip.
 #
 # The push is invisible to the phone's owner (Companion App docs) and is rate
 # limited here to one per tracker per {{ presence_probe_interval_hours }} h: HA's push relay enforces a
 # daily per-device quota, and a check that burns it would silence the real
 # notifications that phone receives.
 #
-# {{ presence_stale_hours }}h before asking; {{ presence_probe_answer_minutes }} min for the answer, so one push
-# delivered late is not a page.
+# {{ presence_stale_hours }}h before asking; {{ presence_probe_answer_minutes }} min for the answer.
 #
 # ⚠️ A Home Assistant restart is not an answer (2026-10-04). On start HA
 # restores every entity and stamps `last_reported` with the moment it did so.
@@ -57,8 +70,8 @@
 # dropped the outstanding request. Cloudflare showed no request from her app
 # at all. So while a request is outstanding, a stamp inside the restart's
 # restore window is read as HA's, and the tracker is judged by the stamp it had
-# when asked. The cost runs the safe way: a phone that genuinely answers inside
-# those few minutes keeps paging until its next report.
+# when asked. A phone that genuinely answers inside those few minutes reads as
+# still waiting until its next report.
 set -eu
 
 SECRETS_FILE="{{ homeassistant_config_dir }}/secrets.yaml"
@@ -290,6 +303,7 @@ def is_fresh(tid):
     return age is not None and age <= stale_hours * 60
 
 watched = 0
+quiet = 0   # stale, for any reason: the summary must not call these reporting
 for person in sorted(persons, key=lambda s: s["entity_id"]):
     pid = person["entity_id"]
     label = person.get("attributes", {}).get("friendly_name") or pid
@@ -349,6 +363,7 @@ for person in sorted(persons, key=lambda s: s["entity_id"]):
 
         if age <= stale_hours * 60:
             continue
+        quiet += 1
         if tstate != "home":
             notes.append(
                 "%s quiet for %.0f h but reads '%s' — benign, phone is away or off"
@@ -371,15 +386,13 @@ for person in sorted(persons, key=lambda s: s["entity_id"]):
                 continue
             if waited < probe_interval_hours * 60:
                 live_probes[tid] = probe
-                issues.append(
-                    "%s tracker is FROZEN on 'home' — last reported %.0f h ago, and "
-                    "the phone did not answer a location request sent %.0f min "
-                    "ago. Presence is claiming someone is in; heating and "
-                    "away-automations are running on a stale signal."
+                notes.append(
+                    "%s quiet for %.0f h at home and did not answer a location "
+                    "request sent %.0f min ago — normal for a phone at rest, "
+                    "and indistinguishable here from a frozen app (PER-197)"
                     % (tlabel, age / 60.0, waited))
                 continue
-            # Unanswered for a whole interval: ask again below, and keep paging
-            # while the new request is out.
+            # Unanswered for a whole interval: ask again below.
 
         try:
             if notify_available is None:
@@ -390,8 +403,9 @@ for person in sorted(persons, key=lambda s: s["entity_id"]):
             call_service("notify", service, {"message": "request_location_update"})
         except (HTTPError, URLError, TimeoutError, OSError, ValueError,
                 LookupError) as exc:
-            # Unable to ask is not evidence the phone is fine. Page, the way
-            # this check did before it could ask, and say why.
+            # Unable to ask at all is the check broken, not the phone quiet —
+            # no notify service (a phone swap left it behind) or HA refusing
+            # the call. Page, and say why.
             issues.append(
                 "%s tracker is quiet on 'home' for %.0f h (threshold %.0f h) and "
                 "the phone could not be asked for a location: %s"
@@ -400,10 +414,10 @@ for person in sorted(persons, key=lambda s: s["entity_id"]):
 
         live_probes[tid] = {"asked_at": epoch, "reported": reported}
         if probe:
-            issues.append(
-                "%s tracker is FROZEN on 'home' — last reported %.0f h ago, and "
-                "the phone has not answered a location request in %.0f h; asked "
-                "again via notify.%s" % (tlabel, age / 60.0, waited / 60.0, service))
+            notes.append(
+                "%s quiet for %.0f h at home, no answer to a location request "
+                "in %.0f h; asked again via notify.%s"
+                % (tlabel, age / 60.0, waited / 60.0, service))
         else:
             notes.append("%s quiet for %.0f h at home — asked the phone for a "
                          "location via notify.%s" % (tlabel, age / 60.0, service))
@@ -423,7 +437,11 @@ if issues:
         print("❌ %s" % issue)
     sys.exit(min(len(issues), 125))
 
-print("✅ presence is live: %d person(s), %d tracker(s), all reporting"
-      % (len(persons), watched))
+if quiet:
+    print("✅ nothing to page: %d person(s), %d tracker(s), %d quiet (see notes)"
+          % (len(persons), watched, quiet))
+else:
+    print("✅ presence is live: %d person(s), %d tracker(s), all reporting"
+          % (len(persons), watched))
 sys.exit(0)
 PYEOF

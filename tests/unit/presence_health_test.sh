@@ -1,6 +1,7 @@
 #!/bin/sh
 # Regression test: check_presence_health.sh must stay quiet for a phone that is
-# merely at home, and still page for one that is frozen there.
+# merely at home — whether or not it answers a location request — and still page
+# when presence is broken in a way it can actually see.
 #
 # Runs on the laptop — no container, no Home Assistant. The template's embedded
 # Python is extracted and pointed at a stub HA on 127.0.0.1 that serves
@@ -12,9 +13,14 @@
 #
 # The bug this exists for (PER-57, 11–16 Sep 2026): Candela stayed home, her
 # iPhone had nothing to report, and "stale AND home" paged four times on a
-# healthy phone. Case 1 is that exact state and must stay green. Case 2 is the
-# same silence from a phone that does NOT answer, and must page — a fix that
-# made case 1 quiet by making both quiet would pass case 1 alone.
+# healthy phone. Case 1 is that exact state and must stay green.
+#
+# Case 2 used to be its loud twin: the same silence from a phone that does NOT
+# answer, paged as FROZEN. That premise was falsified on 2026-11-24: her phone
+# left requests unanswered on 11-20 (while demonstrably alive) and 11-23 (at
+# rest, not charged), and paged both times. An unanswered request is now a
+# note. The loud twins that keep "quiet by making everything quiet" honest are
+# case 10 (tracker unavailable, person unknown) and cases 6 and 9e.
 
 set -u
 
@@ -30,7 +36,7 @@ failures=0
 pass() { printf '   ✓ %s\n' "$1"; }
 fail() { printf '   ✗ %s\n' "$1"; failures=$((failures + 1)); }
 
-printf '\n── presence health: ask the phone before calling it frozen\n'
+printf '\n── presence health: ask the phone, never page on its silence alone\n'
 
 [ -f "$TEMPLATE" ] || { printf '   ✗ template not found: %s\n' "$TEMPLATE"; exit 1; }
 
@@ -259,7 +265,8 @@ else
 fi
 
 # ------------------------------------------------------------------
-# 2. Same silence, phone does NOT answer. Must page — case 1's loud twin.
+# 2. Same silence, phone does NOT answer (2026-11-24). A note, not a page:
+#    HA's own docs call the request hit or miss, and her live app ignored one.
 # ------------------------------------------------------------------
 rm -f "$STATE"; world home 32; phone silent
 run
@@ -271,15 +278,27 @@ fi
 asked 25   # the next cron run, 25 min later; tracker never moved
 : > "$FIX/calls"
 run
-if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -q "FROZEN.*did not answer"; then
-    pass "2b. unanswered after 25 min pages as FROZEN"
+if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q "did not answer" \
+   && grep -q "$TRACKER" "$STATE"; then
+    pass "2b. unanswered after 25 min: a note, request kept, no page"
 else
-    fail "2b. frozen phone did NOT page (rc=$RC): $OUT"
+    fail "2b. unanswered request paged or was dropped (rc=$RC): $OUT"
 fi
 if [ "$(pushes)" -eq 0 ]; then
     pass "2c. no re-ask inside the rate-limit interval"
 else
     fail "2c. re-asked within the interval ($(pushes) pushes)"
+fi
+
+# The live state of 2026-11-23 22:30: 30 h quiet at home, the request
+# unanswered for 330 min. Paged then; must not now.
+world home 30; phone silent; asked 330
+run
+if [ "$RC" -eq 0 ] && [ "$(pushes)" -eq 0 ] \
+   && ! printf '%s' "$OUT" | grep -q "FROZEN"; then
+    pass "2d. 2026-11-23 shape (30 h, unanswered 330 min): no page, no extra push"
+else
+    fail "2d. the 11-23 false page is back (rc=$RC, pushes=$(pushes)): $OUT"
 fi
 
 # ------------------------------------------------------------------
@@ -294,14 +313,15 @@ else
 fi
 
 # ------------------------------------------------------------------
-# 4. Unanswered for a whole interval: re-ask, and keep paging meanwhile.
+# 4. Unanswered for a whole interval: re-ask, still without paging.
 # ------------------------------------------------------------------
 world home 40; phone silent; asked 420
 run
-if [ "$RC" -ne 0 ] && [ "$(pushes)" -eq 1 ]; then
-    pass "4. unanswered 7 h: asks again and still pages"
+if [ "$RC" -eq 0 ] && [ "$(pushes)" -eq 1 ] \
+   && printf '%s' "$OUT" | grep -q "asked again"; then
+    pass "4. unanswered 7 h: asks again, a note, no page"
 else
-    fail "4. expected re-ask + page (rc=$RC, pushes=$(pushes)): $OUT"
+    fail "4. expected one re-ask and no page (rc=$RC, pushes=$(pushes)): $OUT"
 fi
 
 # ------------------------------------------------------------------
@@ -373,8 +393,9 @@ fi
 rm -f "$STATE"; world home 19; phone silent; asked 60
 restamp 15.5; HA_STARTED=$(docker_stamp 16)
 run
-if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -q "FROZEN.*did not answer"; then
-    pass "8a. restart during a freeze: still pages FROZEN"
+if printf '%s' "$OUT" | grep -q "restart at" \
+   && printf '%s' "$OUT" | grep -q "did not answer"; then
+    pass "8a. restart during an unanswered request: still read as unanswered"
 else
     fail "8a. HA's restore stamp read as an answer (rc=$RC): $OUT"
 fi
@@ -475,15 +496,15 @@ else
     fail "9b. retired phone pushed or kept in state (pushes=$(pushes)): $(cat "$STATE")"
 fi
 
-# Its loud twin: every tracker of the person frozen. Must still page — a fix
-# that skipped any person with two trackers would pass 9a alone.
-rm -f "$STATE"; people new_phone:home:32 old_phone:home:97; phone silent
-asked_all 25 new_phone old_phone
+# Its loud twin: no fresh tracker, and the current one unavailable. Must page —
+# a fix that skipped any person with two trackers would pass 9a alone.
+rm -f "$STATE"; people new_phone:unavailable:32 old_phone:home:97; phone silent
+asked_all 25 old_phone
 run
-if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -q "new_phone.*FROZEN"; then
-    pass "9c. every tracker frozen: still pages"
+if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -q "new_phone.*unavailable"; then
+    pass "9c. no fresh tracker, one unavailable: pages"
 else
-    fail "9c. a person with no fresh tracker did not page (rc=$RC): $OUT"
+    fail "9c. a person with no fresh tracker was not judged (rc=$RC): $OUT"
 fi
 
 # A tracker deleted from HA but still named by the person.
@@ -501,6 +522,42 @@ if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -q "does not exist"; then
     pass "9e. the only tracker deleted: still pages"
 else
     fail "9e. a person with no tracker left did not page (rc=$RC): $OUT"
+fi
+
+# ------------------------------------------------------------------
+# 10. What still pages. The loud twins of case 2: presence broken in a way
+#     this check can see without asking the phone anything.
+# ------------------------------------------------------------------
+rm -f "$STATE"; world unavailable 1; phone answer
+run
+if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -q "tracker is unavailable"; then
+    pass "10a. tracker unavailable: pages"
+else
+    fail "10a. unavailable tracker did not page (rc=$RC): $OUT"
+fi
+
+rm -f "$STATE"; people new_phone:home:1
+python3 - "$FIX" <<'PY'
+import json, os, sys
+p = os.path.join(sys.argv[1], "states.json")
+states = json.load(open(p))
+states[0]["state"] = "unknown"
+json.dump(states, open(p, "w"))
+PY
+run
+if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -q "person entity is unknown"; then
+    pass "10b. person unknown: pages"
+else
+    fail "10b. unknown person did not page (rc=$RC): $OUT"
+fi
+
+# A quiet run must not claim every phone is reporting.
+rm -f "$STATE"; world home 30; phone silent; asked 330
+run
+if [ "$RC" -eq 0 ] && ! printf '%s' "$OUT" | grep -q "all reporting"; then
+    pass "10c. quiet phone: the summary does not say 'all reporting'"
+else
+    fail "10c. summary overstates a quiet phone (rc=$RC): $OUT"
 fi
 
 printf '\n'
