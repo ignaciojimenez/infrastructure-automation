@@ -414,6 +414,8 @@
   loop:
     - "{{ scripts_dir }}/check_tado_health.sh"
     - "/home/{{ ansible_user }}/.log/check_tado_health.sh.json"
+    # The location-request state of the rule retired 2026-11-24 (PER-197).
+    - "/home/{{ ansible_user }}/.log/presence_probe.state.json"
   tags: [homeassistant, monitoring]
 
 - name: Configure presence health check cron job

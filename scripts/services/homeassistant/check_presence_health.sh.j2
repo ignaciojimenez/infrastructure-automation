@@ -1,85 +1,64 @@
 #!/bin/sh
-# check_presence_health.sh — is the presence signal still trustworthy?
+# check_presence_health.sh — have we lost a phone as a presence source?
 # Managed by Ansible — do not edit manually.
 #
-# RENAMED from check_tado_health.sh on 2026-08-26. The old name cost a real
-# conversation: it does not check Tado. Tado is downstream — it *consumes*
-# presence. The chain is
+# The chain is
 #
 #   Companion App -> device_tracker.* -> person.* -> group.persons -> Tado API
 #
 # and this script watches the left-hand end, the only place presence is
-# actually produced. There is one presence source, not two.
+# actually produced. (Renamed from check_tado_health.sh on 2026-08-26: Tado
+# consumes presence, it does not produce it.)
 #
-# Three failure modes, and the third is the reason for the rewrite:
+# What it is for: noticing that a phone has stopped feeding Home Assistant, so
+# home/away can no longer be trusted for that person. Not a same-day freeze
+# detector — see "the gap" below.
 #
-#   1. tracker `unavailable` — the app is gone. Loud and obvious.
-#   2. person `unknown`/`unavailable` — the entity is misconfigured.
-#   3. tracker FROZEN — still reporting a state, just not updating. The old
-#      header claimed "verifies device trackers are fresh"; the code only ever
-#      tested for `unavailable`, so a stuck tracker was invisible. A tracker
-#      stuck on `home` means heating runs all day and every away-automation
-#      stays asleep.
+# The rule (2026-11-24): a phone that is in use must be charged, and the
+# Companion App reports on every charging transition. So a live app cannot stay
+# silent past a bound set by its battery, wherever its owner is. The check
+# therefore asks one question per phone:
 #
-# ⚠️ Why staleness is never enough on its own, measured rather than assumed.
+#   when did ANY of its entities last hear from the phone?
 #
-# Silence does not tell a frozen app from a phone that has nothing to say. iOS
-# reports location on zone enter/exit, significant location change, background
-# fetch at the OS's discretion, or when asked — so a phone that stays in the
-# house can go a day or more without a word. 7 days of history (2026-08-26)
-# showed healthy gaps of 470 and 721 min, which set the threshold below; then
-# Candela stayed home and the check paged four times in six days (11, 14, 15,
-# 16 Sep, PER-57) on gaps of 18–32 h while her phone was perfectly healthy.
+# and pages when that is more than {{ presence_stale_hours }} h ago, home or away. "Any" is the tracker plus
+# every sensor the app registers under the same device name (battery level and
+# state, pressure, ...): a charge sends the battery sensors and a location in
+# the same report, and a move sends a location, so the newest of them is the
+# phone's last word.
 #
-# No threshold fixes that: someone home for a weekend is a 48 h gap. So the
-# check ASKS: `request_location_update`, a push the Companion App answers with
-# a fresh location. `last_reported` moved = stationary, healthy.
+# How this replaced two earlier rules, both measured wrong on a real phone:
+#   * "tracker stale AND home" (PER-57): a phone left indoors went 18–32 h
+#     without a location and paged four times in six days.
+#   * "stale AND home AND ignores request_location_update": the recorder showed
+#     her app alive (a sensor update at 13:33, a report at 22:12 on 11-20) and
+#     still ignoring the request. HA's docs call the command "a little bit hit
+#     or miss" and say "Do not rely on this functionality". It is gone.
 #
-# ⚠️ An unanswered request is NOT evidence of a frozen app (2026-11-24). This
-# check used to page on it, and paged on Candela at home on 11-20 and 11-23.
-# The recorder showed why: at rest her phone reports almost only on a charging
-# transition (4–13 h apart over four days at home), on 11-22 she did not charge
-# it, and on 11-20 the app was demonstrably alive — a sensor update at 13:33, a
-# normal report at 22:12 — yet left the 20:30 request unanswered. The Companion
-# docs say as much: the command "only works when the app is running or in the
-# background", is "a little bit hit or miss", and "Do not rely on this
-# functionality". So:
+# ⚠️ The threshold is a choice, not a measurement. Over 2026-11-14..24 the
+# longest silence across ALL entities was 9.4 h for one phone and 30.5 h for
+# the other (home, not charged, 95% -> 65%). Any threshold under 30.5 h pages
+# on that day. See presence_stale_hours.
 #
-#   stale + not_home -> someone is out with their phone off. Benign, a note.
-#   stale + home     -> ask; answered or not, a note. Best effort, never a page.
-#   tracker unavailable / person unknown / cannot ask at all -> page.
+# ⚠️ The gap: a phone that freezes while its owner is out keeps them `home` for
+# up to {{ presence_stale_hours }} h before this pages.
 #
-# ⚠️ Gap left on purpose: a phone frozen on `home` while its owner is out (seen
-# 2026-09-19) no longer pages. Silence and an ignored push cannot tell that from
-# a quiet evening in; a second, independent signal can (home Wi-Fi association,
-# PER-198). Until then this check cannot see that failure, and says
-# so rather than paging on a coin flip.
+# ⚠️ A Home Assistant restart is not a report (2026-10-04). On start HA
+# restores every entity and stamps `last_reported` with the moment it did so;
+# taken at face value, every deploy would reset every phone's clock. So stamps
+# inside the restart's restore window are ignored, and each phone's last real
+# report is kept in {{ presence_last_seen_state_file }}
+# to carry it across the restart.
 #
-# The push is invisible to the phone's owner (Companion App docs) and is rate
-# limited here to one per tracker per {{ presence_probe_interval_hours }} h: HA's push relay enforces a
-# daily per-device quota, and a check that burns it would silence the real
-# notifications that phone receives.
-#
-# {{ presence_stale_hours }}h before asking; {{ presence_probe_answer_minutes }} min for the answer.
-#
-# ⚠️ A Home Assistant restart is not an answer (2026-10-04). On start HA
-# restores every entity and stamps `last_reported` with the moment it did so.
-# Candela's app had been silent 19 h and this check had paged; an Ansible
-# deploy restarted HA at 21:13, every one of her sensors read "reported 34 s
-# after boot", and the 21:30 run cleared the page with "✅ all reporting" and
-# dropped the outstanding request. Cloudflare showed no request from her app
-# at all. So while a request is outstanding, a stamp inside the restart's
-# restore window is read as HA's, and the tracker is judged by the stamp it had
-# when asked. A phone that genuinely answers inside those few minutes reads as
-# still waiting until its next report.
+# Ignored on purpose: the `notify.<phone>` entity. It shares the phone's name,
+# and its stamp moves whenever HA pushes TO the phone — HA's act, not the
+# phone's.
 set -eu
 
 SECRETS_FILE="{{ homeassistant_config_dir }}/secrets.yaml"
 HA_URL="http://localhost:8123"
 STALE_HOURS="{{ presence_stale_hours }}"
-PROBE_ANSWER_MINUTES="{{ presence_probe_answer_minutes }}"
-PROBE_INTERVAL_HOURS="{{ presence_probe_interval_hours }}"
-STATE_FILE="{{ presence_probe_state_file }}"
+STATE_FILE="{{ presence_last_seen_state_file }}"
 
 # cron has no LANG; pin stdout so the status markers below cannot raise
 # UnicodeEncodeError at the moment the check has something to say.
@@ -104,31 +83,31 @@ IGNOREEOF
 export PRESENCE_IGNORE
 
 # When HA last started, from Docker rather than HA: a restored entity cannot
-# tell you it was restored. Empty if Docker cannot say — the check then runs as
-# it did before, and says so.
+# tell you it was restored. Empty if Docker cannot say — the check then runs
+# without the restart guard, and says so.
 HA_STARTED=$(docker inspect "{{ homeassistant_container_name }}" 2>/dev/null \
     | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["State"]["StartedAt"])' \
       2>/dev/null) || HA_STARTED=""
 
-python3 - "$HA_TOKEN" "$HA_URL" "$STALE_HOURS" "$STATE_FILE" \
-          "$PROBE_ANSWER_MINUTES" "$PROBE_INTERVAL_HOURS" "$HA_STARTED" <<'PYEOF'
+python3 - "$HA_TOKEN" "$HA_URL" "$STALE_HOURS" "$STATE_FILE" "$HA_STARTED" <<'PYEOF'
 import datetime
 import json
 import os
 import re
 import sys
-import unicodedata
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
 token, ha_url, stale_hours, state_file = (sys.argv[1], sys.argv[2],
                                           float(sys.argv[3]), sys.argv[4])
-answer_minutes, probe_interval_hours = float(sys.argv[5]), float(sys.argv[6])
 now = datetime.datetime.now(datetime.timezone.utc)
 
 # How long after HA starts its restored stamps keep landing. Observed: 34 s on
 # dockassist; five minutes leaves room for a slow boot.
 RESTORE_WINDOW = datetime.timedelta(minutes=5)
+
+# Domains the Companion App writes. `notify` is excluded: HA moves it.
+PHONE_DOMAINS = ("device_tracker.", "sensor.", "binary_sensor.")
 
 
 def parse_stamp(stamp):
@@ -142,17 +121,8 @@ def parse_stamp(stamp):
         return None
 
 
-ha_started = parse_stamp(sys.argv[7] if len(sys.argv) > 7 else "")
-
-
+ha_started = parse_stamp(sys.argv[5] if len(sys.argv) > 5 else "")
 ignored = {p.strip() for p in os.environ.get("PRESENCE_IGNORE", "").splitlines() if p.strip()}
-
-
-def get_state(entity_id):
-    req = Request("%s/api/states/%s" % (ha_url, entity_id))
-    req.add_header("Authorization", "Bearer %s" % token)
-    with urlopen(req, timeout=10) as resp:
-        return json.loads(resp.read().decode("utf-8"))
 
 
 def all_states():
@@ -162,54 +132,7 @@ def all_states():
         return json.loads(resp.read().decode("utf-8"))
 
 
-def call_service(domain, service, payload):
-    req = Request("%s/api/services/%s/%s" % (ha_url, domain, service),
-                  data=json.dumps(payload).encode("utf-8"), method="POST")
-    req.add_header("Authorization", "Bearer %s" % token)
-    req.add_header("Content-Type", "application/json")
-    with urlopen(req, timeout=15) as resp:
-        resp.read()
-
-
-def notify_services():
-    req = Request("%s/api/services" % ha_url)
-    req.add_header("Authorization", "Bearer %s" % token)
-    with urlopen(req, timeout=15) as resp:
-        domains = json.loads(resp.read().decode("utf-8"))
-    for d in domains:
-        if d.get("domain") == "notify":
-            return set(d.get("services") or {})
-    return set()
-
-
-def slugify(text):
-    text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
-    return re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
-
-
-def notify_service_for(tid, tracker, available):
-    """The Companion App's notify service for this tracker, or None.
-
-    HA names it `mobile_app_<slug of device name>`, and a tracker's
-    friendly_name is that device name unless someone renamed the entity. The
-    entity id is the fallback, with and without the `_2` HA appends on a
-    re-registered phone — which is exactly Candela's: the tracker is
-    `iphone_de_candela_2`. Only a name that HA actually lists is returned, so
-    a wrong guess is "cannot ask", never a push to nowhere.
-    """
-    obj = tid.split(".", 1)[1]
-    candidates = []
-    name = tracker.get("attributes", {}).get("friendly_name")
-    if name:
-        candidates.append("mobile_app_" + slugify(name))
-    candidates += ["mobile_app_" + obj, "mobile_app_" + re.sub(r"_\d+$", "", obj)]
-    for c in candidates:
-        if c in available:
-            return c
-    return None
-
-
-def load_probes():
+def load_seen():
     try:
         with open(state_file) as fh:
             data = json.load(fh)
@@ -218,49 +141,22 @@ def load_probes():
         return {}
 
 
-def save_probes(probes):
-    tmp = state_file + ".tmp"
-    with open(tmp, "w") as fh:
-        json.dump(probes, fh, indent=1, sort_keys=True)
-    os.replace(tmp, state_file)
-
-
-def age_minutes(stamp):
-    """Minutes since `stamp`, or None if it is missing or unreadable."""
-    t = parse_stamp(stamp)
-    return None if t is None else (now - t).total_seconds() / 60.0
-
-
-def restored_at_start(stamp):
+def restored_at_start(t):
     """True if HA wrote this stamp itself while restoring state on start."""
-    t = parse_stamp(stamp)
-    return (ha_started is not None and t is not None
+    return (ha_started is not None
             and datetime.timedelta(0) <= t - ha_started <= RESTORE_WINDOW)
+
+
+def hours(t):
+    return (now - t).total_seconds() / 3600.0
 
 
 issues = []
 notes = []
 if ha_started is None:
     notes.append("cannot read Home Assistant's start time from Docker — a "
-                 "restart during a freeze would read as the phone answering")
+                 "restart would read as every phone reporting")
 
-# ---------------------------------------------------------------------------
-# Discover what to watch, rather than being told.
-#
-# Every `person` entity carries a `device_trackers` attribute naming exactly the
-# trackers HA uses to decide where that person is. Walking that is strictly
-# better than naming phones in inventory, or than matching `source_type == gps`:
-#
-#   * a phone replaced or added is picked up the moment it is attached to a
-#     person in HA's UI — no repo change, and no silent gap while nobody
-#     remembers to edit a list;
-#   * a stray tracker that feeds nobody is correctly ignored, because it cannot
-#     affect presence;
-#   * it mirrors HA's own model instead of guessing at one.
-#
-# This is the same lesson as the entity check: a hardcoded list stops covering
-# whatever is added after it was written.
-# ---------------------------------------------------------------------------
 try:
     states = all_states()
 except (HTTPError, URLError, TimeoutError, OSError) as exc:
@@ -268,48 +164,61 @@ except (HTTPError, URLError, TimeoutError, OSError) as exc:
     sys.exit(1)
 
 by_id = {s["entity_id"]: s for s in states if isinstance(s, dict) and "entity_id" in s}
+
+# Discover what to watch from HA's own model: every person's `device_trackers`.
+# A replaced or added phone is covered the moment it is attached to a person,
+# with no list here to forget to edit.
 persons = [s for eid, s in by_id.items()
            if eid.startswith("person.") and eid not in ignored]
-
 if not persons:
     print("❌ no person entities found — presence cannot be judged, and HA "
           "having none is itself wrong")
     sys.exit(1)
 
-# Outstanding location requests, keyed by tracker:
-#   {"asked_at": <epoch>, "reported": <tracker last_reported when asked>}
-# An entry is dropped the moment its tracker is fresh or away, so the file only
-# ever holds trackers that are silent at home right now.
-probes = load_probes()
-live_probes = {}
-notify_available = None   # GET /api/services only if something needs asking
+seen = load_seen()      # tracker -> ISO stamp of the phone's last real report
+new_seen = {}
 
 
-def last_report(tid, st):
-    """(stamp, restored): the tracker's last word, and whether HA's restart
-    overwrote it while a location request was outstanding."""
-    reported = st.get("last_reported") or st.get("last_updated")
-    probe = probes.get(tid)
-    if probe and restored_at_start(reported):
-        return probe.get("reported"), True
-    return reported, False
+def last_heard(tid):
+    """(when the phone behind `tid` last reported, n entities read, note) or
+    (None, 0, note) if it never has as far as this check can tell."""
+    tracker = by_id[tid]
+    name = tracker.get("attributes", {}).get("friendly_name") or ""
+    family = [tracker]
+    if name:
+        # The app names every sensor "<device name> <sensor>". Matching on the
+        # name rather than the entity id survives HA's `_2` suffixes, which
+        # land on different ends of the id for different phones.
+        family += [s for eid, s in by_id.items()
+                   if eid != tid and eid.startswith(PHONE_DOMAINS)
+                   and (s.get("attributes", {}).get("friendly_name") or "")
+                   .startswith(name + " ")]
+    real, restored = [], []
+    for s in family:
+        t = parse_stamp(s.get("last_reported") or s.get("last_updated"))
+        if t is not None:
+            (restored if restored_at_start(t) else real).append(t)
+    stored = parse_stamp(seen.get(tid))
+    best = max(real + ([stored] if stored else []), default=None)
+    note = None
+    if best is None and restored:
+        # Restarted before this check ever recorded the phone: the restart is
+        # the earliest moment we can vouch for. Counting from it is late, not
+        # wrong — it pages {{ presence_stale_hours }} h after the restart if nothing arrives.
+        best = max(restored)
+        note = "no report since Home Assistant restarted at %s; counting from it" % (
+            ha_started.isoformat(timespec="seconds"))
+    if best is not None:
+        new_seen[tid] = best.isoformat()
+    return best, len(family), note
 
-
-def is_fresh(tid):
-    st = by_id.get(tid)
-    if st is None or st.get("state") == "unavailable":
-        return False
-    age = age_minutes(last_report(tid, st)[0])
-    return age is not None and age <= stale_hours * 60
 
 watched = 0
-quiet = 0   # stale, for any reason: the summary must not call these reporting
 for person in sorted(persons, key=lambda s: s["entity_id"]):
     pid = person["entity_id"]
     label = person.get("attributes", {}).get("friendly_name") or pid
-    state = person.get("state")
-    if state in ("unknown", "unavailable"):
-        issues.append("%s person entity is %s" % (label, state))
+    if person.get("state") in ("unknown", "unavailable"):
+        issues.append("%s person entity is %s" % (label, person.get("state")))
 
     trackers = person.get("attributes", {}).get("device_trackers") or []
     if not trackers:
@@ -317,117 +226,62 @@ for person in sorted(persons, key=lambda s: s["entity_id"]):
                      "unconfigured, so nothing here can watch it" % label)
         continue
 
-    # A person is as live as their freshest tracker: HA's person entity follows
-    # the most recent report, so a silent tracker beside a fresh one cannot
-    # mislead presence. The usual case is a retired phone still attached after
-    # a swap (PER-172: it froze and paged for days while the new phone
-    # reported hourly). Only when none is fresh is each tracker judged below.
-    fresh = next((t for t in trackers if is_fresh(t)), None)
-
+    judged = {}
     for tid in trackers:
         st = by_id.get(tid)
-        if fresh is not None and tid != fresh:
-            if not is_fresh(tid):
-                notes.append("%s: %s is %s, not judged — %s reports for them"
-                             % (label, tid, "missing from HA" if st is None
-                                else "silent", fresh))
-            continue
         if st is None:
-            issues.append("%s: tracker %s is attached but does not exist in HA"
-                          % (label, tid))
+            judged[tid] = ("missing", None, 0, None)
+        elif st.get("state") == "unavailable":
+            judged[tid] = ("unavailable", None, 0, None)
+        else:
+            when, n, note = last_heard(tid)
+            fresh = when is not None and hours(when) <= stale_hours
+            judged[tid] = ("fresh" if fresh else "silent", when, n, note)
+
+    # A person is as live as their freshest phone (PER-172): HA's person entity
+    # follows the most recent report, so a retired phone still attached after a
+    # swap cannot mislead presence while another reports.
+    fresh = [t for t, j in judged.items() if j[0] == "fresh"]
+    for tid, (verdict, when, n, note) in judged.items():
+        st = by_id.get(tid) or {}
+        tlabel = "%s / %s" % (label, st.get("attributes", {}).get("friendly_name") or tid)
+        if note:
+            notes.append("%s: %s" % (tlabel, note))
+        if verdict == "fresh":
+            watched += 1
+            continue
+        if fresh:
+            notes.append("%s is %s, not judged — %s reports for them"
+                         % (tid, "missing from HA" if verdict == "missing" else verdict,
+                            fresh[0]))
             continue
         watched += 1
-        tstate = st.get("state")
-        tlabel = "%s / %s" % (label, st.get("attributes", {}).get("friendly_name") or tid)
-
-        if tstate == "unavailable":
+        if verdict == "missing":
+            issues.append("%s: tracker %s is attached but does not exist in HA"
+                          % (label, tid))
+        elif verdict == "unavailable":
             issues.append("%s tracker is unavailable — the app is not reporting at all"
                           % tlabel)
-            continue
-
-        # `last_reported`, not `last_changed`: the latter only moves when the
-        # value differs, so a phone sitting at `home` all day would look stale
-        # within the hour and page constantly.
-        reported, restored = last_report(tid, st)
-        probe = probes.get(tid)
-        if restored:
-            # HA restarted while the phone owed an answer. The new stamp is
-            # HA's own restore; the phone's last word is the one we asked on.
-            notes.append("%s: stamp is Home Assistant's restart at %s, not a "
-                         "report — still waiting on the phone"
-                         % (tlabel, ha_started.isoformat(timespec="seconds")))
-        age = age_minutes(reported)
-        if age is None:
-            notes.append("%s: no timestamp on the state, cannot judge freshness" % tlabel)
-            continue
-
-        if age <= stale_hours * 60:
-            continue
-        quiet += 1
-        if tstate != "home":
-            notes.append(
-                "%s quiet for %.0f h but reads '%s' — benign, phone is away or off"
-                % (tlabel, age / 60.0, tstate))
-            continue
-
-        # Stale AND home. Silence alone cannot tell stationary from frozen, so
-        # the phone is asked; see the header.
-        if probe and probe.get("reported") != reported:
-            probe = None   # it answered since, and has gone quiet again
-
-        epoch = now.timestamp()
-        if probe:
-            waited = (epoch - probe.get("asked_at", 0)) / 60.0
-            if waited < answer_minutes:
-                live_probes[tid] = probe
-                notes.append("%s quiet for %.0f h at home — asked for a location "
-                             "%.0f min ago, waiting for the answer"
-                             % (tlabel, age / 60.0, waited))
-                continue
-            if waited < probe_interval_hours * 60:
-                live_probes[tid] = probe
-                notes.append(
-                    "%s quiet for %.0f h at home and did not answer a location "
-                    "request sent %.0f min ago — normal for a phone at rest, "
-                    "and indistinguishable here from a frozen app (PER-197)"
-                    % (tlabel, age / 60.0, waited))
-                continue
-            # Unanswered for a whole interval: ask again below.
-
-        try:
-            if notify_available is None:
-                notify_available = notify_services()
-            service = notify_service_for(tid, st, notify_available)
-            if service is None:
-                raise LookupError("no mobile_app notify service matches it")
-            call_service("notify", service, {"message": "request_location_update"})
-        except (HTTPError, URLError, TimeoutError, OSError, ValueError,
-                LookupError) as exc:
-            # Unable to ask at all is the check broken, not the phone quiet —
-            # no notify service (a phone swap left it behind) or HA refusing
-            # the call. Page, and say why.
-            issues.append(
-                "%s tracker is quiet on 'home' for %.0f h (threshold %.0f h) and "
-                "the phone could not be asked for a location: %s"
-                % (tlabel, age / 60.0, stale_hours, exc))
-            continue
-
-        live_probes[tid] = {"asked_at": epoch, "reported": reported}
-        if probe:
-            notes.append(
-                "%s quiet for %.0f h at home, no answer to a location request "
-                "in %.0f h; asked again via notify.%s"
-                % (tlabel, age / 60.0, waited / 60.0, service))
+        elif when is None:
+            issues.append("%s: no timestamp on any of its entities — cannot tell "
+                          "when the phone last reported" % tlabel)
         else:
-            notes.append("%s quiet for %.0f h at home — asked the phone for a "
-                         "location via notify.%s" % (tlabel, age / 60.0, service))
+            issues.append(
+                "%s: no report from the phone in %.0f h (threshold %.0f h, any of "
+                "%d entities). A phone in use reports at least on every charge, so "
+                "the app has stopped or the phone has been off — home/away for "
+                "%s cannot be trusted until it reports again."
+                % (tlabel, hours(when), stale_hours, n, label))
 
-if live_probes != probes:
+if new_seen != seen:
     try:
-        save_probes(live_probes)
+        tmp = state_file + ".tmp"
+        with open(tmp, "w") as fh:
+            json.dump(new_seen, fh, indent=1, sort_keys=True)
+        os.replace(tmp, state_file)
     except OSError as exc:
-        # Without the record, every run asks again and nothing ever pages.
-        issues.append("cannot write probe state %s: %s" % (state_file, exc))
+        # Without the record a restart silently resets every phone's clock.
+        issues.append("cannot write %s: %s" % (state_file, exc))
 
 for note in notes:
     print("⚠️  %s" % note)
@@ -437,11 +291,7 @@ if issues:
         print("❌ %s" % issue)
     sys.exit(min(len(issues), 125))
 
-if quiet:
-    print("✅ nothing to page: %d person(s), %d tracker(s), %d quiet (see notes)"
-          % (len(persons), watched, quiet))
-else:
-    print("✅ presence is live: %d person(s), %d tracker(s), all reporting"
-          % (len(persons), watched))
+print("✅ presence is live: %d person(s), %d phone(s), each reported within %.0f h"
+      % (len(persons), watched, stale_hours))
 sys.exit(0)
 PYEOF
