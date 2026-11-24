@@ -106,7 +106,10 @@ export HA_STATELESS_DOMAINS
 #
 # A long window keeps both. A lamp off overnight is ~12 h; a dead bulb is
 # forever. See docs/TODO.md item 21.
+# The Entrance Eve Door's older entity id: same sensor as the
+# *eve_door_20ebn9901* set (grace in group_vars), but the glob misses it.
 HA_GRACE_OVERRIDES=$(cat <<'GRACEEOF'
+binary_sensor.entrance_door_battery|86400
 {% for o in ha_entity_health_grace_overrides | default([]) %}
 {{ o.pattern }}|{{ o.grace_seconds }}
 {% endfor %}
