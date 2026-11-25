@@ -18,6 +18,8 @@ Jinja these templates actually use:
     body. A trailing ``| default([])`` filter is accepted and ignored, and a
     list that was never supplied renders as zero iterations — which is what
     ``default([])`` means and is itself worth being able to test.
+  * ``{% raw %}…{% endraw %}`` — emitted verbatim, tags dropped. A template
+    that ships Home Assistant Jinja to HA's own template API needs it.
 
 Anything left unrendered is a hard error rather than a silent pass. That is the
 point: when a template grows a construct this does not understand, the test
@@ -41,6 +43,16 @@ def main() -> int:
     ]
 
     src = open(template).read()
+
+    # Raw blocks first, so nothing below renders their content; they come back
+    # after the unrendered-Jinja check, which must not count them as leftovers.
+    raw_blocks = []
+
+    def stash(m):
+        raw_blocks.append(m.group(1))
+        return "\x00RAW%d\x00" % (len(raw_blocks) - 1)
+
+    src = re.sub(r"\{%\s*raw\s*%\}(.*?)\{%\s*endraw\s*%\}", stash, src, flags=re.S)
 
     def subst(text, ctx):
         def one(m):
@@ -89,6 +101,9 @@ def main() -> int:
             "render_j2: unrendered Jinja at %s:%d — teach this renderer the new "
             "construct rather than letting the test run against it" % (template, line)
         )
+
+    for i, block in enumerate(raw_blocks):
+        src = src.replace("\x00RAW%d\x00" % i, block)
 
     open(out, "w").write(src)
     return 0

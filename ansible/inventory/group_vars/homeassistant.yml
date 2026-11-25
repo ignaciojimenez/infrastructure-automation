@@ -219,7 +219,14 @@ ha_entity_health_grace_overrides:
   # battery, which reads `unavailable` and never comes back. 24 h is ~4× the
   # longest self-healed drop and still pages a dead battery within a day.
   # Reopen if a drop outlives this window and then recovers.
-  - pattern: "*eve_door_20ebn9901*"
+  #
+  # Matched by DEVICE, not id: both Matter devices are named "Eve Door
+  # 20EBN9901" ("Entrance Door" / "Balcony Door" by user), each carrying six
+  # entities. The id pattern this replaced missed each door's battery entity
+  # (`binary_sensor.entrance_door_battery`, `..._living_room_balcony_door_battery`
+  # — older names, same device, confirmed in the registry 2026-11-25), so every
+  # drop paged on that one entity alone: 11-11, 11-19, 11-24 (PER-183).
+  - device: "Eve Door 20EBN9901"
     grace_seconds: 86400
 
 # ============================================================
