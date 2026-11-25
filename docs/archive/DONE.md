@@ -17,6 +17,7 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ## Contents
 
+- [2026-11-25 — a phone at rest is silent, and the presence check now asks only whether it is lost (PER-197)](#2026-11-25--a-phone-at-rest-is-silent-and-the-presence-check-now-asks-only-whether-it-is-lost-per-197)
 - [2026-11-20 — the UniFi controller moved to UniFi OS Server, and the old one is gone (PER-127, PER-128)](#2026-11-20--the-unifi-controller-moved-to-unifi-os-server-and-the-old-one-is-gone-per-127-per-128)
 - [2026-11-15 — a key removed from the gist kept working from the fallback file (PER-182)](#2026-11-15--a-key-removed-from-the-gist-kept-working-from-the-fallback-file-per-182)
 - [2026-11-15 — a 250 m home zone reports arrivals before the door opens (PER-170)](#2026-11-15--a-250-m-home-zone-reports-arrivals-before-the-door-opens-per-170)
@@ -82,6 +83,24 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 ---
 
 
+
+## 2026-11-25 — a phone at rest is silent, and the presence check now asks only whether it is lost (PER-197)
+
+**The check paged "FROZEN on home" on Candela on 11-20 and 11-23 while she was home and her phone was fine.** The rule was "quiet at home and ignores `request_location_update`". The recorder showed both halves were wrong. A phone at rest reports almost only on charging transitions, so silence at home is normal. Her app was demonstrably alive while ignoring the request, and HA's docs say not to rely on it.
+
+**Decided: the check exists to notice a lost phone, not a same-day freeze.** A phone in use must be charged, and the app reports on every charge. So the check pages when no entity of a phone has reported in `presence_stale_hours` (20), home or away. "Any entity" means the tracker plus every sensor named "<device name> …". `notify.<phone>` is excluded, because HA moves its stamp when it pushes *to* the phone. The location request is gone. A restart's restored stamps are ignored, and each phone's last real report is kept in `~/.log/presence_last_seen.json` across restarts.
+
+**Accepted:**
+- **A gap.** A phone that freezes while its owner is out keeps them `home` for up to 20 h. PER-198 (a second signal) exists to close that gap if it matters.
+- **Occasional pages on a phone at rest.** 20 h is a choice, not a measurement. Over 11-14..24 the longest silence was 9.4 h on one phone and 30.5 h on the other (home, not charged). If it pages at rest, raise the threshold; ~36 h covers everything seen.
+
+Verified:
+- Unit cases pass under sh and dash, and six deliberate mutations each fail at least one case.
+- `--check --diff` changed only the script and removed the old probe state.
+- Deploy reported `changed=2`, then `changed=0`, with one host.
+- The deployed script on dockassist is green with 2 persons and 2 phones, and its state file holds both trackers.
+
+**Not verified on the host:** an HA restart while a phone is silent. Only the stub covers it.
 
 ## 2026-11-20 — the UniFi controller moved to UniFi OS Server, and the old one is gone (PER-127, PER-128)
 
