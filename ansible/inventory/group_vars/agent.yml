@@ -28,9 +28,14 @@ enable_agent: true
 # Tier 1 — fleet health sweep
 # ============================================================
 
-# Hosts the sweep checks, by their SSH name (not the inventory key).
-# Reached as <name>-agent, which resolves via the ~/.ssh/config deployed by
-# the agent role. Keep in sync with hosts.yml.
+# Hosts the sweep checks, by hostname: the name a host's own alerts carry
+# ("Script Failed on <hostname>"). The sweep keys its findings by it, and the
+# Linear filer closes an alert's issue only when a sweep has observed that same
+# name, so a host listed under any other name keeps its alert issues open
+# forever (unifi-os-vm, 2026-11-25). Reached as <name>-agent through the
+# ~/.ssh/config deployed by the agent role, at <name>.<fleet_dns_domain>, or at
+# <dns_name>.<fleet_dns_domain> when DNS publishes the host under another name.
+# Keep in sync with hosts.yml.
 #
 # `platform` and `runs` describe the host to the Tier 2 model (AGENTS.md.j2);
 # every host without a hand-written row there needs both, or the deploy fails.
@@ -54,8 +59,10 @@ agent_fleet_hosts:
     kind: linux
     platform: RPi
     runs: Icecast, Liquidsoap, detect_audio
-  # unifi-os-vm (VM 105) since PER-127: `unifi` still resolves to .201.
-  - name: unifi
+  # VM 105 since PER-127. DNS publishes it as `unifi` (.201), not under its
+  # hostname: `unifi-os-vm.internal` does not resolve (checked 2026-11-25).
+  - name: unifi-os-vm
+    dns_name: unifi
     kind: linux
     platform: VM
     runs: UniFi OS Server (Network controller)
