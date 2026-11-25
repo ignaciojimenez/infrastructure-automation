@@ -1,20 +1,23 @@
 #!/bin/sh
-# Regression test: check_presence_health.sh must stay quiet for a phone that is
-# merely at home, and still page for one that is frozen there.
+# Regression test: check_presence_health.sh pages when a phone has stopped
+# feeding Home Assistant, and only then.
 #
 # Runs on the laptop — no container, no Home Assistant. The template's embedded
 # Python is extracted and pointed at a stub HA on 127.0.0.1 that serves
-# /api/states and /api/services, records every notify call, and — when told to —
-# answers a location request the way the Companion App does: by moving the
-# tracker's `last_reported`.
+# /api/states from a fixture file.
 #
 #   tests/unit/presence_health_test.sh
 #
-# The bug this exists for (PER-57, 11–16 Sep 2026): Candela stayed home, her
-# iPhone had nothing to report, and "stale AND home" paged four times on a
-# healthy phone. Case 1 is that exact state and must stay green. Case 2 is the
-# same silence from a phone that does NOT answer, and must page — a fix that
-# made case 1 quiet by making both quiet would pass case 1 alone.
+# The rule (2026-11-24, PER-197): a phone is live if ANY of its entities — the
+# tracker or a sensor named after the same device — reported within the
+# threshold, home or away. Every quiet case has a loud twin: a fix that went
+# quiet by never paging would pass the quiet half alone.
+#
+# History the cases pin:
+#   PER-57     a phone indoors for 18–32 h without a location paged as frozen
+#   2026-10-04 an HA restart re-stamped every entity and cleared a real page
+#   PER-172    a retired phone still attached to a person paged for days
+#   2026-11-23 a phone at rest, not charged, silent 30.5 h on every entity
 
 set -u
 
@@ -30,7 +33,7 @@ failures=0
 pass() { printf '   ✓ %s\n' "$1"; }
 fail() { printf '   ✗ %s\n' "$1"; failures=$((failures + 1)); }
 
-printf '\n── presence health: ask the phone before calling it frozen\n'
+printf '\n── presence health: page when a phone stops reporting, on any of its entities\n'
 
 [ -f "$TEMPLATE" ] || { printf '   ✗ template not found: %s\n' "$TEMPLATE"; exit 1; }
 
@@ -39,10 +42,8 @@ printf '\n── presence health: ask the phone before calling it frozen\n'
 # ------------------------------------------------------------------
 if python3 "$RENDERER" "$TEMPLATE" "$WORK/check.sh" \
         homeassistant_config_dir=/home/tester/homeassistant \
-        presence_stale_hours=18 \
-        presence_probe_answer_minutes=20 \
-        presence_probe_interval_hours=6 \
-        presence_probe_state_file=/home/tester/.log/presence_probe.state.json \
+        presence_stale_hours=20 \
+        presence_last_seen_state_file=/home/tester/.log/presence_last_seen.json \
         presence_ignore_persons=person.ai_agent \
         homeassistant_container_name=home-assistant \
         2>"$WORK/render.err"; then
@@ -63,70 +64,41 @@ src = open(sys.argv[1]).read()
 blocks = re.findall(r"<<'PYEOF'\n(.*?)\nPYEOF", src, re.S)
 if len(blocks) != 1:
     sys.exit("expected exactly one PYEOF block, found %d" % len(blocks))
-open(sys.argv[2], "w").write(blocks[0])
+# The block is Jinja too (one comment interpolates the threshold); render it.
+open(sys.argv[2], "w").write(blocks[0].replace("{{ presence_stale_hours }}", "20"))
 PY
 [ -s "$WORK/check.py" ] || { printf '   ✗ could not extract the Python block\n'; exit 1; }
 
 # ------------------------------------------------------------------
-# Stub Home Assistant. Reads $FIX on every request, so a case is set up by
-# rewriting fixtures — no restart.
-#   $FIX/states.json    /api/states body
-#   $FIX/services.json  /api/services body
-#   $FIX/phone          answer | silent | error   (how the notify POST behaves)
-#   $FIX/calls          one line per notify POST: <service> <message>
+# Stub Home Assistant: serves $FIX/states.json, re-read on every request.
 # ------------------------------------------------------------------
 FIX="$WORK/fix"
 mkdir -p "$FIX"
 
 cat > "$WORK/stub.py" <<'PY'
-import datetime, json, os, sys
+import os, sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 FIX = sys.argv[1]
-
-def read(name, default=""):
-    try:
-        return open(os.path.join(FIX, name)).read()
-    except OSError:
-        return default
 
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
-    def reply(self, code, body):
-        data = body.encode()
-        self.send_response(code)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
-
     def do_GET(self):
         if self.path == "/api/states":
-            return self.reply(200, read("states.json", "[]"))
-        if self.path == "/api/services":
-            return self.reply(200, read("services.json", "[]"))
-        self.reply(404, "{}")
-
-    def do_POST(self):
-        body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
-        if not self.path.startswith("/api/services/notify/"):
-            return self.reply(404, "{}")
-        service = self.path.rsplit("/", 1)[1]
-        with open(os.path.join(FIX, "calls"), "a") as fh:
-            fh.write("%s %s\n" % (service, json.loads(body).get("message")))
-        mode = read("phone", "silent").strip()
-        if mode == "error":
-            return self.reply(500, "{}")
-        if mode == "answer":
-            states = json.loads(read("states.json", "[]"))
-            stamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
-            for s in states:
-                if s["entity_id"].startswith("device_tracker."):
-                    s["last_reported"] = s["last_updated"] = stamp
-            open(os.path.join(FIX, "states.json"), "w").write(json.dumps(states))
-        self.reply(200, "[]")
+            try:
+                body = open(os.path.join(FIX, "states.json")).read().encode()
+            except OSError:
+                body = b"[]"
+            self.send_response(200)
+        else:
+            body = b"{}"
+            self.send_response(404)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
 srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
 open(os.path.join(FIX, "port"), "w").write(str(srv.server_address[1]))
@@ -140,59 +112,56 @@ while [ ! -s "$FIX/port" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
 [ -s "$FIX/port" ] || { printf '   ✗ stub HA did not start\n'; exit 1; }
 HA_URL="http://127.0.0.1:$(cat "$FIX/port")"
 
-STATE="$WORK/probe.state.json"
-TRACKER=device_tracker.iphone_de_candela_2
-NOTIFY=mobile_app_iphone_de_candela
+STATE="$WORK/last_seen.json"
 
-# world <tracker_state> <hours_since_report> [notify services, comma-separated]
-# The tracker id carries HA's `_2` re-registration suffix and the notify service
-# does not — the real shape on dockassist, and the reason name matching exists.
+# world [person_state=home] <entity spec>...
+# One person, Candela. Each spec is <entity_id>|<friendly name>|<state>|<hours ago>.
+# Every device_tracker in the specs is attached to the person; `|missing` as the
+# state attaches a tracker HA does not have.
 world() {
-    python3 - "$FIX" "$1" "$2" "${3-$NOTIFY}" <<'PY'
+    pstate=home
+    case "${1-}" in person=*) pstate=${1#person=}; shift ;; esac
+    python3 - "$FIX" "$pstate" "$@" <<'PY'
 import datetime, json, os, sys
-fix, tstate, hours, services = sys.argv[1], sys.argv[2], float(sys.argv[3]), sys.argv[4]
-stamp = (datetime.datetime.now(datetime.timezone.utc)
-         - datetime.timedelta(hours=hours)).isoformat()
-states = [
-    {"entity_id": "person.candela", "state": tstate,
-     "attributes": {"friendly_name": "Candela",
-                    "device_trackers": ["device_tracker.iphone_de_candela_2"]}},
-    {"entity_id": "device_tracker.iphone_de_candela_2", "state": tstate,
-     "attributes": {"friendly_name": "iPhone de Candela", "source_type": "gps"},
-     "last_changed": stamp, "last_reported": stamp, "last_updated": stamp},
-]
+fix, pstate, specs = sys.argv[1], sys.argv[2], sys.argv[3:]
+now = datetime.datetime.now(datetime.timezone.utc)
+trackers, states = [], []
+for spec in specs:
+    eid, name, state, *rest = spec.split("|")
+    if eid.startswith("device_tracker."):
+        trackers.append(eid)
+    if state == "missing":
+        continue
+    stamp = (now - datetime.timedelta(hours=float(rest[0]))).isoformat()
+    states.append({"entity_id": eid, "state": state,
+                   "attributes": {"friendly_name": name},
+                   "last_changed": stamp, "last_reported": stamp, "last_updated": stamp})
+states.insert(0, {"entity_id": "person.candela", "state": pstate,
+                  "attributes": {"friendly_name": "Candela", "device_trackers": trackers}})
 json.dump(states, open(os.path.join(fix, "states.json"), "w"))
-notify = {s: {} for s in services.split(",") if s}
-json.dump([{"domain": "notify", "services": notify},
-           {"domain": "light", "services": {"turn_on": {}}}],
-          open(os.path.join(fix, "services.json"), "w"))
-PY
-    : > "$FIX/calls"
-}
-
-# asked <minutes_ago> [reported_matches=yes|no]
-# Writes an outstanding request as a previous run would have left it.
-asked() {
-    python3 - "$FIX" "$STATE" "$TRACKER" "$1" "${2:-yes}" <<'PY'
-import json, os, sys, time
-fix, state, tid, minutes, match = sys.argv[1:6]
-tracker = [s for s in json.load(open(os.path.join(fix, "states.json")))
-           if s["entity_id"] == tid][0]
-reported = tracker["last_reported"] if match == "yes" else "2020-01-01T00:00:00+00:00"
-json.dump({tid: {"asked_at": time.time() - float(minutes) * 60, "reported": reported}},
-          open(state, "w"))
 PY
 }
 
-phone() { printf '%s\n' "$1" > "$FIX/phone"; }
+# restamp <minutes_ago> — HA re-stamps every entity, as it does on restart.
+restamp() {
+    python3 - "$FIX" "$1" <<'PY'
+import datetime, json, os, sys
+fix, minutes = sys.argv[1], float(sys.argv[2])
+stamp = (datetime.datetime.now(datetime.timezone.utc)
+         - datetime.timedelta(minutes=minutes)).isoformat()
+states = json.load(open(os.path.join(fix, "states.json")))
+for s in states:
+    if not s["entity_id"].startswith("person."):
+        s["last_reported"] = s["last_updated"] = s["last_changed"] = stamp
+json.dump(states, open(os.path.join(fix, "states.json"), "w"))
+PY
+}
 
-# HA_STARTED is what Docker reports for the container; empty = Docker could
-# not say. Default: started long ago, so no stamp is a restore.
-HA_STARTED_DEFAULT=2026-01-01T00:00:00.000000000Z
-run() {
-    OUT=$(PRESENCE_IGNORE="" python3 "$WORK/check.py" token "$HA_URL" 18 \
-          "${STATE_OVERRIDE:-$STATE}" 20 6 "${HA_STARTED-$HA_STARTED_DEFAULT}" 2>&1)
-    RC=$?
+# seen <tracker> <hours_ago> — what a previous run recorded as the last report.
+seen() {
+    python3 -c 'import datetime, json, sys
+t = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=float(sys.argv[3]))
+json.dump({sys.argv[2]: t.isoformat()}, open(sys.argv[1], "w"))' "$STATE" "$1" "$2"
 }
 
 # docker_stamp <minutes_ago> — Docker's StartedAt shape: `Z`, nanoseconds.
@@ -202,305 +171,214 @@ t = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=fl
 print(t.strftime("%Y-%m-%dT%H:%M:%S.%f") + "123Z")' "$1"
 }
 
-# restamp <minutes_ago> — HA re-stamps the tracker (a restore, or a report).
-restamp() {
-    python3 - "$FIX" "$1" <<'PY'
-import datetime, json, os, sys
-fix, minutes = sys.argv[1], float(sys.argv[2])
-stamp = (datetime.datetime.now(datetime.timezone.utc)
-         - datetime.timedelta(minutes=minutes)).isoformat()
-states = json.load(open(os.path.join(fix, "states.json")))
-for s in states:
-    if s["entity_id"].startswith("device_tracker."):
-        s["last_reported"] = s["last_updated"] = s["last_changed"] = stamp
-json.dump(states, open(os.path.join(fix, "states.json"), "w"))
-PY
+# HA_STARTED is what Docker reports; empty = Docker could not say. Default:
+# started long ago, so no stamp is a restore.
+HA_STARTED_DEFAULT=2026-01-01T00:00:00.000000000Z
+run() {
+    OUT=$(PRESENCE_IGNORE="" python3 "$WORK/check.py" token "$HA_URL" 20 \
+          "${STATE_OVERRIDE:-$STATE}" "${HA_STARTED-$HA_STARTED_DEFAULT}" 2>&1)
+    RC=$?
 }
 
-pushes() { grep -c "request_location_update" "$FIX/calls" 2>/dev/null || true; }
+T=device_tracker.iphone_de_candela_2026
+N="iPhone de Candela 2026"
 
 # ------------------------------------------------------------------
-# 1. PER-57: quiet 32 h at home, phone healthy. Must never page.
+# 1. Any entity counts. The tracker alone was the PER-57 mistake.
 # ------------------------------------------------------------------
-rm -f "$STATE"; world home 32; phone answer
+rm -f "$STATE"
+world "$T|$N|home|30" "sensor.iphone_de_candela_2026_battery_state|$N Battery State|Charging|2"
 run
 if [ "$RC" -eq 0 ]; then
-    pass "1a. first run asks instead of paging (exit 0)"
+    pass "1a. tracker quiet 30 h, battery sensor 2 h ago: live"
 else
-    fail "1a. PER-57 state paged on the first run (rc=$RC): $OUT"
-fi
-if grep -q "^$NOTIFY request_location_update$" "$FIX/calls"; then
-    pass "1b. request went to notify.$NOTIFY despite the _2 tracker id"
-else
-    fail "1b. no request_location_update to $NOTIFY: $(cat "$FIX/calls")"
-fi
-if grep -q "$TRACKER" "$STATE" 2>/dev/null; then
-    pass "1c. the outstanding request was recorded"
-else
-    fail "1c. no probe state written"
+    fail "1a. a sensor report did not count (rc=$RC): $OUT"
 fi
 
-: > "$FIX/calls"
+rm -f "$STATE"
+world "$T|$N|home|30" "sensor.iphone_de_candela_2026_battery_state|$N Battery State|Charging|25"
 run
-if [ "$RC" -eq 0 ]; then
-    pass "1d. next run: phone answered, still exit 0"
+if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -q "no report from the phone in 25 h"; then
+    pass "1b. its twin: every entity quiet, newest 25 h: pages, naming the newest"
 else
-    fail "1d. answered phone paged (rc=$RC): $OUT"
-fi
-if [ "$(pushes)" -eq 0 ]; then
-    pass "1e. no second push to a phone that answered"
-else
-    fail "1e. pushed again after an answer"
-fi
-if grep -q "$TRACKER" "$STATE" 2>/dev/null; then
-    fail "1f. answered request left in state"
-else
-    pass "1f. answered request cleared from state"
+    fail "1b. a phone silent on every entity did not page (rc=$RC): $OUT"
 fi
 
 # ------------------------------------------------------------------
-# 2. Same silence, phone does NOT answer. Must page — case 1's loud twin.
+# 2. The threshold, both sides, home and away alike.
 # ------------------------------------------------------------------
-rm -f "$STATE"; world home 32; phone silent
+rm -f "$STATE"; world "$T|$N|home|19"
 run
-if [ "$RC" -eq 0 ]; then
-    pass "2a. first run asks and waits (exit 0)"
-else
-    fail "2a. paged before the phone had a chance to answer (rc=$RC): $OUT"
-fi
-asked 25   # the next cron run, 25 min later; tracker never moved
-: > "$FIX/calls"
+if [ "$RC" -eq 0 ]; then pass "2a. 19 h at home: live"
+else fail "2a. 19 h paged (rc=$RC): $OUT"; fi
+
+rm -f "$STATE"; world "$T|$N|home|21"
 run
-if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -q "FROZEN.*did not answer"; then
-    pass "2b. unanswered after 25 min pages as FROZEN"
-else
-    fail "2b. frozen phone did NOT page (rc=$RC): $OUT"
-fi
-if [ "$(pushes)" -eq 0 ]; then
-    pass "2c. no re-ask inside the rate-limit interval"
-else
-    fail "2c. re-asked within the interval ($(pushes) pushes)"
-fi
+if [ "$RC" -ne 0 ]; then pass "2b. 21 h at home: pages"
+else fail "2b. 21 h at home did not page (rc=$RC): $OUT"; fi
+
+rm -f "$STATE"; world person=not_home "$T|$N|not_home|21"
+run
+if [ "$RC" -ne 0 ]; then pass "2c. 21 h away: pages too — location does not excuse silence"
+else fail "2c. 21 h away did not page (rc=$RC): $OUT"; fi
+
+# The 2026-11-23 shape: home, not charged, every entity silent 30.5 h. Under
+# 20 h this pages, by choice — pinned so a change to it is a decision.
+rm -f "$STATE"
+world "$T|$N|home|30.5" "sensor.iphone_de_candela_2026_battery_level|$N Battery Level|95|30.5"
+run
+if [ "$RC" -ne 0 ]; then pass "2d. 2026-11-23 (30.5 h, uncharged): pages at 20 h, as chosen"
+else fail "2d. 30.5 h silence did not page at 20 h (rc=$RC): $OUT"; fi
 
 # ------------------------------------------------------------------
-# 3. Inside the answer window: wait, do not page, do not re-ask.
+# 3. What is NOT the phone speaking.
 # ------------------------------------------------------------------
-world home 32; phone silent; asked 5
+# notify.<phone> moves when HA pushes TO the phone. Live it is named exactly
+# the device name, so the name rule already drops it (3a); 3c names it the way
+# a sensor would be, to pin the domain rule on its own.
+rm -f "$STATE"
+world "$T|$N|home|25" "notify.iphone_de_candela_2026|$N|2026-11-23T17:30:08|0.1"
 run
-if [ "$RC" -eq 0 ] && [ "$(pushes)" -eq 0 ]; then
-    pass "3. asked 5 min ago: waits quietly, no second push"
-else
-    fail "3. did not wait for the answer (rc=$RC, pushes=$(pushes)): $OUT"
-fi
+if [ "$RC" -ne 0 ]; then pass "3a. a fresh notify entity does not count as a report"
+else fail "3a. HA's own push read as the phone reporting (rc=$RC): $OUT"; fi
+
+rm -f "$STATE"
+world "$T|$N|home|25" "notify.iphone_de_candela_2026_push|$N Push|2026-11-23T17:30:08|0.1"
+run
+if [ "$RC" -ne 0 ]; then pass "3c. nor does one named like a sensor — only phone domains count"
+else fail "3c. a notify entity was credited to the phone (rc=$RC): $OUT"; fi
+
+# Another device whose name merely starts the same way, without the space.
+rm -f "$STATE"
+world "$T|$N|home|25" "sensor.iphone_de_candela_2026b_battery|${N}b Battery Level|50|0.1"
+run
+if [ "$RC" -ne 0 ]; then pass "3b. a different device's sensor does not count"
+else fail "3b. another device's sensor was credited to this phone (rc=$RC): $OUT"; fi
 
 # ------------------------------------------------------------------
-# 4. Unanswered for a whole interval: re-ask, and keep paging meanwhile.
+# 4. A Home Assistant restart is not a report (2026-10-04).
 # ------------------------------------------------------------------
-world home 40; phone silent; asked 420
+# Silent 25 h, recorded by an earlier run; HA restarts and re-stamps everything.
+world "$T|$N|home|25" "sensor.iphone_de_candela_2026_battery_level|$N Battery Level|80|25"
+seen "$T" 25
+restamp 9.5; HA_STARTED=$(docker_stamp 10)
 run
-if [ "$RC" -ne 0 ] && [ "$(pushes)" -eq 1 ]; then
-    pass "4. unanswered 7 h: asks again and still pages"
+if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -q "in 25 h"; then
+    pass "4a. restart during a silence: still pages, from the recorded report"
 else
-    fail "4. expected re-ask + page (rc=$RC, pushes=$(pushes)): $OUT"
+    fail "4a. HA's restore stamp read as a report (rc=$RC): $OUT"
 fi
 
-# ------------------------------------------------------------------
-# 5. Answered earlier, quiet again: a new silence, so ask — do not page on
-#    the old request.
-# ------------------------------------------------------------------
-world home 20; phone silent; asked 120 no
-run
-if [ "$RC" -eq 0 ] && [ "$(pushes)" -eq 1 ]; then
-    pass "5. an old answered request does not count against a new silence"
-else
-    fail "5. stale request misread (rc=$RC, pushes=$(pushes)): $OUT"
-fi
-
-# ------------------------------------------------------------------
-# 6. Cannot ask → page. Unable to verify is not evidence of health.
-# ------------------------------------------------------------------
-rm -f "$STATE"; world home 32 "mobile_app_someone_else"; phone answer
-run
-if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -q "could not be asked" \
-   && [ "$(pushes)" -eq 0 ]; then
-    pass "6a. no matching notify service pages, pushes nothing"
-else
-    fail "6a. unmatched service did not page cleanly (rc=$RC, pushes=$(pushes)): $OUT"
-fi
-
-rm -f "$STATE"; world home 32; phone error
-run
-if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -q "could not be asked"; then
-    pass "6b. notify call failing (HTTP 500) pages"
-else
-    fail "6b. failed notify call did not page (rc=$RC): $OUT"
-fi
-
-STATE_OVERRIDE="$WORK/no/such/dir/state.json"
-rm -f "$STATE"; world home 32; phone silent
-run
-unset STATE_OVERRIDE
-if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -q "cannot write probe state"; then
-    pass "6c. unwritable state pages — otherwise it would ask forever and never page"
-else
-    fail "6c. unwritable state was silent (rc=$RC): $OUT"
-fi
-
-# ------------------------------------------------------------------
-# 7. Paths that must not ask at all.
-# ------------------------------------------------------------------
-rm -f "$STATE"; world not_home 40; phone answer
-run
-if [ "$RC" -eq 0 ] && [ "$(pushes)" -eq 0 ]; then
-    pass "7a. stale + not_home: benign, no push"
-else
-    fail "7a. away phone was asked or paged (rc=$RC, pushes=$(pushes)): $OUT"
-fi
-
-world home 2; phone answer; asked 10
-run
-if [ "$RC" -eq 0 ] && [ "$(pushes)" -eq 0 ] && ! grep -q "$TRACKER" "$STATE"; then
-    pass "7b. fresh + home: no push, leftover request cleared"
-else
-    fail "7b. fresh tracker mishandled (rc=$RC, pushes=$(pushes)): $OUT"
-fi
-
-# ------------------------------------------------------------------
-# 8. A Home Assistant restart is not an answer (2026-10-04). The app was
-#    silent 19 h, the check had paged, a deploy restarted HA, every entity was
-#    re-stamped 34 s after boot, and the next run sent "✅ all reporting".
-# ------------------------------------------------------------------
-rm -f "$STATE"; world home 19; phone silent; asked 60
-restamp 15.5; HA_STARTED=$(docker_stamp 16)
-run
-if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -q "FROZEN.*did not answer"; then
-    pass "8a. restart during a freeze: still pages FROZEN"
-else
-    fail "8a. HA's restore stamp read as an answer (rc=$RC): $OUT"
-fi
-if grep -q "$TRACKER" "$STATE" 2>/dev/null && [ "$(pushes)" -eq 0 ]; then
-    pass "8b. outstanding request kept, no extra push"
-else
-    fail "8b. request dropped or re-pushed (pushes=$(pushes)): $(cat "$STATE" 2>/dev/null)"
-fi
-
-# Its twin: the phone really reports after the restart window. Must clear —
-# a fix that ignored every stamp after a restart would pass 8a alone.
+# Twin: a real report after the restore window clears it and is recorded.
 restamp 2; HA_STARTED=$(docker_stamp 30)
 run
-if [ "$RC" -eq 0 ] && ! grep -q "$TRACKER" "$STATE"; then
-    pass "8c. a real report after the restart clears it"
+if [ "$RC" -eq 0 ] && python3 -c 'import datetime, json, sys
+t = datetime.datetime.fromisoformat(json.load(open(sys.argv[1]))[sys.argv[2]])
+sys.exit(0 if (datetime.datetime.now(datetime.timezone.utc) - t).total_seconds() < 3 * 3600 else 1)' \
+        "$STATE" "$T"; then
+    pass "4b. a real report after the restart clears it and is recorded"
 else
-    fail "8c. real report after restart still paged (rc=$RC): $OUT"
+    fail "4b. real report after restart not taken (rc=$RC): $OUT / $(cat "$STATE")"
 fi
 
-# A restart with nothing outstanding must not page a healthy phone either.
-rm -f "$STATE"; world home 0; restamp 1; HA_STARTED=$(docker_stamp 1.5)
+# Restart with nothing recorded yet: count from the restart, say so.
+rm -f "$STATE"; world "$T|$N|home|0"; restamp 1; HA_STARTED=$(docker_stamp 1.5)
 run
-if [ "$RC" -eq 0 ] && [ "$(pushes)" -eq 0 ]; then
-    pass "8d. restart with no request outstanding: quiet"
+if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q "counting from it" && [ -s "$STATE" ]; then
+    pass "4c. restart, no record: live, counted from the restart, recorded"
 else
-    fail "8d. plain restart paged or pushed (rc=$RC, pushes=$(pushes)): $OUT"
+    fail "4c. restart with no record mishandled (rc=$RC): $OUT"
 fi
 
-# Docker could not say when HA started: run as before, but say so.
+# Docker could not say when HA started: run, but say so.
 HA_STARTED=""
 run
 if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q "cannot read Home Assistant's start time"; then
-    pass "8e. unknown start time is reported, not hidden"
+    pass "4d. unknown start time is reported, not hidden"
 else
-    fail "8e. missing start time was silent (rc=$RC): $OUT"
+    fail "4d. missing start time was silent (rc=$RC): $OUT"
 fi
 unset HA_STARTED
 
+# A stale record never hides a newer real report.
+world "$T|$N|home|1"; seen "$T" 40
+run
+if [ "$RC" -eq 0 ]; then pass "4e. an old record loses to a newer real report"
+else fail "4e. old record outweighed a fresh report (rc=$RC): $OUT"; fi
+
+# Without the record a restart resets every clock: that must page.
+STATE_OVERRIDE="$WORK/no/such/dir/state.json"
+world "$T|$N|home|1"
+run
+unset STATE_OVERRIDE
+if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -q "cannot write"; then
+    pass "4f. unwritable record pages"
+else
+    fail "4f. unwritable record was silent (rc=$RC): $OUT"
+fi
+
 # ------------------------------------------------------------------
-# 9. A person is as live as their freshest tracker (PER-172, 2026-11-08).
-#    After a phone swap the retired phone stayed attached to the person, froze,
-#    and paged for days while the new phone reported every hour.
+# 5. A person is as live as their freshest phone (PER-172).
 # ------------------------------------------------------------------
-# people <tracker spec>... — one person, Candela, with these trackers.
-# Spec: <object_id>:<state>:<hours since report>, or <object_id>:missing for a
-# tracker the person names but HA no longer has.
-people() {
-    python3 - "$FIX" "$@" <<'PY'
-import datetime, json, os, sys
-fix, specs = sys.argv[1], sys.argv[2:]
-now = datetime.datetime.now(datetime.timezone.utc)
-ids, states = [], []
-for spec in specs:
-    obj, tstate, *rest = spec.split(":")
-    tid = "device_tracker." + obj
-    ids.append(tid)
-    if tstate == "missing":
-        continue
-    stamp = (now - datetime.timedelta(hours=float(rest[0]))).isoformat()
-    states.append({"entity_id": tid, "state": tstate,
-                   "attributes": {"friendly_name": obj, "source_type": "gps"},
-                   "last_changed": stamp, "last_reported": stamp, "last_updated": stamp})
-states.insert(0, {"entity_id": "person.candela", "state": "home",
-                  "attributes": {"friendly_name": "Candela", "device_trackers": ids}})
-json.dump(states, open(os.path.join(fix, "states.json"), "w"))
-notify = {"mobile_app_" + s.split(":")[0]: {} for s in specs}
-json.dump([{"domain": "notify", "services": notify}],
-          open(os.path.join(fix, "services.json"), "w"))
-PY
-    : > "$FIX/calls"
-}
-
-# asked_all <minutes_ago> <tracker object_id>... — outstanding, unanswered requests.
-asked_all() {
-    python3 - "$FIX" "$STATE" "$@" <<'PY'
-import json, os, sys, time
-fix, state, minutes, objs = sys.argv[1], sys.argv[2], float(sys.argv[3]), sys.argv[4:]
-by_id = {s["entity_id"]: s for s in json.load(open(os.path.join(fix, "states.json")))}
-json.dump({"device_tracker." + o: {"asked_at": time.time() - minutes * 60,
-                                   "reported": by_id["device_tracker." + o]["last_reported"]}
-           for o in objs}, open(state, "w"))
-PY
-}
-
-# The live state of 2026-11-08: new phone 1 h ago, retired phone frozen 97 h
-# at home with a request unanswered for 150 min.
-rm -f "$STATE"; people new_phone:home:1 old_phone:home:97; phone silent
-asked_all 150 old_phone
+rm -f "$STATE"
+world "$T|$N|home|1" "device_tracker.old_phone|Old Phone|home|97"
 run
-if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q "old_phone.*new_phone"; then
-    pass "9a. retired tracker beside a fresh one: no page, named in a note"
+if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q "old_phone.*not judged.*$T"; then
+    pass "5a. retired phone beside a live one: a note, not a page"
 else
-    fail "9a. retired tracker paged although the person is live (rc=$RC): $OUT"
-fi
-if [ "$(pushes)" -eq 0 ] && ! grep -q "old_phone" "$STATE"; then
-    pass "9b. no push to the retired phone, its request dropped"
-else
-    fail "9b. retired phone pushed or kept in state (pushes=$(pushes)): $(cat "$STATE")"
+    fail "5a. retired phone paged although the person is live (rc=$RC): $OUT"
 fi
 
-# Its loud twin: every tracker of the person frozen. Must still page — a fix
-# that skipped any person with two trackers would pass 9a alone.
-rm -f "$STATE"; people new_phone:home:32 old_phone:home:97; phone silent
-asked_all 25 new_phone old_phone
+rm -f "$STATE"
+world "$T|$N|home|25" "device_tracker.old_phone|Old Phone|home|97"
 run
-if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -q "new_phone.*FROZEN"; then
-    pass "9c. every tracker frozen: still pages"
+if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -q "$N: no report"; then
+    pass "5b. its twin: no phone live: pages"
 else
-    fail "9c. a person with no fresh tracker did not page (rc=$RC): $OUT"
+    fail "5b. a person with no live phone did not page (rc=$RC): $OUT"
 fi
 
-# A tracker deleted from HA but still named by the person.
-rm -f "$STATE"; people new_phone:home:1 old_phone:missing
+rm -f "$STATE"; world "$T|$N|home|1" "device_tracker.old_phone|Old Phone|missing"
 run
-if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q "old_phone.*new_phone"; then
-    pass "9d. deleted tracker beside a fresh one: a note, not a page"
+if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q "old_phone is missing from HA"; then
+    pass "5c. deleted tracker beside a live one: a note"
 else
-    fail "9d. deleted tracker paged although the person is live (rc=$RC): $OUT"
+    fail "5c. deleted tracker paged although the person is live (rc=$RC): $OUT"
 fi
 
-rm -f "$STATE"; people old_phone:missing
+rm -f "$STATE"; world "device_tracker.old_phone|Old Phone|missing"
 run
 if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -q "does not exist"; then
-    pass "9e. the only tracker deleted: still pages"
+    pass "5d. the only tracker deleted: pages"
 else
-    fail "9e. a person with no tracker left did not page (rc=$RC): $OUT"
+    fail "5d. a person with no tracker left did not page (rc=$RC): $OUT"
+fi
+
+# ------------------------------------------------------------------
+# 6. Broken without waiting for the threshold.
+# ------------------------------------------------------------------
+rm -f "$STATE"; world "$T|$N|unavailable|0"
+run
+if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -q "tracker is unavailable"; then
+    pass "6a. tracker unavailable: pages at once"
+else
+    fail "6a. unavailable tracker did not page (rc=$RC): $OUT"
+fi
+
+rm -f "$STATE"; world person=unknown "$T|$N|home|1"
+run
+if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -q "person entity is unknown"; then
+    pass "6b. person unknown: pages"
+else
+    fail "6b. unknown person did not page (rc=$RC): $OUT"
+fi
+
+rm -f "$STATE"; world
+run
+if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q "no device_trackers attached"; then
+    pass "6c. person with no trackers: a note"
+else
+    fail "6c. person with no trackers mishandled (rc=$RC): $OUT"
 fi
 
 printf '\n'
