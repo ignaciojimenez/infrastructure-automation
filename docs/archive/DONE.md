@@ -17,6 +17,7 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ## Contents
 
+- [2026-11-25 — a grace window can name a device, so the Eve doors' battery entities stop paging (PER-183)](#2026-11-25--a-grace-window-can-name-a-device-so-the-eve-doors-battery-entities-stop-paging-per-183)
 - [2026-11-25 — the UniFi VM's alert issues could never close: the sweep knew it by another name](#2026-11-25--the-unifi-vms-alert-issues-could-never-close-the-sweep-knew-it-by-another-name)
 - [2026-11-25 — a phone at rest is silent, and the presence check now asks only whether it is lost (PER-197)](#2026-11-25--a-phone-at-rest-is-silent-and-the-presence-check-now-asks-only-whether-it-is-lost-per-197)
 - [2026-11-20 — the UniFi controller moved to UniFi OS Server, and the old one is gone (PER-127, PER-128)](#2026-11-20--the-unifi-controller-moved-to-unifi-os-server-and-the-old-one-is-gone-per-127-per-128)
@@ -85,11 +86,30 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 
 
+## 2026-11-25 — a grace window can name a device, so the Eve doors' battery entities stop paging (PER-183)
+
+**Each Eve door paged on every Thread drop through one entity.** The doors' 24 h grace (2026-10-04) matched the id pattern `*eve_door_20ebn9901*`. Each door also carries a battery entity with an older id (`binary_sensor.entrance_door_battery`, `binary_sensor.living_room_balcony_door_battery`). Those sat on the 15 min default and paged alone: 11-11, 11-19 (hourly, PER-194), 11-24 (PER-199). dockassist's registry confirmed both are entities of the same Matter device as their siblings.
+
+**Decided: an override can name a device** (`device: "<name>"`, matching the device's own or user-given name). It covers every entity on the device, including ones added or renamed later; an id pattern cannot. `/api/states` has no device, so the check fetches an entity → device-name map from `/api/template`, with the same token, only when a device override exists. The Eve entry is `device: "Eve Door 20EBN9901"`, both doors, 12 entities.
+
+**Rejected:** builder PR #51, which hardcoded the Entrance battery id in the script template. It left the Balcony door uncovered, excused by entity id against this check's own rule, and moved host config into code to get around the builder's inventory restriction. PR #49 had handed the same fault back honestly for that restriction.
+
+**Failure behaviour:** a failed or empty lookup pages and names itself; the door entities then fall back to 15 min. Every run logs how many entities each device override covers, so a renamed device shows as a count of 0, not as surprise pages.
+
+Verified:
+- Tests replay the bug with the old pattern, then, with the real ids: 1 h silent, past 24 h pages, an unrelated entity still pages at 15 min, a failed or empty lookup pages. They pass under sh and dash; two deliberate breaks of the query block each fail.
+- Before deploy, the exact query against live HA returned 196 well-formed rows, 12 on the Eve device.
+- `--check --diff` and the deploy each changed only `check_ha_entities.sh`.
+- The 23:40 cron run on dockassist logged `device grace 1440 min for 'Eve Door 20EBN9901': 12 entities` and was green.
+
+**Not verified on the host:** a real Thread drop under the new window. The next one should show the door entities "inside grace" and no page.
+
 ## 2026-11-25 — the UniFi VM's alert issues could never close: the sweep knew it by another name
 
 **PER-180 and PER-191 stayed open 12 and 6 days after their faults cleared.** The filer logged "unifi-os-vm not observed this sweep; absence proves nothing" every hour. Alerts carry the host's own hostname (`unifi-os-vm`), and the filer closes an alert's issue only once a sweep has observed that name. The sweep listed the VM as `unifi`, its DNS name, since PER-127. PER-180 was only ever opened by the alerts forced during the rehearsal and the cutover.
 
 **Decided: the sweep lists hosts by hostname, and an optional `dns_name` says how to reach one that DNS publishes under another name** (`group_vars/agent.yml`). The VM is `unifi-os-vm` with `dns_name: unifi`, because `unifi-os-vm.internal` does not resolve. `ssh_config` pins the host key to the DNS name, so the rename kept the key already trusted rather than trusting a new one on first contact. Renaming the DNS record instead would have been a firewall change for the same result.
+
 
 ## 2026-11-25 — a phone at rest is silent, and the presence check now asks only whether it is lost (PER-197)
 

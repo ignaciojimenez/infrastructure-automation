@@ -69,6 +69,23 @@ else
     fail "allowlist patterns missing from the rendered script"
 fi
 
+# The device query is Home Assistant Jinja inside an Ansible template. It must
+# reach the script verbatim and be a JSON body HA can parse.
+if [ -f "$WORK/check.sh" ] && python3 - "$WORK/check.sh" <<'PY'
+import json, re, sys
+src = open(sys.argv[1]).read()
+m = re.search(r"^DEVICE_QUERY='(.*)'$", src, re.M)
+t = json.loads(m.group(1))["template"]
+assert "{% for s in states %}" in t and "device_id(s.entity_id)" in t, t
+assert '{{ device_attr(d, "name_by_user") or "" }}' in t, t
+assert t.count("\t") == 2 and t.count("\n") == 1, repr(t)
+PY
+then
+    pass "device query reaches the script verbatim as a valid JSON body"
+else
+    fail "device query is missing, rendered by Ansible, or not valid JSON"
+fi
+
 # ------------------------------------------------------------------
 # Extract the Python block for behavioural testing.
 # ------------------------------------------------------------------
@@ -128,9 +145,13 @@ PY
 }
 
 # run <state_file> <mode> <api_ok> <http> <states_file>
+# DEVCODE/DEVFILE: the /api/template device lookup ("-" = not asked).
+DEVCODE="-"
+DEVFILE=""
+
 run() {
     OUT=$(HA_ALLOWLIST="$ALLOW" HA_STATELESS_DOMAINS="$STATELESS" HA_GRACE_OVERRIDES="$OVERRIDES" python3 "$WORK/check.py" \
-          "$1" "$GRACE" "$2" "$3" "$4" "$5" 2>&1)
+          "$1" "$GRACE" "$2" "$3" "$4" "$5" "$DEVCODE" "$DEVFILE" 2>&1)
     RC=$?
 }
 
@@ -328,6 +349,98 @@ OVERRIDES="light.lamp|notanumber"
 run "$WORK/st4d.json" check 1 200 "$WORK/s4d.json"
 expect_out "ignoring malformed grace override" "a broken override is announced"
 OVERRIDES=""
+
+printf '\n   ── device-scoped grace windows (PER-183)\n'
+
+# ------------------------------------------------------------------
+# 4f. The Eve doors' battery entities carry older ids than their siblings, so
+#     the id pattern `*eve_door_20ebn9901*` missed them and each Thread drop
+#     paged on that one entity: 11-11, 11-19, 11-24. Entity ids and device
+#     names below are the real ones, from dockassist's registry on 2026-11-25.
+# ------------------------------------------------------------------
+{
+    for e in binary_sensor.entrance_door_battery binary_sensor.eve_door_20ebn9901_door_2 \
+             button.eve_door_20ebn9901_identify_2 sensor.eve_door_20ebn9901_battery_2 \
+             sensor.eve_door_20ebn9901_battery_voltage_2 update.eve_door_20ebn9901_firmware_2; do
+        printf '%s\tEve Door 20EBN9901\tEntrance Door\n' "$e"
+    done
+    for e in binary_sensor.living_room_balcony_door_battery binary_sensor.eve_door_20ebn9901_door \
+             button.eve_door_20ebn9901_identify sensor.eve_door_20ebn9901_battery \
+             sensor.eve_door_20ebn9901_battery_voltage update.eve_door_20ebn9901_firmware; do
+        printf '%s\tEve Door 20EBN9901\tBalcony Door\n' "$e"
+    done
+    printf 'light.kitchen\tShelly Duo\t\n'
+} > "$WORK/devices.tsv"
+
+states "$WORK/s4f.json" \
+    binary_sensor.entrance_door_battery=unavailable \
+    sensor.eve_door_20ebn9901_battery_2=unavailable \
+    binary_sensor.front_door=unavailable
+
+# The bug, replayed: the old id pattern leaves the battery entity on 15 min.
+OVERRIDES="*eve_door_20ebn9901*|86400"
+state "$WORK/st4f.json" binary_sensor.entrance_door_battery:3600 \
+    sensor.eve_door_20ebn9901_battery_2:3600 binary_sensor.front_door:1200
+run "$WORK/st4f.json" check 1 200 "$WORK/s4f.json"
+expect_out "❌ binary_sensor.entrance_door_battery" "the old id pattern misses the battery entity (the bug)"
+
+OVERRIDES="device:Eve Door 20EBN9901|86400"
+DEVCODE=200
+DEVFILE="$WORK/devices.tsv"
+
+# Acceptance 1 and 3: an hour-long drop is silent; an unrelated entity 20 min
+# down, past its 15 min window, still pages.
+run "$WORK/st4f.json" check 1 200 "$WORK/s4f.json"
+expect_rc 1 "a 1 h door drop is silent on the device window; the unrelated entity pages"
+expect_no_out "❌ binary_sensor.entrance_door_battery" "the battery entity is covered by its device"
+expect_no_out "❌ sensor.eve_door_20ebn9901_battery_2" "and so is its sibling"
+expect_out "❌ binary_sensor.front_door" "the entity outside the device is named"
+expect_out "device grace 1440 min for 'Eve Door 20EBN9901': 12 entities" \
+    "the run states how many entities the device override covers"
+
+# Acceptance 2, forced: past 24 h the same device pages.
+state "$WORK/st4g.json" binary_sensor.entrance_door_battery:90000 \
+    sensor.eve_door_20ebn9901_battery_2:90000 binary_sensor.front_door:1200
+run "$WORK/st4g.json" check 1 200 "$WORK/s4f.json"
+expect_rc 3 "a door gone longer than 24 h pages on every entity, battery included"
+expect_out "❌ binary_sensor.entrance_door_battery" "the battery entity is named"
+
+# The user-given name matches too, and a device override stays on its device.
+states "$WORK/s4h.json" binary_sensor.entrance_door_battery=unavailable \
+    binary_sensor.living_room_balcony_door_battery=unavailable
+state "$WORK/st4h.json" binary_sensor.entrance_door_battery:3600 \
+    binary_sensor.living_room_balcony_door_battery:3600
+OVERRIDES="device:Entrance Door|86400"
+run "$WORK/st4h.json" check 1 200 "$WORK/s4h.json"
+expect_rc 1 "a user-given device name scopes the window to that one door"
+expect_out "❌ binary_sensor.living_room_balcony_door_battery" "the other door is not covered by it"
+
+# A failed lookup must be loud and say why, never a quiet fallback.
+OVERRIDES="device:Eve Door 20EBN9901|86400"
+DEVCODE=500
+run "$WORK/st4f.json" check 1 200 "$WORK/s4f.json"
+expect_out "❌ device lookup failed (HTTP 500" "a failed device lookup is named"
+expect_rc 4 "and pages, with the door entities back on the global window"
+
+DEVCODE=200
+: > "$WORK/devices.empty"
+DEVFILE="$WORK/devices.empty"
+state "$WORK/st4i.json" binary_sensor.front_door:60
+run "$WORK/st4i.json" check 1 200 "$WORK/s4f.json"
+expect_out "mapped no entity to a device" "an empty device map is a failure, not an empty answer"
+expect_rc 1 "and pages even with nothing else past grace"
+
+# Report mode shows the failure but still never pages.
+run "$WORK/st4i.json" report 1 200 "$WORK/s4f.json"
+expect_rc 0 "report mode stays at exit 0 with a failed lookup"
+expect_out "device lookup failed" "but shows it"
+
+# No device override: no lookup expected, none reported.
+OVERRIDES=""
+DEVCODE="-"
+DEVFILE=""
+run "$WORK/st4i.json" check 1 200 "$WORK/s4f.json"
+expect_no_out "device lookup" "without a device override nothing is looked up or reported"
 
 printf '\n   ── recovery\n'
 

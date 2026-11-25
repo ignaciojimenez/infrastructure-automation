@@ -106,13 +106,28 @@ export HA_STATELESS_DOMAINS
 #
 # A long window keeps both. A lamp off overnight is ~12 h; a dead bulb is
 # forever. See docs/TODO.md item 21.
+#
+# An override names entities by id pattern OR by device ("device:<name>|s").
+# A device override covers every entity HA attaches to that device, including
+# ones added or renamed later — an id pattern missed the Eve doors' battery
+# entities, which carry older names, and each paged on every Thread drop
+# (PER-183). The device's own name or its user-given name may match.
 HA_GRACE_OVERRIDES=$(cat <<'GRACEEOF'
 {% for o in ha_entity_health_grace_overrides | default([]) %}
+{% if o.device is defined %}
+device:{{ o.device }}|{{ o.grace_seconds }}
+{% else %}
 {{ o.pattern }}|{{ o.grace_seconds }}
+{% endif %}
 {% endfor %}
 GRACEEOF
 )
 export HA_GRACE_OVERRIDES
+
+# /api/states carries no device, so device overrides need HA's template API:
+# one line per entity that has a device, "entity_id<TAB>name<TAB>name_by_user".
+# Raw block: this is Home Assistant's Jinja, not Ansible's.
+DEVICE_QUERY='{% raw %}{"template": "{% for s in states %}{% set d = device_id(s.entity_id) %}{% if d %}{{ s.entity_id }}\t{{ device_attr(d, \"name\") or \"\" }}\t{{ device_attr(d, \"name_by_user\") or \"\" }}\n{% endif %}{% endfor %}"}{% endraw %}'
 
 TOKEN=$(sed -n 's/^ha_monitor_token:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}.*/\1/p' \
         "$SECRETS" 2>/dev/null | head -1)
@@ -122,7 +137,8 @@ if [ -z "$TOKEN" ]; then
 fi
 
 STATES_FILE=$(mktemp) || exit 1
-trap 'rm -f "$STATES_FILE"' EXIT INT TERM
+DEVICES_FILE=$(mktemp) || exit 1
+trap 'rm -f "$STATES_FILE" "$DEVICES_FILE"' EXIT INT TERM
 
 # A check that cannot see is not a check that is happy: an empty body or a
 # non-200 is a failure to fetch, never an absence of broken entities.
@@ -141,7 +157,20 @@ while [ "$attempt" -le "$FETCH_ATTEMPTS" ]; do
     [ "$attempt" -le "$FETCH_ATTEMPTS" ] && sleep "$FETCH_INTERVAL"
 done
 
-python3 - "$STATE_FILE" "$HA_GRACE" "$MODE" "$API_OK" "$http_code" "$STATES_FILE" <<'PYEOF'
+# "-" means not asked: no device override, or HA already unreachable. Any other
+# value is the HTTP status, and anything but 200 is a failed lookup.
+devices_code="-"
+if [ "$API_OK" = "1" ] &&
+   printf '%s\n' "$HA_GRACE_OVERRIDES" | grep -q '^[[:space:]]*device:'; then
+    devices_code=$(curl -s -o "$DEVICES_FILE" -w '%{http_code}' --max-time 20 \
+                   -H "Authorization: Bearer $TOKEN" \
+                   -H "Content-Type: application/json" \
+                   --data "$DEVICE_QUERY" \
+                   "$HA_URL/api/template" 2>/dev/null) || devices_code="000"
+fi
+
+python3 - "$STATE_FILE" "$HA_GRACE" "$MODE" "$API_OK" "$http_code" "$STATES_FILE" \
+          "$devices_code" "$DEVICES_FILE" <<'PYEOF'
 import fnmatch
 import json
 import os
@@ -150,6 +179,8 @@ import tempfile
 import time
 
 state_path, grace_raw, mode, api_raw, http_code, states_path = sys.argv[1:7]
+devices_code = sys.argv[7] if len(sys.argv) > 7 else "-"
+devices_path = sys.argv[8] if len(sys.argv) > 8 else ""
 grace = int(grace_raw)
 api_ok = api_raw == "1"
 report = mode == "report"
@@ -165,19 +196,54 @@ for line in os.environ.get("HA_GRACE_OVERRIDES", "").splitlines():
     line = line.strip()
     if not line or "|" not in line:
         continue
-    pattern, _, seconds = line.partition("|")
+    pattern, _, seconds = line.rpartition("|")
+    kind = "entity"
+    if pattern.startswith("device:"):
+        kind, pattern = "device", pattern[len("device:"):]
     try:
-        overrides.append((pattern.strip(), int(seconds)))
+        overrides.append((kind, pattern.strip(), int(seconds)))
     except ValueError:
         # A malformed override must not silently become the global default and
         # quietly tighten a window someone deliberately widened.
         print("⚠️  ignoring malformed grace override: %s" % line)
 
+device_overrides = [o for o in overrides if o[0] == "device"]
+
+# entity_id -> the names of its device (own name, user-given name).
+device_names = {}
+
+
+def load_devices():
+    """Fill device_names; return None on success, else why the lookup failed.
+
+    Only called when a device override exists. A failed lookup is reported,
+    never shrugged off: those entities fall back to the global window, so a
+    silent failure would page on every ordinary drop with no stated cause.
+    """
+    if devices_code != "200":
+        return "HTTP %s from /api/template" % devices_code
+    try:
+        with open(devices_path) as fh:
+            lines = fh.read().splitlines()
+    except OSError as exc:
+        return str(exc)
+    for line in lines:
+        fields = line.split("\t")
+        if len(fields) == 3 and fields[0]:
+            device_names[fields[0]] = tuple(n for n in fields[1:] if n)
+    if not device_names:
+        # Any HA with devices maps some entity to one; none means a bad answer.
+        return "/api/template mapped no entity to a device"
+    return None
+
 
 def grace_for(entity_id):
     """Seconds this entity may be bad before it pages. First match wins."""
-    for pattern, seconds in overrides:
-        if fnmatch.fnmatchcase(entity_id, pattern):
+    for kind, pattern, seconds in overrides:
+        if kind == "entity":
+            if fnmatch.fnmatchcase(entity_id, pattern):
+                return seconds
+        elif any(fnmatch.fnmatchcase(n, pattern) for n in device_names.get(entity_id, ())):
             return seconds
     return grace
 
@@ -288,6 +354,8 @@ if not entities:
     write_state(entity_since, None)
     finish(1)
 
+device_error = load_devices() if device_overrides else None
+
 bad_now = {}
 for entity in entities:
     if not isinstance(entity, dict):
@@ -321,6 +389,19 @@ print("=== Home Assistant entity health ===")
 print("%d entities; %d unavailable/unknown (%d allowlisted, %d inside grace)"
       % (len(entities), len(bad_now), len(excused), len(waiting)))
 
+# Printed every run, healthy or not: a device override that matches nothing
+# (renamed device, bad lookup) is otherwise invisible until the drop it was
+# meant to absorb pages anyway.
+if device_error:
+    print("❌ device lookup failed (%s) — device-scoped grace windows NOT applied"
+          % device_error)
+else:
+    for _, pattern, seconds in device_overrides:
+        covered = sum(1 for names in device_names.values()
+                      if any(fnmatch.fnmatchcase(n, pattern) for n in names))
+        print("device grace %d min for '%s': %d entities"
+              % (seconds // 60, pattern, covered))
+
 for entity_id in recovered:
     print("✅ recovered: %s" % entity_id)
 
@@ -340,6 +421,9 @@ rc = 0
 if state_broken:
     print("❌ state file %s was unreadable and has been rebuilt — entity ages "
           "were lost, so an old fault may be re-timed from now" % state_path)
+    rc += 1
+
+if device_error:
     rc += 1
 
 for entity_id, entity_state, age, eg in alerting:
