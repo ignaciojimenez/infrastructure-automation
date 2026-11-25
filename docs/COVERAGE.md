@@ -52,7 +52,7 @@ Every "healthchecks.io" in the tables means "you are told".
 |---|---|---|---|
 | WAN down | healthchecks.io WAN heartbeat (*/5) stops; gateway check | ~5–15 min | ✅ |
 | DNS resolution broken | `check_dns_health` */5, DNS failover monitor every minute, healthchecks.io DNS heartbeat | 1–5 min | ✅ |
-| A Mullvad exit dies / Spotify-class refusal | `check_wg`, `check_vpn_gateway` */10–15; agent-lxc Mullvad relay signal on change | 10–60 min | ✅ |
+| A Mullvad exit dies / Spotify-class refusal | `check_wg`, `check_vpn_gateway` */10–15; agent-lxc Mullvad relay signal on change | a group carrying traffic running out: 10 min; one gateway down: 12 h; a relay change: on change | ✅ |
 | Box hung or VM stopped | cwwk `check_vm_status` */15; WAN heartbeat stops | ~15 min | ✅ |
 | One process pegs a core (the 2026-08-07 class) | `check_runaway.sh` (PER-10; forced on cwwk 2026-10-13, alert reached `#home-alerts`) | 30 min | ✅ |
 | Disk / memory | `check_system_health.sh` */30; Tier 1 over the API | 30–60 min | ✅ |

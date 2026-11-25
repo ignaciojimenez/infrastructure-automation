@@ -203,7 +203,7 @@ single always-on tunnel.
 | `wg3` | `wg0_mullvad_nl3` | NL | up — peer `nl-ams-wg-004` (31173) since 2026-11-15, after it was found with no peer and its gateway down; the old relay `nl-ams-wg-101` had left Mullvad's list by 2026-09-14 |
 | `wg4` | `wg0_mullvad_es1` | ES | up |
 | `wg5` | `wg0_mullvad_es2` | ES | up |
-| `wg6` | `wg0_mullvad_es3` | ES | down from ~2026-11-17 until re-keyed 2026-11-20: Mullvad rotated `es-bcn-wg-101`'s public key and the peer kept the old one (found by the 26.7.9 upgrade diff) |
+| `wg6` | `wg0_mullvad_es3` | ES | down from ~2026-11-17 until re-keyed 2026-11-20: Mullvad rotated `es-bcn-wg-101`'s public key and the peer kept the old one (found by the 26.7.9 upgrade diff). Monitor changed by hand on 2026-11-22 from F-root (`192.5.5.241`), which read down through the ES3 exit for 38 h while the tunnel handshook, to `1.1.8.8` — the one monitor that is not a root server |
 | `wg7` | `wg0_mullvad_us1` | US | up — peer `us-nyc-wg-001` |
 | `wg8` | `wg0_mullvad_us2` | US | up — peer `us-nyc-wg-002` |
 | `wg9` | `wg0_mullvad_us3` | US | up since 2026-11-20 — the tunnel handshook; its gateway was down because the monitor, Quad9 (`9.9.9.9`), stopped answering ICMP through the US exit. Monitor moved to h-root `198.97.190.53` ([finding 1](#1-wg9-mullvad-us3-is-dead-and-quad9-is-routed-through-it--resolved)) |
@@ -236,22 +236,40 @@ hifipi is the one exception: a floating rule, `from 10.30.40.100 to ! USED_LAN_N
 via the WAN gateway, loaded ahead of the group rule because Spotify refuses Mullvad
 exits.
 
-🔴 **If every member of the group is down, VLAN 40 and 80 go out the WAN,
-unencrypted** — all five tiers, across three regions. `skip_rules_gw_down` is not set (read 2026-09-14), and OPNsense's
+🔴 **If every member of the group is down, VLAN 40 and 80 were taken to go out
+the WAN, unencrypted** — all five tiers, across three regions. `skip_rules_gw_down` is not set (read 2026-09-14), and OPNsense's
 documented default is that *"when a rule has a specific gateway set, and this
 gateway is down, rule is created and traffic is sent to default gateway."* The
 documentation describes a single gateway; that a fully-down group behaves the same
 is inferred, not tested.
 
+**OPNsense 26.7.9's source contradicts that (read 2026-11-25, not tested live).**
+`filter.lib.inc` builds each group's `route-to` from
+`GatewayGroups::getActiveGroups`, which, when no tier is up, falls back to every
+gateway of the first tier. So an exhausted `Mullvad_failover_nl` keeps routing
+into NL1's tunnel — failing closed if NL1 is dead — and `skip_rules_gw_down`,
+which disables a rule only when its gateway has no mapping, never applies to a
+group. The live test (force all five members down, read the exit from a VLAN 40
+host) was deferred on 2026-11-25. Either way the group alarm pages.
+
 **Decided 2026-11-20: that fallback is accepted, on condition that it pages** — no
 kill switch. `check_wg.sh` on the firewall (every 10 min) judges each group the
-way failover does, by gateway status: CRITICAL when a group has no usable member
-("leaves via the WAN gateway, unencrypted"), WARNING for any single Mullvad
-gateway down, saying whether its tunnel still handshakes (monitor fault) or not
+way failover does, by gateway status: CRITICAL when a group has no usable
+member, WARNING for any single Mullvad gateway down, saying whether its tunnel still handshakes (monitor fault) or not
 (tunnel dead). Forced on the live firewall with the real status doctored, before
 it was deployed. Until that date it counted handshaking tunnels against
 thresholds written for four tunnels, so it stayed green until ten of twelve were
 dead: ES3 was down three days unseen.
+
+**Changed 2026-11-25.** The group alarm covers only groups an enabled rule routes
+to: the ES, US and UK groups are standby exits whose rules are disabled, so they
+carry nothing. A single gateway — standby ones included, since they must work
+when switched to — warns only after 12 hours down. Warning at once paged 12 times
+in four days (2026-11-21 to -24) over five spells: four were over within 40
+minutes, the fifth was ES3's F-root monitor, down 38 hours. A month of
+dpinger transitions put the spells that healed on their own at up to 7 hours and
+the faults that needed a hand at 38 hours or more; the reasoning is in
+`check_wg.sh`'s header.
 
 ### Replacing a Mullvad peer (runbook)
 
@@ -485,7 +503,8 @@ before; none are fixed. Each was verified on the live firewall, not inferred.
 > its monitor, held the gateway down. The `9.9.9.9` host route below was that
 > monitor's route. The monitor is now h-root, `198.97.190.53` (10/10 replies;
 > g-root `192.112.36.4` dropped every ping), completing the set: the other
-> eleven gateways monitor root servers a–f and i–m. Monitors must be unique per
+> eleven gateways monitor root servers a–f and i–m (until 2026-11-22, when ES3
+> moved off F-root; see its row under VPN). Monitors must be unique per
 > gateway, and each gets a host route through its tunnel, so a root server is
 > the right kind: nothing here queries one directly, since Unbound forwards
 > everything to Mullvad. The old `9.9.9.9 → wg9` route outlived the change in

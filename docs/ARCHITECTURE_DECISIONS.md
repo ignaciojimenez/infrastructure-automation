@@ -282,6 +282,14 @@ set — see `docs/BACKUP_AND_RECOVERY.md`.
 
 ## DNS Architecture (Updated November 2025)
 
+- **A Mullvad gateway warns after 12 hours down; only a group that carries
+  traffic pages at once (2026-11-25).** The standby exits are kept ready to
+  switch to, so every gateway is watched, but a spell of minutes is not news:
+  warning at once paged 12 times in four days, for four spells over within 40
+  minutes and one real fault (ES3's monitor, 38 hours). A month of
+  dpinger history put the self-healing spells at up to 7 hours and the faults
+  that needed a hand at 38 hours or more. See `check_wg.sh`'s header.
+
 - **An exhausted Mullvad group may fall back to the WAN, unencrypted — but it
   must page (2026-11-20).** No kill switch. `check_wg.sh` judges each gateway
   group by gateway status, as failover does, and goes CRITICAL when a group has
@@ -289,6 +297,8 @@ set — see `docs/BACKUP_AND_RECOVERY.md`.
   provider diversity in a group (NL1 and NL2 both xtom on purpose), and `wg1`,
   the road-warrior server, is in use and stays. See
   [NETWORK.md, Failover](NETWORK.md#failover--and-what-happens-when-a-group-runs-out).
+  OPNsense 26.7.9's source says an exhausted group keeps routing to its first
+  tier instead of the WAN; not tested live (2026-11-25, same section).
 
 - **Firewall upgrades are judged by a behaviour diff, not a checklist
   (2026-11-15).** `bin/opnsense-validate pre|post` records ~220 read-only
