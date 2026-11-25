@@ -17,6 +17,7 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ## Contents
 
+- [2026-11-25 — the UniFi VM's alert issues could never close: the sweep knew it by another name](#2026-11-25--the-unifi-vms-alert-issues-could-never-close-the-sweep-knew-it-by-another-name)
 - [2026-11-25 — a phone at rest is silent, and the presence check now asks only whether it is lost (PER-197)](#2026-11-25--a-phone-at-rest-is-silent-and-the-presence-check-now-asks-only-whether-it-is-lost-per-197)
 - [2026-11-20 — the UniFi controller moved to UniFi OS Server, and the old one is gone (PER-127, PER-128)](#2026-11-20--the-unifi-controller-moved-to-unifi-os-server-and-the-old-one-is-gone-per-127-per-128)
 - [2026-11-15 — a key removed from the gist kept working from the fallback file (PER-182)](#2026-11-15--a-key-removed-from-the-gist-kept-working-from-the-fallback-file-per-182)
@@ -83,6 +84,12 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 ---
 
 
+
+## 2026-11-25 — the UniFi VM's alert issues could never close: the sweep knew it by another name
+
+**PER-180 and PER-191 stayed open 12 and 6 days after their faults cleared.** The filer logged "unifi-os-vm not observed this sweep; absence proves nothing" every hour. Alerts carry the host's own hostname (`unifi-os-vm`), and the filer closes an alert's issue only once a sweep has observed that name. The sweep listed the VM as `unifi`, its DNS name, since PER-127. PER-180 was only ever opened by the alerts forced during the rehearsal and the cutover.
+
+**Decided: the sweep lists hosts by hostname, and an optional `dns_name` says how to reach one that DNS publishes under another name** (`group_vars/agent.yml`). The VM is `unifi-os-vm` with `dns_name: unifi`, because `unifi-os-vm.internal` does not resolve. `ssh_config` pins the host key to the DNS name, so the rename kept the key already trusted rather than trusting a new one on first contact. Renaming the DNS record instead would have been a firewall change for the same result.
 
 ## 2026-11-25 — a phone at rest is silent, and the presence check now asks only whether it is lost (PER-197)
 
