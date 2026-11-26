@@ -17,6 +17,7 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ## Contents
 
+- [2026-11-26 — the key write no longer touches OPNsense, which rewrites that file from config.xml](#2026-11-26--the-key-write-no-longer-touches-opnsense-which-rewrites-that-file-from-configxml)
 - [2026-11-25 — a grace window can name a device, so the Eve doors' battery entities stop paging (PER-183)](#2026-11-25--a-grace-window-can-name-a-device-so-the-eve-doors-battery-entities-stop-paging-per-183)
 - [2026-11-25 — the UniFi VM's alert issues could never close: the sweep knew it by another name](#2026-11-25--the-unifi-vms-alert-issues-could-never-close-the-sweep-knew-it-by-another-name)
 - [2026-11-25 — a phone at rest is silent, and the presence check now asks only whether it is lost (PER-197)](#2026-11-25--a-phone-at-rest-is-silent-and-the-presence-check-now-asks-only-whether-it-is-lost-per-197)
@@ -85,6 +86,29 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 ---
 
 
+
+## 2026-11-26 — the key write no longer touches OPNsense, which rewrites that file from config.xml
+
+**The exclusion was a flag someone had to remember, and on 11-26 nobody did.** The
+11-15 rollout (PER-182) kept OPNsense out with `--limit '!opnsense'`. The next keys run,
+`services.yml --tags keys` for PR #48, had no limit, and wrote the gist's seven keys
+into the firewall user's `authorized_keys`. A comparison by fingerprint afterwards
+showed config.xml holding five of them: the other two worked only until the next boot.
+
+**Why a write there cannot last.** In OPNsense 26.7, `local_user_set` (`auth.inc`)
+rewrites `~/.ssh/authorized_keys` from the user's `<authorizedkeys>` in config.xml, and
+deletes it when that field is empty. It runs at boot, on `rc.reload_all`, on a firmware
+configure and on every user save. So keys added from here vanish at the next boot, and
+a revocation from the gist comes back with it. A sync timer on the firewall would only
+fight config.xml every 15 minutes, so none was added.
+
+**The change.** Both callers of `tasks/github_authorized_keys.yml` (`ssh_hardening.yml`
+and `bootstrap.yml`) are gated `os_family == 'debian'`, like the sync timer already was.
+`update_keys`, which OPNsense's sshd never used, is no longer shipped there, and the old
+copy is removed. The firewall's keys are set in its user manager. What survives a
+regeneration, checked against the source: the infrastructure user's own crontab
+(OPNsense rewrites only root's), `sshd_config.d/`, and `/usr/local/etc/monitoring`.
+Rule: [ARCHITECTURE_DECISIONS.md](../ARCHITECTURE_DECISIONS.md) (SSH key management).
 
 ## 2026-11-25 — a grace window can name a device, so the Eve doors' battery entities stop paging (PER-183)
 

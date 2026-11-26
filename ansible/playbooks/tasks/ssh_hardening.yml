@@ -3,11 +3,22 @@
 
 # The GitHub key set, exclusive, for the account Ansible connects as. Shared
 # with bootstrap.yml so the two cannot drift again — see the file.
+#
+# Debian only. OPNsense owns this file: at boot, on a reload-all, a firmware
+# configure and every user save, `local_user_set` (auth.inc) rewrites it from
+# the user's <authorizedkeys> in config.xml, or deletes it when that field is
+# empty. A write from here adds keys that vanish at the next boot and drops
+# revocations that come back with it. On 2026-11-26 a `--tags keys` run
+# without `--limit '!opnsense'` did exactly that. The firewall's keys are set
+# in its user manager, where config.xml keeps them.
 - name: Set authorized keys from GitHub
   ansible.builtin.import_tasks: github_authorized_keys.yml
   vars:
     github_keys_user: "{{ ansible_user }}"
+  when: os_family == "debian"
 
+# Debian only: OPNsense generates its sshd_config from config.xml and never
+# points AuthorizedKeysCommand at this script, so it would be dead code there.
 - name: Create authorized key command script
   become: true
   ansible.builtin.copy:
@@ -23,7 +34,18 @@
       #!/bin/sh
       [ "$1" = "{{ infrastructure_user }}" ] || exit 0
       exec curl -sf --max-time 5 "{{ gh_keys }}"
-  when: gh_keys is defined
+  when:
+    - os_family == "debian"
+    - gh_keys is defined
+  tags: [ssh, keys]
+
+# The copy the task above used to ship to OPNsense before it was gated.
+- name: Remove the unused key command script from FreeBSD hosts
+  become: true
+  ansible.builtin.file:
+    path: /usr/local/bin/update_keys
+    state: absent
+  when: os_family == "freebsd"
   tags: [ssh, keys]
 
 # After the write above, so a first deploy finds the file already in sync and
