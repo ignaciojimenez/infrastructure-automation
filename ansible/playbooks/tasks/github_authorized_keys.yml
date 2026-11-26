@@ -8,7 +8,9 @@
 #                      keys into root's authorized_keys instead of the
 #                      infrastructure user's (TODO 3b, 2026-10-03).
 #
-# Included by bootstrap.yml and tasks/ssh_hardening.yml. It used to be two
+# Included by bootstrap.yml and tasks/ssh_hardening.yml, both gated to Debian:
+# OPNsense regenerates this file from config.xml, so a write there does not
+# last (ssh_hardening.yml has the mechanism). It used to be two
 # copies, and they drifted: only ssh_hardening's learned the test-container
 # exception below, so bootstrap kept sawing off the rig's way in. One file is
 # the fix for that class of bug, not just for that instance.

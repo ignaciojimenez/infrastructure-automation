@@ -155,10 +155,13 @@
     # the fleet (PermitRootLogin no), and on a test container it replaced the
     # rig's key for root, the one copy that had no test-host exception.
     # Forced 2026-10-03 on CT 199. Shared with ssh_hardening.yml.
+    # Debian only: OPNsense rewrites this file from config.xml (see
+    # tasks/ssh_hardening.yml), and its keys are set in its user manager.
     - name: Set the infrastructure user's authorized keys from GitHub
       ansible.builtin.import_tasks: tasks/github_authorized_keys.yml
       vars:
         github_keys_user: "{{ infrastructure_user }}"
+      when: os_family == 'debian'
       tags: [bootstrap]
 
     - name: Check if pi user exists
