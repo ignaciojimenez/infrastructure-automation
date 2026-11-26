@@ -64,26 +64,15 @@ python3 "$REPO_ROOT/tests/lib/render_j2.py" "$TEMPLATE" "$WORK/investigate.sh" \
     agent_incident_max_age_days=7 \
     agent_daily_spend_cap_usd=2.00 \
     agent_fleet_hosts=cobra:linux,dockassist:linux,hifipi:linux,vinylstreamer:linux,unifi:linux,cwwk:proxmox,opnsense:opnsense \
-    opencode_bin="$WORK/bin/opencode" || exit 1
+    agent_model_run="$WORK/bin/opencode" || exit 1
 
 # ------------------------------------------------------------------
-# Stubs. flock and timeout: macOS ships neither and neither is under test.
+# Stubs. flock: macOS does not ship it and it is not under test.
 # curl answers the history poll from a fixture; webhooks are unset, so no
 # post ever reaches it. opencode records each call and bills what COST_FILE
 # says, so the ledger can be checked against real numbers.
 # ------------------------------------------------------------------
 printf '#!/bin/sh\nexit 0\n' > "$WORK/bin/flock"
-cat > "$WORK/bin/timeout" <<'STUB'
-#!/bin/sh
-while [ $# -gt 0 ]; do
-    case "$1" in
-        -*) shift 2 ;;
-        [0-9]*) shift ;;
-        *) break ;;
-    esac
-done
-exec "$@"
-STUB
 cat > "$WORK/bin/curl" <<'STUB'
 #!/bin/sh
 case "$*" in *conversations.history*) cat "$SLACK_FIXTURE" ;; esac

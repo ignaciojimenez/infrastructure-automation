@@ -88,10 +88,16 @@ Do not propose rebuilding any of this.
 - Your own Tier 1 sweep runs hourly at :{{ agent_sweep_minute }} and is the
   thing that produced the anomaly you are investigating.
 
-## Where your files go
+## What you are given, and what you cannot read
 
-- `{{ agent_state_dir }}/last_anomaly.json` — the Tier 1 snapshot that triggered you.
-- `{{ agent_plans_dir }}/` — the plans you write. One per investigation.
-- `{{ agent_state_dir }}/ssh_backoff/` — one file per host whose SSH auth Tier 1
-  has given up on. A host named here will refuse you too; see the hard rule
-  about not retrying refused logins.
+You run as `{{ agent_model_user }}`, an account that holds nothing but your SSH
+key and this configuration. The Tier 1 state on this box belongs to another
+account, and you cannot read it. Do not try: you will get `Permission denied`.
+Everything you need from it is already in your prompt:
+
+- the Tier 1 findings (or the alerts) that triggered you;
+- the hosts whose SSH auth Tier 1 has given up on. A host named there will
+  refuse you too; see the hard rule about not retrying refused logins.
+
+The script that started you writes your plan to a file and posts your summary.
+You only produce the text.

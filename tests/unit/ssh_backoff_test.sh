@@ -82,15 +82,14 @@ python3 "$REPO_ROOT/tests/lib/render_j2.py" "$INVESTIGATE_TMPL" "$WORK/investiga
     agent_incident_max_age_days=7 \
     agent_daily_spend_cap_usd=0 \
     agent_fleet_hosts=cobra:linux,opnsense:linux \
-    opencode_bin="$WORK/bin/opencode" || exit 1
+    agent_model_run="$WORK/bin/opencode" || exit 1
 
 # ------------------------------------------------------------------
 # Stubs.
 #
-# `ssh` is the unit under test's only contact with the world. `flock` and
-# `timeout` are stubbed because macOS ships neither and neither is what this
-# file is testing; stubbing them unconditionally also keeps the run identical
-# on Linux. `opencode` records the prompt it was handed and returns a minimal
+# `ssh` is the unit under test's only contact with the world. `flock` is
+# stubbed because macOS does not ship it and it is not what this file is
+# testing; stubbing it unconditionally also keeps the run identical on Linux. `opencode` records the prompt it was handed and returns a minimal
 # well-formed response — whether it was called AT ALL is the assertion.
 # ------------------------------------------------------------------
 cat > "$WORK/bin/ssh" <<'STUB'
@@ -120,19 +119,6 @@ STUB
 
 printf '#!/bin/sh\nexit 0\n' > "$WORK/bin/getent"
 printf '#!/bin/sh\nshift $#\nexit 0\n' > "$WORK/bin/flock"
-
-cat > "$WORK/bin/timeout" <<'STUB'
-#!/bin/sh
-# Drop `-k <n> <duration>` and exec the rest.
-while [ $# -gt 0 ]; do
-    case "$1" in
-        -*) shift 2 ;;
-        [0-9]*) shift ;;
-        *) break ;;
-    esac
-done
-exec "$@"
-STUB
 
 cat > "$WORK/bin/opencode" <<'STUB'
 #!/bin/sh

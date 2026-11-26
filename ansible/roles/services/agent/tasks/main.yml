@@ -335,11 +335,10 @@
 # ============================================================
 # Linear filer (PER-85 part 1)
 #
-# Root, because root is the one account on this box the model cannot act as:
-# OpenCode runs as the agent account and denies sudo. A dedicated user would
-# need ACLs into that account's 0700 home to read the findings, for no gain in
-# what the model can reach. The wrapper is copied root-owned for the same
-# reason the script is: root runs nothing the agent account can rewrite.
+# Root, because the findings live in the primary user's 0700 home and a
+# dedicated user would need ACLs into it, for no gain. The model runs as its own
+# account (PER-122) and can reach neither. The wrapper is copied root-owned for
+# the same reason the script is: root runs nothing another account can rewrite.
 # ============================================================
 
 - name: Configure the Linear filer
@@ -530,48 +529,167 @@
             state: absent
 
     # ------------------------------------------------------------
-    # Configuration as code
+    # The model account (PER-122) — the builder's pattern
+    # (roles/services/workbench/tasks/fleet_builder.yml, autobuilder)
+    #
+    # OpenCode runs here, not as the primary user, which reads /etc/agent/ by
+    # group and has passwordless sudo. This account owns its home and nothing
+    # else on the box: no group, no sudo, no credential file. The API key
+    # reaches it in the environment of one run.
+    #
+    # The home is the model's own, OpenCode config included. OpenCode installs
+    # @opencode-ai/plugin into its config directory on every start (1.18.4,
+    # config.ts), so that directory must be writable. Its permission rules are
+    # therefore a layer the model could in principle rewrite. That is accepted:
+    # they are no longer the barrier, the filesystem is.
     # ------------------------------------------------------------
 
-    - name: Ensure OpenCode config directories exist
+    - name: Create the Tier 2 model account
+      become: true
+      ansible.builtin.user:
+        name: "{{ agent_model_user }}"
+        shell: /usr/sbin/nologin
+        create_home: true
+        home: "{{ agent_model_home }}"
+        password_lock: true
+        comment: "Tier 2 model (OpenCode) — no credentials, no sudo (PER-122)"
+      register: agent_model_account
+
+    # Under --check on a first deploy the account does not exist yet, so every
+    # chown to it would fail and hide the rest of the diff.
+    - name: Configure the model account's home
+      when: not (ansible_check_mode and agent_model_account is changed)
+      block:
+        - name: Keep the model account's home private
+          become: true
+          ansible.builtin.file:
+            path: "{{ agent_model_home }}"
+            state: directory
+            owner: "{{ agent_model_user }}"
+            group: "{{ agent_model_user }}"
+            mode: '0700'
+
+        - name: Ensure the model account's directories exist
+          become: true
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: directory
+            owner: "{{ agent_model_user }}"
+            group: "{{ agent_model_user }}"
+            mode: '0700'
+          loop:
+            - "{{ agent_model_home }}/.ssh"
+            - "{{ agent_model_home }}/.config"
+            - "{{ agent_model_home }}/.config/opencode"
+            - "{{ agent_model_home }}/.config/opencode/agents"
+
+        # A copy, not a move: the Tier 1 sweep runs as the primary user and SSHes
+        # with the same key. Copied on the box, so the private half never leaves
+        # it, as the builder's rig key is.
+        - name: Give the model account the fleet key
+          become: true
+          ansible.builtin.copy:
+            src: "{{ agent_ssh_key_path }}{{ item.suffix }}"
+            dest: "{{ agent_model_ssh_key_path }}{{ item.suffix }}"
+            remote_src: true
+            owner: "{{ agent_model_user }}"
+            group: "{{ agent_model_user }}"
+            mode: "{{ item.mode }}"
+          loop:
+            - { suffix: '', mode: '0600' }
+            - { suffix: '.pub', mode: '0644' }
+
+        - name: Deploy the model account's fleet SSH client config
+          become: true
+          ansible.builtin.template:
+            src: ssh_config.j2
+            dest: "{{ agent_model_home }}/.ssh/config"
+            owner: "{{ agent_model_user }}"
+            group: "{{ agent_model_user }}"
+            mode: '0600'
+          vars:
+            agent_ssh_key_path: "{{ agent_model_ssh_key_path }}"
+
+        # Seeded once from the sweep's pins, so the model's first connection to a
+        # host checks the key the sweep already trusts rather than accepting
+        # whatever answers (ssh_config's accept-new). force: false, because the
+        # model's own ssh appends to it and a converge must not fight that.
+        - name: Seed the model account's known hosts from the sweep's
+          become: true
+          ansible.builtin.copy:
+            src: "/home/{{ primary_user }}/.ssh/known_hosts"
+            dest: "{{ agent_model_home }}/.ssh/known_hosts"
+            remote_src: true
+            force: false
+            owner: "{{ agent_model_user }}"
+            group: "{{ agent_model_user }}"
+            mode: '0600'
+
+        - name: Deploy OpenCode configuration
+          become: true
+          ansible.builtin.template:
+            src: opencode.json.j2
+            dest: "{{ agent_model_home }}/.config/opencode/opencode.json"
+            owner: "{{ agent_model_user }}"
+            group: "{{ agent_model_user }}"
+            mode: '0600'
+
+        - name: Deploy the infra-monitor agent definition
+          become: true
+          ansible.builtin.template:
+            src: infra-monitor.md.j2
+            dest: "{{ agent_model_home }}/.config/opencode/agents/infra-monitor.md"
+            owner: "{{ agent_model_user }}"
+            group: "{{ agent_model_user }}"
+            mode: '0600'
+
+        - name: Deploy fleet context for the agent
+          become: true
+          ansible.builtin.template:
+            src: AGENTS.md.j2
+            dest: "{{ agent_model_home }}/.config/opencode/AGENTS.md"
+            owner: "{{ agent_model_user }}"
+            group: "{{ agent_model_user }}"
+            mode: '0600'
+
+    - name: Ensure the plans directory exists
       become: true
       ansible.builtin.file:
-        path: "{{ item }}"
+        path: "{{ agent_plans_dir }}"
         state: directory
         owner: "{{ primary_user }}"
         group: "{{ infrastructure_group }}"
         mode: '0750'
-      loop:
-        - "/home/{{ primary_user }}/.config/opencode"
-        - "/home/{{ primary_user }}/.config/opencode/agents"
-        - "{{ agent_plans_dir }}"
 
-    - name: Deploy OpenCode configuration
+    # ------------------------------------------------------------
+    # The hand-off: primary user -> root launcher -> model account
+    # ------------------------------------------------------------
+
+    - name: Deploy the model launcher
       become: true
       ansible.builtin.template:
-        src: opencode.json.j2
-        dest: "/home/{{ primary_user }}/.config/opencode/opencode.json"
-        owner: "{{ primary_user }}"
-        group: "{{ infrastructure_group }}"
-        mode: '0640'
+        src: "{{ inventory_dir }}/../../scripts/services/agent/run_model.sh.j2"
+        dest: "{{ agent_model_launcher }}"
+        owner: root
+        group: root
+        mode: '0755'
 
-    - name: Deploy the infra-monitor agent definition
+    # The primary user already has passwordless sudo for ALL on this box, so
+    # this grants nothing new. It exists to state the contract on its own: the
+    # one command, and the two variables that cross sudo's environment reset.
+    # Without the env_keep the launcher refuses to run.
+    - name: Allow investigate.sh to hand a run to the model account
       become: true
-      ansible.builtin.template:
-        src: infra-monitor.md.j2
-        dest: "/home/{{ primary_user }}/.config/opencode/agents/infra-monitor.md"
-        owner: "{{ primary_user }}"
-        group: "{{ infrastructure_group }}"
-        mode: '0640'
-
-    - name: Deploy fleet context for the agent
-      become: true
-      ansible.builtin.template:
-        src: AGENTS.md.j2
-        dest: "/home/{{ primary_user }}/.config/opencode/AGENTS.md"
-        owner: "{{ primary_user }}"
-        group: "{{ infrastructure_group }}"
-        mode: '0640'
+      ansible.builtin.copy:
+        content: |
+          # Managed by Ansible (roles/services/agent). PER-122.
+          Defaults!{{ agent_model_launcher }} env_keep += "ANTHROPIC_API_KEY FIREWORKS_API_KEY"
+          {{ primary_user }} ALL=(root) NOPASSWD: {{ agent_model_launcher }}
+        dest: /etc/sudoers.d/agent_model
+        owner: root
+        group: root
+        mode: '0440'
+        validate: /usr/sbin/visudo -cf %s
 
     # ------------------------------------------------------------
     # Credential — 0600, sourced by scripts, never in a cron argument
@@ -608,6 +726,32 @@
         owner: "{{ primary_user }}"
         group: "{{ infrastructure_group }}"
         mode: '0755'
+
+    # The primary user's ~/.config/opencode belongs to dotfiles now (PER-86),
+    # which links AGENTS.md there. Only regular files are removed, the ones this
+    # role used to template: removing a symlink would undo bootstrap.sh on every
+    # converge.
+    #
+    # 🔴 After the investigate script, never before. With no opencode.json,
+    # OpenCode's built-in default allows every tool. An old investigate.sh
+    # firing from cron between the two tasks would start it as the primary
+    # user, which has passwordless sudo, with nothing denied.
+    - name: Find the OpenCode config this role used to write for the primary user
+      become: true
+      ansible.builtin.stat:
+        path: "/home/{{ primary_user }}/.config/opencode/{{ item }}"
+      loop: [opencode.json, AGENTS.md, agents/infra-monitor.md]
+      register: agent_old_opencode_config
+
+    - name: Remove the OpenCode config this role used to write for the primary user
+      become: true
+      ansible.builtin.file:
+        path: "{{ item.stat.path }}"
+        state: absent
+      loop: "{{ agent_old_opencode_config.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: item.stat.isreg | default(false)
 
     # Deliberately a separate cron from the Tier 1 sweep rather than being
     # called by it: Tier 1 stays free, independent, and unable to be broken by

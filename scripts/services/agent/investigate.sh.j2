@@ -31,7 +31,10 @@ BACKOFF_DIR="$AGENT_DIR/ssh_backoff"
 MARKER="$AGENT_DIR/.last_investigated"
 FAIL_MARKER="$AGENT_DIR/.last_failure_alert"
 FAIL_COOLDOWN_SECONDS={{ agent_failure_alert_cooldown_seconds }}
-OPENCODE="{{ opencode_bin }}"
+# OpenCode never runs as this account (PER-122): each run is handed to the
+# model account through a root-owned launcher, which also enforces the time
+# limit. A command prefix, split on purpose where it is used.
+MODEL_RUN="{{ agent_model_run }}"
 MONITOR_AGENT="infra-monitor"
 
 # Slack watch
@@ -356,16 +359,15 @@ over_spend_cap() {
 # Sets AGENT_OUTPUT, AGENT_RC, AGENT_COST.
 run_agent() {
     _prompt=$(cat)
-    # Hard timeout on the opencode call. Without it, a run that hangs (observed:
-    # opencode occasionally finishes its work but the process does not exit)
-    # would block investigate.sh forever — and since we hold the flock, that
-    # stalls ALL future Tier 2 work, not just this run. -k 15 SIGKILLs it if it
-    # ignores SIGTERM; the stray-process sweep below clears any detached child
-    # opencode leaves behind (safe: the flock guarantees we are the only run).
-    _raw=$(timeout -k 15 {{ agent_run_timeout_seconds }} \
-           "$OPENCODE" run --agent "$MONITOR_AGENT" --format json "$_prompt" 2>&1)
+    # The launcher puts a hard timeout on the run and kills whatever it leaves
+    # behind. Without it, a run that hangs (observed: opencode occasionally
+    # finishes its work but the process does not exit) would block this script
+    # forever, and since we hold the flock, that stalls ALL future Tier 2 work.
+    # The keys reach it through sudo's env_keep, never argv. MODEL_RUN is a
+    # command prefix, so it is left unquoted.
+    # shellcheck disable=SC2086
+    _raw=$($MODEL_RUN run --agent "$MONITOR_AGENT" --format json "$_prompt" 2>&1)
     AGENT_RC=$?
-    pkill -u "$(id -un)" -f 'opencode run' 2>/dev/null || true
     if [ "$AGENT_RC" -eq 124 ]; then
         AGENT_OUTPUT="opencode timed out after {{ agent_run_timeout_seconds }}s and was killed"
         AGENT_COST="0"; return

@@ -186,6 +186,28 @@ agent_run_timeout_seconds: 600
 # Credentials live in a 0600 env file sourced by the scripts — never in a cron
 # argument, where `crontab -l`, `ps`, and cron mail would all leak them.
 agent_env_file: "/etc/agent/agent.env"
+
+# The account OpenCode runs as (PER-122). investigate.sh runs as the primary
+# user, which reads /etc/agent/ by group and has passwordless sudo, so while
+# the model ran there OpenCode's permission config was the only thing between
+# it and every credential on the box. As this account, the filesystem refuses.
+#
+# Its home holds only what a run needs: a copy of the fleet key (the Tier 1
+# sweep keeps its own), the ssh_config for it, and the OpenCode config. That is
+# also what resolves PER-86: the agent role no longer writes into the primary
+# user's ~/.config/opencode, which dotfiles links.
+#
+# Not "agent": that names the role. It investigates; it does not sweep, file
+# or hold a credential beyond the API key it is handed for one run.
+agent_model_user: investigator
+agent_model_home: "/home/{{ agent_model_user }}"
+agent_model_ssh_key_path: "{{ agent_model_home }}/.ssh/agent_lxc_ed25519"
+
+# investigate.sh cannot setpriv itself: changing uid needs root. It runs this
+# root-owned launcher through one sudoers rule, and the launcher drops to the
+# model account. -n: fail at once rather than wait for a password nobody types.
+agent_model_launcher: "{{ agent_lib_dir }}/run_model.sh"
+agent_model_run: "sudo -n {{ agent_model_launcher }}"
 agent_plans_dir: "{{ agent_state_dir }}/plans"
 
 # Runs 10 minutes after the Tier 1 sweep at :{{ agent_sweep_minute }}, giving

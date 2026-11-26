@@ -50,6 +50,15 @@
   Glob matching on a command string is a coarse filter, not a security
   boundary. The real constraint on "ssh *-agent *" is the key itself: pinned to
   10.30.40.203, mapped to a read-only account, revocable fleet-wide in one run.
+
+  SINCE PER-122 THIS FILE IS A SECOND LAYER, NOT THE BARRIER. OpenCode runs as
+  {{ agent_model_user }}, an account that owns no credential and has no sudo,
+  so `cat /etc/agent/agent.env` is refused by the filesystem whatever this file
+  says (forced with every permission set to "allow"). The project directory is
+  now {{ agent_model_home }}, so the "cat"/"ls" allows on {{ agent_state_dir }}
+  below match paths that account cannot open. They are kept as they were on
+  purpose: tightening this file is not what made the box safe, and loosening
+  it should still take a deliberate change.
 #}
 {
   "$schema": "https://opencode.ai/config.json",
