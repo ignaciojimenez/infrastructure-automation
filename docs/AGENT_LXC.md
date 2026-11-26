@@ -115,7 +115,7 @@ cannot disagree. Its rules:
 The Linear key is **Read + Write, team PER only**. It sits in `/etc/fleet-linear/auth.header`
 (0600 root) and reaches curl as `-H @file`. The filer, its wrapper and `incident_subjects.py` are
 root-owned in `/usr/local/lib/agent/`, so root runs nothing the agent account can rewrite. The
-model runs as the agent account, and OpenCode denies it `sudo`.
+model runs as `investigator`, which has no `sudo` and runs under `no_new_privs` (PER-122).
 
 The filer **fails, and pages**, on any of these:
 - stale sweep state (over 2 h);
