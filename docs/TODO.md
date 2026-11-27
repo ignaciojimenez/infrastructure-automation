@@ -301,6 +301,18 @@ counts, which include unavailable). Before deploying, show it (a) fires on the
 
 ### 🟢 P3 — improvements, no urgency
 
+**53. dockassist and cobra are still on Debian 12 (bookworm)** — found in PER-200.
+Debian 13 is stable, so these two get no more point releases; PER-200's
+point-release pattern matches nothing there. Security still flows:
+`bookworm-security` was republished 2026-11-26 and matches the security
+pattern (checked on both hosts' InRelease). The real item is a planned
+trixie upgrade, cobra first, dockassist after — not an unattended-upgrades change.
+
+**54. `gh` on the workbench never updates** — found in PER-200. It comes from
+GitHub's apt repo, which no allowed origin matches, and this repo does not
+install it (dotfiles does, likely). Decide where it is owned first; then either
+a `custom_origins` entry on workbench-lxc or a cooldown-respecting install.
+
 **46. `wrapper_state_collision` exercises the wrapper as root** ([PER-106](https://linear.app/lacopadeeuropa/issue/PER-106))
 Left over from item 3. It was to be folded in only if it was one edit, and it
 is not. Every other case arranges as root and exercises as the infrastructure

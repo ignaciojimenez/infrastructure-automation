@@ -2,20 +2,31 @@
 // Managed by Ansible — do not edit here. See ansible/playbooks/tasks/debian_updates.yml
 // Based on https://gist.github.com/anatolebeuzon/98ff195f3375e8ca621e7df3955b4f23
 
+// Patterns match the Origin/Codename/Label fields of each repo's InRelease
+// file (/var/lib/apt/lists/*_InRelease). Read those before adding one: a
+// pattern that matches nothing fails silently (PER-200 found three).
 Unattended-Upgrade::Origins-Pattern {
-        // SECURITY UPDATES ONLY - No regular feature updates
-        
-        // Debian security updates
-        "origin=Debian,codename=${distro_codename},label=Debian-Security";
+        // Debian security updates. Since bullseye the security archive's
+        // codename is "<release>-security", so this is the only form that matches.
         "origin=Debian,codename=${distro_codename}-security,label=Debian-Security";
-        
-        // For systems running oldstable
-        "origin=Debian,codename=oldstable,label=Debian-Security";
-        "origin=Debian,codename=oldstable-security,label=Debian-Security";
-        
-        // Raspbian security updates
-        "origin=Raspbian,codename=${distro_codename},label=Raspbian-Security";
-        "origin=Raspberry Pi Foundation,codename=${distro_codename},label=Raspberry Pi Foundation-Security";
+{% if enable_unattended_point_releases | default(true) %}
+
+        // Debian point releases — the same set Debian's own shipped default
+        // allows. Not feature updates: "mainly corrections for security issues,
+        // along with a few adjustments for serious problems", batched about
+        // every two months. stable-updates (-updates) stays out, as in Debian's
+        // default. Off on Proxmox: PVE needs full-upgrade, which this cannot do.
+        "origin=Debian,codename=${distro_codename},label=Debian";
+{% endif %}
+{% if enable_unattended_rpi_repo | default(false) %}
+
+        // Raspberry Pi's own repo: kernel, firmware, bootloader EEPROM (flashed
+        // at the next boot by rpi-eeprom-update), AND its "+rpt" rebuilds of
+        // Debian packages — openssl, mesa, pipewire, wireless firmware. It
+        // publishes no separate security label, so this is all of it or none.
+        // A kernel sets reboot-required, so Automatic-Reboot below applies it.
+        "origin=Raspberry Pi Foundation,codename=${distro_codename},label=Raspberry Pi Foundation";
+{% endif %}
 {% if custom_origins is defined %}
 
         // Per-host vendor repositories, set as `custom_origins` in inventory.
@@ -30,15 +41,10 @@ Unattended-Upgrade::Origins-Pattern {
 {% endif %}
 };
 
-// Package blacklist: packages that should *never* be automatically upgraded
+// Package blacklist: packages that should *never* be automatically upgraded.
+// Docker is not listed because it needs no listing: download.docker.com is in
+// no allowed origin above, so it is never upgraded unattended. Keep it that way.
 Unattended-Upgrade::Package-Blacklist {
-        // Docker packages - critical for Home Assistant, update manually
-        "docker-ce";
-        "docker-ce-cli";
-        "docker-ce-rootless-extras";
-        "docker-compose-plugin";
-        "docker-buildx-plugin";
-        "containerd.io";
 {% if custom_blacklist is defined %}
 {% for package in custom_blacklist %}
         "{{ package }}";
