@@ -1,0 +1,55 @@
+#!/bin/sh
+# run_model.sh — run one OpenCode invocation as {{ agent_model_user }} (managed by Ansible)
+#
+#   sudo -n {{ agent_model_launcher }} run --agent infra-monitor --format json "<prompt>"
+#
+# investigate.sh runs as {{ primary_user }}, which reads /etc/agent/ by group
+# and has passwordless sudo. While OpenCode ran there too, its permission config
+# was the only thing between the model and every credential on this box
+# (PER-112, PER-122). This hands each run to an account that owns none of them,
+# so the filesystem refuses instead.
+#
+# Root-owned, reached through one sudoers rule (/etc/sudoers.d/agent_model),
+# which also keeps ANTHROPIC_API_KEY and FIREWORKS_API_KEY across sudo's
+# environment reset. Nothing else of the caller's environment survives that
+# reset; HOME, USER, LOGNAME and SHELL are set here to the model account's.
+#
+# --no-new-privs: no setuid binary (sudo above all) can give the model back the
+# privileges dropped here.
+#
+# The time limit and the stray-process sweep live here rather than in
+# investigate.sh because only root can signal the model account's processes.
+# Exit status is opencode's, or 124 when the limit killed it.
+
+set -u
+
+MODEL_USER="{{ agent_model_user }}"
+MODEL_HOME="{{ agent_model_home }}"
+
+if [ "$(id -u)" -ne 0 ]; then
+    echo "run_model: must run as root, through sudo" >&2
+    exit 1
+fi
+if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+    echo "run_model: ANTHROPIC_API_KEY was not passed through sudo" >&2
+    exit 1
+fi
+
+cd "$MODEL_HOME" || exit 1
+# SHELL=/bin/sh is what cron gave OpenCode when it ran as {{ primary_user }}.
+HOME=$MODEL_HOME USER=$MODEL_USER LOGNAME=$MODEL_USER SHELL=/bin/sh
+export HOME USER LOGNAME SHELL
+
+# timeout runs the command in its own process group and signals the whole
+# group, so ssh children go with it; -k 15 SIGKILLs a run that ignores SIGTERM.
+timeout -k 15 {{ agent_run_timeout_seconds }} \
+    setpriv --reuid="$MODEL_USER" --regid="$MODEL_USER" --init-groups --no-new-privs \
+    {{ opencode_bin }} "$@"
+rc=$?
+
+# OpenCode can finish and leave a detached child behind. The account runs
+# nothing but this, and investigate.sh's flock means no other run is live, so
+# whatever it still owns is debris.
+pkill -KILL -u "$MODEL_USER" 2>/dev/null || true
+
+exit "$rc"

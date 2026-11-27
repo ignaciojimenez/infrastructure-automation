@@ -17,6 +17,7 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ## Contents
 
+- [2026-11-27 — the Tier 2 model runs as its own account, so the filesystem guards the secrets (PER-122, PER-86)](#2026-11-27--the-tier-2-model-runs-as-its-own-account-so-the-filesystem-guards-the-secrets-per-122-per-86)
 - [2026-11-26 — the key write no longer touches OPNsense, which rewrites that file from config.xml](#2026-11-26--the-key-write-no-longer-touches-opnsense-which-rewrites-that-file-from-configxml)
 - [2026-11-25 — a grace window can name a device, so the Eve doors' battery entities stop paging (PER-183)](#2026-11-25--a-grace-window-can-name-a-device-so-the-eve-doors-battery-entities-stop-paging-per-183)
 - [2026-11-25 — the UniFi VM's alert issues could never close: the sweep knew it by another name](#2026-11-25--the-unifi-vms-alert-issues-could-never-close-the-sweep-knew-it-by-another-name)
@@ -86,6 +87,22 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 ---
 
 
+
+## 2026-11-27 — the Tier 2 model runs as its own account, so the filesystem guards the secrets (PER-122, PER-86)
+
+**One OpenCode rule stood between the model and root.** OpenCode ran as `choco`, which reads `/etc/agent/` (the Anthropic key, the Slack read token, the OPNsense and healthchecks API credentials) by group and has passwordless sudo. PER-112 closed every path it found, but the boundary was OpenCode's permission engine and a glob over command strings, which any upgrade could change. Separately, the role templated a file at `~/.config/opencode/AGENTS.md`, where dotfiles wants a symlink (PER-86).
+
+**Decided: the builder's pattern** ([ARCHITECTURE_DECISIONS](../ARCHITECTURE_DECISIONS.md#phase-b--tier-2-investigation-built--live-2026-072526)). `investigate.sh` stays `choco` and hands each run to `investigator` through a root launcher (`run_model.sh`: `setpriv --no-new-privs`, plus the time limit and the stray-process kill, which only root can apply to another account). The key passes by sudoers `env_keep`. `investigator` holds a copy of the read-only fleet key, its ssh_config and the OpenCode config; `choco`'s three config files are removed, after the new `investigate.sh` lands, so no cron run starts OpenCode as `choco` with no config. OpenCode's permission rules are unchanged, now the second layer. Moving the config out of `choco`'s home also resolves PER-86: **dotfiles never bootstraps into `choco` on a fleet host**, because its `~/.scripts` is the monitoring directory.
+
+Verified:
+- `--check --diff`, then the deploy (`changed=13`), then a second run `changed=0`, one host.
+- Direct, as `investigator` with the launcher's flags: `cat` gave `Permission denied` on `agent.env`, both API creds, the Linear auth header, `choco`'s findings and `choco`'s key; `sudo` refused by no_new_privs. Control: `choco` can read `agent.env`.
+- Through the real launcher (`choco` → `sudo -n`), **every OpenCode permission set to `allow`**: a control `cat /etc/hostname` ran; bash `cat /etc/agent/agent.env` → `Permission denied`; `ls /etc/agent/` → `Permission denied`; `sudo` refused; OpenCode's `read` tool → `PermissionDenied`. 0 secret values in the output. The first attempt proved nothing, because the model declined to try the reads; the rerun sent each to `/dev/null`.
+- Only `ANTHROPIC_API_KEY` reaches the model's environment.
+- dotfiles `bootstrap.sh --dry-run` as `choco`: would now link `~/.config/opencode/AGENTS.md`; the remaining conflicts are `.profile` and `.scripts`, which the decision above settles.
+- A real `investigate.sh --digest` (2026-11-27 01:11, $0.78) ran as `investigator`, read every host over SSH (cwwk's throttle count, SMART, dockassist's logs), wrote its plan in `choco`'s `~/.agent/plans/` and posted to `#home-logging`.
+
+**Not done here:** OpenCode is still pinned (1.18.4); floating it under the 20-day cooldown is the next issue. OpenCode npm-installs `@opencode-ai/plugin` into its config directory on every start, outside any cooldown. `/proc` is not `hidepid` (TODO 5). `choco`'s old OpenCode data (`~/.local/share/opencode`, the `node_modules` in `~/.config/opencode`) was left in place.
 
 ## 2026-11-26 — the key write no longer touches OPNsense, which rewrites that file from config.xml
 

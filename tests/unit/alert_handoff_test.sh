@@ -52,7 +52,7 @@ python3 "$REPO_ROOT/tests/lib/render_j2.py" \
     agent_incident_max_age_days=7 \
     agent_daily_spend_cap_usd=5.00 \
     agent_fleet_hosts=cobra:linux,hifipi:linux,workbench-lxc:linux \
-    opencode_bin="$WORK/bin/opencode" || exit 1
+    agent_model_run="$WORK/bin/opencode" || exit 1
 
 printf 'Authorization: lin_api_UNITTEST\n' > "$WORK/auth.header"
 python3 "$REPO_ROOT/tests/lib/render_j2.py" \
@@ -83,13 +83,6 @@ python3 "$REPO_ROOT/tests/lib/render_j2.py" \
 # plan $PLAN_FILE holds, so each case picks its verdict.
 # ------------------------------------------------------------------
 printf '#!/bin/sh\nexit 0\n' > "$WORK/bin/flock"
-cat > "$WORK/bin/timeout" <<'STUB'
-#!/bin/sh
-while [ $# -gt 0 ]; do
-    case "$1" in -*) shift 2 ;; [0-9]*) shift ;; *) break ;; esac
-done
-exec "$@"
-STUB
 cp "$REPO_ROOT/tests/lib/fake_linear_curl.py" "$WORK/bin/fake_linear_curl"
 cat > "$WORK/bin/curl" <<STUB
 #!/bin/sh

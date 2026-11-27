@@ -26,9 +26,9 @@
 # which plans it has already posted.
 #
 # 🔴 Runs as ROOT, from root's crontab, and is the only thing that can read the
-# Linear credential (AUTH_FILE, 0600 root). The model runs as the agent
-# account, whose OpenCode allowlist denies sudo, so the key is out of its
-# reach. Everything this script reads from the agent account (findings, plan
+# Linear credential (AUTH_FILE, 0600 root). The model runs as its own account
+# (PER-122), with no sudo and no_new_privs, so the key is out of its reach.
+# Everything this script reads from the agent account (findings, plan
 # text) is DATA: it only ever reaches jq --arg/--rawfile, never eval. It runs
 # nothing the agent account can rewrite — incident_subjects.py and this file
 # are root-owned.

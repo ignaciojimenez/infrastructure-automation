@@ -115,7 +115,7 @@ cannot disagree. Its rules:
 The Linear key is **Read + Write, team PER only**. It sits in `/etc/fleet-linear/auth.header`
 (0600 root) and reaches curl as `-H @file`. The filer, its wrapper and `incident_subjects.py` are
 root-owned in `/usr/local/lib/agent/`, so root runs nothing the agent account can rewrite. The
-model runs as the agent account, and OpenCode denies it `sudo`.
+model runs as `investigator`, which has no `sudo` and runs under `no_new_privs` (PER-122).
 
 The filer **fails, and pages**, on any of these:
 - stale sweep state (over 2 h);
@@ -182,24 +182,33 @@ Tuning levers if you want it cheaper: raise `agent_incident_quiet_hours` or
 
 ## Security model
 
-- **Read-only by construction.** The agent's account (`read_agent`) has only read-only sudo, and
+- **The model runs as its own account, so the filesystem is the boundary** (PER-122).
+  `investigate.sh` runs as `choco` and hands each OpenCode run to `investigator` through a
+  root-owned launcher (`sudo -n /usr/local/lib/agent/run_model.sh`, which drops privileges with
+  `setpriv --no-new-privs`). `investigator` has no sudo and owns only a copy of the read-only
+  fleet key, its ssh_config and the OpenCode config. The Anthropic key arrives in its
+  environment through sudoers `env_keep`, never argv: the model can read that one key, because
+  OpenCode needs it. Forced 2026-11-27 with **every OpenCode permission set to `allow`**: bash
+  `cat /etc/agent/agent.env` → `Permission denied`, `ls /etc/agent/` → `Permission denied`,
+  `choco`'s findings → `Permission denied`, `sudo` → refused (no_new_privs), OpenCode's `read`
+  tool → `PermissionDenied`. A control (`cat /etc/hostname`) ran in the same session. The OpenCode
+  permissions below are now the second layer.
+- **Read-only on the fleet.** The key logs in as `read_agent`, which has only read-only sudo, and
   OpenCode denies every tool except `bash` (a top-level `"*": "deny"`; its built-in default
   allows `read`, `grep`, `glob` and the rest), and restricts `bash` to `ssh *-agent *` plus a few
   local reads, with ssh options denied before or right after the host. The bash glob is a coarse filter, not the boundary — the real constraint is the
   **key**: `from=10.30.40.203` pinned, read-only account, revocable fleet-wide in one Ansible run.
 - **Permissions fail closed.** Headless, a denied action auto-rejects (there is no `--auto`);
   verified live.
-- **The agent never handles secrets — enforced by OpenCode, not by the filesystem.** The Slack
-  read token and HA monitor token stay in trusted scripts / host-side helpers; the agent only ever
-  gets handed alert text and reads state through a GET-only `ha_state` helper. Every credential
-  on the box (`agent.env`, and since PER-112 the OPNsense and healthchecks API credentials) lives
-  in `/etc/agent/`, outside `/home/choco`, which OpenCode treats as its project. A path outside
-  the project is `external_directory`, which a headless run auto-rejects. Forced 2026-10-12:
-  before PER-112 the `read` tool opened files in `~/.agent/`, where two credentials then sat;
-  after it, `read` is gone, `cat ~/.agent/../../../etc/hostname` is refused, and so is
-  `ssh -F <file> …`. ⚠️ The model still runs as `choco`, which can read `/etc/agent/` by group,
-  so the boundary is OpenCode's permission engine. A separate Unix account for the model, as the
-  builder has (`autobuilder`), would make it the filesystem (TODO 52).
+- **The agent never handles secrets.** The Slack read token and HA monitor token stay in trusted
+  scripts and host-side helpers; the agent is only ever handed alert text, and reads HA state
+  through a GET-only `ha_state` helper. Every credential on the box (`agent.env`, the OPNsense
+  and healthchecks API credentials) lives in `/etc/agent/`, readable by `choco` and not by
+  `investigator` (above). The Linear key is root's. The OpenCode layer, forced 2026-10-12
+  (PER-112): no `read` tool, no path outside the project directory (`external_directory`
+  auto-rejects headless), no `ssh -F <file> …`.
+- **Residual: `/proc` is not mounted `hidepid`**, so `investigator` can read other accounts'
+  command lines, which include the Slack webhooks in the wrappers' cron jobs (TODO 5).
 - **Scoped-read helpers** (`agent_read`, `ha_state`) are root-owned, name-validated (traversal-
   proof), and give the agent read access to monitoring logs/scripts and HA entity state without
   exposing the rest of the 0700 home or any credential.
