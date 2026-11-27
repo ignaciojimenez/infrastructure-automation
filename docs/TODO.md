@@ -158,25 +158,6 @@ headings say what is urgent.
 
 ### 🟠 P2 — known risk, not currently biting
 
-**52. The Tier 2 model shares a Unix account with every secret on agent-lxc** ([PER-122](https://linear.app/lacopadeeuropa/issue/PER-122))
-Left by PER-112 (2026-10-12). OpenCode runs as `choco`, the account the sweep
-needs, and `choco` can read `/etc/agent/` (the Anthropic key, the Slack read
-token, the OPNsense and healthchecks API credentials) by group. PER-112 closed
-every path found and forced: no `read` tool, no reads outside `/home/choco`, no
-ssh option that reads a local file. But the boundary is OpenCode's permission
-engine and a coarse glob over command strings. Each OpenCode upgrade can change
-it, and a new tool defaults to allow (the top-level deny covers that today).
-
-```
-TODO 52: run Tier 2's opencode as its own Unix account, the builder's pattern
-(roles/services/workbench/tasks/fleet_builder.yml, autobuilder). The account
-holds only the read_agent SSH key, its ssh_config and the opencode config;
-investigate.sh (choco) hands off with setpriv and passes ANTHROPIC_API_KEY
-in the environment. Prove it with the PER-112 probes run as the new account:
-`cat /etc/agent/agent.env` is "Permission denied" from the filesystem even
-with every OpenCode permission set to allow.
-```
-
 **37. vinylstreamer's wifi recovery undid its own fix — DEPLOYED, waiting on a lockout**
 On 2026-09-13 wlan0 dropped at 06:31 and stayed off until 09:00; the host itself
 stayed up. Layer 3 of `wifi_reconnect.sh` (driver reload) recovered the link on

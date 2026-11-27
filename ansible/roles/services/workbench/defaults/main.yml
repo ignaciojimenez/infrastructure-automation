@@ -14,9 +14,10 @@ enable_workbench: true
 #                                   scripts. Live: dotfiles' own validate.sh
 #                                   fails here because the agent-sessions hook
 #                                   target is shadowed by the monitoring dir.
-#   ~/.config/opencode/AGENTS.md  — the agent role templates a FILE where
-#                                   dotfiles wants a SYMLINK. Latent on
-#                                   agent-lxc, fires the day dotfiles lands.
+#   ~/.config/opencode/AGENTS.md  — the agent role templated a FILE where
+#                                   dotfiles wants a SYMLINK. Gone on
+#                                   agent-lxc since PER-122 moved OpenCode's
+#                                   config to its own account, the same fix.
 #   ~/.local/bin                  — Claude Code installs here.
 #
 # Renaming any one of them fixes that one and leaves the next to be discovered
