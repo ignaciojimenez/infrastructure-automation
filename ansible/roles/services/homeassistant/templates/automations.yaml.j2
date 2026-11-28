@@ -204,10 +204,17 @@
 # check_ha_entities.sh pages for, through a second channel. agent-lxc's Tier 2
 # keys every alert by (host, subject) to pay for one investigation per fault;
 # HA's wording names neither, so on 2026-09-21 one radiator bought two (PER-58).
-# This tag puts them in the check's own incident. "ha-entities" is the subject
-# investigate.sh derives from that script's name; tests/unit/incident_dedup_test.sh
-# reads this line, so the two cannot drift apart unnoticed.
-{% set ha_entities_incident = "(Host: " ~ inventory_hostname ~ ", Subject: ha-entities)" %}
+# This tag puts them in the check's own incident.
+#
+# The check's incident is per DEVICE (PER-184): its alert lines end
+# "— device: <name>", and agent-lxc keys them "ha-<name>". So the tag states the
+# same device, picked the same way: user-given name, else HA's own, else the
+# entity id for an entity with no device. device_attr() takes an entity id and
+# returns None for one without a device; it does not raise. This is an HA Jinja
+# expression, spliced into each message expression below with `~`.
+# tests/unit/incident_dedup_test.sh reads this line, so the two cannot drift
+# apart unnoticed.
+{% set ha_entities_incident = "' (Host: " ~ inventory_hostname ~ ", Subject: ha-' ~ (device_attr(trigger.entity_id, 'name_by_user') or device_attr(trigger.entity_id, 'name') or trigger.entity_id) ~ ')'" %}
 
 # HomeKit heating availability monitoring
 - id: "homekit_tado_climate_offline_alert"
@@ -237,7 +244,7 @@
   action:
     - service: rest_command.slack_alert
       data:
-        message: "{{ '{{' }} \"⚠️ Heating offline: \" ~ (trigger.to_state.attributes.friendly_name | default(trigger.entity_id)) ~ \" {{ ha_entities_incident }}\" {{ '}}' }}"
+        message: "{{ '{{' }} \"⚠️ Heating offline: \" ~ (trigger.to_state.attributes.friendly_name | default(trigger.entity_id)) ~ {{ ha_entities_incident }} {{ '}}' }}"
   mode: parallel
 
 - id: "homekit_tado_climate_online_recovery"
@@ -442,7 +449,7 @@
   action:
     - service: rest_command.slack_alert
       data:
-        message: "{{ '{{' }} \"⚠️ Gas detector FAULT/OFFLINE — \" ~ (area_name(trigger.entity_id) | default(trigger.to_state.attributes.friendly_name | replace(\" Operation\", \"\"), true)) ~ \" (state: \" ~ trigger.to_state.state ~ \")\" ~ (\" {{ ha_entities_incident }}\" if trigger.to_state.state == \"unavailable\" else \"\") {{ '}}' }}"
+        message: "{{ '{{' }} \"⚠️ Gas detector FAULT/OFFLINE — \" ~ (area_name(trigger.entity_id) | default(trigger.to_state.attributes.friendly_name | replace(\" Operation\", \"\"), true)) ~ \" (state: \" ~ trigger.to_state.state ~ \")\" ~ ({{ ha_entities_incident }} if trigger.to_state.state == \"unavailable\" else \"\") {{ '}}' }}"
   mode: parallel
 
 - id: "shelly_gas_fault_recovery"
@@ -529,7 +536,7 @@
   action:
     - service: rest_command.slack_alert
       data:
-        message: "{{ '{{' }} \"⚠️ Smoke detector OFFLINE (not reporting) — \" ~ (area_name(trigger.entity_id) | default(trigger.to_state.attributes.friendly_name | replace(\" Smoke\", \"\"), true)) ~ \" {{ ha_entities_incident }}\" {{ '}}' }}"
+        message: "{{ '{{' }} \"⚠️ Smoke detector OFFLINE (not reporting) — \" ~ (area_name(trigger.entity_id) | default(trigger.to_state.attributes.friendly_name | replace(\" Smoke\", \"\"), true)) ~ {{ ha_entities_incident }} {{ '}}' }}"
   mode: parallel
 
 - id: "shelly_smoke_online_recovery"

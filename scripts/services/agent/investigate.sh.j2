@@ -208,7 +208,12 @@ compose_prompt() {
 # keyed "dockassist.ha-entities" in the next poll, $1.17 for one fault. Naming
 # the host alone would not have helped: "offline" reads as reachability, which
 # means the host itself is down. The automations that overlap that check now
-# state "Host: dockassist, Subject: ha-entities" (subject rule 0 below).
+# state "Host: dockassist, Subject: ha-<device>" (subject rule 0 below).
+#
+# Seen 2026-11-11 (PER-184): every check_ha_entities alert keyed
+# "dockassist.ha-entities", so the Eve door dropping joined the previous
+# day's Shelly bulb incident and was never investigated. That check now keys
+# by the device each alert line names, and the automations name the same one.
 #
 # State: one file per key holding "<opened_epoch> <last_seen_epoch> <plan>".
 # ============================================================

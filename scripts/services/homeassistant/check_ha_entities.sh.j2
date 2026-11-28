@@ -124,8 +124,10 @@ GRACEEOF
 )
 export HA_GRACE_OVERRIDES
 
-# /api/states carries no device, so device overrides need HA's template API:
-# one line per entity that has a device, "entity_id<TAB>name<TAB>name_by_user".
+# /api/states carries no device, so devices come from HA's template API: one
+# line per entity that has a device, "entity_id<TAB>name<TAB>name_by_user".
+# Two consumers: device-scoped grace overrides, and the "— device: <name>" tail
+# on every alerting line, which is what agent-lxc keys the incident by (PER-184).
 # Raw block: this is Home Assistant's Jinja, not Ansible's.
 DEVICE_QUERY='{% raw %}{"template": "{% for s in states %}{% set d = device_id(s.entity_id) %}{% if d %}{{ s.entity_id }}\t{{ device_attr(d, \"name\") or \"\" }}\t{{ device_attr(d, \"name_by_user\") or \"\" }}\n{% endif %}{% endfor %}"}{% endraw %}'
 
@@ -157,11 +159,10 @@ while [ "$attempt" -le "$FETCH_ATTEMPTS" ]; do
     [ "$attempt" -le "$FETCH_ATTEMPTS" ] && sleep "$FETCH_INTERVAL"
 done
 
-# "-" means not asked: no device override, or HA already unreachable. Any other
-# value is the HTTP status, and anything but 200 is a failed lookup.
+# "-" means not asked: HA already unreachable. Any other value is the HTTP
+# status, and anything but 200 is a failed lookup.
 devices_code="-"
-if [ "$API_OK" = "1" ] &&
-   printf '%s\n' "$HA_GRACE_OVERRIDES" | grep -q '^[[:space:]]*device:'; then
+if [ "$API_OK" = "1" ]; then
     devices_code=$(curl -s -o "$DEVICES_FILE" -w '%{http_code}' --max-time 20 \
                    -H "Authorization: Bearer $TOKEN" \
                    -H "Content-Type: application/json" \
@@ -211,15 +212,21 @@ device_overrides = [o for o in overrides if o[0] == "device"]
 
 # entity_id -> the names of its device (own name, user-given name).
 device_names = {}
+# entity_id -> the one name an alert line states: user-given, else own. The
+# same order HA uses, so automations.yaml's device_attr() names it identically.
+device_label = {}
 
 
 def load_devices():
     """Fill device_names; return None on success, else why the lookup failed.
 
-    Only called when a device override exists. A failed lookup is reported,
-    never shrugged off: those entities fall back to the global window, so a
-    silent failure would page on every ordinary drop with no stated cause.
+    With a device override, a failed lookup pages, never shrugged off: those
+    entities fall back to the global window, so a silent failure would page on
+    every ordinary drop with no stated cause. Without one, it only costs the
+    device tail on alert lines, so it is a warning.
     """
+    if devices_code == "-" and not device_overrides:
+        return None  # not asked, and nothing but the device tail needs it
     if devices_code != "200":
         return "HTTP %s from /api/template" % devices_code
     try:
@@ -231,6 +238,9 @@ def load_devices():
         fields = line.split("\t")
         if len(fields) == 3 and fields[0]:
             device_names[fields[0]] = tuple(n for n in fields[1:] if n)
+            label = (fields[2] or fields[1]).strip()
+            if label:
+                device_label[fields[0]] = label
     if not device_names:
         # Any HA with devices maps some entity to one; none means a bad answer.
         return "/api/template mapped no entity to a device"
@@ -354,7 +364,7 @@ if not entities:
     write_state(entity_since, None)
     finish(1)
 
-device_error = load_devices() if device_overrides else None
+device_error = load_devices()
 
 bad_now = {}
 for entity in entities:
@@ -392,9 +402,11 @@ print("%d entities; %d unavailable/unknown (%d allowlisted, %d inside grace)"
 # Printed every run, healthy or not: a device override that matches nothing
 # (renamed device, bad lookup) is otherwise invisible until the drop it was
 # meant to absorb pages anyway.
-if device_error:
+if device_error and device_overrides:
     print("❌ device lookup failed (%s) — device-scoped grace windows NOT applied"
           % device_error)
+elif device_error:
+    print("⚠️  device lookup failed (%s) — alert lines name no device" % device_error)
 else:
     for _, pattern, seconds in device_overrides:
         covered = sum(1 for names in device_names.values()
@@ -423,12 +435,17 @@ if state_broken:
           "were lost, so an old fault may be re-timed from now" % state_path)
     rc += 1
 
-if device_error:
+if device_error and device_overrides:
     rc += 1
 
+# The "— device: <name>" tail is a contract, not decoration: agent-lxc keys the
+# incident by it (incident_subjects.py), so one bulb losing five entities is
+# one incident, and a different device under this same check is a new one.
 for entity_id, entity_state, age, eg in alerting:
-    print("❌ %s = %s for %d min (past its %d min grace)"
-          % (entity_id, entity_state, age // 60, eg // 60))
+    device = device_label.get(entity_id)
+    print("❌ %s = %s for %d min (past its %d min grace)%s"
+          % (entity_id, entity_state, age // 60, eg // 60,
+             " — device: %s" % device if device else ""))
 rc += len(alerting)
 
 if rc == 0:
