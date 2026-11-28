@@ -1,6 +1,12 @@
 ---
 # Transmission BitTorrent client service role
 
+# First, so a missing secret fails before anything on the host changes. Tagged
+# like the settings template, so every run that can write the file checks it.
+- name: Require vault-backed RPC credentials
+  ansible.builtin.import_tasks: credentials.yml
+  tags: [transmission, config]
+
 - name: Install transmission daemon
   become: true
   ansible.builtin.apt:
@@ -43,12 +49,16 @@
   tags: [transmission, config]
   notify: restart transmission
 
+# No owner: on cobra these live on an exFAT mount, which cannot store one (its
+# uid comes from the mount options), so setting it failed every run. That
+# failure landed after the daemon was stopped and before it was started again,
+# leaving Transmission down (2026-11-28). Access is by group: the daemon user is
+# in media, and the mount's gid and dmask already give media 0775.
 - name: Ensure download directories exist
   become: true
   ansible.builtin.file:
     path: "{{ item }}"
     state: directory
-    owner: debian-transmission
     group: media
     mode: '0775'
   loop:

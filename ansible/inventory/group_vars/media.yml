@@ -21,6 +21,10 @@ transmission_incomplete_dir: "{{ external_drive_mount }}/Descargas/tmp"
 transmission_blocklist_enabled: true
 transmission_blocklist_url: "https://github.com/Naunter/BT_BlockLists/raw/master/bt_blocklists.gz"
 transmission_umask: 2
+# RPC login. No default anywhere: the role refuses to run without these
+# (tasks/credentials.yml). The password is stored as Transmission's own hash.
+transmission_rpc_username: "{{ vault_transmission_rpc_username }}"
+transmission_rpc_password_hash: "{{ vault_transmission_rpc_password_hash }}"
 
 # Samba Configuration
 samba_shares:
