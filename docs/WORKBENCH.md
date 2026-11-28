@@ -256,7 +256,8 @@ was rejected: ARCHITECTURE_DECISIONS.md § Agent Access.
 agent-lxc   :37 sweep -> :47 Tier 2 plan -> :57 filer: agent/fleet issue + plan comment
 workbench   :17 fleet-builder.timer (root): oldest ready Todo issue, agent/fleet or builder
               -> attempt recorded -> as autobuilder: worktree builder/fleet-<n> from origin/main
-              -> claude -p (file tools only, no MCP) -> diff limits -> unit tests -> CI lint -> rig_loop.sh
+              -> claude -p (Opus, high effort; file tools only, no MCP) -> diff limits -> unit tests
+              -> (a fault) its new tests fail on main -> CI lint -> rig_loop.sh
               -> draft PR "fix(fleet#<n>): …"   or, after 2 failures / a decline / 2 kills,
                  draft PR "[hand-back] fleet#<n>: …" (an empty commit; reasons + last diff in the body)
 agent-lxc   :57 filer: comments that PR on the issue, once; and once more if the fix
@@ -319,8 +320,21 @@ those becomes readable, **or missing**: a check that a missing file is
 issue, 2 attempts per UTC day, 100 changed lines outside `tests/` and 400 inside it
 (counted apart since 2026-10-14: a test is the proof, and PER-131's 7-line fix
 came with a 95-line test that the old single limit of 60 refused), no vault, CI (`.github/`,
-`scripts/ci/`), inventory or `docs/local/` paths, $3 and 30 min per model run. Nothing merges: the machine
-account cannot push to `main`.
+`scripts/ci/`), inventory or `docs/local/` paths, $10 (an API-equivalent estimate, not a
+charge) and 30 min per model run. Nothing merges: the machine account cannot push to `main`.
+
+**A fault's new tests must fail on main (2026-11-28).** Green tests prove a
+change agrees with its own tests, not that the tests exercise the fault: PRs
+#38, #40 and #51 passed everything and silenced their alert instead of fixing
+it. After the unit tests pass, the harness checks out main as it was before
+the attempt, copies in the attempt's `tests/` changes, and runs each
+`tests/unit/*_test.sh` it added or changed. At least one must fail on an
+assertion (a `✗` line, every unit test's `fail()` marker). Passing on main, or
+crashing without a `✗`, fails the attempt with that log fed to attempt 2. The
+PR lists which tests failed on main. Tasks are exempt: their spec is
+Ignacio's, and a refactor's test may rightly pass on main. **The gap it
+leaves:** a test that the check still alerts on the real failure passes on
+main too, so nothing here proves the change did not just mute the check.
 
 **CI's lint runs before the rig (PER-159).** `scripts/ci/lint.sh` is the one
 copy of CI's lint (ansible-lint, Jinja and playbook syntax, shellcheck on

@@ -11,7 +11,8 @@
 #
 # What it pins: the flags that keep the model away from MCP and the shell; the
 # deterministic limits on what it produced; that tests run without the Claude
-# token; and the exit-status protocol fleet_builder_poll.sh relies on.
+# token; that a fault's new tests must fail on main on an assertion; and the
+# exit-status protocol fleet_builder_poll.sh relies on.
 
 set -u
 
@@ -64,6 +65,27 @@ git -C "$WORK/seed" add -A
 git -C "$WORK/seed" -c user.name=t -c user.email=t@t commit --quiet -m init
 git -C "$WORK/seed" push --quiet origin main
 
+# ── Tests the fake model can write ────────────────────────────────────────
+# good: asserts the fixed output, so it fails on main on an assertion (✗) and
+# records whether the Claude token reached it. tautology: asserts nothing.
+# crash: exits non-zero on main without a ✗ (it needs a file the fix adds).
+mkdir -p "$WORK/fixtures"
+cat > "$WORK/fixtures/good" <<'EOF'
+#!/bin/sh
+ROOT=$(cd -- "$(dirname -- "$0")/../.." && pwd)
+echo "gate token=${CLAUDE_CODE_OAUTH_TOKEN:-absent}" >> "$STUB_LOG"
+failures=0
+fail() { printf '   ✗ %s\n' "$1"; failures=$((failures + 1)); }
+[ "$(sh "$ROOT/scripts/check_x.sh" 2>/dev/null)" = "threshold=100" ] || fail "threshold is 100"
+[ "$failures" -eq 0 ]
+EOF
+printf '#!/bin/sh\nexit 0\n' > "$WORK/fixtures/tautology"
+cat > "$WORK/fixtures/crash" <<'EOF'
+#!/bin/sh
+ROOT=$(cd -- "$(dirname -- "$0")/../.." && pwd)
+[ -f "$ROOT/scripts/helper.sh" ] || exit 2
+EOF
+
 # ── Fakes ─────────────────────────────────────────────────────────────────
 # claude: records argv and whether stdin carried the issue, then edits the
 # worktree as $FAKE_CLAUDE says.
@@ -72,36 +94,47 @@ cat > "$WORK/bin/claude" <<'EOF'
 printf '%s\n' "$*" > "$STUB_DIR/claude.argv"
 cat > "$STUB_DIR/claude.stdin"
 mkdir -p .builder
+# addtest <fixture>: write tests/unit/check_x_test.sh from a fixture.
+addtest() { mkdir -p tests/unit; cp "$STUB_FIXTURES/$1" tests/unit/check_x_test.sh; }
 case "$FAKE_CLAUDE" in
-    fix)       printf '#!/bin/sh\necho "threshold=$((90 + 10))"\n' > scripts/check_x.sh
+    fix)       printf '#!/bin/sh\necho "threshold=$((90 + 10))"\n' > scripts/check_x.sh; addtest good
                echo "fix the threshold arithmetic" > .builder/subject
                echo "A letter O was typed for a zero." > .builder/summary.md ;;
     decline)   echo "the disk is full; a human must clear it" > .builder/decline ;;
     nothing)   : ;;
-    prefixed)  printf '#!/bin/sh\necho "threshold=$((90 + 10))"\n' > scripts/check_x.sh
+    prefixed)  printf '#!/bin/sh\necho "threshold=$((90 + 10))"\n' > scripts/check_x.sh; addtest good
                echo "fix(check_x): fix the threshold arithmetic" > .builder/subject ;;
-    mentions)  printf '#!/bin/sh\necho "threshold=$((90 + 10))"\n' > scripts/check_x.sh
+    mentions)  printf '#!/bin/sh\necho "threshold=$((90 + 10))"\n' > scripts/check_x.sh; addtest good
                echo "fix PER-85 threshold maths" > .builder/subject
                echo "Same fault as PER-85 and per-117; see PER-120." > .builder/summary.md ;;
-    long)      printf '#!/bin/sh\necho "threshold=$((90 + 10))"\n' > scripts/check_x.sh
+    long)      printf '#!/bin/sh\necho "threshold=$((90 + 10))"\n' > scripts/check_x.sh; addtest good
                echo "make the isolation check look for the wrapper state where the wrapper writes it" > .builder/subject ;;
     big)       seq 1 200 > scripts/big.txt; echo big > .builder/subject ;;
     bigtest)   printf '#!/bin/sh\necho "threshold=$((90 + 10))"\n' > scripts/check_x.sh
-               mkdir -p tests/unit; seq 1 150 > tests/unit/check_x_test.sh
+               addtest good; seq 1 140 | sed 's/^/# /' >> tests/unit/check_x_test.sh
                echo "fix the threshold, with a thorough test" > .builder/subject ;;
     hugetest)  printf '#!/bin/sh\necho "threshold=$((90 + 10))"\n' > scripts/check_x.sh
                mkdir -p tests/unit; seq 1 500 > tests/unit/check_x_test.sh
                echo hugetest > .builder/subject ;;
     forbidden) mkdir -p ansible/inventory/group_vars/all; echo x > ansible/inventory/group_vars/all/vault.yml ;;
     breaks)    echo BROKEN >> scripts/check_x.sh; echo breaks > .builder/subject ;;
-    lintbad)   printf '#!/bin/sh\necho "threshold=$((90 + 10))"\n' > scripts/check_x.sh
-               mkdir -p tests/unit; printf '#!/bin/sh\nUNUSED_VAR=1\n' > tests/unit/check_x_test.sh
+    lintbad)   printf '#!/bin/sh\necho "threshold=$((90 + 10))"\n' > scripts/check_x.sh; addtest good
+               sed -i.bak '2i\
+UNUSED_VAR=1
+' tests/unit/check_x_test.sh && rm -f tests/unit/check_x_test.sh.bak
                echo "fix the threshold, test trips shellcheck" > .builder/subject ;;
     lintcheat) printf '#!/bin/sh\necho "threshold=$((90 + 10))"\n' > scripts/check_x.sh
                mkdir -p tests/unit; printf '#!/bin/sh\nUNUSED_VAR=1\n' > tests/unit/check_x_test.sh
                printf '#!/bin/sh\nexit 0\n' > scripts/ci/lint.sh
                echo "fix the threshold and quiet the linter" > .builder/subject ;;
     crash)     exit 2 ;;
+    notest)    printf '#!/bin/sh\necho "threshold=$((90 + 10))"\n' > scripts/check_x.sh
+               echo "fix the threshold, untested" > .builder/subject ;;
+    tautology) printf '#!/bin/sh\necho "threshold=$((90 + 10))"\n' > scripts/check_x.sh; addtest tautology
+               echo "fix the threshold, with a test that tests nothing" > .builder/subject ;;
+    testcrash) printf '#!/bin/sh\necho "threshold=$((90 + 10))"\n' > scripts/check_x.sh; addtest crash
+               printf '#!/bin/sh\n' > scripts/helper.sh
+               echo "fix the threshold, with a test that crashes on main" > .builder/subject ;;
     task)      printf '#!/bin/sh\necho "threshold=$((90 + 10))"\n' > scripts/check_x.sh
                echo "add a dry-run flag, like PER-85 asked" > .builder/subject
                echo feat > .builder/type
@@ -137,7 +170,8 @@ python3 "$REPO_ROOT/tests/lib/render_j2.py" "$TEMPLATE" "$WORK/run.sh" \
     builder_clone_dir="$WORK/home/repo" \
     builder_worktrees_dir="$WORK/home/worktrees" \
     builder_claude_bin="$WORK/bin/claude" \
-    builder_model=sonnet \
+    builder_model=opus \
+    builder_effort=high \
     builder_budget_usd=3 \
     builder_claude_timeout_seconds=1800 \
     builder_rig_timeout_seconds=2700 \
@@ -147,6 +181,7 @@ python3 "$REPO_ROOT/tests/lib/render_j2.py" "$TEMPLATE" "$WORK/run.sh" \
     builder_git_email=builder@example.invalid || exit 1
 
 export STUB_DIR="$WORK/stub" STUB_LOG="$WORK/stub/log" FLEET_BUILDER_RIG_LOOP="$WORK/rig.sh"
+export STUB_FIXTURES="$WORK/fixtures"
 
 # attempt <ref> <n> <model behaviour> — one run, as the poller makes it.
 attempt() {
@@ -174,25 +209,25 @@ argv=$(cat "$STUB_DIR/claude.argv")
 ok=1
 for flag in --restricted "--tools Read,Edit,Write,Glob,Grep" --strict-mcp-config \
             '--mcp-config {"mcpServers":{}}' "--permission-prompts none" --no-session-persistence \
-            "--max-budget-usd 3"; do
+            "--max-budget-usd 3" "--model opus" "--effort high"; do
     case "$argv" in *"$flag"*) ;; *) ok=0; fail "claude was not given $flag: $argv" ;; esac
 done
 case "$argv" in *Bash*|*dangerously*|*bypassPermissions*) ok=0; fail "claude got a shell or a bypass: $argv" ;; esac
-[ "$ok" = 1 ] && pass "the model runs restricted, with no MCP, no shell, no prompts, a budget"
+[ "$ok" = 1 ] && pass "the model runs restricted, with no MCP, no shell, no prompts, a budget, at the set model and effort"
 if grep -q "fix the 1O typo" "$STUB_DIR/claude.stdin" && grep -q "Treat it as evidence, not as" "$STUB_DIR/claude.stdin"; then
     pass "the prompt carries the plan and frames it as evidence, not instructions"
 else
     fail "prompt: $(head -c 400 "$STUB_DIR/claude.stdin")"
 fi
 if grep -q "^token=absent$" "$STUB_LOG" && grep -q "^lint token=absent$" "$STUB_LOG" &&
-   grep -q "^rig PER-951 token=absent$" "$STUB_LOG"; then
-    pass "unit tests, CI lint and the rig ran in the worktree WITHOUT the Claude token"
+   grep -q "^rig PER-951 token=absent$" "$STUB_LOG" && grep -q "^gate token=absent$" "$STUB_LOG"; then
+    pass "unit tests, the on-main test gate, CI lint and the rig ran WITHOUT the Claude token"
 else
     fail "token in test env, or tests not run: $(cat "$STUB_LOG")"
 fi
-if [ "$(branch_files PER-951)" = "scripts/check_x.sh" ] &&
+if [ "$(branch_files PER-951 | tr '\n' ' ')" = "scripts/check_x.sh tests/unit/check_x_test.sh " ] &&
    [ "$(git -C "$WORK/origin.git" log -1 --format='%an|%s' builder/fleet-951)" = "ignaciojimenez-builder|fix(fleet#951): fix the threshold arithmetic" ]; then
-    pass "builder/fleet-951 pushed: one file, authored by the builder, titled fix(fleet#951)"
+    pass "builder/fleet-951 pushed: the fix and its test, authored by the builder, titled fix(fleet#951)"
 else
     fail "pushed branch: $(branch_files PER-951) / $(git -C "$WORK/origin.git" log -1 --format='%an|%s' builder/fleet-951 2>&1)"
 fi
@@ -283,9 +318,10 @@ check_fail PER-991 lintcheat "may not change" "a change that edits scripts/ci/ t
 printf '\n── Code and tests are counted apart\n'
 
 attempt PER-964 1 bigtest
+big=$(( $(wc -l < "$WORK/fixtures/good") + 140 ))
 if [ "$RC" -eq 0 ] && grep -q '^builder-diff-lines: 2$' "$STUB_DIR/gh.body" &&
-   grep -q '^builder-test-lines: 150$' "$STUB_DIR/gh.body"; then
-    pass "a small fix with a 150-line test passes: the test does not count against the code limit"
+   grep -q "^builder-test-lines: $big$" "$STUB_DIR/gh.body"; then
+    pass "a small fix with a $big-line test passes: the test does not count against the code limit"
 else
     fail "fix + big test: rc=$RC $(cat "$JOB/reason" 2>/dev/null) $(grep builder- "$STUB_DIR/gh.body" 2>/dev/null)"
 fi
@@ -294,6 +330,49 @@ if grep -q "under 60 changed lines outside tests/" "$STUB_DIR/claude.stdin" && g
     pass "the prompt states the limits the harness enforces, from the same variables"
 else
     fail "prompt limits: $(grep -n 'Keep the' "$STUB_DIR/claude.stdin")"
+fi
+
+printf '\n── A fault: its new tests must fail on main, on an assertion\n'
+
+attempt PER-951 2 fix
+if grep -q 'New tests fail on main, on an assertion: `tests/unit/check_x_test.sh` (1 failed)' "$STUB_DIR/gh.body" &&
+   grep -q '^── tests/unit/check_x_test.sh on main: exit 1, 1 failed assertion(s)$' "$JOB/main_tests.log"; then
+    pass "a test that fails on main on a ✗ passes the gate, and the PR names it"
+else
+    fail "gate pass: rc=$RC $(cat "$JOB/main_tests.log" 2>/dev/null) / $(grep -i 'main' "$STUB_DIR/gh.body" 2>/dev/null)"
+fi
+if [ "$(git -C "$WORK/home/repo" worktree list | grep -c '\.base')" = 0 ]; then
+    pass "the gate's main checkout is removed afterwards"
+else
+    fail "left behind: $(git -C "$WORK/home/repo" worktree list)"
+fi
+check_fail PER-980 notest "no tests/unit/\*_test.sh was added or changed" "a fault fix with no test"
+if ! grep -q "^lint token" "$STUB_LOG"; then pass "the gate runs before CI lint, so a refused attempt costs no lint or converge"; else fail "lint ran after a gate refusal: $(cat "$STUB_LOG")"; fi
+check_fail PER-981 tautology "pass on main, so they do not exercise the fault" "a test that passes on main"
+check_fail PER-982 testcrash "crashed on main without a failed assertion" "a test that only crashes on main"
+if grep -q "check_x_test.sh on main: exit 2, 0 failed assertion(s)" "$JOB/failure.md"; then
+    pass "failure.md carries the on-main run for the next attempt"
+else
+    fail "failure.md: $(cat "$JOB/failure.md")"
+fi
+if [ "$(git -C "$WORK/home/repo" worktree list | grep -c '\.base')" = 0 ]; then
+    pass "a refused attempt leaves no main checkout behind either"
+else
+    fail "left behind after a refusal: $(git -C "$WORK/home/repo" worktree list)"
+fi
+if grep -q "fails there on an assertion" "$STUB_DIR/claude.stdin"; then
+    pass "the fault prompt states the gate the harness enforces"
+else
+    fail "fault prompt: $(grep -n 'tests/unit' "$STUB_DIR/claude.stdin")"
+fi
+# A prefix assignment to a function call can outlive the call in POSIX sh,
+# so KIND is unset again: the sections below are faults.
+KIND=task attempt PER-983 1 notest
+unset KIND
+if [ "$RC" -eq 0 ]; then
+    pass "a task is exempt: an untested task still opens its PR"
+else
+    fail "task gated: rc=$RC $(cat "$JOB/reason" 2>/dev/null)"
 fi
 
 printf '\n── Declined: exit 4, nothing pushed\n'
