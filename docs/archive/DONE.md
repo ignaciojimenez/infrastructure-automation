@@ -106,6 +106,12 @@ Verified before deploy:
 - HA's `device_attr()` source (core `helpers/template/extensions/devices.py`): it takes an entity id, returns `None` for an unknown entity or one with no device, and raises only for non-string input. The changed automation lines render through Ansible's Jinja to valid YAML, and evaluate with a stubbed `device_attr`.
 - Linear: no open `dockassist.ha-entities` issue (PER-194 and PER-199 were already Done), so none is orphaned.
 
+Verified live:
+- agent-lxc: `--check --diff`, the deploy (`changed=2`: `incident_subjects.py`, `investigate.sh`), a second run `changed=0`. The deployed parser's sha256 matches the repo's, and the real 11-10 and 11-11 bodies replayed through it give different keys.
+- dockassist (`--tags config,monitoring`): `--check --diff` showed only `automations.yaml` and `check_ha_entities.sh`, the deploy `changed=3` (the two plus the HA restart), a second run `changed=0`. HA's log after the restart has no automation or template error. The deployed check, run by hand, is green and still prints `device grace 1440 min for 'Eve Door 20EBN9901': 12 entities`, with no lookup warning.
+- Forced on a throwaway copy of the deployed check (grace 0, no allowlist, no overrides, its own state file): all 39 bad entities printed an alert line, 29 of them with a real device tail. That body, through agent-lxc's deployed parser, gave 16 keys: one per device (6) and one per deviceless entity (10), where the old parser gave one key for all of them.
+- Not seen live: one of the three automations rendering its new tag in HA, which needs a radiator, smoke or gas detector to drop.
+
 **Residual:** an entity with no device, or a failed lookup, still keys per entity, and one run takes at most `agent_slack_max_per_run` (3) new keys, so a large untagged alert can cost a second run.
 
 ## 2026-11-27 — the Tier 2 model runs as its own account, so the filesystem guards the secrets (PER-122, PER-86)
