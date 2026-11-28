@@ -335,6 +335,7 @@ fi
 printf '\n── A fault: its new tests must fail on main, on an assertion\n'
 
 attempt PER-951 2 fix
+# shellcheck disable=SC2016  # literal: the backticks are the PR body's markdown
 if grep -q 'New tests fail on main, on an assertion: `tests/unit/check_x_test.sh` (1 failed)' "$STUB_DIR/gh.body" &&
    grep -q '^── tests/unit/check_x_test.sh on main: exit 1, 1 failed assertion(s)$' "$JOB/main_tests.log"; then
     pass "a test that fails on main on a ✗ passes the gate, and the PR names it"
