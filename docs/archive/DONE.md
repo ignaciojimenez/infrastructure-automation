@@ -17,6 +17,7 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ## Contents
 
+- [2026-11-28 — Transmission's login comes from vault, and the role refuses to run without it](#2026-11-28--transmissions-login-comes-from-vault-and-the-role-refuses-to-run-without-it)
 - [2026-11-28 — an HA entity alert keys by the device that failed, so a second device is investigated (PER-184)](#2026-11-28--an-ha-entity-alert-keys-by-the-device-that-failed-so-a-second-device-is-investigated-per-184)
 - [2026-11-27 — the Tier 2 model runs as its own account, so the filesystem guards the secrets (PER-122, PER-86)](#2026-11-27--the-tier-2-model-runs-as-its-own-account-so-the-filesystem-guards-the-secrets-per-122-per-86)
 - [2026-11-26 — the key write no longer touches OPNsense, which rewrites that file from config.xml](#2026-11-26--the-key-write-no-longer-touches-opnsense-which-rewrites-that-file-from-configxml)
@@ -88,6 +89,21 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 ---
 
 
+
+## 2026-11-28 — Transmission's login comes from vault, and the role refuses to run without it
+
+**RPC had been locked since 2026-08-23, and nothing reported it.** The template's `rpc-password` fell back to `{changeme}`, and no variable ever supplied a real one (`vault_transmission_*` sat in `vault.yml.example`, never read). Transmission 3.00 treats a `{`-prefixed value as a stored hash, and `tr_ssha1_matches` rejects any hash shorter than 41 characters, so no input could match. The 23:25 run on 08-23 overwrote the working settings (its backup is the only one on cobra) and also reset the username. The lockout was found on 11-28, at the first login attempt.
+
+**Decided: a missing secret fails the run, never a default.** `tasks/credentials.yml` asserts a username and a Transmission-format hash before the daemon is stopped. Vault holds the hash (`{` + sha1(password + salt) + 8-character salt, from `tr_ssha1`), not the password: the daemon keeps a `{`-prefixed value verbatim, so the file converges. The `vault.yml.example` placeholder is deliberately invalid, so copying it fails the assert too. `bin/transmission-rpc-credentials` writes both values without printing them; the old login was restored from the 08-23 backup with `--from`.
+
+**Also fixed: every run left Transmission stopped.** "Ensure download directories exist" set `owner: debian-transmission` on the exFAT mount, which cannot store an owner (same root as TODO item 2), so it failed every real run. `--check` never showed it. The failure came after the stop task and before the start, so the play aborted with the daemon down; the first deploy did exactly that. The owner is dropped: access is by group `media`, which the mount's `gid`/`dmask` already give 0775.
+
+Verified:
+- Unit test `transmission_rpc_credentials`: the matcher checked against Transmission's own test vectors; the role's assert run on localhost refuses missing vars, an undefined vault var, `{changeme}`, plaintext, the example placeholder and an empty username, and accepts a real hash. 10 assertions fail on main.
+- On cobra, before the vault keys existed, the assert refused (`failed=1`, `changed=0`, daemon never stopped).
+- Deploy diff touched only `rpc-username` and `rpc-password`. Two further real runs: the settings template `ok` after each daemon stop/write. Daemon running; unauthenticated RPC returns 401.
+
+**Not done here:** the role still stops and starts the daemon on every run (`changed=2` is its floor), and any task failing between those two leaves Transmission down. The unit has `ExecReload` (SIGHUP); moving to template plus a reload handler is the textbook fix, not built.
 
 ## 2026-11-28 — an HA entity alert keys by the device that failed, so a second device is investigated (PER-184)
 

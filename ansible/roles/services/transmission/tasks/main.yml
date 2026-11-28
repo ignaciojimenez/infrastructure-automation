@@ -49,12 +49,16 @@
   tags: [transmission, config]
   notify: restart transmission
 
+# No owner: on cobra these live on an exFAT mount, which cannot store one (its
+# uid comes from the mount options), so setting it failed every run. That
+# failure landed after the daemon was stopped and before it was started again,
+# leaving Transmission down (2026-11-28). Access is by group: the daemon user is
+# in media, and the mount's gid and dmask already give media 0775.
 - name: Ensure download directories exist
   become: true
   ansible.builtin.file:
     path: "{{ item }}"
     state: directory
-    owner: debian-transmission
     group: media
     mode: '0775'
   loop:
