@@ -240,8 +240,16 @@ builder_daily_cap: 2
 # ceiling only guards against a runaway, such as a generated fixture.
 builder_max_diff_lines: 100
 builder_max_test_lines: 400
-builder_model: sonnet
-builder_budget_usd: 3
+# Opus at high effort (2026-11-28, Ignacio's call): the builder's failures were
+# reasoning ones (a stub off by one field, a fix that silenced its alert), and
+# runs are few and capped, so capability is worth more than speed here.
+builder_model: opus
+builder_effort: high
+# A runaway guard on the API-equivalent estimate, not a charge: builds draw on
+# the subscription. Sonnet runs logged $0.05-0.42; an Opus/high run is not yet
+# measured, and a guard that cuts a run mid-edit wastes the attempt. Read the
+# first PRs' builder-cost-usd lines and tighten this to about 3x the largest.
+builder_budget_usd: 10
 builder_claude_timeout_seconds: 1800
 builder_rig_timeout_seconds: 2700
 

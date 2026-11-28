@@ -13,7 +13,8 @@
 #
 #   attempt:  fresh worktree from origin/main
 #             -> the model edits files (no shell, no MCP, no web)
-#             -> diff limits -> unit tests -> CI lint -> rig_loop.sh
+#             -> diff limits -> unit tests -> (a fault) its new tests fail
+#                on main -> CI lint -> rig_loop.sh
 #             -> commit, push, draft PR
 #   handback: an empty commit and a draft PR "[hand-back] …" carrying the
 #             reasons and the last diff
@@ -61,6 +62,7 @@ CLONE="{{ builder_clone_dir }}"
 WORKTREES="{{ builder_worktrees_dir }}"
 CLAUDE="{{ builder_claude_bin }}"
 MODEL="{{ builder_model }}"
+EFFORT="{{ builder_effort }}"
 BUDGET_USD="{{ builder_budget_usd }}"
 CLAUDE_TIMEOUT={{ builder_claude_timeout_seconds }}
 RIG_TIMEOUT={{ builder_rig_timeout_seconds }}
@@ -199,8 +201,12 @@ monitor found the fault below and a separate investigation wrote the plan.
 
 Your job: make the SMALLEST change to files in this repository that fixes the
 fault, preferably in a monitoring script, and add or adjust a unit test under
-tests/unit/ that would have caught it when that is practical (see
-tests/run_unit_tests.sh and tests/lib/ for the conventions).
+tests/unit/ that fails without your change (see tests/run_unit_tests.sh and
+tests/lib/ for the conventions). The harness runs every tests/unit/*_test.sh
+you added or changed against main as it was before your change, and rejects
+the attempt unless at least one of them fails there on an assertion: a ✗ line
+from the test's fail(). A test that passes on main does not exercise the
+fault, and one that crashes on main proves nothing.
 
 Rules:
 - You cannot run commands. After you finish, the harness runs
@@ -270,7 +276,7 @@ timeout "$CLAUDE_TIMEOUT" "$CLAUDE" -p \
     --strict-mcp-config --mcp-config '{"mcpServers":{}}' \
     --permission-mode acceptEdits --permission-prompts none \
     --no-session-persistence --output-format json \
-    --model "$MODEL" --max-budget-usd "$BUDGET_USD" \
+    --model "$MODEL" --effort "$EFFORT" --max-budget-usd "$BUDGET_USD" \
     < "$JOB/prompt.md" > "$JOB/claude.json" 2> "$JOB/claude.err"
 claude_rc=$?
 cost=$(jq -r '.total_cost_usd // empty' "$JOB/claude.json" 2>/dev/null)
@@ -324,6 +330,53 @@ forbidden=$(git diff --cached --name-only | grep -E '(^|/)vault[^/]*\.yml$|^\.gi
 
 env -u CLAUDE_CODE_OAUTH_TOKEN sh tests/run_unit_tests.sh > "$JOB/unit.log" 2>&1 ||
     fail 3 "unit tests failed" "$JOB/unit.log"
+
+# ── A fault's new tests must fail on main ─────────────────────────────────
+#
+# Passing tests prove the change is consistent with its own tests, not that
+# the tests exercise the fault. PRs #38, #40 and #51 were green and silenced
+# their alert instead of fixing it. So every tests/unit/*_test.sh the attempt
+# added or changed is run against main as it was (HEAD: the attempt is still
+# uncommitted), with the attempt's tests/ changes copied in, and at least one
+# must fail ON AN ASSERTION. Every unit test reports a failed assertion as a
+# "✗" line from its fail(); a non-zero exit without one is a crash (a missing
+# file, a syntax error), which proves nothing about the fault.
+#
+# Faults only: a task's spec is Ignacio's, and a refactor's test may rightly
+# pass on main. What this cannot see: whether the change still alerts on the
+# real failure the check exists for. A test of that passes on main too.
+if [ "$KIND" = fault ]; then
+    git diff --cached --name-only --diff-filter=AMR -- 'tests/unit/*_test.sh' > "$JOB/new_tests"
+    [ -s "$JOB/new_tests" ] ||
+        fail 3 "no tests/unit/*_test.sh was added or changed; a fault fix needs a test that fails without it"
+    BASE="$WT.base"
+    git -C "$CLONE" worktree remove --force "$BASE" 2>/dev/null || rm -rf "$BASE"
+    git worktree add --quiet --detach "$BASE" HEAD || die "worktree add of main for the test gate failed"
+    git diff --cached --name-only --diff-filter=AMR -- tests/ | while IFS= read -r f; do
+        mkdir -p "$BASE/$(dirname "$f")" && cp "$f" "$BASE/$f"
+    done
+    asserted="" crashed="" out="$JOB/main_test.out"
+    : > "$JOB/main_tests.log"
+    while IFS= read -r t; do
+        (cd "$BASE" && env -u CLAUDE_CODE_OAUTH_TOKEN timeout 600 sh "$BASE/$t") > "$out" 2>&1
+        rc=$?
+        n=$(grep -c '✗' "$out")
+        printf '── %s on main: exit %s, %s failed assertion(s)\n' "$t" "$rc" "$n" >> "$JOB/main_tests.log"
+        cat "$out" >> "$JOB/main_tests.log"
+        if [ "$rc" -ne 0 ] && [ "$n" -gt 0 ]; then
+            asserted="$asserted${asserted:+, }\`$t\` ($n failed)"
+        elif [ "$rc" -ne 0 ]; then
+            crashed="$crashed $t"
+        fi
+    done < "$JOB/new_tests"
+    rm -f "$out"
+    git worktree remove --force "$BASE" 2>/dev/null || rm -rf "$BASE"
+    if [ -z "$asserted" ] && [ -n "$crashed" ]; then
+        fail 3 "the new tests crashed on main without a failed assertion (✗):$crashed" "$JOB/main_tests.log"
+    fi
+    [ -n "$asserted" ] ||
+        fail 3 "the new tests pass on main, so they do not exercise the fault" "$JOB/main_tests.log"
+fi
 # CI's own lint, before the rig: PR #23 passed both of the above and still
 # failed CI's shellcheck. scripts/ci/ is a forbidden path, so this is main's
 # copy and the model cannot have weakened the check it is judged by.
@@ -345,6 +398,7 @@ g commit --quiet -m "$ctype($TAG): ${subject:-builder change}" || die "commit fa
     printf '%s\n\n' "$(head -c 4000 "$JOB/summary.md")"
     printf '## Verification\n\n'
     printf -- '- Unit tests: `%s`\n' "$(tail -1 "$JOB/unit.log")"
+    [ "$KIND" = fault ] && printf -- '- New tests fail on main, on an assertion: %s\n' "$asserted"
     printf -- '- CI lint (`scripts/ci/lint.sh`): `%s`\n' "$(grep -v '^[[:space:]]*$' "$JOB/lint.log" | tail -1)"
     # rig_loop.sh colours its verdict; GitHub would show the escapes raw.
     esc=$(printf '\033')
