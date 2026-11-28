@@ -21,8 +21,11 @@ vault_logging_token: "your-logging-token"
 vault_alert_token: "your-alert-token"
 
 # Service-specific secrets (examples)
-vault_transmission_username: "admin"
-vault_transmission_password: "changeme"
+# Transmission RPC login; the password as Transmission's hash, never plaintext.
+# Generate both with bin/transmission-rpc-credentials. The placeholder is
+# deliberately not a valid hash, so the role refuses it rather than deploying it.
+vault_transmission_rpc_username: "admin"
+vault_transmission_rpc_password_hash: "replace-me"
 
 # WiFi credentials (for WiFi-enabled Pis)
 vault_wifi_ssid: "YourWiFiNetwork"

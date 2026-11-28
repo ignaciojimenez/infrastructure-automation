@@ -1,6 +1,12 @@
 ---
 # Transmission BitTorrent client service role
 
+# First, so a missing secret fails before anything on the host changes. Tagged
+# like the settings template, so every run that can write the file checks it.
+- name: Require vault-backed RPC credentials
+  ansible.builtin.import_tasks: credentials.yml
+  tags: [transmission, config]
+
 - name: Install transmission daemon
   become: true
   ansible.builtin.apt:
