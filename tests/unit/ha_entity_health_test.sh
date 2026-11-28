@@ -435,12 +435,47 @@ run "$WORK/st4i.json" report 1 200 "$WORK/s4f.json"
 expect_rc 0 "report mode stays at exit 0 with a failed lookup"
 expect_out "device lookup failed" "but shows it"
 
-# No device override: no lookup expected, none reported.
+# Not asked ("-", which only HA being down produces) and no override: silent.
 OVERRIDES=""
 DEVCODE="-"
 DEVFILE=""
 run "$WORK/st4i.json" check 1 200 "$WORK/s4f.json"
-expect_no_out "device lookup" "without a device override nothing is looked up or reported"
+expect_no_out "device lookup" "a lookup that was not run, with no override, reports nothing"
+
+printf '\n   ── alert lines name the device (PER-184)\n'
+
+# ------------------------------------------------------------------
+# 4j. agent-lxc keys an HA incident by the device the alert line names, so
+#     a new device failing under this same check is a new incident. The tail
+#     uses the user-given name first, as HA itself does. An entity with no
+#     device gets no tail and keys by its id.
+# ------------------------------------------------------------------
+states "$WORK/s4j.json" binary_sensor.entrance_door_battery=unavailable \
+    light.kitchen=unavailable binary_sensor.front_door=unavailable
+state "$WORK/st4j.json" binary_sensor.entrance_door_battery:1200 \
+    light.kitchen:1200 binary_sensor.front_door:1200
+DEVCODE=200
+DEVFILE="$WORK/devices.tsv"
+run "$WORK/st4j.json" check 1 200 "$WORK/s4j.json"
+expect_rc 3 "without an override the lookup still runs, and every past-grace entity pages"
+expect_out "❌ binary_sensor.entrance_door_battery = unavailable for 20 min (past its 15 min grace) — device: Entrance Door" \
+    "the tail names the user-given device name"
+expect_out "❌ light.kitchen = unavailable for 20 min (past its 15 min grace) — device: Shelly Duo" \
+    "and HA's own name when there is no user-given one"
+expect_out "❌ binary_sensor.front_door = unavailable for 20 min (past its 15 min grace)" \
+    "an entity with no device is still named"
+expect_no_out "front_door = unavailable for 20 min (past its 15 min grace) —" "with no tail"
+
+# Without an override a failed lookup only costs the tail: it warns, and must
+# not page, nor print a ❌ line that agent-lxc would key as a fault.
+DEVCODE=500
+run "$WORK/st4j.json" check 1 200 "$WORK/s4j.json"
+expect_rc 3 "a failed lookup with no override does not add to the exit code"
+expect_out "⚠️  device lookup failed (HTTP 500" "it is reported as a warning"
+expect_no_out "❌ device lookup" "not as a fault"
+expect_no_out "— device:" "and the alert lines carry no tail"
+DEVCODE="-"
+DEVFILE=""
 
 printf '\n   ── recovery\n'
 

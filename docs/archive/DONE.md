@@ -17,6 +17,7 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 
 ## Contents
 
+- [2026-11-28 — an HA entity alert keys by the device that failed, so a second device is investigated (PER-184)](#2026-11-28--an-ha-entity-alert-keys-by-the-device-that-failed-so-a-second-device-is-investigated-per-184)
 - [2026-11-27 — the Tier 2 model runs as its own account, so the filesystem guards the secrets (PER-122, PER-86)](#2026-11-27--the-tier-2-model-runs-as-its-own-account-so-the-filesystem-guards-the-secrets-per-122-per-86)
 - [2026-11-26 — the key write no longer touches OPNsense, which rewrites that file from config.xml](#2026-11-26--the-key-write-no-longer-touches-opnsense-which-rewrites-that-file-from-configxml)
 - [2026-11-25 — a grace window can name a device, so the Eve doors' battery entities stop paging (PER-183)](#2026-11-25--a-grace-window-can-name-a-device-so-the-eve-doors-battery-entities-stop-paging-per-183)
@@ -87,6 +88,31 @@ there rather than restating. Open work lives in [`TODO.md`](../TODO.md).
 ---
 
 
+
+## 2026-11-28 — an HA entity alert keys by the device that failed, so a second device is investigated (PER-184)
+
+**A second device under the same check was never looked at.** agent-lxc pays for one Tier 2 run per incident, keyed `host.subject`, and a specific check script named its own subject. So every `check_ha_entities` alert keyed `dockassist.ha-entities`. On 11-11 the Entrance Eve door dropped off Thread inside the quiet window of the 11-10 Shelly bulb incident, and was skipped as already explained. Replayed through the old `subjects()`, the real 11-10 bulb, 11-10 radiator, 11-10 "zero entities" and 11-11 door bodies all gave `['ha-entities']`.
+
+**Decided: key by device, and let the check name it** ([ARCHITECTURE_DECISIONS](../ARCHITECTURE_DECISIONS.md)). The check already read HA's device registry for PER-183's grace windows. It now reads it on every run and ends each alert line `— device: <name>`. The parser keys `ha-<device>`, falling back to `ha-<entity id>`. The three HA automations that join the check's incident (PER-58) name the same device through `device_attr()`. The check's own failures key `ha-api`, `ha-device-lookup` or `ha-state-file`. A failed device lookup pages only when a device override depends on it; otherwise it warns, and alert lines go out without the tail.
+
+**Rejected: the issue's first guess, treating the check as a generic multi-check script.** It did split the two real bodies, but the keys held the state word (an entity going `unavailable` → `unknown` changed key), one bulb gave five keys, the lookup failure keyed on its error text, and the automations' `Subject: ha-entities` would have joined nothing, so PER-58's double charge would have come back.
+
+Verified before deploy:
+- The real 11-10 and 11-11 bodies, replayed end to end through `investigate.sh`, cost two runs (was one). Repeating the door's alert costs none.
+- A tagged bulb losing five entities, `unavailable` then `unknown`, is one incident (`ha-floor-lamp`). The PER-183 `device grace …` line keys nothing. Two lookup failures with different error texts are one incident. HA's API being down keys `ha-api`, not `reachability`.
+- PER-58 replay: the radiator still costs one run whichever sender comes first. Smoke and gas each join their own device's incident, and a smoke drop while the radiator's incident is open is investigated.
+- Control: the old parser fails 14 of these assertions.
+- No other key changed: 13 real bodies from other hosts and checks (system health, fleet sweep, UniFi OS, VM status, builder poll, Mullvad, security, the untagged gas FAULT) and five Tier 1 findings give identical keys before and after. All five agent and HA test files pass; CI lint passes.
+- HA's `device_attr()` source (core `helpers/template/extensions/devices.py`): it takes an entity id, returns `None` for an unknown entity or one with no device, and raises only for non-string input. The changed automation lines render through Ansible's Jinja to valid YAML, and evaluate with a stubbed `device_attr`.
+- Linear: no open `dockassist.ha-entities` issue (PER-194 and PER-199 were already Done), so none is orphaned.
+
+Verified live:
+- agent-lxc: `--check --diff`, the deploy (`changed=2`: `incident_subjects.py`, `investigate.sh`), a second run `changed=0`. The deployed parser's sha256 matches the repo's, and the real 11-10 and 11-11 bodies replayed through it give different keys.
+- dockassist (`--tags config,monitoring`): `--check --diff` showed only `automations.yaml` and `check_ha_entities.sh`, the deploy `changed=3` (the two plus the HA restart), a second run `changed=0`. HA's log after the restart has no automation or template error. The deployed check, run by hand, is green and still prints `device grace 1440 min for 'Eve Door 20EBN9901': 12 entities`, with no lookup warning.
+- Forced on a throwaway copy of the deployed check (grace 0, no allowlist, no overrides, its own state file): all 39 bad entities printed an alert line, 29 of them with a real device tail. That body, through agent-lxc's deployed parser, gave 16 keys: one per device (6) and one per deviceless entity (10), where the old parser gave one key for all of them.
+- Not seen live: one of the three automations rendering its new tag in HA, which needs a radiator, smoke or gas detector to drop.
+
+**Residual:** an entity with no device, or a failed lookup, still keys per entity, and one run takes at most `agent_slack_max_per_run` (3) new keys, so a large untagged alert can cost a second run.
 
 ## 2026-11-27 — the Tier 2 model runs as its own account, so the filesystem guards the secrets (PER-122, PER-86)
 

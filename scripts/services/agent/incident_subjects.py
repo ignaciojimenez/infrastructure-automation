@@ -15,10 +15,15 @@ defines functions and runs nothing on import.
   0. An alert whose TITLE states "Subject: <name>" is taken at its word. This
      is for senders with no check script to be named after (Home Assistant
      automations), so they can join the incident the matching check opens
-     instead of being guessed at (see automations.yaml.j2). Title only: the
-     body is a check output, and openssl, for one, prints "Subject:".
+     instead of being guessed at (see automations.yaml.j2). The tag ends its
+     line, "(... Subject: <name>)", and the name runs to that last
+     parenthesis, so a device name that holds one survives. It is slugged
+     here, so a sender states the name as HA spells it. Title only: the body
+     is a check output, and openssl, for one, prints "Subject:".
   1. A specific check script names its subject: check_raspotify.sh ->
-     raspotify. Generic multi-check scripts are NOT a subject.
+     raspotify. Generic multi-check scripts are NOT a subject. A check that
+     watches many independent things says which one failed in its output, and
+     is keyed by that instead (BODY_KEYED below).
   2. Otherwise, the failing lines of the output: "Service X: not running", a
      "- X.service" failed-unit line, "N failed systemd unit(s): X.service"
      (Tier 1 wording) -> X; a reachability failure -> "reachability"; any
@@ -32,6 +37,7 @@ ignored rather than keyed as a bogus subject.
 NOTE: no apostrophes anywhere in this file. Older callers embedded it in a
 single-quoted shell string, and the habit is cheap insurance.
 """
+import hashlib
 import re
 GENERIC_SCRIPTS = ("system_health_check", "fleet_health_check")
 ANSI = re.compile(r"\x1b\[[0-9;]*m|\[[0-9;]*m")
@@ -42,6 +48,19 @@ STOP = ("on", "the", "is", "at", "of", "and", "to", "for", "in", "not")
 
 def slug(s):
     return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")[:40]
+
+def name_slug(s):
+    """slug() for a stated name, where a plain cut could merge two of them.
+
+    tado heads are named "...Radiator Thermostat VA<serial>", and the serial
+    falls past the 40 chars slug() keeps. A long name keeps a readable head
+    plus a hash of the whole, so it stays unique and stable. A short one is
+    slug() without the cut.
+    """
+    full = re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")
+    if len(full) <= 48:
+        return full
+    return full[:39].rstrip("-") + "-" + hashlib.sha1(full.encode()).hexdigest()[:8]
 
 def unit_name(u):
     return slug(re.sub(r"\.(?:service|timer|socket|mount|path)$", "", u))
@@ -84,14 +103,54 @@ def body_subjects(body, host):
             add(signature(line, host))
     return out
 
+# check_ha_entities.sh watches every Home Assistant entity, so its name says
+# nothing about WHAT failed. Keyed by its name alone, the 11-11 Eve door drop
+# joined the 11-10 Shelly bulb incident and was never investigated (PER-184).
+#
+# Its alert line names the entity and, since PER-184, the device:
+#   "❌ light.floor_lamp_new = unavailable for 20 min (past its 15 min grace) — device: Floor Lamp"
+# The key is the device, so one bulb losing five entities is one incident and
+# the state ("unavailable" vs "unknown") never enters it. The entity id is the
+# fallback for an entity with no device, or an alert from before the tail.
+# Every subject starts "ha-", which is also the prefix the HA automations
+# state, so the two always meet (see automations.yaml.j2).
+HA_ENTITY = re.compile(r"^❌\s*([a-z0-9_]+\.[a-z0-9_]+) = \S+ for \d+ min\b.*?(?: — device: (.+))?$")
+# Its other failures, each a fixed subject: their wording carries an
+# error text or a path that must not leak into the key.
+HA_FIXED = (("device lookup failed", "ha-device-lookup"),
+            ("state file", "ha-state-file"),
+            ("home assistant api", "ha-api"),
+            ("/api/states", "ha-api"),
+            ("ha_monitor_token", "ha-api"))
+
+def ha_entity_subjects(body, host):
+    out = []
+    for raw in body.splitlines():
+        line = ANSI.sub("", raw).strip().strip("`").strip()
+        if "❌" not in line or line.endswith("..."):
+            continue
+        m = HA_ENTITY.match(line)
+        if m:
+            x = name_slug("ha-" + (m.group(2) or m.group(1)).strip())
+        else:
+            low = line.lower()
+            x = next((k for w, k in HA_FIXED if w in low), "") or signature(line, host)
+        if x and x not in out:
+            out.append(x)
+    return out
+
+BODY_KEYED = {"ha_entities": ha_entity_subjects}
+
 def subjects(host, script, title, body):
-    m = re.search(r"\bSubject: *([a-z0-9][a-z0-9-]*)", title)
-    if m:
-        return [m.group(1)]
+    m = re.search(r"\bSubject: *([^\n]+?)\)?\s*$", title, re.M)
+    if m and name_slug(m.group(1)):
+        return [name_slug(m.group(1))]
     base = ""
     if script:
         base = re.sub(r"\.[A-Za-z0-9]+$", "", script.split()[0].rsplit("/", 1)[-1]).lower()
         base = re.sub(r"^check_", "", base)
+        if base in BODY_KEYED:
+            return BODY_KEYED[base](body, host) or [slug(base)]
         if base and base not in GENERIC_SCRIPTS:
             return [slug(base)]
     found = body_subjects(body, host)

@@ -559,28 +559,48 @@ printf "\n── Part 3: replay of 2026-09-21 (was 2 runs, \$1.1712) — PER-58\
 # channel (so in the 16:07 one). HA's text named no host and keyed "alert-…";
 # the wrapper keyed dockassist.ha-entities. The fix is at the sender: the
 # automations that overlap that check now carry a tag naming its incident.
-# The tag is read from the template itself, so a fixture cannot keep passing
-# after the real message has changed.
+#
+# Since PER-184 that incident is the DEVICE: the check ends each alert line
+# "— device: <name>", and the tag is an HA Jinja expression that names the
+# same device. The expression is read from the template itself and "rendered"
+# here by substituting the device name, so a fixture cannot keep passing after
+# the real message has changed. HA's own rendering is proven live.
 rm -f "$INCIDENTS"/* "$AGENT_DIR/spend/$(date -u +%Y-%m-%d)"
 AUTOMATIONS="$REPO_ROOT/ansible/roles/services/homeassistant/templates/automations.yaml.j2"
-TAG=$(sed -n 's/^{% set ha_entities_incident = "\(.*\)" %}$/\1/p' "$AUTOMATIONS" \
+TAG_EXPR=$(sed -n 's/^{% set ha_entities_incident = "\(.*\)" %}$/\1/p' "$AUTOMATIONS" \
     | sed 's/" ~ inventory_hostname ~ "/dockassist/')
-case "$TAG" in
-    *"Host: dockassist"*"Subject: "*) pass "automations.yaml.j2 defines the incident tag: $TAG" ;;
-    *) fail "no usable ha_entities_incident tag in automations.yaml.j2: '$TAG'" ;;
+# The device is picked in the order the check picks it (user-given name, else
+# HA's own, else the entity id). Different orders would key one fault twice.
+DEVICE_EXPR="(device_attr(trigger.entity_id, 'name_by_user') or device_attr(trigger.entity_id, 'name') or trigger.entity_id)"
+case "$TAG_EXPR" in
+    *"Host: dockassist"*"Subject: ha-' ~ $DEVICE_EXPR ~ ')'") pass "automations.yaml.j2 tags the incident by device: $TAG_EXPR" ;;
+    *) fail "no usable ha_entities_incident tag in automations.yaml.j2: '$TAG_EXPR'" ;;
 esac
+# tag_for <device name> — the text HA renders for that device.
+tag_for() {
+    python3 - "$TAG_EXPR" "$DEVICE_EXPR" "$1" <<'PY'
+import sys
+expr, dev, name = sys.argv[1:4]
+expr = expr.replace(dev, "'" + name + "'").replace("' ~ '", "")
+print(expr.strip().strip("'"))
+PY
+}
+RADIATOR="tado° Smart Radiator Thermostat VA0612513536"
+TAG=$(tag_for "$RADIATOR")
 
-# Verbatim from #home-alerts, ts 1789995739 and 1789996207, plus the tag.
-printf ':warning: Heating offline: Bathroom Radiator %s\n' "$TAG" > "$WORK/fx/ha_radiator"
-cat > "$WORK/fx/ha_entities" <<'EOF'
+# Verbatim from #home-alerts, ts 1789995739 and 1789996207, plus the tag and
+# the device tail. The device name is the shape HomeKit gives a tado head;
+# the live replay uses the real one.
+printf ':warning: Heating offline: Bathroom Radiator%s\n' "$TAG" > "$WORK/fx/ha_radiator"
+cat > "$WORK/fx/ha_entities" <<EOF
 :x: ALERT: Script Failed on dockassist
 *Output:*
-```=== Home Assistant entity health ===
+\`\`\`=== Home Assistant entity health ===
 299 entities; 67 unavailable/unknown (63 allowlisted, 0 inside grace)
-❌ climate.tado_smart_radiator_thermostat_va0612513536 = unavailable for 20 min (past its 15 min grace)
-❌ select.tado_smart_radiator_thermostat_va0612513536_temperature_display_units = unavailable for 20 min (past its 15 min grace)
-❌ sensor.tado_smart_radiator_thermostat_va0612513536_current_humidity = unavailable for 20 min (past its 15 min grace)
-❌ sensor.tado_smart_radiator_thermostat_va0612513536_current_temperature = unavailable for 20 min (past its 15 min grace)```
+❌ climate.tado_smart_radiator_thermostat_va0612513536 = unavailable for 20 min (past its 15 min grace) — device: $RADIATOR
+❌ select.tado_smart_radiator_thermostat_va0612513536_temperature_display_units = unavailable for 20 min (past its 15 min grace) — device: $RADIATOR
+❌ sensor.tado_smart_radiator_thermostat_va0612513536_current_humidity = unavailable for 20 min (past its 15 min grace) — device: $RADIATOR
+❌ sensor.tado_smart_radiator_thermostat_va0612513536_current_temperature = unavailable for 20 min (past its 15 min grace) — device: $RADIATOR\`\`\`
 Host: dockassist
 Script: /home/choco/.scripts/check_ha_entities.sh
 Started: 2026-09-21 15:10:04
@@ -593,10 +613,11 @@ EOF
 b=$(runs); echo 0.6926 > "$COST_FILE"
 poll "$WORK/fx/ha_radiator"
 expect 1 "$b" "15:07 HA's 'Heating offline' is investigated (was \$0.6926)"
-if [ -f "$INCIDENTS/dockassist.ha-entities" ]; then
-    pass "it opens the check's own incident, dockassist.ha-entities"
+RADIATOR_KEY=dockassist.ha-tado-smart-radiator-thermostat-va0612513536
+if [ -f "$INCIDENTS/$RADIATOR_KEY" ]; then
+    pass "it opens the device's incident, $RADIATOR_KEY"
 else
-    fail "HA's alert did not key to dockassist.ha-entities: $(incident_list)"
+    fail "HA's alert did not key to $RADIATOR_KEY: $(incident_list)"
 fi
 if [ -f "$INCIDENTS/dockassist.reachability" ]; then
     fail "a device going offline was keyed as dockassist itself being unreachable"
@@ -623,15 +644,36 @@ poll "$WORK/fx/ha_entities"
 poll "$WORK/fx/ha_radiator"
 expect 1 "$b" "check first, HA's alert second: still one run"
 
-# The other two automations carrying the tag, while that incident is open.
-printf ':warning: Smoke detector OFFLINE (not reporting) — Hallway %s\n' "$TAG" > "$WORK/fx/ha_smoke"
+# The other two automations carrying the tag. Each joins the incident the
+# check opened for ITS device, and is not swallowed by the radiator's.
+SMOKE="Hallway Smoke"
+printf ':warning: Smoke detector OFFLINE (not reporting) — Hallway%s\n' "$(tag_for "$SMOKE")" > "$WORK/fx/ha_smoke"
+cat > "$WORK/fx/ha_entities_smoke" <<EOF
+:x: ALERT: Script Failed on dockassist
+*Output:*
+\`\`\`❌ binary_sensor.shellyplussmoke_3076f523fd68_smoke = unavailable for 1560 min (past its 1560 min grace) — device: $SMOKE\`\`\`
+Host: dockassist
+Script: /home/choco/.scripts/check_ha_entities.sh
+EOF
 b=$(runs)
 poll "$WORK/fx/ha_smoke"
-expect 0 "$b" "a smoke detector gone unavailable joins the open ha-entities incident"
-printf ':warning: Gas detector FAULT/OFFLINE — Kitchen (state: unavailable) %s\n' "$TAG" > "$WORK/fx/ha_gas_gone"
+expect 1 "$b" "a smoke detector gone unavailable while the radiator's incident is open is investigated (PER-184)"
 b=$(runs)
+poll "$WORK/fx/ha_entities_smoke"
+expect 0 "$b" "the check's alert for that smoke detector joins the incident HA's alert opened"
+GAS="shellygas-8c4f0059f510"
+cat > "$WORK/fx/ha_entities_gas" <<EOF
+:x: ALERT: Script Failed on dockassist
+*Output:*
+\`\`\`❌ sensor.shellygas_8c4f0059f510_operation = unavailable for 20 min (past its 15 min grace) — device: $GAS\`\`\`
+Host: dockassist
+Script: /home/choco/.scripts/check_ha_entities.sh
+EOF
+printf ':warning: Gas detector FAULT/OFFLINE — Kitchen (state: unavailable)%s\n' "$(tag_for "$GAS")" > "$WORK/fx/ha_gas_gone"
+b=$(runs)
+poll "$WORK/fx/ha_entities_gas"
 poll "$WORK/fx/ha_gas_gone"
-expect 0 "$b" "a gas detector gone unavailable joins it too"
+expect 1 "$b" "check first, then HA's gas alert for the same device: one run"
 
 # ...and what the tag must NOT swallow.
 printf ':warning: Gas detector FAULT/OFFLINE — Kitchen (state: fault)\n' > "$WORK/fx/ha_gas_fault"
@@ -647,7 +689,7 @@ Script: /home/choco/.scripts/check_ha_web.sh
 EOF
 b=$(runs)
 poll "$WORK/fx/ha_web"
-expect 1 "$b" "a different check failing on dockassist while ha-entities is open is investigated"
+expect 1 "$b" "a different check failing on dockassist while HA device incidents are open is investigated"
 cat > "$WORK/fx/openssl" <<'EOF'
 :x: ALERT: Script Failed on cobra
 *Output:*
@@ -661,6 +703,140 @@ if [ -f "$INCIDENTS/cobra.cert" ] && [ ! -f "$INCIDENTS/cobra.cn" ]; then
     pass "a 'Subject:' inside a check's output is not taken as the incident subject"
 else
     fail "a check's output chose the subject: $(incident_list)"
+fi
+
+# ==================================================================
+printf "\n── Part 4: replay of 2026-11-10/11 (was 1 run, the door never looked at) — PER-184\n"
+# ==================================================================
+# check_ha_entities keyed every alert by its own name, dockassist.ha-entities.
+# The 11-11 Eve door drop arrived inside the quiet window of the 11-10 Shelly
+# bulb incident and was never investigated. Both bodies are verbatim from
+# #home-alerts (ts 1794268811 and 1794421207). They predate the device tail,
+# so they key by entity id; the tagged shape is forced after them.
+rm -f "$INCIDENTS"/* "$AGENT_DIR/spend/$(date -u +%Y-%m-%d)"
+echo 0.30 > "$COST_FILE"
+cat > "$WORK/fx/shelly_1110" <<'EOF'
+:x: ALERT: Script Failed on dockassist
+*Output:*
+```=== Home Assistant entity health ===
+262 entities; 43 unavailable/unknown (38 allowlisted, 0 inside grace)
+❌ button.shellyduobulbg3_48f6eebd40d4_restart = unavailable for 20 min (past its 15 min grace)
+❌ light.floor_lamp_new = unavailable for 20 min (past its 15 min grace)
+❌ sensor.shellyduobulbg3_48f6eebd40d4_energy = unavailable for 20 min (past its 15 min grace)
+❌ sensor.shellyduobulbg3_48f6eebd40d4_power = unavailable for 20 min (past its 15 min grace)
+❌ update.shellyduobulbg3_48f6eebd40d4_firmware = unavailable for 20 min (past its 15 min grace)```
+Host: dockassist
+Script: /home/choco/.scripts/check_ha_entities.sh
+Started: 2026-11-10 01:00:08
+Duration: 1 seconds
+Status: FAILED
+Exit Code: 5
+EOF
+cat > "$WORK/fx/eve_1111" <<'EOF'
+:x: ALERT: Script Failed on dockassist
+*Output:*
+```=== Home Assistant entity health ===
+266 entities; 41 unavailable/unknown (35 allowlisted, 5 inside grace)
+⚠️  binary_sensor.eve_door_20ebn9901_door_2 = unavailable for 19 min (grace 1440 min)
+⚠️  button.eve_door_20ebn9901_identify_2 = unavailable for 19 min (grace 1440 min)
+⚠️  sensor.eve_door_20ebn9901_battery_2 = unavailable for 19 min (grace 1440 min)
+⚠️  sensor.eve_door_20ebn9901_battery_voltage_2 = unavailable for 19 min (grace 1440 min)
+⚠️  update.eve_door_20ebn9901_firmware_2 = unavailable for 19 min (grace 1440 min)
+❌ binary_sensor.entrance_door_battery = unavailable for 19 min (past its 15 min grace)```
+Host: dockassist
+Script: /home/choco/.scripts/check_ha_entities.sh
+Started: 2026-11-11 19:20:05
+Duration: 0 seconds
+Status: FAILED
+Exit Code: 1
+EOF
+b=$(runs)
+poll "$WORK/fx/shelly_1110"
+expect 1 "$b" "11-10 01:00 the Shelly bulb is investigated"
+b=$(runs)
+poll "$WORK/fx/eve_1111"
+expect 1 "$b" "11-11 19:20 the Eve door, a different device under the same check, is investigated (was skipped)"
+if [ -f "$INCIDENTS/dockassist.ha-binary-sensor-entrance-door-battery" ]; then
+    pass "the door keys by what failed: dockassist.ha-binary-sensor-entrance-door-battery"
+else
+    fail "the door did not key by its entity: $(incident_list)"
+fi
+if [ -f "$INCIDENTS/dockassist.ha-entities" ]; then
+    fail "an entity alert still keyed by the script name: $(incident_list)"
+else
+    pass "no entity alert keys as dockassist.ha-entities any more"
+fi
+b=$(runs)
+printf ':x: STILL FAILING on dockassist\n%s\n' "$(sed 1d "$WORK/fx/eve_1111")" > "$WORK/fx/eve_repeat"
+poll "$WORK/fx/eve_repeat"
+expect 0 "$b" "the door failing again: no new run (fleet-investigation-duplicates-one-root-cause)"
+# Not asserted: replayed untagged, the bulb is five entity keys, and one run
+# takes at most agent_slack_max_per_run (3) new keys, so its repeat buys a
+# second run for the other two. The device tail below is what makes it one
+# key. Entities with no device, or a failed device lookup, still key per
+# entity, with that same cost.
+
+# The tagged shape: one bulb is one incident, whichever entities it loses and
+# whichever bad state they sit in.
+rm -f "$INCIDENTS"/*
+cat > "$WORK/fx/bulb_a" <<'EOF'
+:x: ALERT: Script Failed on dockassist
+*Output:*
+```❌ button.shellyduobulbg3_48f6eebd40d4_restart = unavailable for 20 min (past its 15 min grace) — device: Floor Lamp
+❌ light.floor_lamp_new = unavailable for 20 min (past its 15 min grace) — device: Floor Lamp
+❌ sensor.shellyduobulbg3_48f6eebd40d4_power = unavailable for 20 min (past its 15 min grace) — device: Floor Lamp```
+Host: dockassist
+Script: /home/choco/.scripts/check_ha_entities.sh
+EOF
+cat > "$WORK/fx/bulb_b" <<'EOF'
+:x: STILL FAILING on dockassist
+*Output:*
+```device grace 1440 min for 'Eve Door 20EBN9901': 12 entities
+❌ light.floor_lamp_new = unknown for 80 min (past its 15 min grace) — device: Floor Lamp
+❌ update.shellyduobulbg3_48f6eebd40d4_firmware = unavailable for 80 min (past its 15 min grace) — device: Floor Lamp```
+Host: dockassist
+Script: /home/choco/.scripts/check_ha_entities.sh
+EOF
+b=$(runs)
+poll "$WORK/fx/bulb_a"
+poll "$WORK/fx/bulb_b"
+expect 1 "$b" "one bulb, five entities, unavailable then unknown: one run"
+if [ "$(incident_list)" = "dockassist.ha-floor-lamp " ]; then
+    pass "its only incident is dockassist.ha-floor-lamp (the device grace line keys nothing)"
+else
+    fail "the bulb opened: $(incident_list)"
+fi
+
+# The check's own failures key to fixed subjects, never to their error text.
+cat > "$WORK/fx/lookup_a" <<'EOF'
+:x: ALERT: Script Failed on dockassist
+*Output:*
+```❌ device lookup failed (HTTP 500 from /api/template) — device-scoped grace windows NOT applied```
+Host: dockassist
+Script: /home/choco/.scripts/check_ha_entities.sh
+EOF
+sed 's#HTTP 500 from /api/template#/api/template mapped no entity to a device#' "$WORK/fx/lookup_a" > "$WORK/fx/lookup_b"
+b=$(runs)
+poll "$WORK/fx/lookup_a"
+poll "$WORK/fx/lookup_b"
+expect 1 "$b" "a device lookup failing two different ways: one run"
+if [ -f "$INCIDENTS/dockassist.ha-device-lookup" ]; then
+    pass "it keys as dockassist.ha-device-lookup"
+else
+    fail "the lookup failure keyed as: $(incident_list)"
+fi
+cat > "$WORK/fx/ha_api" <<'EOF'
+:x: ALERT: Script Failed on dockassist
+*Output:*
+```❌ Home Assistant API unreachable for 22 min (HTTP 000) — entity health is UNKNOWN, not healthy```
+Host: dockassist
+Script: /home/choco/.scripts/check_ha_entities.sh
+EOF
+poll "$WORK/fx/ha_api"
+if [ -f "$INCIDENTS/dockassist.ha-api" ] && [ ! -f "$INCIDENTS/dockassist.reachability" ]; then
+    pass "HA's API down keys as dockassist.ha-api, not as dockassist itself unreachable"
+else
+    fail "HA's API down keyed as: $(incident_list)"
 fi
 
 printf '\n'
