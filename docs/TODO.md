@@ -301,6 +301,141 @@ counts, which include unavailable). Before deploying, show it (a) fires on the
 
 ### 🟢 P3 — improvements, no urgency
 
+**55. Tier 2 runs OpenCode on an API key, while the subscription already runs Claude Code unattended** ([PER-201](https://linear.app/lacopadeeuropa/issue/PER-201))
+Decided 2026-11-28. Tier 2 on agent-lxc runs OpenCode, billed to a spend-capped
+Anthropic API key in its own Console workspace. The workbench's unattended
+builder already runs `claude -p` on Ignacio's subscription with a
+`claude setup-token` credential. Replacing OpenCode with Claude Code leaves one
+agent runtime instead of two. It also removes the pending OpenCode upgrade and
+its 20-day cooldown work, and OpenCode's uncooled npm install of
+`@opencode-ai/plugin` on every start. The money is small ($2–15 a month), so
+cost is not the reason. OpenCode was chosen for per-tool permissions with bash
+globs (ARCHITECTURE_DECISIONS, Phase B). Claude Code has the same, and since
+PER-122 the boundary is the `investigator` account anyway.
+
+🔴 **What decides it is the credential, not the code.** Today the model can read
+its own `ANTHROPIC_API_KEY`: it has bash, and the PER-122 probe listed the key
+in its environment. That key reaches only the spend-capped API. A subscription
+token is tied to Ignacio's account. On the workbench, the claude.ai *account
+login* loaded 102 connector tools (Gmail, Drive, Calendar, Slack, Cloudflare)
+into a headless `claude -p` (ARCHITECTURE_DECISIONS, the PER-85 part 2 bullet).
+The builder stays safe because its model has no shell and an empty MCP config.
+Tier 2's model needs a shell for ssh. Whether a *setup-token* also reaches the
+connectors has not been forced, and it is the first thing to prove.
+
+```
+TODO 55 / PER-201: replace OpenCode with Claude Code for agent-lxc's Tier 2,
+on Ignacio's subscription (a `claude setup-token` credential) instead of the
+Anthropic API key.
+
+READ FIRST: docs/TODO.md item 55 and PER-201; docs/AGENT_LXC.md (Tier 2 and
+the security model); docs/WORKBENCH.md ("The unattended builder" and "Why
+running is not working"); ARCHITECTURE_DECISIONS.md: the PER-85 part 2
+builder bullet (Agent Access) and the Phase B section; the workbench's
+Claude Code code: roles/services/workbench/tasks/fleet_builder.yml,
+tasks/main.yml (install and token tasks), defaults/main.yml
+(workbench_claude_install_url, workbench_claude_channel) and
+scripts/services/workbench/fleet_builder_run.sh.j2 (the `claude -p` call);
+then roles/services/agent as PER-122 left it (investigator account,
+scripts/services/agent/run_model.sh.j2, /etc/sudoers.d/agent_model,
+investigate.sh.j2, opencode.json.j2, tests/unit/run_model_test.sh).
+
+SETUP: git worktree add ../infrastructure-automation-per-201-build -b
+feat/per-201-claude-code-tier2 main; work only there. Move PER-201 to In
+Progress.
+
+SETTLED, do not reopen:
+- Claude Code replaces OpenCode entirely. Delete the install tasks,
+  opencode_version, opencode.json.j2, the infra-monitor agent file and
+  FIREWORKS_API_KEY in env_keep. No "keep it as an option": git has it.
+- PER-122 stays: investigate.sh runs as choco and hands each run to
+  `investigator` through run_model.sh (setpriv --no-new-privs), the
+  credential in the environment through sudoers env_keep, never argv. Only
+  the binary and the credential change.
+- Reuse the workbench rather than rediscover it:
+  * native installer, run as the account with become_user, never plain
+    become (the installer exits when it sees uid 0 with SUDO_USER set);
+  * token as CLAUDE_CODE_OAUTH_TOKEN in a root 0600 env file;
+  * `--strict-mcp-config --mcp-config '{"mcpServers":{}}'`,
+    `--permission-prompts none`, `--no-session-persistence`,
+    `--output-format json`, cost from `.total_cost_usd`;
+  * `claude -p` needs none of the interactive onboarding gates WORKBENCH.md
+    lists (autobuilder runs without them).
+  If the install tasks fit both roles cleanly, share them rather than copy
+  them; if sharing costs more than it saves, copy and say why.
+- A separate setup-token for agent-lxc, in its own vault variable, not
+  workbench_anthropic_token, so each box is revoked on its own.
+
+GATE 1, before building anything: what does a leaked token reach?
+Ask Ignacio to run `claude setup-token` (a browser round trip: give him the
+exact command, and where the token goes). On agent-lxc, as `investigator`,
+with only that token in the environment, run `claude -p` WITHOUT
+--strict-mcp-config and read the init event's tools and mcp_servers; also
+run `claude mcp list`. Force it; do not ask the model. If any claude.ai
+connector loads, STOP: report it, and stay on the API key. If none load,
+the residual is "a leaked token spends Ignacio's subscription quota until he
+revokes it". Write that down, along with how to revoke it.
+
+THEN:
+- Port the permission rules in opencode.json.j2 to Claude Code (Bash only;
+  `ssh *-agent *` plus the local reads; ssh options denied). Check every flag
+  and settings key against `claude --help` and the docs on the box: the
+  workbench once built on a flag that did not exist. OpenCode's rules are
+  last-match-wins; read how Claude Code orders allow and deny, don't assume.
+- infra-monitor.md and AGENTS.md.j2 become the system prompt or a CLAUDE.md
+  for investigator; `steps: 40` becomes the turn limit; keep today's models
+  (a model change is a separate call).
+- investigate.sh: take the final text from claude's JSON instead of
+  OpenCode's event stream; the ===PLAN=== / ===SUMMARY=== markers stay.
+  Check total_cost_usd is still reported on a subscription. The daily spend
+  cap needs a number: if it reads 0, say so and propose what limits runs
+  instead.
+- Tests: alert_handoff, incident_dedup and ssh_backoff stub the model; move
+  their fixtures to claude's JSON. Extend run_model_test.sh.
+- Remove from the box: /usr/local/bin/opencode and its install dir;
+  investigator's ~/.config/opencode and ~/.local/share/opencode; choco's
+  leftovers (~/.config/opencode: node_modules, package*.json, .gitignore;
+  ~/.local/share/opencode). Then ANTHROPIC_API_KEY from agent.env and the
+  vault, and tell Ignacio to revoke the Console key and workspace.
+- Flag, don't decide alone: Claude Code installs into the model account's
+  home and updates itself. (a) The model can then rewrite its own harness
+  for later runs; OpenCode's binary was root-owned. (b) Does the `stable`
+  channel meet the 20-day cooldown policy? Read what the workbench
+  decided; don't invent a policy answer.
+- grep the repo, open Linear issues (PER-68 mentions OpenCode) and TODO
+  items for OpenCode assumptions, and correct them.
+
+DONE WHEN:
+- Gate 1 is forced and written down.
+- The PER-122 probe, re-run against Claude Code with its permission rules
+  opened wide, still gets "Permission denied" from the filesystem on `cat
+  /etc/agent/agent.env`, with a control that ran, and the init event lists
+  zero MCP tools. Check which tool calls actually ran: on PER-122 the model
+  silently skipped the reads and a clean result proved nothing. Send reads
+  to /dev/null.
+- A real `investigate.sh --digest` completes on the subscription, writes a
+  plan and posts to #home-logging (and a cron-fired run, if one occurs).
+- `services.yml --limit agent-lxc --tags agent`: --check --diff first, then
+  changed=0 on a second run. `sh scripts/ci/lint.sh` and the unit suite pass.
+- `command -v opencode` is empty on the box, nothing named opencode is left
+  outside /proc, and the API key is gone from agent.env and the vault.
+- Docs: AGENT_LXC.md (runtime, cost: $0 marginal against the subscription
+  quota, security model); ARCHITECTURE_DECISIONS.md (supersede the "OpenCode
+  as the Phase B runtime" bullet in place, with a note); move this item to
+  docs/archive/DONE.md.
+
+CONSTRAINTS: test with --check --diff first. Every deploy and push needs
+Ignacio's Touch ID, so give him the exact command. Reach agent-lxc without
+Touch ID with `ssh 10.30.40.203-agent` (read_agent); logs in choco's home
+with `sudo agent_read log <name>`. Pipe every journal, crontab and
+agent_read output through
+sed -E 's#T[0-9A-Z]{8,}/B[0-9A-Z]{8,}/[A-Za-z0-9]+#<redacted-webhook>#g'.
+Keep the Tier 2 crons in mind (:07 Slack watch, :17 digest on its day, :47
+anomaly); every Tier 2 mode shares a flock. Close PER-201 only after the
+acceptance above passes. Finish with a handover: branch, verified versus
+reasoned, and the commands he needs to run.
+```
+
 **53. dockassist and cobra are still on Debian 12 (bookworm)** — found in PER-200.
 Debian 13 is stable, so these two get no more point releases; PER-200's
 point-release pattern matches nothing there. Security still flows:
